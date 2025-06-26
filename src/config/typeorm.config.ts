@@ -2,7 +2,7 @@ import { TypeOrmModuleOptions } from '@nestjs/typeorm';
 import { config } from 'dotenv';
 import * as path from 'path';
 
-config(); // Load biến môi trường từ .env
+config();
 
 export const typeOrmConfig: TypeOrmModuleOptions = {
   type: 'mysql',

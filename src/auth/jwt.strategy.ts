@@ -1,10 +1,19 @@
 import { Injectable } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
-import { ExtractJwt, Strategy as PassportJwtStrategy } from 'passport-jwt';
+import { ExtractJwt, Strategy } from 'passport-jwt';
+
+export type JwtPayload = {
+  sub: number;
+  username: string;
+  permissions: string[];
+};
 
 @Injectable()
-export class JwtStrategy extends PassportStrategy(PassportJwtStrategy) {
+export class JwtStrategy extends PassportStrategy(Strategy) {
   constructor() {
+    if (!process.env.JWT_SECRET) {
+      throw new Error('JWT_SECRET environment variable is not defined');
+    }
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
@@ -12,7 +21,11 @@ export class JwtStrategy extends PassportStrategy(PassportJwtStrategy) {
     });
   }
 
-  async validate(payload: any) {
-    return { userId: payload.sub, username: payload.username };
+  async validate(payload: JwtPayload) {
+    return {
+      id: payload.sub,
+      username: payload.username,
+      permissions: payload.permissions,
+    };
   }
 }
