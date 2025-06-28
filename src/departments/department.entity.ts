@@ -3,6 +3,7 @@ import {
   PrimaryGeneratedColumn,
   Column,
   OneToMany,
+  DeleteDateColumn,
 } from 'typeorm';
 import { User } from '../users/user.entity';
 
@@ -14,7 +15,24 @@ export class Department {
   @Column({ unique: true })
   name: string;
 
-  @OneToMany(() => User, user => user.department)
+  @OneToMany(() => User, (user) => user.department, {
+    onDelete: 'SET NULL',
+  })
   users: User[];
-}
 
+  @DeleteDateColumn({ type: 'timestamp', nullable: true })
+  deletedAt?: Date;
+
+  @Column({
+    type: 'timestamp',
+    default: () => 'CURRENT_TIMESTAMP',
+  })
+  createdAt: Date;
+
+  @Column({
+    type: 'timestamp',
+    default: () => 'CURRENT_TIMESTAMP',
+    onUpdate: 'CURRENT_TIMESTAMP',
+  })
+  updatedAt: Date;
+}

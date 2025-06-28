@@ -10,7 +10,7 @@ export class PermissionService {
     private readonly permissionRepo: Repository<Permission>
   ) {}
 
-  async findAll(): Promise<Permission[]> {
+  async findAll(token: string): Promise<Permission[]> {
     return this.permissionRepo.find();
   }
 }

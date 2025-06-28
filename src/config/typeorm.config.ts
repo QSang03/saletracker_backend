@@ -1,6 +1,7 @@
 import { TypeOrmModuleOptions } from '@nestjs/typeorm';
 import { config } from 'dotenv';
 import * as path from 'path';
+import { CustomNamingStrategy } from './custom-naming.strategy';
 
 config();
 
@@ -14,7 +15,18 @@ export const typeOrmConfig: TypeOrmModuleOptions = {
   entities: [path.join(__dirname, '/../**/*.entity.{ts,js}')],
   migrations: [path.join(__dirname, '/../migrations/*{.ts,.js}')],
   autoLoadEntities: true,
-  synchronize: false,
+  namingStrategy: new CustomNamingStrategy(),
+  synchronize: true,
   charset: 'utf8mb4_general_ci',
-  logging: true,
+  logging: false,
+  extra: {
+    connectionLimit: 10,
+    typeCast: (field, next) => {
+      if (field.type === 'TIMESTAMP') {
+        return field.string();
+      }
+      return next();
+    }
+  },
+  timezone: 'Z',
 };

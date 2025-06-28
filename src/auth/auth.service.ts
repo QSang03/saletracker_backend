@@ -1,100 +1,71 @@
-import {
-  Injectable,
-  UnauthorizedException,
-  BadRequestException,
-} from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
-import { JwtService } from '@nestjs/jwt';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { UserService } from '../users/user.service';
 import * as bcrypt from 'bcrypt';
-
-import { User } from '../users/user.entity';
-import { Role } from '../roles/role.entity';
-import { Permission } from '../permissions/permission.entity';
-import { RegisterDto } from './dto/register.dto';
+import { JwtService } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
+import { CreateUserDto } from '../users/dto/create-user.dto';
 
 @Injectable()
 export class AuthService {
   constructor(
-    @InjectRepository(User)
-    private readonly userRepo: Repository<User>,
-
-    @InjectRepository(Permission)
-    private readonly permissionRepo: Repository<Permission>,
-
+    private readonly usersService: UserService,
     private readonly jwtService: JwtService,
+    private readonly configService: ConfigService,
   ) {}
 
-  async validateUser(username: string, password: string): Promise<User> {
-    const user = await this.userRepo.findOne({
-      where: { username },
-      relations: ['roles', 'roles.permissions'],
+  async register(createUserDto: CreateUserDto) {
+    const hashedPassword = await bcrypt.hash(createUserDto.password, 10);
+    return this.usersService.createUser({
+      ...createUserDto,
+      password: hashedPassword,
     });
-
-    if (!user) throw new UnauthorizedException('Không tìm thấy tài khoản');
-
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) throw new UnauthorizedException('Sai mật khẩu');
-
-    return user;
   }
 
-  async login(user: User) {
-    let permissions: string[];
+  async validateUser(username: string, password: string): Promise<any> {
+    const user = await this.usersService.findByUsername(username);
 
-    if (user.username === 'admin') {
-      const allPermissions = await this.permissionRepo.find();
-      permissions = allPermissions.map((p) => p.action);
-    } else {
-      permissions = user.roles.flatMap((role) =>
-        role.permissions.map((perm) => perm.action),
-      );
+    if (!user) {
+      throw new UnauthorizedException('User not found');
     }
 
+    const passwordValid = await bcrypt.compare(password, user.password);
+
+    if (!passwordValid) {
+      throw new UnauthorizedException('Invalid credentials');
+    }
+
+    const { password: _, ...result } = user;
+    return result;
+  }
+
+  async login(user: any) {
     const payload = {
       sub: user.id,
       username: user.username,
-      permissions: [...new Set(permissions)],
+      fullName: user.fullName,
+      email: user.email,
+      phone: user.phone,
+      avatar: user.avatar,
+      status: user.status,
+      permissions: [
+        ...(user.permissions?.map((p) => p.action) || []),
+        ...(user.roles.flatMap(
+          (role) => role.permissions?.map((p) => p.action) || [],
+        ) || []),
+      ],
+      department: user.department?.name,
+      lastLogin: new Date().toISOString(),
     };
 
     return {
-      access_token: this.jwtService.sign(payload),
-      user: {
-        id: user.id,
-        username: user.username,
-        permissions: [...new Set(permissions)],
-      },
+      access_token: this.jwtService.sign(payload, {
+        secret: this.configService.get<string>('JWT_SECRET'),
+        expiresIn: '7d',
+      }),
     };
   }
 
-  async register(dto: RegisterDto) {
-    const { username, password, roleIds } = dto;
-
-    const existing = await this.userRepo.findOne({ where: { username } });
-    if (existing) throw new BadRequestException('Username đã tồn tại');
-
-    const roles = await this.userRepo.manager.getRepository(Role).find({
-      where: { id: In(roleIds) },
-      relations: ['permissions'],
-    });
-
-    const hashed = await bcrypt.hash(password, 10);
-
-    const user = this.userRepo.create({
-      username,
-      password: hashed,
-      roles,
-    });
-
-    await this.userRepo.save(user);
-
-    return {
-      message: 'Đăng ký thành công',
-      user: {
-        id: user.id,
-        username: user.username,
-        roles: user.roles.map((r) => r.name),
-      },
-    };
+  async logout(user: any) {
+    return { message: 'Đăng xuất thành công!' };
   }
 }

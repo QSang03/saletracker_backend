@@ -7,7 +7,14 @@ import { User } from '../users/user.entity';
 import { Department } from '../departments/department.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Permission, Role, User, Department])],
+  imports: [
+    TypeOrmModule.forFeature([
+      Permission, 
+      Role, 
+      User, 
+      Department
+    ]),
+  ],
   providers: [SeedService],
 })
 export class SeedModule {}
