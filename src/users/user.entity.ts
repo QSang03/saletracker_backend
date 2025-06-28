@@ -4,14 +4,13 @@ import {
   Column,
   ManyToMany,
   JoinTable,
-  ManyToOne,
   DeleteDateColumn,
   CreateDateColumn,
   UpdateDateColumn,
 } from 'typeorm';
 import { Role } from '../roles/role.entity';
 import { Department } from '../departments/department.entity';
-import { Permission } from '../permissions/permission.entity';
+import { UserStatus } from './user-status.enum';
 
 @Entity('users')
 export class User {
@@ -21,10 +20,10 @@ export class User {
   @Column({ unique: true })
   username: string;
 
-  @Column({ select: false }) // Ẩn password khi query
+  @Column({ select: false })
   password: string;
 
-  @Column({ nullable: true })
+  @Column({ nullable: true, name: 'full_name' })
   fullName?: string;
 
   @Column({ unique: true, nullable: true })
@@ -36,10 +35,10 @@ export class User {
   @Column({ nullable: true })
   avatar?: string;
 
-  @Column({ default: 'active' })
-  status: 'active' | 'inactive'; // Chỉ định rõ kiểu dữ liệu
+  @Column({ type: 'enum', enum: UserStatus, default: UserStatus.ACTIVE })
+  status: UserStatus;
 
-  @Column({ type: 'timestamp', nullable: true })
+  @Column({ type: 'timestamp', nullable: true, name: 'last_login' })
   lastLogin?: Date;
 
   @ManyToMany(() => Role, (role) => role.users, {
@@ -48,40 +47,28 @@ export class User {
   })
   @JoinTable({
     name: 'users_roles',
-    joinColumn: { name: 'userId', referencedColumnName: 'id' },
-    inverseJoinColumn: { name: 'roleId', referencedColumnName: 'id' },
+    joinColumn: { name: 'user_id', referencedColumnName: 'id' },
+    inverseJoinColumn: { name: 'role_id', referencedColumnName: 'id' },
   })
   roles: Role[];
 
-  @ManyToMany(() => Permission, (permission) => permission.users, {
-    cascade: true,
+  // Many-to-many với Department (optional)
+  @ManyToMany(() => Department, (department) => department.users, {
+    nullable: true,
   })
   @JoinTable({
-    name: 'users_permissions',
-    joinColumn: { name: 'userId', referencedColumnName: 'id' },
-    inverseJoinColumn: { name: 'permissionId', referencedColumnName: 'id' },
+    name: 'users_departments',
+    joinColumn: { name: 'user_id', referencedColumnName: 'id' },
+    inverseJoinColumn: { name: 'department_id', referencedColumnName: 'id' },
   })
-  permissions: Permission[]; // Quan hệ trực tiếp với Permission
+  departments?: Department[];
 
-  @ManyToOne(() => Department, (department) => department.users, {
-    nullable: true,
-    onDelete: 'SET NULL',
-  })
-  department?: Department;
-
-  @DeleteDateColumn({ type: 'timestamp', nullable: true })
+  @DeleteDateColumn({ type: 'timestamp', nullable: true, name: 'deleted_at' })
   deletedAt?: Date;
 
-  @Column({
-    type: 'timestamp',
-    default: () => 'CURRENT_TIMESTAMP',
-  })
+  @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 
-  @Column({
-    type: 'timestamp',
-    default: () => 'CURRENT_TIMESTAMP',
-    onUpdate: 'CURRENT_TIMESTAMP',
-  })
+  @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
 }

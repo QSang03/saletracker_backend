@@ -1,8 +1,4 @@
-import {
-  BadRequestException,
-  Injectable,
-  UnauthorizedException,
-} from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, IsNull } from 'typeorm';
 import { User } from './user.entity';
@@ -10,9 +6,8 @@ import * as bcrypt from 'bcrypt';
 import { JwtService } from '@nestjs/jwt';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
-import { UpdateUserPermissionsDto } from './dto/update-user-permissions.dto';
 import { Role } from '../roles/role.entity';
-import { Permission } from '../permissions/permission.entity';
+import { Department } from '../departments/department.entity';
 import { UserStatus } from './user-status.enum';
 
 @Injectable()
@@ -20,27 +15,20 @@ export class UserService {
   constructor(
     @InjectRepository(User)
     private readonly userRepo: Repository<User>,
-
+    @InjectRepository(Department)
+    private readonly departmentRepo: Repository<Department>,
     @InjectRepository(Role)
     private readonly roleRepo: Repository<Role>,
-
-    @InjectRepository(Permission)
-    private readonly permissionRepo: Repository<Permission>,
-
     private readonly jwtService: JwtService,
   ) {}
 
-  // 2. Phương thức lấy tất cả user
   async findAll(): Promise<User[]> {
     return this.userRepo.find({
-      relations: ['roles', 'department'],
-      where: {
-        deletedAt: IsNull(),
-      },
+      relations: ['roles', 'departments'],
+      where: { deletedAt: IsNull() },
     });
   }
 
-  // 3. Phương thức lấy một user theo ID
   async findOne(id: number): Promise<User | null> {
     if (isNaN(id) || !Number.isInteger(id) || id <= 0) {
       throw new BadRequestException('Invalid user ID');
@@ -48,27 +36,45 @@ export class UserService {
 
     return this.userRepo.findOne({
       where: { id, deletedAt: IsNull() },
-      relations: ['roles', 'department'],
+      relations: ['roles', 'departments'],
     });
   }
 
-  // 4. Phương thức tìm user theo username
+  async findOneWithDetails(id: number): Promise<User | null> {
+    if (isNaN(id) || !Number.isInteger(id) || id <= 0) {
+      throw new BadRequestException('Invalid user ID');
+    }
+
+    return this.userRepo.findOne({
+      where: { id, deletedAt: IsNull() },
+      relations: [
+        'roles', 
+        'roles.rolePermissions',
+        'roles.rolePermissions.permission',
+        'departments'
+      ],
+    });
+  }
+
   async findByUsername(username: string): Promise<User | null> {
     return this.userRepo.findOne({
       where: { username },
-      relations: ['roles', 'roles.permissions', 'permissions'],
+      relations: [
+        'roles', 
+        'roles.rolePermissions',
+        'roles.rolePermissions.permission',
+        'departments'
+      ],
       select: [
         'id',
         'username',
         'password',
         'roles',
-        'permissions',
-        'department',
+        'departments'
       ],
     });
   }
 
-  // 5. Phương thức tạo user mới
   async createUser(userData: CreateUserDto): Promise<User> {
     const hashedPassword = await bcrypt.hash(userData.password, 10);
 
@@ -88,8 +94,8 @@ export class UserService {
       status: userData.status || UserStatus.ACTIVE,
     };
 
-    if (userData.departmentId) {
-      userObj.department = { id: userData.departmentId } as any;
+    if (userData.departmentIds && userData.departmentIds.length > 0) {
+      userObj.departments = await this.departmentRepo.findByIds(userData.departmentIds);
     }
 
     const newUser = this.userRepo.create(userObj);
@@ -97,11 +103,10 @@ export class UserService {
 
     return this.userRepo.findOneOrFail({
       where: { id: savedUser.id },
-      relations: ['roles', 'roles.permissions', 'department'],
+      relations: ['roles', 'departments'],
     });
   }
 
-  // 6. Phương thức cập nhật user
   async updateUser(id: number, updateData: UpdateUserDto): Promise<User> {
     const updatePayload: Partial<User> = {
       username: updateData.username,
@@ -118,12 +123,13 @@ export class UserService {
 
     await this.userRepo.update(id, updatePayload);
 
-    if (updateData.departmentId !== undefined) {
+    if (updateData.departmentIds !== undefined) {
+      const departments = await this.departmentRepo.findByIds(updateData.departmentIds);
       await this.userRepo
         .createQueryBuilder()
-        .relation(User, 'department')
+        .relation(User, 'departments')
         .of(id)
-        .set(updateData.departmentId ? { id: updateData.departmentId } : null);
+        .set(departments);
     }
 
     if (updateData.roleIds) {
@@ -137,53 +143,21 @@ export class UserService {
 
     return this.userRepo.findOneOrFail({
       where: { id },
-      relations: ['roles', 'department'],
+      relations: ['roles', 'departments'],
     });
   }
 
-  // 7. Phương thức xóa mềm user
   async softDeleteUser(id: number): Promise<void> {
     await this.userRepo.update(id, { deletedAt: new Date() });
   }
 
-  // 8. Phương thức lấy user cho quản lý phân quyền
   async getUsersForPermissionManagement(): Promise<User[]> {
     return this.userRepo.find({
-      relations: ['roles', 'department'],
-      select: ['id', 'username', 'department'],
+      relations: ['roles', 'departments'],
+      select: ['id', 'username', 'departments'],
     });
   }
 
-  // 9. Phương thức cập nhật phân quyền cho user
-  async updateUserPermissions(
-    userId: number,
-    dto: UpdateUserPermissionsDto,
-  ): Promise<User> {
-    const user = await this.userRepo.findOne({
-      where: { id: userId },
-      relations: ['roles', 'permissions'],
-    });
-
-    if (!user) {
-      throw new Error(`User with ID ${userId} not found`);
-    }
-
-    const roles = await this.roleRepo.findBy({ id: In(dto.roleIds) });
-    user.roles = roles;
-
-    if (dto.permissionIds && dto.permissionIds.length > 0) {
-      const permissions = await this.permissionRepo.findBy({
-        id: In(dto.permissionIds),
-      });
-      user.permissions = permissions;
-    } else {
-      user.permissions = [];
-    }
-
-    return this.userRepo.save(user);
-  }
-
-  // 10. Phương thức gán vai trò cho user
   async assignRolesToUser(userId: number, roleIds: number[]): Promise<User> {
     const user = await this.userRepo.findOne({
       where: { id: userId },
@@ -198,16 +172,5 @@ export class UserService {
     user.roles = roles;
 
     return this.userRepo.save(user);
-  }
-
-  async findOneWithDetails(id: number): Promise<User | null> {
-    if (isNaN(id) || !Number.isInteger(id) || id <= 0) {
-      throw new BadRequestException('Invalid user ID');
-    }
-
-    return this.userRepo.findOne({
-      where: { id, deletedAt: IsNull() },
-      relations: ['roles', 'roles.permissions', 'permissions', 'department'],
-    });
   }
 }

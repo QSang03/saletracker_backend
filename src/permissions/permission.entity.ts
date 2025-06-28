@@ -2,10 +2,13 @@ import {
   Entity,
   PrimaryGeneratedColumn,
   Column,
-  ManyToMany,
+  OneToMany,
+  CreateDateColumn,
+  UpdateDateColumn,
   DeleteDateColumn,
 } from 'typeorm';
-import { Role } from '../roles/role.entity';
+import { RolePermission } from '../roles_permissions/roles_permissions.entity';
+import { DepartmentPermission } from '../departments-permissions/departments_permissions.entity';
 
 @Entity('permissions')
 export class Permission {
@@ -15,25 +18,18 @@ export class Permission {
   @Column()
   action: string;
 
-  @ManyToMany(() => Role, (role) => role.permissions, {
-    onDelete: 'CASCADE',
-  })
-  roles: Role[];
+  @OneToMany(() => RolePermission, (rp) => rp.permission)
+  rolePermissions: RolePermission[];
 
-  @DeleteDateColumn({ type: 'timestamp', nullable: true })
-  deletedAt?: Date;
+  @OneToMany(() => DepartmentPermission, (dp) => dp.permission)
+  departmentPermissions: DepartmentPermission[];
 
-  @Column({
-    type: 'timestamp',
-    default: () => 'CURRENT_TIMESTAMP',
-  })
+  @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 
-  @Column({
-    type: 'timestamp',
-    default: () => 'CURRENT_TIMESTAMP',
-    onUpdate: 'CURRENT_TIMESTAMP',
-  })
+  @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
-  users: any;
+
+  @DeleteDateColumn({ name: 'deleted_at' })
+  deletedAt?: Date;
 }

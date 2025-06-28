@@ -9,11 +9,11 @@ import { PermissionModule } from './permissions/permission.module';
 import { DepartmentModule } from './departments/department.module';
 import { SeedModule } from './seed/seed.module';
 import { typeOrmConfig } from './config/typeorm.config';
-import { ConfigModule } from '@nestjs/config'; // Thêm ConfigModule
+import { ConfigModule } from '@nestjs/config';
 
 @Module({
   imports: [
-    ConfigModule.forRoot({ // Thêm cấu hình này
+    ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: '.env'
     }),

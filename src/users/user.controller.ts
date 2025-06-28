@@ -19,7 +19,6 @@ import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { AuthGuard } from '../common/guards/auth.guard';
 import { Request } from 'express';
-import { UpdateUserPermissionsDto } from './dto/update-user-permissions.dto';
 import { JwtAuthGuard } from 'src/auth/jwt-auth.guard';
 
 @Controller('users')
@@ -70,15 +69,5 @@ export class UserController {
   @UseGuards(JwtAuthGuard)
   async findOne(@Param('id', ParseIntPipe) id: number) {
     return this.userService.findOne(id);
-  }
-
-  @Put(':id/permissions')
-  @UseGuards(JwtAuthGuard)
-  @HttpCode(HttpStatus.OK)
-  async updateUserPermissions(
-    @Param('id', ParseIntPipe) userId: number,
-    @Body() dto: UpdateUserPermissionsDto,
-  ) {
-    return this.userService.updateUserPermissions(userId, dto);
   }
 }

@@ -1,7 +1,7 @@
 import { Controller, Post, Body, UseGuards, Req, Get } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { CreateUserDto } from '../users/dto/create-user.dto';
-import { LoginDto } from './dto/login.dto'; // Tạo file login.dto.ts
+import { LoginDto } from './dto/login.dto';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import { UserService } from '../users/user.service';
 
@@ -38,6 +38,12 @@ export class AuthController {
     const user = await this.userService.findOneWithDetails(req.user.id);
     if (!user) return null;
 
+    const permissions = user.roles.flatMap(role =>
+      role.rolePermissions
+        .filter(rp => rp.isActive)
+        .map(rp => rp.permission.action)
+    );
+
     return {
       id: user.id,
       username: user.username,
@@ -46,13 +52,9 @@ export class AuthController {
       phone: user.phone,
       avatar: user.avatar,
       status: user.status,
-      permissions: [
-        ...(user.permissions?.map((p) => p.action) || []),
-        ...(user.roles?.flatMap((role) =>
-          role.permissions.map((p) => p.action),
-        ) || []),
-      ],
-      department: user.department?.name,
+      permissions,
+      // Sửa: trả về danh sách tên phòng ban
+      departments: user.departments?.map(d => d.name) || [],
       lastLogin: user.lastLogin,
       createdAt: user.createdAt,
       updatedAt: user.updatedAt,

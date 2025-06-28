@@ -2,12 +2,14 @@ import {
   Entity,
   PrimaryGeneratedColumn,
   Column,
+  OneToMany,
   ManyToMany,
-  JoinTable,
   DeleteDateColumn,
+  CreateDateColumn,
+  UpdateDateColumn,
 } from 'typeorm';
-import { Permission } from '../permissions/permission.entity';
 import { User } from '../users/user.entity';
+import { RolePermission } from '../roles_permissions/roles_permissions.entity';
 
 @Entity('roles')
 export class Role {
@@ -17,35 +19,21 @@ export class Role {
   @Column({ unique: true })
   name: string;
 
-  @ManyToMany(() => Permission, (permission) => permission.roles, {
-    cascade: true,
-    onDelete: 'CASCADE',
-  })
-  @JoinTable({
-    name: 'roles_permissions',
-    joinColumn: { name: 'roleId', referencedColumnName: 'id' },
-    inverseJoinColumn: { name: 'permissionId', referencedColumnName: 'id' },
-  })
-  permissions: Permission[];
+  // THÊM DÒNG NÀY
+  @OneToMany(() => RolePermission, (rolePermission) => rolePermission.role)
+  rolePermissions: RolePermission[];
 
   @ManyToMany(() => User, (user) => user.roles, {
     onDelete: 'CASCADE',
   })
   users: User[];
 
-  @DeleteDateColumn({ type: 'timestamp', nullable: true })
+  @DeleteDateColumn({ type: 'timestamp', nullable: true, name: 'deleted_at' })
   deletedAt?: Date;
 
-  @Column({
-    type: 'timestamp',
-    default: () => 'CURRENT_TIMESTAMP',
-  })
+  @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 
-  @Column({
-    type: 'timestamp',
-    default: () => 'CURRENT_TIMESTAMP',
-    onUpdate: 'CURRENT_TIMESTAMP',
-  })
+  @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
 }

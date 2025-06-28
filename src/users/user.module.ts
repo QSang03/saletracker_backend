@@ -5,14 +5,14 @@ import { UserService } from './user.service';
 import { UserController } from './user.controller';
 import { User } from './user.entity';
 import { Role } from '../roles/role.entity';
-import { Permission } from '../permissions/permission.entity';
+import { Department } from '../departments/department.entity';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([
       User, 
       Role,
-      Permission
+      Department,
     ]),
     JwtModule.register({}),
   ],

@@ -2,10 +2,14 @@ import {
   Entity,
   PrimaryGeneratedColumn,
   Column,
+  ManyToMany,
   OneToMany,
+  CreateDateColumn,
+  UpdateDateColumn,
   DeleteDateColumn,
 } from 'typeorm';
 import { User } from '../users/user.entity';
+import { DepartmentPermission } from '../departments-permissions/departments_permissions.entity';
 
 @Entity('departments')
 export class Department {
@@ -15,24 +19,20 @@ export class Department {
   @Column({ unique: true })
   name: string;
 
-  @OneToMany(() => User, (user) => user.department, {
-    onDelete: 'SET NULL',
+  @ManyToMany(() => User, (user) => user.departments, {
+    nullable: true,
   })
-  users: User[];
+  users?: User[];
 
-  @DeleteDateColumn({ type: 'timestamp', nullable: true })
-  deletedAt?: Date;
+  @OneToMany(() => DepartmentPermission, (dp) => dp.department)
+  departmentPermissions: DepartmentPermission[];
 
-  @Column({
-    type: 'timestamp',
-    default: () => 'CURRENT_TIMESTAMP',
-  })
+  @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 
-  @Column({
-    type: 'timestamp',
-    default: () => 'CURRENT_TIMESTAMP',
-    onUpdate: 'CURRENT_TIMESTAMP',
-  })
+  @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
+
+  @DeleteDateColumn({ name: 'deleted_at' })
+  deletedAt?: Date;
 }

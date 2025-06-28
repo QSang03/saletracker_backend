@@ -1,27 +1,11 @@
-import { 
-  IsString, 
-  IsOptional, 
-  IsNotEmpty, 
-  IsArray, 
-  IsNumber, 
-  IsEmail,
-  IsPhoneNumber,
-  IsEnum
-} from 'class-validator';
-
-// Tạo enum cho trạng thái
-export enum UserStatus {
-  ACTIVE = 'active',
-  INACTIVE = 'inactive',
-}
+import { IsString, IsOptional, IsEmail, IsEnum, IsArray, IsNumber } from 'class-validator';
+import { UserStatus } from '../user-status.enum';
 
 export class CreateUserDto {
   @IsString()
-  @IsNotEmpty()
   username: string;
 
   @IsString()
-  @IsNotEmpty()
   password: string;
 
   @IsOptional()
@@ -33,7 +17,7 @@ export class CreateUserDto {
   email?: string;
 
   @IsOptional()
-  @IsPhoneNumber(undefined)
+  @IsString()
   phone?: string;
 
   @IsOptional()
@@ -45,8 +29,9 @@ export class CreateUserDto {
   status?: UserStatus;
 
   @IsOptional()
-  @IsNumber()
-  departmentId?: number;
+  @IsArray()
+  @IsNumber({}, { each: true })
+  departmentIds?: number[];
 
   @IsOptional()
   @IsArray()

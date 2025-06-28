@@ -5,6 +5,7 @@ import { Permission } from '../permissions/permission.entity';
 import { Role } from '../roles/role.entity';
 import { User } from '../users/user.entity';
 import { Department } from '../departments/department.entity';
+import { RolePermission } from '../roles_permissions/roles_permissions.entity';
 
 @Module({
   imports: [
@@ -12,7 +13,8 @@ import { Department } from '../departments/department.entity';
       Permission, 
       Role, 
       User, 
-      Department
+      Department,
+      RolePermission
     ]),
   ],
   providers: [SeedService],

@@ -1,13 +1,5 @@
-import { 
-  IsString, 
-  IsOptional, 
-  IsArray, 
-  IsNumber, 
-  IsEmail,
-  IsPhoneNumber,
-  IsEnum
-} from 'class-validator';
-import { UserStatus } from './create-user.dto';
+import { IsString, IsOptional, IsEmail, IsEnum, IsArray, IsNumber } from 'class-validator';
+import { UserStatus } from '../user-status.enum';
 
 export class UpdateUserDto {
   @IsOptional()
@@ -27,7 +19,7 @@ export class UpdateUserDto {
   email?: string;
 
   @IsOptional()
-  @IsPhoneNumber(undefined)
+  @IsString()
   phone?: string;
 
   @IsOptional()
@@ -39,8 +31,9 @@ export class UpdateUserDto {
   status?: UserStatus;
 
   @IsOptional()
-  @IsNumber()
-  departmentId?: number;
+  @IsArray()
+  @IsNumber({}, { each: true })
+  departmentIds?: number[];
 
   @IsOptional()
   @IsArray()
