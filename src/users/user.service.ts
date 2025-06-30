@@ -3,7 +3,6 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, IsNull } from 'typeorm';
 import { User } from './user.entity';
 import * as bcrypt from 'bcrypt';
-import { JwtService } from '@nestjs/jwt';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { Role } from '../roles/role.entity';
@@ -19,7 +18,6 @@ export class UserService {
     private readonly departmentRepo: Repository<Department>,
     @InjectRepository(Role)
     private readonly roleRepo: Repository<Role>,
-    private readonly jwtService: JwtService,
   ) {}
 
   async findAll(): Promise<User[]> {
@@ -51,7 +49,7 @@ export class UserService {
         'roles', 
         'roles.rolePermissions',
         'roles.rolePermissions.permission',
-        'departments'
+        'departments',
       ],
     });
   }
@@ -63,15 +61,9 @@ export class UserService {
         'roles', 
         'roles.rolePermissions',
         'roles.rolePermissions.permission',
-        'departments'
+        'departments',
       ],
-      select: [
-        'id',
-        'username',
-        'password',
-        'roles',
-        'departments'
-      ],
+      select: ['id', 'username', 'password', 'roles', 'departments'],
     });
   }
 
@@ -83,20 +75,24 @@ export class UserService {
       roles = await this.roleRepo.findBy({ id: In(userData.roleIds) });
     }
 
+    let departments: Department[] = [];
+    if (userData.departmentIds && userData.departmentIds.length > 0) {
+      departments = await this.departmentRepo.findBy({ 
+        id: In(userData.departmentIds) 
+      });
+    }
+
     const userObj: Partial<User> = {
       username: userData.username,
       password: hashedPassword,
-      roles: roles,
+      roles,
+      departments,
       fullName: userData.fullName,
       email: userData.email,
       phone: userData.phone,
       avatar: userData.avatar,
       status: userData.status || UserStatus.ACTIVE,
     };
-
-    if (userData.departmentIds && userData.departmentIds.length > 0) {
-      userObj.departments = await this.departmentRepo.findByIds(userData.departmentIds);
-    }
 
     const newUser = this.userRepo.create(userObj);
     const savedUser = await this.userRepo.save(newUser);
@@ -123,8 +119,12 @@ export class UserService {
 
     await this.userRepo.update(id, updatePayload);
 
+    // Cập nhật departments
     if (updateData.departmentIds !== undefined) {
-      const departments = await this.departmentRepo.findByIds(updateData.departmentIds);
+      const departments = await this.departmentRepo.findBy({ 
+        id: In(updateData.departmentIds) 
+      });
+      
       await this.userRepo
         .createQueryBuilder()
         .relation(User, 'departments')
@@ -132,8 +132,12 @@ export class UserService {
         .set(departments);
     }
 
+    // Cập nhật roles
     if (updateData.roleIds) {
-      const roles = await this.roleRepo.findBy({ id: In(updateData.roleIds) });
+      const roles = await this.roleRepo.findBy({ 
+        id: In(updateData.roleIds) 
+      });
+      
       await this.userRepo
         .createQueryBuilder()
         .relation(User, 'roles')
@@ -153,8 +157,26 @@ export class UserService {
 
   async getUsersForPermissionManagement(): Promise<User[]> {
     return this.userRepo.find({
-      relations: ['roles', 'departments'],
-      select: ['id', 'username', 'departments'],
+      relations: {
+        roles: true,
+        departments: true,
+      },
+      select: {
+        id: true,
+        username: true,
+        fullName: true,
+        departments: {
+          id: true,
+          name: true,
+        },
+        roles: {
+          id: true,
+          name: true,
+        },
+      },
+      where: {
+        deletedAt: IsNull(),
+      },
     });
   }
 

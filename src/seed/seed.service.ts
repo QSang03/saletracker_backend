@@ -8,7 +8,7 @@ import { Permission } from '../permissions/permission.entity';
 import { Role } from '../roles/role.entity';
 import { User } from '../users/user.entity';
 import { UserStatus } from '../users/user-status.enum';
-import { RolePermission } from '../roles_permissions/roles_permissions.entity';
+import { RolePermission } from '../roles_permissions/roles-permissions.entity';
 
 @Injectable()
 export class SeedService implements OnModuleInit {

@@ -9,7 +9,7 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 import { User } from '../users/user.entity';
-import { RolePermission } from '../roles_permissions/roles_permissions.entity';
+import { RolePermission } from '../roles_permissions/roles-permissions.entity';
 
 @Entity('roles')
 export class Role {

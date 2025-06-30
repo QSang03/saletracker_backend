@@ -7,7 +7,7 @@ import {
   UpdateDateColumn,
   DeleteDateColumn,
 } from 'typeorm';
-import { RolePermission } from '../roles_permissions/roles_permissions.entity';
+import { RolePermission } from '../roles_permissions/roles-permissions.entity';
 import { DepartmentPermission } from '../departments-permissions/departments_permissions.entity';
 
 @Entity('permissions')

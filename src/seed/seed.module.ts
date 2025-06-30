@@ -5,7 +5,7 @@ import { Permission } from '../permissions/permission.entity';
 import { Role } from '../roles/role.entity';
 import { User } from '../users/user.entity';
 import { Department } from '../departments/department.entity';
-import { RolePermission } from '../roles_permissions/roles_permissions.entity';
+import { RolePermission } from '../roles_permissions/roles-permissions.entity';
 
 @Module({
   imports: [

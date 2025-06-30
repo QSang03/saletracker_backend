@@ -7,67 +7,63 @@ import {
   Param,
   Delete,
   UseGuards,
-  Req,
-  Query,
-  Put,
-  HttpCode,
-  HttpStatus,
   ParseIntPipe,
 } from '@nestjs/common';
 import { UserService } from './user.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
-import { AuthGuard } from '../common/guards/auth.guard';
-import { Request } from 'express';
-import { JwtAuthGuard } from 'src/auth/jwt-auth.guard';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
 @Controller('users')
-@UseGuards(AuthGuard)
+@UseGuards(JwtAuthGuard)
 export class UserController {
   constructor(private readonly userService: UserService) {}
 
   @Get()
-  @UseGuards(JwtAuthGuard)
   async findAll() {
     return this.userService.findAll();
   }
 
   @Post()
-  @UseGuards(JwtAuthGuard)
   async create(@Body() createUserDto: CreateUserDto) {
     return this.userService.createUser(createUserDto);
   }
 
+  @Get(':id')
+  async findOne(@Param('id', ParseIntPipe) id: number) {
+    return this.userService.findOne(id);
+  }
+
   @Patch(':id')
-  @UseGuards(JwtAuthGuard)
-  async update(@Param('id') id: string, @Body() updateUserDto: UpdateUserDto) {
-    return this.userService.updateUser(+id, updateUserDto);
+  async update(
+    @Param('id', ParseIntPipe) id: number, 
+    @Body() updateUserDto: UpdateUserDto
+  ) {
+    return this.userService.updateUser(id, updateUserDto);
   }
 
   @Delete(':id')
-  @UseGuards(JwtAuthGuard)
-  async remove(@Param('id') id: string) {
-    return this.userService.softDeleteUser(+id);
+  async remove(@Param('id', ParseIntPipe) id: number) {
+    return this.userService.softDeleteUser(id);
   }
 
   @Post(':userId/roles')
-  @UseGuards(JwtAuthGuard)
   async assignRoles(
-    @Param('userId') userId: string,
+    @Param('userId', ParseIntPipe) userId: number,
     @Body() roleIds: number[],
   ) {
-    return this.userService.assignRolesToUser(+userId, roleIds);
+    return this.userService.assignRolesToUser(userId, roleIds);
   }
 
   @Get('for-permission-management')
-  @UseGuards(JwtAuthGuard)
   async getUsersForPermissionManagement() {
-    return this.userService.getUsersForPermissionManagement();
-  }
-
-  @Get(':id')
-  @UseGuards(JwtAuthGuard)
-  async findOne(@Param('id', ParseIntPipe) id: number) {
-    return this.userService.findOne(id);
+    const users = await this.userService.getUsersForPermissionManagement();
+    return users.map(user => ({
+      id: user.id,
+      username: user.username,
+      fullName: user.fullName,
+      departments: (user.departments ?? []).map(d => ({ id: d.id, name: d.name })),
+      roles: (user.roles ?? []).map(r => ({ id: r.id, name: r.name })),
+    }));
   }
 }
