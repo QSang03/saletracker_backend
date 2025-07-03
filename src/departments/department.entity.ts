@@ -9,7 +9,6 @@ import {
   DeleteDateColumn,
 } from 'typeorm';
 import { User } from '../users/user.entity';
-import { DepartmentPermission } from '../departments-permissions/departments_permissions.entity';
 
 @Entity('departments')
 export class Department {
@@ -19,13 +18,13 @@ export class Department {
   @Column({ unique: true })
   name: string;
 
+  @Column({ unique: true })
+  slug: string;
+
   @ManyToMany(() => User, (user) => user.departments, {
     nullable: true,
   })
   users?: User[];
-
-  @OneToMany(() => DepartmentPermission, (dp) => dp.department)
-  departmentPermissions: DepartmentPermission[];
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;

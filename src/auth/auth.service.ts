@@ -4,6 +4,11 @@ import * as bcrypt from 'bcrypt';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { CreateUserDto } from '../users/dto/create-user.dto';
+import { Role } from 'src/roles/role.entity';
+import { RolePermission } from 'src/roles_permissions/roles-permissions.entity';
+import { Permission } from 'src/permissions/permission.entity';
+import { UserGateway } from 'src/users/user.gateway';
+import { UserStatus } from '../users/user-status.enum';
 
 @Injectable()
 export class AuthService {
@@ -11,6 +16,7 @@ export class AuthService {
     private readonly usersService: UserService,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
+    private readonly userGateway: UserGateway,
   ) {}
 
   async register(createUserDto: CreateUserDto) {
@@ -25,13 +31,21 @@ export class AuthService {
     const user = await this.usersService.findByUsername(username);
 
     if (!user) {
-      throw new UnauthorizedException('User not found');
+      throw new UnauthorizedException('Tài khoản không tồn tại');
+    }
+
+    if (!user.password) {
+      throw new UnauthorizedException('Tài khoản chưa được thiết lập mật khẩu');
+    }
+
+    if (user.isBlock) {
+      throw new UnauthorizedException('Tài khoản của bạn đã bị khóa');
     }
 
     const passwordValid = await bcrypt.compare(password, user.password);
 
     if (!passwordValid) {
-      throw new UnauthorizedException('Invalid credentials');
+      throw new UnauthorizedException('Mật khẩu không chính xác');
     }
 
     const { password: _, ...result } = user;
@@ -39,33 +53,77 @@ export class AuthService {
   }
 
   async login(user: any) {
+    await this.usersService.updateUser(user.id, {
+      status: UserStatus.ACTIVE,
+      lastLogin: true,
+    });
+
+    const updatedUser = await this.usersService.findOneWithDetails(user.id);
+
+    if (!updatedUser) {
+      throw new UnauthorizedException('User not found after update');
+    }
+
     const payload = {
-      sub: user.id,
-      username: user.username,
-      fullName: user.fullName,
-      email: user.email,
-      phone: user.phone,
-      avatar: user.avatar,
-      status: user.status,
+      sub: updatedUser.id,
+      username: updatedUser.username,
+      fullName: updatedUser.fullName,
+      email: updatedUser.email,
+      status: updatedUser.status,
+      roles: updatedUser.roles?.map((role) => role.name) || [],
+      departments:
+        updatedUser.departments?.map((d) => ({
+          id: d.id,
+          name: d.name,
+          slug: d.slug,
+        })) || [],
       permissions: [
-        ...(user.permissions?.map((p) => p.action) || []),
-        ...(user.roles.flatMap(
-          (role) => role.permissions?.map((p) => p.action) || [],
-        ) || []),
+        ...updatedUser.roles?.flatMap(
+          (role: Role) =>
+            role.rolePermissions
+              ?.filter((rp: RolePermission) => rp.isActive)
+              .map((rp: RolePermission) => ({
+                name: rp.permission.name,
+                action: rp.permission.action,
+              })) || [],
+        ),
       ],
-      department: user.department?.name,
-      lastLogin: new Date().toISOString(),
+      lastLogin: updatedUser.lastLogin,
     };
+
+    this.userGateway.server.to('admin_dashboard').emit('user_login', {
+      userId: updatedUser.id,
+      status: updatedUser.status,
+      last_login: updatedUser.lastLogin,
+    });
 
     return {
       access_token: this.jwtService.sign(payload, {
         secret: this.configService.get<string>('JWT_SECRET'),
         expiresIn: '7d',
       }),
+      user: {
+        id: updatedUser.id,
+        username: updatedUser.username,
+        fullName: updatedUser.fullName,
+        email: updatedUser.email,
+        status: updatedUser.status,
+        isBlock: updatedUser.isBlock,
+        roles: updatedUser.roles?.map((role) => role.name) || [],
+      },
     };
   }
 
   async logout(user: any) {
+    await this.usersService.updateUser(user.id, {
+      status: UserStatus.INACTIVE,
+    });
+
+    this.userGateway.server.to('admin_dashboard').emit('user_logout', {
+      userId: user.id,
+      status: UserStatus.INACTIVE,
+    });
+
     return { message: 'Đăng xuất thành công!' };
   }
 }

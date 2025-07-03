@@ -1,4 +1,12 @@
-import { IsString, IsOptional, IsEmail, IsEnum, IsArray, IsNumber } from 'class-validator';
+import {
+  IsString,
+  IsOptional,
+  IsEmail,
+  IsEnum,
+  IsArray,
+  IsNumber,
+  IsBoolean,
+} from 'class-validator';
 import { UserStatus } from '../user-status.enum';
 
 export class CreateUserDto {
@@ -9,24 +17,24 @@ export class CreateUserDto {
   password: string;
 
   @IsOptional()
-  @IsString()
-  fullName?: string;
-
-  @IsOptional()
   @IsEmail()
   email?: string;
 
   @IsOptional()
   @IsString()
-  phone?: string;
-
-  @IsOptional()
-  @IsString()
-  avatar?: string;
+  fullName?: string;
 
   @IsOptional()
   @IsEnum(UserStatus)
   status?: UserStatus;
+
+  @IsOptional()
+  @IsBoolean()
+  isBlock?: boolean;
+
+  @IsOptional()
+  @IsString()
+  employeeCode?: string;
 
   @IsOptional()
   @IsArray()

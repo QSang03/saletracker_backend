@@ -14,6 +14,10 @@ import { UserStatus } from './user-status.enum';
 
 @Entity('users')
 export class User {
+  toJSON() {
+    const { password, ...rest } = this;
+    return rest;
+  }
   @PrimaryGeneratedColumn()
   id: number;
 
@@ -29,17 +33,17 @@ export class User {
   @Column({ unique: true, nullable: true })
   email?: string;
 
-  @Column({ nullable: true })
-  phone?: string;
+  @Column({ default: false, name: 'is_block' })
+  isBlock: boolean;
 
-  @Column({ nullable: true })
-  avatar?: string;
+  @Column({ unique: true, nullable: true, name: 'employee_code' })
+  employeeCode?: string;
 
   @Column({ type: 'enum', enum: UserStatus, default: UserStatus.ACTIVE })
   status: UserStatus;
 
-  @Column({ type: 'timestamp', nullable: true, name: 'last_login' })
-  lastLogin?: Date;
+  @Column({ type: 'datetime', nullable: true })
+  lastLogin?: Date | null;
 
   @ManyToMany(() => Role, (role) => role.users, {
     cascade: true,
@@ -52,7 +56,6 @@ export class User {
   })
   roles: Role[];
 
-  // Many-to-many với Department (optional)
   @ManyToMany(() => Department, (department) => department.users, {
     nullable: true,
   })
@@ -63,8 +66,8 @@ export class User {
   })
   departments?: Department[];
 
-  @DeleteDateColumn({ type: 'timestamp', nullable: true, name: 'deleted_at' })
-  deletedAt?: Date;
+  @Column({ type: 'datetime', nullable: true })
+  deletedAt?: Date | null;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;

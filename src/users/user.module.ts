@@ -6,6 +6,7 @@ import { UserController } from './user.controller';
 import { User } from './user.entity';
 import { Role } from '../roles/role.entity';
 import { Department } from '../departments/department.entity';
+import { UserGateway } from './user.gateway';
 
 @Module({
   imports: [
@@ -16,8 +17,8 @@ import { Department } from '../departments/department.entity';
     ]),
     JwtModule.register({}),
   ],
-  providers: [UserService],
+  providers: [UserService, UserGateway],
   controllers: [UserController],
-  exports: [UserService],
+  exports: [UserService, UserGateway],
 })
 export class UserModule {}

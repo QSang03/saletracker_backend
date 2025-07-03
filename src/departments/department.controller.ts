@@ -1,13 +1,13 @@
-import { 
-  Controller, 
-  Get, 
-  Post, 
-  Body, 
-  Patch, 
-  Param, 
-  Delete, 
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Patch,
+  Param,
+  Delete,
   UseGuards,
-  Req
+  Req,
 } from '@nestjs/common';
 import { DepartmentService } from './department.service';
 import { CreateDepartmentDto } from './dto/create-department.dto';
@@ -18,7 +18,9 @@ import { Request } from 'express';
 @Controller('departments')
 @UseGuards(AuthGuard)
 export class DepartmentController {
-  constructor(private readonly departmentService: DepartmentService) {}
+  constructor(
+    private readonly departmentService: DepartmentService,
+  ) {}
 
   @Get()
   async findAll(@Req() req: Request) {
@@ -29,20 +31,28 @@ export class DepartmentController {
   @Post()
   async create(
     @Body() createDepartmentDto: CreateDepartmentDto,
-    @Req() req: Request
+    @Req() req: Request,
   ) {
     const token = req.headers.authorization?.split(' ')[1] || '';
-    return this.departmentService.createDepartment(createDepartmentDto, '', token);
+    return this.departmentService.createDepartment(
+      createDepartmentDto,
+      '',
+      token,
+    );
   }
 
   @Patch(':id')
   async update(
-    @Param('id') id: string, 
+    @Param('id') id: string,
     @Body() updateDepartmentDto: UpdateDepartmentDto,
-    @Req() req: Request
+    @Req() req: Request,
   ) {
     const token = req.headers.authorization?.split(' ')[1] || '';
-    return this.departmentService.updateDepartment(+id, updateDepartmentDto, token);
+    return this.departmentService.updateDepartment(
+      +id,
+      updateDepartmentDto,
+      token,
+    );
   }
 
   @Delete(':id')

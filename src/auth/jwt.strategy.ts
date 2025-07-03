@@ -16,6 +16,7 @@ export type JwtPayload = {
   lastLogin?: string;
   iat?: number;
   exp?: number;
+  departmentId?: number;
 };
 
 @Injectable()
@@ -38,14 +39,15 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     return {
       id: payload.sub,
       username: payload.username,
-      full_name: payload.full_name,
+      fullName: payload.full_name,
       email: payload.email,
       phone: payload.phone,
       avatar: payload.avatar,
       status: payload.status,
       permissions: payload.permissions,
       department: payload.department,
-      lastLogin: payload.lastLogin
+      lastLogin: payload.lastLogin,
+      departmentId: payload.departmentId
     };
   }
 }

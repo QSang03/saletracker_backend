@@ -38,27 +38,36 @@ export class AuthController {
     const user = await this.userService.findOneWithDetails(req.user.id);
     if (!user) return null;
 
-    const permissions = user.roles.flatMap(role =>
+    // Trả về cả name và action cho mỗi permission
+    const permissions = user.roles.flatMap((role) =>
       role.rolePermissions
-        .filter(rp => rp.isActive)
-        .map(rp => rp.permission.action)
+        .filter((rp) => rp.isActive)
+        .map((rp) => ({
+          name: rp.permission.name,
+          action: rp.permission.action,
+        })),
     );
 
     return {
       id: user.id,
       username: user.username,
       fullName: user.fullName,
-      email: user.email,
-      phone: user.phone,
-      avatar: user.avatar,
       status: user.status,
+      isBlock: user.isBlock,
+      employeeCode: user.employeeCode,
       permissions,
-      // Sửa: trả về danh sách tên phòng ban
-      departments: user.departments?.map(d => d.name) || [],
-      lastLogin: user.lastLogin,
-      createdAt: user.createdAt,
-      updatedAt: user.updatedAt,
+      departments:
+        user.departments?.map((d) => ({
+          id: d.id,
+          name: d.name,
+          slug: d.slug,
+        })) || [],
       roles: user.roles?.map((r) => ({ id: r.id, name: r.name })),
+      // Nếu không cần các trường dưới, có thể bỏ để nhẹ hơn:
+      email: user.email,
+      // lastLogin: user.lastLogin,
+      // createdAt: user.createdAt,
+      // updatedAt: user.updatedAt,
     };
   }
 }

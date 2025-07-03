@@ -1,4 +1,13 @@
-import { IsString, IsOptional, IsEmail, IsEnum, IsArray, IsNumber } from 'class-validator';
+import {
+  IsString,
+  IsOptional,
+  IsEmail,
+  IsEnum,
+  IsArray,
+  IsNumber,
+  IsBoolean,
+  IsDate,
+} from 'class-validator';
 import { UserStatus } from '../user-status.enum';
 
 export class UpdateUserDto {
@@ -11,24 +20,28 @@ export class UpdateUserDto {
   password?: string;
 
   @IsOptional()
-  @IsString()
-  fullName?: string;
-
-  @IsOptional()
   @IsEmail()
   email?: string;
 
   @IsOptional()
-  @IsString()
-  phone?: string;
-
-  @IsOptional()
-  @IsString()
-  avatar?: string;
-
-  @IsOptional()
   @IsEnum(UserStatus)
   status?: UserStatus;
+
+  @IsOptional()
+  @IsString()
+  lastLogin?: boolean | string | null;
+
+  @IsOptional()
+  @IsString()
+  fullName?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  isBlock?: boolean;
+
+  @IsOptional()
+  @IsString()
+  employeeCode?: string;
 
   @IsOptional()
   @IsArray()
@@ -39,4 +52,8 @@ export class UpdateUserDto {
   @IsArray()
   @IsNumber({}, { each: true })
   roleIds?: number[];
+
+  @IsOptional()
+  @IsString()
+  deletedAt?: string | null;
 }
