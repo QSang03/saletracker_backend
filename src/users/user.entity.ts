@@ -45,6 +45,9 @@ export class User {
   @Column({ type: 'datetime', nullable: true })
   lastLogin?: Date | null;
 
+  @Column({ nullable: true, name: 'nick_name' })
+  nickName?: string;
+
   @ManyToMany(() => Role, (role) => role.users, {
     cascade: true,
     onDelete: 'CASCADE',

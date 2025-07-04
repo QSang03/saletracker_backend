@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Permission } from './permission.entity';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { Role } from '../roles/role.entity';
 import { RolePermission } from '../roles_permissions/roles-permissions.entity';
 
@@ -21,19 +21,70 @@ export class PermissionService {
   }
 
   async createPermission(dto: { name: string; action: string }) {
-    const permission = this.permissionRepo.create(dto);
-    const savedPermission = await this.permissionRepo.save(permission);
+    // Kiểm tra trùng permission
+    let permission = await this.permissionRepo.findOne({ where: dto });
+    if (!permission) {
+      permission = this.permissionRepo.create(dto);
+      permission = await this.permissionRepo.save(permission);
+    }
 
     const adminRole = await this.roleRepo.findOne({ where: { name: 'admin' } });
     if (adminRole) {
-      const rolePermission = this.rolePermissionRepo.create({
-        role: adminRole,
-        permission: savedPermission,
-        isActive: true,
+      // Kiểm tra trùng mapping role-permission
+      const existed = await this.rolePermissionRepo.findOne({
+        where: {
+          role: { id: adminRole.id },
+          permission: { id: permission.id },
+        },
       });
-      await this.rolePermissionRepo.save(rolePermission);
+      if (!existed) {
+        const rolePermission = this.rolePermissionRepo.create({
+          role: adminRole,
+          permission: permission,
+          isActive: true,
+        });
+        await this.rolePermissionRepo.save(rolePermission);
+      }
     }
 
-    return savedPermission;
+    return permission;
+  }
+
+  async updatePermissionNameBySlug(oldSlug: string, newSlug: string) {
+    await this.permissionRepo.update({ name: oldSlug }, { name: newSlug });
+  }
+
+  async softDeletePermissionsBySlug(slug: string) {
+    // Xóa mềm permissions
+    const permissions = await this.permissionRepo.find({
+      where: { name: slug },
+    });
+    const permissionIds = permissions.map((p) => p.id);
+    if (permissionIds.length) {
+      await this.permissionRepo.softDelete({ name: slug });
+      // Xóa mềm roles_permissions liên quan
+      await this.rolePermissionRepo.softDelete({
+        permission: { id: In(permissionIds) },
+      });
+    }
+  }
+
+  async restorePermissionsAndRolePermissionsBySlug(slug: string) {
+    // Khôi phục permissions theo slug
+    await this.permissionRepo.restore({ name: slug });
+
+    // Lấy lại các permission id vừa khôi phục (kể cả đã xóa mềm)
+    const permissions = await this.permissionRepo.find({
+      where: { name: slug },
+      withDeleted: true,
+    });
+    const permissionIds = permissions.map((p) => p.id);
+
+    // Khôi phục roles_permissions liên quan
+    if (permissionIds.length) {
+      await this.rolePermissionRepo.restore({
+        permission: { id: In(permissionIds) },
+      });
+    }
   }
 }

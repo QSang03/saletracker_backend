@@ -6,7 +6,6 @@ import {
   IsArray,
   IsNumber,
   IsBoolean,
-  IsDate,
 } from 'class-validator';
 import { UserStatus } from '../user-status.enum';
 
@@ -28,12 +27,15 @@ export class UpdateUserDto {
   status?: UserStatus;
 
   @IsOptional()
-  @IsString()
   lastLogin?: boolean | string | null;
 
   @IsOptional()
   @IsString()
   fullName?: string;
+
+  @IsOptional()
+  @IsString()
+  nickName?: string;
 
   @IsOptional()
   @IsBoolean()

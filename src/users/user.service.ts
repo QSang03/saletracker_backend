@@ -1,4 +1,8 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, IsNull, Not } from 'typeorm';
 import { User } from './user.entity';
@@ -9,6 +13,7 @@ import { Role } from '../roles/role.entity';
 import { Department } from '../departments/department.entity';
 import { UserStatus } from './user-status.enum';
 import { UserGateway } from './user.gateway';
+import { ChangeUserLog } from './change-user-log.entity';
 
 @Injectable()
 export class UserService {
@@ -19,6 +24,8 @@ export class UserService {
     private readonly departmentRepo: Repository<Department>,
     @InjectRepository(Role)
     private readonly roleRepo: Repository<Role>,
+    @InjectRepository(ChangeUserLog)
+    private readonly changeUserLogRepo: Repository<ChangeUserLog>,
     private readonly userGateway: UserGateway,
   ) {}
 
@@ -64,6 +71,7 @@ export class UserService {
       'user.id',
       'user.username',
       'user.fullName',
+      'user.nickName',
       'user.status',
       'user.employeeCode',
       'user.createdAt',
@@ -162,6 +170,19 @@ export class UserService {
       departments = await this.departmentRepo.findBy({
         id: In(userData.departmentIds),
       });
+
+      // Lấy thêm role user-[slug] của từng phòng ban
+      const departmentRoles = await this.roleRepo.findBy({
+        name: In(departments.map((dep) => `user-${dep.slug}`)),
+      });
+
+      // Gộp roles lại (tránh trùng lặp)
+      const allRoles = [...roles, ...departmentRoles];
+      // Loại bỏ trùng lặp theo id
+      roles = allRoles.filter(
+        (role, index, self) =>
+          index === self.findIndex((r) => r.id === role.id),
+      );
     }
 
     const userObj: Partial<User> = {
@@ -185,7 +206,11 @@ export class UserService {
     });
   }
 
-  async updateUser(id: number, updateData: UpdateUserDto): Promise<User> {
+  async updateUser(
+    id: number,
+    updateData: UpdateUserDto,
+    changerId?: number,
+  ): Promise<User> {
     let status = updateData.status;
 
     if (typeof updateData.isBlock === 'boolean') {
@@ -194,13 +219,48 @@ export class UserService {
       }
     }
 
+    const oldUser = await this.userRepo.findOne({ where: { id } });
+
     const updatePayload: Partial<User> = {
       email: updateData.email,
       status,
       isBlock: updateData.isBlock,
       employeeCode: updateData.employeeCode,
-      fullName: updateData.fullName,
     };
+
+    if (typeof updateData.nickName === 'string') {
+      updatePayload.nickName = updateData.nickName;
+    }
+
+    if (
+      typeof updateData.fullName === 'string' &&
+      updateData.fullName !== oldUser?.fullName
+    ) {
+      updatePayload.fullName = updateData.fullName;
+
+      if (changerId) {
+        const userEntity = await this.userRepo.findOne({ where: { id } });
+        if (!userEntity) throw new NotFoundException('Không tìm thấy user');
+
+        let log = await this.changeUserLogRepo.findOne({
+          where: { user: { id } },
+          relations: ['user'],
+        });
+        if (!log) {
+          log = this.changeUserLogRepo.create({
+            user: userEntity,
+            fullNames: [updateData.fullName],
+            timeChanges: [new Date().toISOString()],
+            changerIds: [changerId],
+          });
+        } else {
+          log.fullNames.push(updateData.fullName);
+          log.timeChanges.push(new Date().toISOString());
+          log.changerIds.push(changerId);
+        }
+        await this.changeUserLogRepo.save(log);
+      }
+    }
 
     if (updateData.password) {
       updatePayload.password = await bcrypt.hash(updateData.password, 10);
@@ -245,10 +305,11 @@ export class UserService {
 
       const user = await this.userRepo.findOne({
         where: { id },
-        relations: ['departments'],
+        relations: ['departments', 'roles'],
       });
       const oldDepartments = user?.departments ?? [];
 
+      // Cập nhật lại departments
       await this.userRepo
         .createQueryBuilder()
         .relation(User, 'departments')
@@ -257,6 +318,33 @@ export class UserService {
           newDepartments.map((d) => d.id),
           oldDepartments.map((d) => d.id),
         );
+
+      // Cập nhật lại roles user-[slug] theo phòng ban mới
+      let currentRoles = user?.roles ?? [];
+      const userSlugRolePrefix = 'user-';
+      currentRoles = currentRoles.filter(
+        (role) =>
+          !(
+            role.name.startsWith(userSlugRolePrefix) &&
+            oldDepartments.some((dep) => role.name === `user-${dep.slug}`)
+          ),
+      );
+
+      const departmentRoles = await this.roleRepo.findBy({
+        name: In(newDepartments.map((dep) => `user-${dep.slug}`)),
+      });
+
+      const allRoles = [...currentRoles, ...departmentRoles];
+      const uniqueRoles = allRoles.filter(
+        (role, index, self) =>
+          index === self.findIndex((r) => r.id === role.id),
+      );
+
+      await this.userRepo
+        .createQueryBuilder()
+        .relation(User, 'roles')
+        .of(id)
+        .set(uniqueRoles);
     }
 
     if (updateData.roleIds !== undefined) {
@@ -405,5 +493,163 @@ export class UserService {
 
     const [data, total] = await qb.getManyAndCount();
     return { data, total };
+  }
+
+  async getAllChangeUserLogs(options?: {
+    page?: number;
+    limit?: number;
+    search?: string;
+    departments?: string[];
+  }): Promise<{ data: any[]; total: number }> {
+    const page = Number(options?.page) || 1;
+    const limit = Number(options?.limit) || 10;
+    const skip = (page - 1) * limit;
+
+    // 1. Lấy danh sách id đã phân trang
+    let idQb = this.changeUserLogRepo.createQueryBuilder('log');
+    if (options?.search) {
+      idQb = idQb
+        .leftJoin('log.user', 'user')
+        .andWhere('user.fullName LIKE :search', {
+          search: `%${options.search}%`,
+        });
+    }
+    if (options?.departments && options.departments.length > 0) {
+      idQb = idQb
+        .leftJoin('log.user', 'user')
+        .leftJoin('user.departments', 'department')
+        .andWhere('department.name IN (:...departments)', {
+          departments: options.departments,
+        });
+    }
+    idQb.orderBy('log.id', 'DESC').skip(skip).take(limit);
+
+    const [pagedLogs, total] = await idQb.select('log.id').getManyAndCount();
+    const ids = pagedLogs.map((l) => l.id);
+
+    if (ids.length === 0) return { data: [], total };
+
+    // 2. Lấy đủ thông tin cho các id vừa lấy
+    let logs = await this.changeUserLogRepo
+      .createQueryBuilder('log')
+      .leftJoinAndSelect('log.user', 'user')
+      .leftJoinAndSelect('user.departments', 'department')
+      .where('log.id IN (:...ids)', { ids })
+      .orderBy('log.id', 'DESC')
+      .getMany();
+
+    // Đảm bảo logs đúng thứ tự phân trang
+    logs = ids
+      .map((id) => logs.find((log) => log.id === id))
+      .filter(Boolean) as ChangeUserLog[];
+
+    // 3. Lấy tất cả changerIds để lấy tên người đổi
+    const allChangerIds = logs.flatMap((log) => log.changerIds.map(Number));
+    const uniqueChangerIds = Array.from(new Set(allChangerIds));
+    const changers = uniqueChangerIds.length
+      ? await this.userRepo.findBy({ id: In(uniqueChangerIds) })
+      : [];
+
+    const data = logs.map((log) => {
+      const user = log.user;
+      const department = user?.departments?.[0];
+      return {
+        id: log.id,
+        userId: user?.id || null,
+        userFullName: user?.fullName || '',
+        departmentId: department?.id || null,
+        departmentName: department?.name || '',
+        changerFullNames: log.changerIds.map(
+          (id) =>
+            changers.find((u) => u.id === Number(id))?.fullName || `ID:${id}`,
+        ),
+        changes: log.fullNames.map((fullName, idx) => ({
+          newFullName: fullName,
+          timeChange: log.timeChanges[idx],
+          changerId: log.changerIds[idx],
+          changerFullName:
+            changers.find((u) => u.id === Number(log.changerIds[idx]))
+              ?.fullName || `ID:${log.changerIds[idx]}`,
+        })),
+      };
+    });
+
+    return { data, total };
+  }
+
+  async getChangeUserLogByUser(userId: number) {
+    const log = await this.changeUserLogRepo.findOne({
+      where: { user: { id: userId } },
+      relations: ['user', 'user.departments'],
+    });
+    if (!log) return null;
+
+    const user = log.user;
+    const department = user?.departments?.[0];
+
+    const changers = await this.userRepo.findBy({
+      id: In(log.changerIds.map(Number)),
+    });
+
+    return {
+      id: log.id,
+      userId: user?.id || null,
+      userFullName: user?.fullName || '',
+      departmentId: department?.id || null,
+      departmentName: department?.name || '',
+      changerFullNames: log.changerIds.map(
+        (id) =>
+          changers.find((u) => u.id === Number(id))?.fullName || `ID:${id}`,
+      ),
+      changes: log.fullNames.map((fullName, idx) => ({
+        newFullName: fullName,
+        timeChange: log.timeChanges[idx],
+        changerId: log.changerIds[idx],
+        changerFullName:
+          changers.find((u) => u.id === Number(log.changerIds[idx]))
+            ?.fullName || `ID:${log.changerIds[idx]}`,
+      })),
+    };
+  }
+
+  async updateUserRolesPermissions(
+    userId: number,
+    departmentIds: number[],
+    roleIds: number[],
+    permissionIds: number[],
+  ) {
+    const user = await this.userRepo.findOne({
+      where: { id: userId },
+      relations: ['departments', 'roles'],
+    });
+    if (!user) throw new NotFoundException('User not found');
+
+    // Cập nhật departments (many-to-many)
+    const newDepartments = await this.departmentRepo.findBy({
+      id: In(departmentIds),
+    });
+    const oldDepartments = user.departments ?? [];
+    const oldDepartmentIds = oldDepartments.map((d) => d.id);
+    const newDepartmentIds = newDepartments.map((d) => d.id);
+
+    await this.userRepo
+      .createQueryBuilder()
+      .relation(User, 'departments')
+      .of(userId)
+      .addAndRemove(newDepartmentIds, oldDepartmentIds);
+
+    // Cập nhật roles (many-to-many)
+    const newRoles = await this.roleRepo.findBy({ id: In(roleIds) });
+    const oldRoles = user.roles ?? [];
+    const oldRoleIds = oldRoles.map((r) => r.id);
+    const newRoleIds = newRoles.map((r) => r.id);
+
+    await this.userRepo
+      .createQueryBuilder()
+      .relation(User, 'roles')
+      .of(userId)
+      .addAndRemove(newRoleIds, oldRoleIds);
+
+    return { success: true };
   }
 }

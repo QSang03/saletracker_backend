@@ -22,6 +22,7 @@ async function bootstrap() {
 
   app.useGlobalInterceptors(new DatetimeInterceptor());
 
+  // Lắng nghe trên tất cả IP để dùng LAN
   await app.listen(3001);
 }
 bootstrap();

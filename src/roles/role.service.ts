@@ -25,19 +25,31 @@ export class RoleService {
 
   async findAll(token: string): Promise<{ id: number; name: string }[]> {
     const user: any = this.jwtService.decode(token);
+
     if (user?.roles?.includes('admin')) {
       return this.roleRepo.find({
         select: { id: true, name: true },
         order: { id: 'ASC' },
       });
     }
+
     if (user?.roles?.includes('manager')) {
-      return this.roleRepo.find({
-        where: { name: Not('admin') },
-        select: { id: true, name: true },
-        order: { id: 'ASC' },
-      });
+      // Lấy danh sách slug phòng ban của manager
+      const managerDepartments = user.departments ?? [];
+      const departmentSlugs = managerDepartments.map((d: any) => d.slug);
+
+      // Lấy các role có permission.name thuộc departmentSlugs (qua bảng nối)
+      return this.roleRepo
+        .createQueryBuilder('role')
+        .leftJoin('role.rolePermissions', 'rolePermission')
+        .leftJoin('rolePermission.permission', 'permission')
+        .where('role.name != :admin', { admin: 'admin' })
+        .andWhere('permission.name IN (:...slugs)', { slugs: departmentSlugs })
+        .select(['role.id', 'role.name'])
+        .orderBy('role.id', 'ASC')
+        .getMany();
     }
+
     throw new UnauthorizedException('Bạn không có quyền xem role');
   }
 
@@ -84,5 +96,24 @@ export class RoleService {
     throw new Error(
       'Method not implemented. Cần bổ sung logic gán permission cho role.',
     );
+  }
+
+  async getGroupedRoles(token: string) {
+    this.checkAdmin(token);
+    const allRoles = await this.roleRepo.find();
+    const main: { id: number; name: string }[] = [];
+    const sub: { id: number; name: string; display_name: string }[] = [];
+    for (const role of allRoles) {
+      if (!role.display_name) {
+        main.push({ id: role.id, name: role.name });
+      } else {
+        sub.push({
+          id: role.id,
+          name: role.name,
+          display_name: role.display_name,
+        });
+      }
+    }
+    return { main, sub };
   }
 }

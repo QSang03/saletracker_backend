@@ -7,6 +7,7 @@ import {
   Unique,
   CreateDateColumn,
   UpdateDateColumn,
+  DeleteDateColumn,
 } from 'typeorm';
 import { Role } from '../roles/role.entity';
 import { Permission } from '../permissions/permission.entity';
@@ -33,4 +34,7 @@ export class RolePermission {
 
   @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
+
+  @DeleteDateColumn({ name: 'deleted_at' })
+  deletedAt?: Date;
 }

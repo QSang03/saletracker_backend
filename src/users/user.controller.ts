@@ -18,6 +18,7 @@ import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { JwtUserPayload } from 'src/auth/interfaces/jwt-payload.interface';
+import { AdminAuthGuard } from '../common/guards/admin-auth.guard';
 
 interface CustomRequest extends Request {
   user: JwtUserPayload;
@@ -69,6 +70,7 @@ export class UserController {
     return { data: [], total: 0 };
   }
 
+  @UseGuards(AdminAuthGuard)
   @Get('for-permission-management')
   async getUsersForPermissionManagement() {
     const users = await this.userService.getUsersForPermissionManagement();
@@ -82,6 +84,62 @@ export class UserController {
       })),
       roles: (user.roles ?? []).map((r) => ({ id: r.id, name: r.name })),
     }));
+  }
+
+  @Get('change-logs')
+  async getAllChangeUserLogs(
+    @Req() req: CustomRequest,
+    @Query('page') page = 1,
+    @Query('limit') limit = 10,
+    @Query('search') search?: string,
+    @Query('departments') departments?: string,
+  ) {
+    const currentUser = req.user;
+    const user = await this.userService.findOneWithDetails(currentUser.id);
+
+    if (!user || !user.roles?.some((role) => role.name === 'admin')) {
+      throw new ForbiddenException('Bạn không có quyền xem lịch sử đổi tên');
+    }
+
+    return this.userService.getAllChangeUserLogs({
+      page: Number(page),
+      limit: Number(limit),
+      search,
+      departments: departments ? departments.split(',') : [],
+    });
+  }
+
+  @Get(':id/change-logs')
+  async getChangeUserLogByUser(
+    @Param('id', ParseIntPipe) id: number,
+    @Req() req: CustomRequest,
+  ) {
+    const currentUser = req.user;
+    const user = await this.userService.findOneWithDetails(currentUser.id);
+
+    if (!user || !user.roles?.some((role) => role.name === 'admin')) {
+      throw new ForbiddenException('Bạn không có quyền xem lịch sử đổi tên');
+    }
+
+    return this.userService.getChangeUserLogByUser(id);
+  }
+
+  @Patch(':id/roles-permissions')
+  async updateUserRolesPermissions(
+    @Param('id', ParseIntPipe) id: number,
+    @Body()
+    body: {
+      departmentIds: number[];
+      roleIds: number[];
+      permissionIds: number[];
+    }
+  ) {
+    return this.userService.updateUserRolesPermissions(
+      id,
+      body.departmentIds,
+      body.roleIds,
+      body.permissionIds
+    );
   }
 
   @Post()
@@ -136,12 +194,14 @@ export class UserController {
     }
 
     if (user.roles?.some((role) => role.name === 'admin')) {
-      return this.userService.updateUser(id, updateUserDto);
+      // Admin đổi cho ai cũng truyền changerId là chính họ
+      return this.userService.updateUser(id, updateUserDto, currentUser.id);
     }
 
     if (user.roles?.some((role) => role.name === 'manager')) {
       if (id === user.id) {
-        return this.userService.updateUser(id, updateUserDto);
+        // Manager đổi cho chính mình
+        return this.userService.updateUser(id, updateUserDto, currentUser.id);
       }
       const targetUser = await this.userService.findOneWithDetails(id);
       const managerDeptIds = user.departments?.map((d) => d.id) ?? [];
@@ -154,12 +214,22 @@ export class UserController {
           'Bạn chỉ được sửa user trong nhóm của mình',
         );
       }
-      return this.userService.updateUser(id, {
-        employeeCode: updateUserDto.employeeCode,
-      } as UpdateUserDto);
+      // Manager đổi cho user trong nhóm
+      return this.userService.updateUser(
+        id,
+        {
+          ...updateUserDto,
+          employeeCode: updateUserDto.employeeCode,
+        } as UpdateUserDto,
+        currentUser.id,
+      );
     }
 
     if (id === user.id) {
+      // User tự đổi: KHÔNG cho đổi fullName
+      if ('fullName' in updateUserDto) {
+        throw new ForbiddenException('Bạn không có quyền đổi họ và tên');
+      }
       return this.userService.updateUser(id, updateUserDto);
     }
 
