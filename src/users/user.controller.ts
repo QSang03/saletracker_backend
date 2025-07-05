@@ -70,7 +70,6 @@ export class UserController {
     return { data: [], total: 0 };
   }
 
-  @UseGuards(AdminAuthGuard)
   @Get('for-permission-management')
   async getUsersForPermissionManagement() {
     const users = await this.userService.getUsersForPermissionManagement();

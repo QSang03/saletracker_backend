@@ -10,6 +10,7 @@ import { DepartmentModule } from './departments/department.module';
 import { SeedModule } from './seed/seed.module';
 import { typeOrmConfig } from './config/typeorm.config';
 import { ConfigModule } from '@nestjs/config';
+import { SystemConfigModule } from './system_config/system_config.module';
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { ConfigModule } from '@nestjs/config';
     PermissionModule,
     DepartmentModule,
     SeedModule,
+    SystemConfigModule,
   ],
   controllers: [AppController],
   providers: [AppService],

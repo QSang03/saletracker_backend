@@ -213,13 +213,15 @@ export class UserService {
   ): Promise<User> {
     let status = updateData.status;
 
-    if (typeof updateData.isBlock === 'boolean') {
-      if (updateData.isBlock) {
-        status = UserStatus.INACTIVE;
-      }
+    if (typeof updateData.isBlock === 'boolean' && updateData.isBlock) {
+      status = UserStatus.INACTIVE;
     }
 
-    const oldUser = await this.userRepo.findOne({ where: { id } });
+    const oldUser = await this.userRepo.findOne({
+      where: { id },
+      relations: ['departments', 'roles'],
+    });
+    if (!oldUser) throw new NotFoundException('Không tìm thấy user');
 
     const updatePayload: Partial<User> = {
       email: updateData.email,
@@ -234,21 +236,18 @@ export class UserService {
 
     if (
       typeof updateData.fullName === 'string' &&
-      updateData.fullName !== oldUser?.fullName
+      updateData.fullName !== oldUser.fullName
     ) {
       updatePayload.fullName = updateData.fullName;
 
       if (changerId) {
-        const userEntity = await this.userRepo.findOne({ where: { id } });
-        if (!userEntity) throw new NotFoundException('Không tìm thấy user');
-
         let log = await this.changeUserLogRepo.findOne({
           where: { user: { id } },
           relations: ['user'],
         });
         if (!log) {
           log = this.changeUserLogRepo.create({
-            user: userEntity,
+            user: oldUser,
             fullNames: [updateData.fullName],
             timeChanges: [new Date().toISOString()],
             changerIds: [changerId],
@@ -268,6 +267,7 @@ export class UserService {
 
     await this.userRepo.update(id, updatePayload);
 
+    // Cập nhật lastLogin
     if (updateData.lastLogin) {
       await this.userRepo
         .createQueryBuilder()
@@ -277,6 +277,7 @@ export class UserService {
         .execute();
     }
 
+    // Cập nhật deletedAt
     if (updateData.deletedAt) {
       await this.userRepo
         .createQueryBuilder()
@@ -286,6 +287,7 @@ export class UserService {
         .execute();
     }
 
+    // Emit block event
     if (typeof updateData.isBlock === 'boolean') {
       this.userGateway.server.to('admin_dashboard').emit('user_block', {
         userId: id,
@@ -298,18 +300,14 @@ export class UserService {
       }
     }
 
+    // Cập nhật departments và roles phòng ban
     if (updateData.departmentIds !== undefined) {
       const newDepartments = await this.departmentRepo.findBy({
         id: In(updateData.departmentIds),
       });
+      const oldDepartments = oldUser.departments ?? [];
 
-      const user = await this.userRepo.findOne({
-        where: { id },
-        relations: ['departments', 'roles'],
-      });
-      const oldDepartments = user?.departments ?? [];
-
-      // Cập nhật lại departments
+      // Cập nhật departments (many-to-many)
       await this.userRepo
         .createQueryBuilder()
         .relation(User, 'departments')
@@ -319,9 +317,10 @@ export class UserService {
           oldDepartments.map((d) => d.id),
         );
 
-      // Cập nhật lại roles user-[slug] theo phòng ban mới
-      let currentRoles = user?.roles ?? [];
+      // Cập nhật roles user-[slug] theo phòng ban mới
+      let currentRoles = oldUser.roles ?? [];
       const userSlugRolePrefix = 'user-';
+      // Loại bỏ các role phòng ban cũ
       currentRoles = currentRoles.filter(
         (role) =>
           !(
@@ -330,6 +329,7 @@ export class UserService {
           ),
       );
 
+      // Thêm các role phòng ban mới
       const departmentRoles = await this.roleRepo.findBy({
         name: In(newDepartments.map((dep) => `user-${dep.slug}`)),
       });
@@ -340,23 +340,36 @@ export class UserService {
           index === self.findIndex((r) => r.id === role.id),
       );
 
+      // Chuẩn hóa: dùng addAndRemove thay cho set để tránh lỗi TypeORM
+      const oldRoleIds = (oldUser.roles ?? []).map((r) => r.id);
+      const newRoleIds = uniqueRoles.map((r) => r.id);
+
       await this.userRepo
         .createQueryBuilder()
         .relation(User, 'roles')
         .of(id)
-        .set(uniqueRoles);
+        .addAndRemove(newRoleIds, oldRoleIds);
     }
 
+    // Cập nhật roles chính/phụ (nếu có)
     if (updateData.roleIds !== undefined) {
       const roles = await this.roleRepo.findBy({
         id: In(updateData.roleIds),
       });
 
+      // Lấy lại roles hiện tại (sau khi đã cập nhật roles phòng ban ở trên)
+      const userAfterDept = await this.userRepo.findOne({
+        where: { id },
+        relations: ['roles'],
+      });
+      const oldRoleIds = (userAfterDept?.roles ?? []).map((r) => r.id);
+      const newRoleIds = roles.map((r) => r.id);
+
       await this.userRepo
         .createQueryBuilder()
         .relation(User, 'roles')
         .of(id)
-        .set(roles);
+        .addAndRemove(newRoleIds, oldRoleIds);
     }
 
     return this.userRepo.findOneOrFail({
@@ -475,6 +488,7 @@ export class UserService {
       'user.id',
       'user.username',
       'user.fullName',
+      'user.nickName',
       'user.status',
       'user.employeeCode',
       'user.createdAt',
