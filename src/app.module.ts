@@ -11,6 +11,11 @@ import { SeedModule } from './seed/seed.module';
 import { typeOrmConfig } from './config/typeorm.config';
 import { ConfigModule } from '@nestjs/config';
 import { SystemConfigModule } from './system_config/system_config.module';
+import { NKCProductModule } from './nkc_products/nkc_product.module';
+import { ProductModule } from './products/product.module';
+import { CategoryModule } from './categories/category.module';
+import { BrandModule } from './brands/brand.module';
+import { CronjobModule } from './cronjobs/cronjob.module';
 
 @Module({
   imports: [
@@ -26,6 +31,11 @@ import { SystemConfigModule } from './system_config/system_config.module';
     DepartmentModule,
     SeedModule,
     SystemConfigModule,
+    NKCProductModule,
+    ProductModule,
+    CategoryModule,
+    BrandModule,
+    CronjobModule,
   ],
   controllers: [AppController],
   providers: [AppService],
