@@ -52,6 +52,7 @@ export class AuthController {
       id: user.id,
       username: user.username,
       fullName: user.fullName,
+      nickName: user.nickName,
       status: user.status,
       isBlock: user.isBlock,
       employeeCode: user.employeeCode,

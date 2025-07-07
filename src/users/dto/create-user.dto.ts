@@ -45,4 +45,8 @@ export class CreateUserDto {
   @IsArray()
   @IsNumber({}, { each: true })
   roleIds?: number[];
+
+  @IsOptional()
+  @IsString()
+  nickName?: string;
 }

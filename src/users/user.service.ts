@@ -195,6 +195,7 @@ export class UserService {
       isBlock: userData.isBlock ?? false,
       employeeCode: userData.employeeCode,
       fullName: userData.fullName,
+      nickName: userData.nickName,
     };
 
     const newUser = this.userRepo.create(userObj);
