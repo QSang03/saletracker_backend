@@ -11,11 +11,11 @@ export class ProductService {
   ) {}
 
   findAll() {
-    return this.productRepository.find({ relations: ['categories', 'brand', 'nkcProduct'] });
+    return this.productRepository.find({ relations: ['categories', 'brand'] });
   }
 
   findOne(id: number) {
-    return this.productRepository.findOne({ where: { id }, relations: ['categories', 'brand', 'nkcProduct'] });
+    return this.productRepository.findOne({ where: { id }, relations: ['categories', 'brand'] });
   }
 
   create(data: Partial<Product>) {
