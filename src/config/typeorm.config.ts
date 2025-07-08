@@ -28,5 +28,5 @@ export const typeOrmConfig: TypeOrmModuleOptions = {
       return next();
     }
   },
-  timezone: 'Z',
+  timezone: '+07:00',
 };
