@@ -226,7 +226,11 @@ export class UserController {
 
     if (id === user.id) {
       // User tự đổi: KHÔNG cho đổi fullName
-      if ('fullName' in updateUserDto) {
+      if (
+        Object.prototype.hasOwnProperty.call(updateUserDto, 'fullName') &&
+        typeof updateUserDto.fullName === 'string' &&
+        updateUserDto.fullName !== user.fullName
+      ) {
         throw new ForbiddenException('Bạn không có quyền đổi họ và tên');
       }
       return this.userService.updateUser(id, updateUserDto);

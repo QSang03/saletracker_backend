@@ -58,4 +58,15 @@ export class UpdateUserDto {
   @IsOptional()
   @IsString()
   deletedAt?: string | null;
+
+  @IsOptional()
+  zaloLinkStatus?: number;
+
+  @IsOptional()
+  @IsString()
+  zaloName?: string;
+
+  @IsOptional()
+  @IsString()
+  avatarZalo?: string;
 }

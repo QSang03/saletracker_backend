@@ -56,6 +56,9 @@ export class AuthController {
       status: user.status,
       isBlock: user.isBlock,
       employeeCode: user.employeeCode,
+      zaloLinkStatus: user.zaloLinkStatus,
+      zaloName: user.zaloName,
+      avatarZalo: user.avatarZalo,
       permissions,
       departments:
         user.departments?.map((d) => ({
@@ -64,7 +67,6 @@ export class AuthController {
           slug: d.slug,
         })) || [],
       roles: user.roles?.map((r) => ({ id: r.id, name: r.name })),
-      // Nếu không cần các trường dưới, có thể bỏ để nhẹ hơn:
       email: user.email,
       // lastLogin: user.lastLogin,
       // createdAt: user.createdAt,

@@ -110,6 +110,9 @@ export class AuthService {
         status: updatedUser.status,
         isBlock: updatedUser.isBlock,
         roles: updatedUser.roles?.map((role) => role.name) || [],
+        zaloLinkStatus: updatedUser.zaloLinkStatus,
+        zaloName: updatedUser.zaloName,
+        avatarZalo: updatedUser.avatarZalo,
       },
     };
   }

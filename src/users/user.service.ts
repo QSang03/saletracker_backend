@@ -229,6 +229,10 @@ export class UserService {
       status,
       isBlock: updateData.isBlock,
       employeeCode: updateData.employeeCode,
+      // Allow updating Zalo link fields
+      zaloLinkStatus: updateData.zaloLinkStatus,
+      zaloName: updateData.zaloName,
+      avatarZalo: updateData.avatarZalo,
     };
 
     if (typeof updateData.nickName === 'string') {

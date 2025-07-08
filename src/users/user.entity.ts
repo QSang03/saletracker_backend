@@ -77,4 +77,13 @@ export class User {
 
   @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
+
+  @Column({ type: 'tinyint', default: 0, name: 'zalo_link_status' })
+  zaloLinkStatus: number; // 0: chưa liên kết, 1: đã liên kết, 2: lỗi liên kết
+
+  @Column({ nullable: true, name: 'zalo_name' })
+  zaloName?: string;
+
+  @Column({ nullable: true, name: 'avatar_zalo' })
+  avatarZalo?: string;
 }
