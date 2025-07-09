@@ -16,6 +16,10 @@ import { ProductModule } from './products/product.module';
 import { CategoryModule } from './categories/category.module';
 import { BrandModule } from './brands/brand.module';
 import { CronjobModule } from './cronjobs/cronjob.module';
+import { DebtConfigsModule } from './debt_configs/debt_configs.module';
+import { DebtModule } from './debts/debt.module';
+import { DebtLogsModule } from './debt_logs/debt_logs.module';
+import { DebtHistoriesModule } from './debt_histories/debt_histories.module';
 
 @Module({
   imports: [
@@ -36,6 +40,10 @@ import { CronjobModule } from './cronjobs/cronjob.module';
     CategoryModule,
     BrandModule,
     CronjobModule,
+    DebtConfigsModule,
+    DebtModule,
+    DebtLogsModule,
+    DebtHistoriesModule,
   ],
   controllers: [AppController],
   providers: [AppService],
