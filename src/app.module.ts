@@ -21,6 +21,8 @@ import { DebtModule } from './debts/debt.module';
 import { DebtLogsModule } from './debt_logs/debt_logs.module';
 import { DebtHistoriesModule } from './debt_histories/debt_histories.module';
 import { RolesPermissionsModule } from './roles_permissions/roles-permissions.module';
+import { NotificationModule } from './notifications/notification.module';
+import { OrderModule } from './orders/order.module';
 
 @Module({
   imports: [
@@ -46,6 +48,8 @@ import { RolesPermissionsModule } from './roles_permissions/roles-permissions.mo
     DebtLogsModule,
     DebtHistoriesModule,
     RolesPermissionsModule,
+    NotificationModule,
+    OrderModule,
   ],
   controllers: [AppController],
   providers: [AppService],

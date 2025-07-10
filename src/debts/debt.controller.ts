@@ -14,14 +14,31 @@ export class DebtController {
 
   @Get()
   @Permission('cong-no', 'read')
-  findAll(@Query() query: any, @Req() req) {
-    return this.debtService.findAll(query, req.user);
+  async findAll(@Query() query: any, @Req() req) {
+    // Lấy page và pageSize từ query, mặc định page=1, pageSize=10
+    const page = Number(query.page) > 0 ? Number(query.page) : 1;
+    const pageSize = Number(query.pageSize) > 0 ? Number(query.pageSize) : 10;
+    const result = await this.debtService.findAll(query, req.user, page, pageSize);
+    return result;
   }
 
   @Get('customers')
   @Permission('cong-no', 'read')
   async getUniqueCustomers(@Req() req) {
     return this.debtService.getUniqueCustomerList(req.user);
+  }
+
+  @Get('stats')
+  @Permission('cong-no', 'read')
+  async getStats(@Query() query: any, @Req() req) {
+    // Lấy toàn bộ dữ liệu theo filter (nếu có), không phân trang
+    const result = await this.debtService.findAll(query, req.user, 1, 1000000); // lấy tối đa 1 triệu bản ghi
+    const debts = result.data || [];
+    const totalAmount = debts.reduce((sum, d) => sum + (Number(d.total_amount) || 0), 0);
+    const totalBills = debts.length;
+    const totalCollected = debts.reduce((sum, d) => sum + (d.status === 'paid' ? (Number(d.total_amount) || 0) : 0), 0);
+    const totalPaidBills = debts.filter(d => d.status === 'paid').length;
+    return { totalAmount, totalBills, totalCollected, totalPaidBills };
   }
 
   @Get(':id')
@@ -48,8 +65,10 @@ export class DebtController {
 
   @Delete(':id')
   @Permission('cong-no', 'delete')
-  remove(@Param('id') id: number) {
-    return this.debtService.remove(id);
+  async softDelete(@Param('id') id: number) {
+    if (!id) throw new BadRequestException('ID không hợp lệ');
+    await this.debtService.remove(id);
+    return { success: true };
   }
 
   @Post('import-excel')
@@ -72,5 +91,11 @@ export class DebtController {
     const payDate = new Date(body.payDate);
     const updated = await this.debtService.updatePayLaterForCustomers(body.customerCodes, payDate);
     return { updated };
+  }
+
+  @Patch(':id/note-status')
+  @Permission('cong-no', 'update')
+  async updateNoteAndStatus(@Param('id') id: number, @Body() body: { note?: string; status?: string }) {
+    return this.debtService.updateNoteAndStatusKeepUpdatedAt(id, body);
   }
 }

@@ -17,7 +17,7 @@ export class DebtService {
     private readonly userRepository: Repository<User>,
   ) {}
 
-  async findAll(query: any = {}, currentUser?: User) {
+  async findAll(query: any = {}, currentUser?: User, page = 1, pageSize = 10) {
     const roleNames = (currentUser?.roles || []).map(
       (r: any) =>
         typeof r === 'string'
@@ -30,6 +30,7 @@ export class DebtService {
       .leftJoinAndSelect('debt.debt_config', 'debt_config')
       .leftJoinAndSelect('debt_config.employee', 'employee');
 
+    // Filter ngày (giữ nguyên logic cũ)
     let filterDate: string | undefined = query.singleDate;
     if (!filterDate && query.date) {
       filterDate = query.date;
@@ -39,6 +40,36 @@ export class DebtService {
       filterDate = today.toISOString().slice(0, 10);
     }
     qb.andWhere('DATE(debt.updated_at) = :filterDate', { filterDate });
+
+    // Filter search (áp dụng cho nhiều trường)
+    if (query.search) {
+      const search = `%${query.search.trim()}%`;
+      qb.andWhere(
+        '(debt.customer_raw_code LIKE :search OR debt.invoice_code LIKE :search OR debt.bill_code LIKE :search OR debt.sale_name_raw LIKE :search)',
+        { search }
+      );
+    }
+    // Filter trạng thái
+    if (query.status) {
+      qb.andWhere('debt.status = :status', { status: query.status });
+    }
+    // Filter mã đối tác
+    if (query.customerCode) {
+      qb.andWhere('debt.customer_raw_code = :customerCode', { customerCode: query.customerCode });
+    }
+    // Filter kế toán công nợ (employeeCode)
+    if (query.employeeCode) {
+      qb.andWhere('debt.employee_code_raw LIKE :employeeCode', { employeeCode: `%${query.employeeCode}%` });
+    }
+    // Filter NVKD (saleCode)
+    if (query.saleCode) {
+      qb.andWhere('debt.sale_name_raw LIKE :saleCode', { saleCode: `%${query.saleCode}%` });
+    }
+    // Filter ngày công nợ (nếu có)
+    if (query.debtDate) {
+      qb.andWhere('DATE(debt.issue_date) = :debtDate', { debtDate: query.debtDate });
+    }
+    // Filter nhiều trường khác nếu cần (mở rộng)
 
     if (!isAdminOrManager) {
       qb.andWhere(
@@ -52,7 +83,11 @@ export class DebtService {
         }
       );
     }
-    return qb.getMany();
+    // Pagination
+    const total = await qb.getCount();
+    qb.skip((page - 1) * pageSize).take(pageSize);
+    const data = await qb.getMany();
+    return { data, total, page, pageSize };
   }
 
   findOne(id: number) {
@@ -282,21 +317,37 @@ export class DebtService {
     // Lấy danh sách các phiếu sẽ bị cập nhật và lưu lại updated_at cũ
     const debts = await this.debtRepository.find({
       where: { customer_raw_code: In(validCodes) },
-      select: ['id', 'updated_at']
+      select: ['id', 'updated_at', 'status']
     });
     const updatedAtMap = new Map<number, Date>();
     debts.forEach(d => updatedAtMap.set(d.id, d.updated_at));
-    // Cập nhật pay_later
-    await this.debtRepository
-      .createQueryBuilder()
-      .update(Debt)
-      .set({ pay_later: payDate })
-      .where('customer_raw_code IN (:...codes)', { codes: validCodes })
-      .execute();
+    // Chỉ cập nhật các phiếu chưa paid
+    const toUpdate = debts.filter(d => d.status !== 'paid');
+    if (toUpdate.length === 0) return 0;
+    // Cập nhật pay_later và status = 'pay_later'
+    await Promise.all(toUpdate.map(d =>
+      this.debtRepository.update(d.id, { pay_later: payDate, status: 'pay_later' as any })
+    ));
     // Khôi phục lại updated_at cũ cho các phiếu vừa cập nhật
-    for (const d of debts) {
+    for (const d of toUpdate) {
       await this.debtRepository.update(d.id, { updated_at: d.updated_at });
     }
-    return validCodes.length;
+    return toUpdate.length;
+  }
+
+  async updateNoteAndStatusKeepUpdatedAt(id: number, data: { note?: string; status?: string }) {
+    if (!id || (!data.note && !data.status)) {
+      throw new BadRequestException('Thiếu dữ liệu cập nhật');
+    }
+    // Lấy updated_at cũ
+    const debt = await this.findOne(Number(id));
+    if (!debt) throw new BadRequestException('Không tìm thấy công nợ');
+    const updateData: any = {};
+    if (data.note !== undefined) updateData.note = data.note;
+    if (data.status !== undefined) updateData.status = data.status;
+    await this.update(id, updateData);
+    // Khôi phục updated_at cũ
+    await this.update(id, { updated_at: debt.updated_at });
+    return { success: true };
   }
 }

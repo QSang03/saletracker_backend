@@ -23,31 +23,31 @@ export class DebtLogs {
   @JoinColumn({ name: 'debt_config_id' })
   debt_config: DebtConfig;
 
-  @Column({ type: 'text' })
+  @Column({ type: 'longtext' })
   debt_msg: string;
 
-  @Column({ type: 'datetime' })
+  @Column({ type: 'datetime', nullable: true })
   send_at: Date;
 
-  @Column({ type: 'text', nullable: true })
+  @Column({ type: 'longtext', nullable: true })
   first_remind: string;
 
   @Column({ type: 'datetime', nullable: true })
   first_remind_at: Date;
 
-  @Column({ type: 'text', nullable: true })
+  @Column({ type: 'longtext', nullable: true })
   second_remind: string;
 
   @Column({ type: 'datetime', nullable: true })
   second_remind_at: Date;
 
-  @Column({ type: 'text', nullable: true })
+  @Column({ type: 'longtext', nullable: true })
   sale_msg: string;
 
   @Column({ type: 'varchar', length: 255, nullable: true })
   conv_id: string;
 
-  @Column({ type: 'varchar', length: 255, nullable: true })
+  @Column({ type: 'longtext', nullable: true })
   debt_img: string;
 
   @Column({
