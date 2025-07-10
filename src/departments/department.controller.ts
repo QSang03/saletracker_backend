@@ -23,8 +23,9 @@ export class DepartmentController {
 
   @Get()
   async findAll(@Req() req: Request) {
-    const token = req.headers.authorization?.split(' ')[1] || '';
-    return this.departmentService.findAll(token);
+    // Lấy user từ request (đã qua AuthGuard)
+    const user = req.user;
+    return this.departmentService.findAll(user);
   }
 
   @Post()
@@ -32,11 +33,10 @@ export class DepartmentController {
     @Body() createDepartmentDto: CreateDepartmentDto,
     @Req() req: Request,
   ) {
-    const token = req.headers.authorization?.split(' ')[1] || '';
+    const user = req.user;
     return this.departmentService.createDepartment(
       createDepartmentDto,
-      '',
-      token,
+      user,
     );
   }
 
@@ -46,51 +46,37 @@ export class DepartmentController {
     @Body() updateDepartmentDto: UpdateDepartmentDto,
     @Req() req: Request,
   ) {
-    const token = req.headers.authorization?.split(' ')[1] || '';
+    const user = req.user;
     return this.departmentService.updateDepartment(
       +id,
       updateDepartmentDto,
-      token,
+      user,
     );
   }
 
   @Delete(':id')
   async remove(@Param('id') id: string, @Req() req: Request) {
-    const token = req.headers.authorization?.split(' ')[1] || '';
-    return this.departmentService.softDeleteDepartment(+id, token);
+    const user = req.user;
+    return this.departmentService.softDeleteDepartment(+id, user);
   }
 
   @Patch(':id/restore')
   async restore(@Param('id') id: string, @Req() req: Request) {
-    const token = req.headers.authorization?.split(' ')[1] || '';
-    return this.departmentService.restoreDepartment(+id, token);
+    const user = req.user;
+    return this.departmentService.restoreDepartment(+id, user);
   }
 
-  @Get()
-  async getDepartments(
+  @Get('deleted')
+  async getDeletedDepartments(
     @Req() req: Request,
     @Query('page') page?: string,
     @Query('pageSize') pageSize?: string,
   ) {
-    const token = req.headers.authorization?.split(' ')[1] || '';
-    return this.departmentService.findAll(
-      token,
+    const user = req.user;
+    return this.departmentService.findDeleted(
+      user,
       page ? parseInt(page, 10) : 1,
       pageSize ? parseInt(pageSize, 10) : 20,
-    );
-  }
-
-  @Get("deleted")
-  async getDeletedDepartments(
-    @Req() req,
-    @Query("page") page?: string,
-    @Query("pageSize") pageSize?: string
-  ) {
-    const token = req.headers.authorization?.split(" ")[1] || "";
-    return this.departmentService.findDeleted(
-      token,
-      page ? parseInt(page, 10) : 1,
-      pageSize ? parseInt(pageSize, 10) : 20
     );
   }
 }

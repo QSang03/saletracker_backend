@@ -66,11 +66,22 @@ export class AuthService {
 
     const payload = {
       sub: updatedUser.id,
+      id: updatedUser.id,
       username: updatedUser.username,
       fullName: updatedUser.fullName,
       email: updatedUser.email,
       status: updatedUser.status,
-      roles: updatedUser.roles?.map((role) => role.name) || [],
+      isBlock: updatedUser.isBlock,
+      employeeCode: updatedUser.employeeCode,
+      nickName: updatedUser.nickName,
+      zaloLinkStatus: updatedUser.zaloLinkStatus,
+      zaloName: updatedUser.zaloName,
+      avatarZalo: updatedUser.avatarZalo,
+      roles: updatedUser.roles?.map((role) => ({
+        id: role.id,
+        name: role.name,
+        display_name: role.display_name,
+      })) || [],
       departments:
         updatedUser.departments?.map((d) => ({
           id: d.id,
@@ -109,7 +120,7 @@ export class AuthService {
         email: updatedUser.email,
         status: updatedUser.status,
         isBlock: updatedUser.isBlock,
-        roles: updatedUser.roles?.map((role) => role.name) || [],
+        roles: updatedUser.roles?.map((role) => ({ id: role.id, name: role.name })) || [],
         zaloLinkStatus: updatedUser.zaloLinkStatus,
         zaloName: updatedUser.zaloName,
         avatarZalo: updatedUser.avatarZalo,

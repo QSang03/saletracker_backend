@@ -7,7 +7,8 @@ import { User } from './user.entity';
 import { Role } from '../roles/role.entity';
 import { Department } from '../departments/department.entity';
 import { UserGateway } from './user.gateway';
-import { ChangeUserLog } from './change-user-log.entity'; 
+import { ChangeUserLog } from './change-user-log.entity';
+import { RolesPermissionsModule } from '../roles_permissions/roles-permissions.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { ChangeUserLog } from './change-user-log.entity';
       ChangeUserLog,
     ]),
     JwtModule.register({}),
+    RolesPermissionsModule,
   ],
   providers: [UserService, UserGateway],
   controllers: [UserController],

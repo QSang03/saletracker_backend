@@ -2,6 +2,12 @@ import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateCol
 import { DebtConfig } from '../debt_configs/debt_configs.entity';
 import { User } from '../users/user.entity';
 
+export enum DebtStatus {
+  PAID = 'paid',
+  PAY_LATER = 'pay_later',
+  NO_INFORMATION = 'no_information_available',
+}
+
 @Entity('debts')
 export class Debt {
   @PrimaryGeneratedColumn()
@@ -28,14 +34,15 @@ export class Debt {
   @Column({ type: 'date', nullable: true })
   due_date: Date;
 
-  @Column({ default: false })
-  pay_later: boolean;
+  @Column({ type: 'date', nullable: true })
+  pay_later: Date | null;
 
-  @Column({ length: 50 })
-  status: string;
-
-  @Column({ type: 'int', nullable: true })
-  sale_id: number;
+  @Column({
+    type: 'enum',
+    enum: DebtStatus,
+    default: DebtStatus.NO_INFORMATION,
+  })
+  status: DebtStatus;
 
   @ManyToOne(() => User, { nullable: true })
   sale: User;
@@ -58,9 +65,9 @@ export class Debt {
   @Column({ length: 255, nullable: true })
   sale_name_raw: string;
 
-  @Column({ type: 'int', nullable: true })
-  debt_config_id: number;
-
   @ManyToOne(() => DebtConfig, (debtConfig) => debtConfig.debts)
   debt_config: DebtConfig;
+
+  @Column({ type: 'tinyint', default: 0, comment: '0: chưa thông báo, 1: đã thông báo' })
+  is_notified: number;
 }

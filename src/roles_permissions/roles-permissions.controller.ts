@@ -1,4 +1,4 @@
-import { Controller, Post, Body, UseGuards } from '@nestjs/common';
+import { Controller, Post, Body, UseGuards, Get } from '@nestjs/common';
 import { RolesPermissionsService } from './roles-permissions.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
@@ -16,5 +16,10 @@ export class RolesPermissionsController {
     }>
   ) {
     return this.service.bulkUpdate(permissions);
+  }
+
+  @Get('all')
+  async getAll() {
+    return this.service.findAll();
   }
 }

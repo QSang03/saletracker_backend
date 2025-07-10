@@ -17,7 +17,7 @@ export class PermissionController {
   @UseGuards(AdminAuthGuard)
   @Get()
   async findAll(@Req() req: Request) {
-    const token = req.headers.authorization?.split(' ')[1] || '';
-    return this.permissionService.findAll(token);
+    const user = req.user;
+    return this.permissionService.findAll(user);
   }
 }

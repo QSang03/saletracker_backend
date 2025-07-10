@@ -35,19 +35,23 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     });
   }
 
-  async validate(payload: JwtPayload) {
+  async validate(payload: any) {
     return {
       id: payload.sub,
       username: payload.username,
-      fullName: payload.full_name,
+      fullName: payload.fullName,
       email: payload.email,
-      phone: payload.phone,
-      avatar: payload.avatar,
       status: payload.status,
-      permissions: payload.permissions,
-      department: payload.department,
+      isBlock: payload.isBlock,
+      employeeCode: payload.employeeCode,
+      nickName: payload.nickName,
+      zaloLinkStatus: payload.zaloLinkStatus,
+      zaloName: payload.zaloName,
+      avatarZalo: payload.avatarZalo,
+      roles: payload.roles || [],
+      departments: payload.departments || [],
+      permissions: payload.permissions || [],
       lastLogin: payload.lastLogin,
-      departmentId: payload.departmentId
     };
   }
 }

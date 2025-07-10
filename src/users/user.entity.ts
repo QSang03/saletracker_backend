@@ -7,10 +7,12 @@ import {
   DeleteDateColumn,
   CreateDateColumn,
   UpdateDateColumn,
+  OneToMany,
 } from 'typeorm';
 import { Role } from '../roles/role.entity';
 import { Department } from '../departments/department.entity';
 import { UserStatus } from './user-status.enum';
+import { Notification } from '../notifications/notification.entity';
 
 @Entity('users')
 export class User {
@@ -86,4 +88,7 @@ export class User {
 
   @Column({ nullable: true, name: 'avatar_zalo' })
   avatarZalo?: string;
+
+  @OneToMany(() => Notification, (notification) => notification.user)
+  notifications: Notification[];
 }

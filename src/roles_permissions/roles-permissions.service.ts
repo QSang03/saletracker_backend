@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import { RolePermission } from './roles-permissions.entity';
 import { CreateRolePermissionDto } from './dto/create-roles-permissions.dto';
 
@@ -11,14 +11,48 @@ export class RolesPermissionsService {
     private readonly rolePermissionRepo: Repository<RolePermission>,
   ) {}
 
-  async bulkUpdate(permissions: Partial<RolePermission>[]): Promise<RolePermission[]> {
-    await this.rolePermissionRepo.delete({});
-    const newPermissions = this.rolePermissionRepo.create(permissions);
-    return this.rolePermissionRepo.save(newPermissions);
+  async bulkUpdate(permissions: any[]): Promise<RolePermission[]> {
+    if (!permissions || permissions.length === 0) return [];
+    const results: RolePermission[] = [];
+    for (const item of permissions) {
+      const { roleId, permissionId, isActive } = item;
+      let rolePermission = await this.rolePermissionRepo.findOne({
+        where: {
+          role: { id: roleId },
+          permission: { id: permissionId },
+        },
+        withDeleted: true,
+      });
+      if (rolePermission) {
+        // Nếu đã có, chỉ update isActive
+        rolePermission.isActive = isActive;
+        await this.rolePermissionRepo.save(rolePermission);
+        results.push(rolePermission);
+      } else {
+        // Nếu chưa có, tạo mới
+        const newRolePermission = this.rolePermissionRepo.create({
+          role: { id: roleId },
+          permission: { id: permissionId },
+          isActive,
+        });
+        await this.rolePermissionRepo.save(newRolePermission);
+        results.push(newRolePermission);
+      }
+    }
+    return results;
   }
 
-  async findAll(): Promise<RolePermission[]> {
-    return this.rolePermissionRepo.find();
+  async findAll(): Promise<any[]> {
+    const list = await this.rolePermissionRepo.find({ relations: ['role', 'permission'] });
+    return list.map((item) => ({
+      id: item.id,
+      roleId: item.role?.id,
+      permissionId: item.permission?.id,
+      isActive: item.isActive,
+      createdAt: item.createdAt,
+      updatedAt: item.updatedAt,
+      deletedAt: item.deletedAt,
+    }));
   }
 
   async findOne(id: number): Promise<RolePermission | null> {
@@ -32,5 +66,14 @@ export class RolesPermissionsService {
 
   async remove(id: number): Promise<void> {
     await this.rolePermissionRepo.delete(id);
+  }
+
+  async findByRoleIds(roleIds: number[]): Promise<RolePermission[]> {
+    if (!roleIds || roleIds.length === 0) return [];
+    return this.rolePermissionRepo.find({
+      where: { role: { id: In(roleIds) } },
+      relations: ['role', 'permission'],
+      withDeleted: true,
+    });
   }
 }

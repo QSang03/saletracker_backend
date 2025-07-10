@@ -20,6 +20,7 @@ import { DebtConfigsModule } from './debt_configs/debt_configs.module';
 import { DebtModule } from './debts/debt.module';
 import { DebtLogsModule } from './debt_logs/debt_logs.module';
 import { DebtHistoriesModule } from './debt_histories/debt_histories.module';
+import { RolesPermissionsModule } from './roles_permissions/roles-permissions.module';
 
 @Module({
   imports: [
@@ -44,6 +45,7 @@ import { DebtHistoriesModule } from './debt_histories/debt_histories.module';
     DebtModule,
     DebtLogsModule,
     DebtHistoriesModule,
+    RolesPermissionsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

@@ -19,6 +19,8 @@ import { UpdateUserDto } from './dto/update-user.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { JwtUserPayload } from 'src/auth/interfaces/jwt-payload.interface';
 import { AdminAuthGuard } from '../common/guards/admin-auth.guard';
+import { getRoleNames } from '../common/utils/user-permission.helper';
+import { RolesPermissionsService } from '../roles_permissions/roles-permissions.service';
 
 interface CustomRequest extends Request {
   user: JwtUserPayload;
@@ -27,7 +29,10 @@ interface CustomRequest extends Request {
 @Controller('users')
 @UseGuards(JwtAuthGuard)
 export class UserController {
-  constructor(private readonly userService: UserService) {}
+  constructor(
+    private readonly userService: UserService,
+    private readonly rolesPermissionsService: RolesPermissionsService, // Inject service
+  ) {}
 
   @Get()
   async findAll(
@@ -54,11 +59,11 @@ export class UserController {
       statuses: statuses ? statuses.split(',') : [],
     };
 
-    if (user.roles?.some((role) => role.name === 'admin')) {
+    if (getRoleNames(user).includes('admin')) {
       return this.userService.findAll(Number(page), Number(limit), filter);
     }
 
-    if (user.roles?.some((role) => role.name === 'manager')) {
+    if (getRoleNames(user).includes('manager')) {
       return this.userService.findUsersByDepartmentIds(
         user.departments?.map((d) => d.id) ?? [],
         Number(page),
@@ -96,7 +101,7 @@ export class UserController {
     const currentUser = req.user;
     const user = await this.userService.findOneWithDetails(currentUser.id);
 
-    if (!user || !user.roles?.some((role) => role.name === 'admin')) {
+    if (!user || !getRoleNames(user).includes('admin')) {
       throw new ForbiddenException('Bạn không có quyền xem lịch sử đổi tên');
     }
 
@@ -116,7 +121,7 @@ export class UserController {
     const currentUser = req.user;
     const user = await this.userService.findOneWithDetails(currentUser.id);
 
-    if (!user || !user.roles?.some((role) => role.name === 'admin')) {
+    if (!user || !getRoleNames(user).includes('admin')) {
       throw new ForbiddenException('Bạn không có quyền xem lịch sử đổi tên');
     }
 
@@ -131,14 +136,18 @@ export class UserController {
       departmentIds: number[];
       roleIds: number[];
       permissionIds: number[];
+      rolePermissions: { roleId: number; permissionId: number; isActive: boolean }[];
     }
   ) {
-    return this.userService.updateUserRolesPermissions(
+    // Gọi service cập nhật roles, departments, permissions, role-permissions cho user
+    await this.userService.updateUserRolesPermissions(
       id,
       body.departmentIds,
       body.roleIds,
-      body.permissionIds
+      body.permissionIds,
+      body.rolePermissions,
     );
+    return { success: true };
   }
 
   @Post()
@@ -149,7 +158,7 @@ export class UserController {
     const currentUser = req.user;
     const user = await this.userService.findOneWithDetails(currentUser.id);
 
-    if (!user || !user.roles?.some((role) => role.name === 'admin')) {
+    if (!user || !getRoleNames(user).includes('admin')) {
       throw new ForbiddenException('Bạn không có quyền tạo user mới');
     }
 
@@ -165,7 +174,7 @@ export class UserController {
     const currentUser = req.user;
     const user = await this.userService.findOneWithDetails(currentUser.id);
 
-    if (!user || !user.roles?.some((role) => role.name === 'admin')) {
+    if (!user || !getRoleNames(user).includes('admin')) {
       throw new ForbiddenException(
         'Bạn không có quyền xem danh sách user đã xóa',
       );
@@ -192,12 +201,12 @@ export class UserController {
       throw new NotFoundException('User not found');
     }
 
-    if (user.roles?.some((role) => role.name === 'admin')) {
+    if (getRoleNames(user).includes('admin')) {
       // Admin đổi cho ai cũng truyền changerId là chính họ
       return this.userService.updateUser(id, updateUserDto, currentUser.id);
     }
 
-    if (user.roles?.some((role) => role.name === 'manager')) {
+    if (getRoleNames(user).includes('manager')) {
       if (id === user.id) {
         // Manager đổi cho chính mình
         return this.userService.updateUser(id, updateUserDto, currentUser.id);
@@ -247,7 +256,7 @@ export class UserController {
     const currentUser = req.user;
     const user = await this.userService.findOneWithDetails(currentUser.id);
 
-    if (!user || !user.roles?.some((role) => role.name === 'admin')) {
+    if (!user || !getRoleNames(user).includes('admin')) {
       throw new ForbiddenException('Bạn không có quyền xóa user này');
     }
 
@@ -262,7 +271,7 @@ export class UserController {
     const currentUser = req.user;
     const user = await this.userService.findOneWithDetails(currentUser.id);
 
-    if (!user || !user.roles?.some((role) => role.name === 'admin')) {
+    if (!user || !getRoleNames(user).includes('admin')) {
       throw new ForbiddenException('Bạn không có quyền khôi phục user này');
     }
 
@@ -275,5 +284,16 @@ export class UserController {
     @Body() roleIds: number[],
   ) {
     return this.userService.assignRolesToUser(userId, roleIds);
+  }
+
+  @Get(':id/roles-permissions')
+  async getUserRolePermissions(@Param('id', ParseIntPipe) id: number) {
+    // Lấy tất cả role-permission của user này (theo các role hiện tại của user)
+    const user = await this.userService.findOneWithDetails(id);
+    if (!user) throw new NotFoundException('User not found');
+    const roleIds = user.roles?.map(r => r.id) || [];
+    if (roleIds.length === 0) return [];
+    // Lấy tất cả role-permission mapping cho các role này
+    return this.rolesPermissionsService.findByRoleIds(roleIds);
   }
 }

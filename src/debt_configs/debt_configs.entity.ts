@@ -3,6 +3,12 @@ import { Debt } from '../debts/debt.entity';
 import { DebtLogs } from '../debt_logs/debt_logs.entity';
 import { User } from '../users/user.entity';
 
+export enum CustomerType {
+  FIXED = 'fixed',
+  NON_FIXED = 'non-fixed',
+  CASH = 'cash',
+}
+
 @Entity({ name: 'debt_configs' })
 export class DebtConfig {
   @PrimaryGeneratedColumn()
@@ -14,8 +20,12 @@ export class DebtConfig {
   @Column({ type: 'varchar', length: 255 })
   customer_name: string;
 
-  @Column({ type: 'varchar', length: 50 })
-  customer_type: string;
+  @Column({
+    type: 'enum',
+    enum: CustomerType,
+    default: CustomerType.CASH,
+  })
+  customer_type: CustomerType;
 
   @Column({ type: 'int', nullable: true })
   day_of_week: number;
@@ -35,14 +45,8 @@ export class DebtConfig {
   @Column({ type: 'datetime', nullable: true })
   last_update_at: Date;
 
-  @Column({ type: 'int', nullable: true })
-  actor_id: number;
-
   @ManyToOne(() => User, { nullable: true })
   actor: User;
-
-  @Column({ type: 'int', nullable: true })
-  employee_id: number;
 
   @ManyToOne(() => User, { nullable: true })
   employee: User;

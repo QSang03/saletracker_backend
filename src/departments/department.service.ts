@@ -10,23 +10,22 @@ import { Department } from './department.entity';
 import { Role } from '../roles/role.entity';
 import { CreateDepartmentDto } from './dto/create-department.dto';
 import { UpdateDepartmentDto } from './dto/update-department.dto';
-import { JwtService } from '@nestjs/jwt';
 import { PermissionService } from '../permissions/permission.service';
 import { RolePermission } from '../roles_permissions/roles-permissions.entity';
 import slugify from 'slugify';
 import { Permission } from '../permissions/permission.entity';
+import { getRoleNames } from '../common/utils/user-permission.helper';
 
 @Injectable()
 export class DepartmentService {
   constructor(
     @InjectRepository(Department)
     private readonly departmentRepo: Repository<Department>,
-    private readonly jwtService: JwtService,
     private readonly permissionService: PermissionService,
   ) {}
 
   async findAll(
-    token: string,
+    user: any,
     page = 1,
     pageSize = 20,
   ): Promise<{
@@ -41,14 +40,7 @@ export class DepartmentService {
     page: number;
     pageSize: number;
   }> {
-    let user: any;
-    try {
-      user = this.jwtService.decode(token);
-    } catch {
-      throw new UnauthorizedException('Invalid token');
-    }
-
-    if (user?.roles?.includes('admin')) {
+    if (getRoleNames(user).includes('admin')) {
       const [departments, total] = await this.departmentRepo.findAndCount({
         relations: { users: { roles: true } },
         order: { id: 'ASC' },
@@ -59,7 +51,7 @@ export class DepartmentService {
       return {
         data: departments.map((dep) => {
           const manager = dep.users?.find((u) =>
-            u.roles?.some((r) => r.name === `manager-${dep.slug}`),
+            getRoleNames(u).some((r) => r === `manager-${dep.slug}`),
           );
           return {
             id: dep.id,
@@ -85,7 +77,7 @@ export class DepartmentService {
       };
     }
 
-    if (user?.roles?.includes('manager')) {
+    if (getRoleNames(user).includes('manager')) {
       if (!user.departments || !Array.isArray(user.departments))
         return { data: [], total: 0, page, pageSize };
       const [departments, total] = await this.departmentRepo.findAndCount({
@@ -98,7 +90,7 @@ export class DepartmentService {
       return {
         data: departments.map((dep) => {
           const manager = dep.users?.find((u) =>
-            u.roles?.some((r) => r.name === `manager-${dep.slug}`),
+            getRoleNames(u).some((r) => r === `manager-${dep.slug}`),
           );
           return {
             id: dep.id,
@@ -129,16 +121,9 @@ export class DepartmentService {
 
   async createDepartment(
     createDepartmentDto: CreateDepartmentDto,
-    _token: string,
-    token: string,
+    user: any,
   ) {
-    let user: any;
-    try {
-      user = this.jwtService.decode(token);
-    } catch {
-      throw new UnauthorizedException('Invalid token');
-    }
-    if (!user?.roles?.includes('admin')) {
+    if (!getRoleNames(user).includes('admin')) {
       throw new UnauthorizedException('Chỉ admin mới được tạo phòng ban');
     }
 
@@ -205,15 +190,9 @@ export class DepartmentService {
   async updateDepartment(
     id: number,
     updateDepartmentDto: UpdateDepartmentDto,
-    token: string,
+    user: any,
   ) {
-    let user: any;
-    try {
-      user = this.jwtService.decode(token);
-    } catch {
-      throw new UnauthorizedException('Invalid token');
-    }
-    if (!user?.roles?.includes('admin')) {
+    if (!getRoleNames(user).includes('admin')) {
       throw new UnauthorizedException('Chỉ admin mới được sửa phòng ban');
     }
 
@@ -246,14 +225,8 @@ export class DepartmentService {
     return department;
   }
 
-  async softDeleteDepartment(id: number, token: string) {
-    let user: any;
-    try {
-      user = this.jwtService.decode(token);
-    } catch {
-      throw new UnauthorizedException('Invalid token');
-    }
-    if (!user?.roles?.includes('admin')) {
+  async softDeleteDepartment(id: number, user: any) {
+    if (!getRoleNames(user).includes('admin')) {
       throw new UnauthorizedException('Chỉ admin mới được xóa phòng ban');
     }
 
@@ -276,14 +249,8 @@ export class DepartmentService {
     return { success: true };
   }
 
-  async restoreDepartment(id: number, token: string) {
-    let user: any;
-    try {
-      user = this.jwtService.decode(token);
-    } catch {
-      throw new UnauthorizedException('Invalid token');
-    }
-    if (!user?.roles?.includes('admin')) {
+  async restoreDepartment(id: number, user: any) {
+    if (!getRoleNames(user).includes('admin')) {
       throw new UnauthorizedException('Chỉ admin mới được khôi phục phòng ban');
     }
 
@@ -304,14 +271,8 @@ export class DepartmentService {
     return { success: true };
   }
 
-  async findDeleted(token: string, page = 1, pageSize = 20) {
-    let user: any;
-    try {
-      user = this.jwtService.decode(token);
-    } catch {
-      throw new UnauthorizedException('Invalid token');
-    }
-    if (!user?.roles?.includes('admin')) {
+  async findDeleted(user: any, page = 1, pageSize = 20) {
+    if (!getRoleNames(user).includes('admin')) {
       throw new UnauthorizedException(
         'Chỉ admin mới được xem phòng ban đã xóa',
       );

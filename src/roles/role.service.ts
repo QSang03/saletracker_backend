@@ -1,39 +1,35 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Not, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 import { Role } from './role.entity';
 import { UpdateRoleDto } from './dto/update-role.dto';
 import { CreateRoleDto } from './dto/create-role.dto';
-import { JwtService } from '@nestjs/jwt';
+import { getRoleNames } from '../common/utils/user-permission.helper';
 
 @Injectable()
 export class RoleService {
   constructor(
     @InjectRepository(Role)
     private readonly roleRepo: Repository<Role>,
-    private readonly jwtService: JwtService,
   ) {}
 
-  private checkAdmin(token: string) {
-    const user: any = this.jwtService.decode(token);
-    if (!user?.roles?.includes('admin')) {
+  private checkAdmin(user: any) {
+    if (!getRoleNames(user).includes('admin')) {
       throw new UnauthorizedException(
         'Chỉ admin mới được phép thực hiện thao tác này',
       );
     }
   }
 
-  async findAll(token: string): Promise<{ id: number; name: string }[]> {
-    const user: any = this.jwtService.decode(token);
-
-    if (user?.roles?.includes('admin')) {
+  async findAll(user: any): Promise<{ id: number; name: string }[]> {
+    if (getRoleNames(user).includes('admin')) {
       return this.roleRepo.find({
         select: { id: true, name: true },
         order: { id: 'ASC' },
       });
     }
 
-    if (user?.roles?.includes('manager')) {
+    if (getRoleNames(user).includes('manager')) {
       // Lấy danh sách slug phòng ban của manager
       const managerDepartments = user.departments ?? [];
       const departmentSlugs = managerDepartments.map((d: any) => d.slug);
@@ -53,8 +49,8 @@ export class RoleService {
     throw new UnauthorizedException('Bạn không có quyền xem role');
   }
 
-  async createRole(createRoleDto: CreateRoleDto, token: string): Promise<Role> {
-    this.checkAdmin(token);
+  async createRole(createRoleDto: CreateRoleDto, user: any): Promise<Role> {
+    this.checkAdmin(user);
     const role = this.roleRepo.create(createRoleDto);
     return this.roleRepo.save(role);
   }
@@ -62,9 +58,9 @@ export class RoleService {
   async updateRole(
     id: number,
     updateRoleDto: UpdateRoleDto,
-    token: string,
+    user: any,
   ): Promise<Role> {
-    this.checkAdmin(token);
+    this.checkAdmin(user);
     await this.roleRepo.update(id, updateRoleDto);
     return this.roleRepo.findOneOrFail({
       where: { id },
@@ -72,17 +68,17 @@ export class RoleService {
     });
   }
 
-  async softDeleteRole(id: number, token: string): Promise<void> {
-    this.checkAdmin(token);
+  async softDeleteRole(id: number, user: any): Promise<void> {
+    this.checkAdmin(user);
     await this.roleRepo.softDelete(id);
   }
 
   async assignPermissionsToRole(
     roleId: number,
     permissionIds: number[],
-    token: string,
+    user: any,
   ): Promise<Role> {
-    this.checkAdmin(token);
+    this.checkAdmin(user);
     const role = await this.roleRepo.findOneOrFail({
       where: { id: roleId },
       relations: ['rolePermissions', 'rolePermissions.permission'],
@@ -98,8 +94,8 @@ export class RoleService {
     );
   }
 
-  async getGroupedRoles(token: string) {
-    this.checkAdmin(token);
+  async getGroupedRoles(user: any) {
+    this.checkAdmin(user);
     const allRoles = await this.roleRepo.find();
     const main: { id: number; name: string }[] = [];
     const sub: { id: number; name: string; display_name: string }[] = [];

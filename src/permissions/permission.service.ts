@@ -4,6 +4,7 @@ import { Permission } from './permission.entity';
 import { In, Repository } from 'typeorm';
 import { Role } from '../roles/role.entity';
 import { RolePermission } from '../roles_permissions/roles-permissions.entity';
+import { getRoleNames } from '../common/utils/user-permission.helper';
 
 @Injectable()
 export class PermissionService {
@@ -16,7 +17,9 @@ export class PermissionService {
     private readonly rolePermissionRepo: Repository<RolePermission>,
   ) {}
 
-  async findAll(token: string): Promise<Permission[]> {
+  async findAll(user: any): Promise<Permission[]> {
+    // Có thể kiểm tra quyền ở đây nếu cần
+    // if (!getRoleNames(user).includes('admin')) throw new UnauthorizedException('Chỉ admin được xem danh sách permission');
     return this.permissionRepo.find();
   }
 

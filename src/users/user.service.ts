@@ -14,6 +14,8 @@ import { Department } from '../departments/department.entity';
 import { UserStatus } from './user-status.enum';
 import { UserGateway } from './user.gateway';
 import { ChangeUserLog } from './change-user-log.entity';
+import { getRoleNames } from '../common/utils/user-permission.helper';
+import { RolesPermissionsService } from '../roles_permissions/roles-permissions.service';
 
 @Injectable()
 export class UserService {
@@ -27,6 +29,7 @@ export class UserService {
     @InjectRepository(ChangeUserLog)
     private readonly changeUserLogRepo: Repository<ChangeUserLog>,
     private readonly userGateway: UserGateway,
+    private readonly rolesPermissionsService: RolesPermissionsService, // Inject service
   ) {}
 
   async findAll(
@@ -38,7 +41,9 @@ export class UserService {
       roles?: string[];
       statuses?: string[];
     },
+    user?: any // Thêm user để phân quyền động nếu cần
   ): Promise<{ data: User[]; total: number }> {
+    // Nếu cần phân quyền động, có thể kiểm tra role ở đây bằng getRoleNames(user)
     const qb = this.userRepo
       .createQueryBuilder('user')
       .leftJoinAndSelect('user.departments', 'department')
@@ -636,6 +641,7 @@ export class UserService {
     departmentIds: number[],
     roleIds: number[],
     permissionIds: number[],
+    rolePermissions?: { roleId: number; permissionId: number; isActive: boolean }[],
   ) {
     const user = await this.userRepo.findOne({
       where: { id: userId },
@@ -669,6 +675,11 @@ export class UserService {
       .of(userId)
       .addAndRemove(newRoleIds, oldRoleIds);
 
+    // Nếu có rolePermissions thì gọi RolesPermissionsService.bulkUpdate
+    if (rolePermissions && Array.isArray(rolePermissions)) {
+      // Inject RolesPermissionsService vào service này hoặc gọi qua controller
+      await this.rolesPermissionsService.bulkUpdate(rolePermissions);
+    }
     return { success: true };
   }
 }

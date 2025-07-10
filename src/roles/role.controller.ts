@@ -22,20 +22,20 @@ export class RoleController {
 
   @Get()
   async findAll(@Req() req: Request) {
-    const token = req.headers.authorization?.split(' ')[1] || '';
-    return this.roleService.findAll(token);
+    const user = req.user;
+    return this.roleService.findAll(user);
   }
 
   @Get('grouped')
   async getGroupedRoles(@Req() req: Request) {
-    const token = req.headers.authorization?.split(' ')[1] || '';
-    return this.roleService.getGroupedRoles(token);
+    const user = req.user;
+    return this.roleService.getGroupedRoles(user);
   }
 
   @Post()
   async create(@Body() createRoleDto: CreateRoleDto, @Req() req: Request) {
-    const token = req.headers.authorization?.split(' ')[1] || '';
-    return this.roleService.createRole(createRoleDto, token);
+    const user = req.user;
+    return this.roleService.createRole(createRoleDto, user);
   }
 
   @Patch(':id')
@@ -44,14 +44,14 @@ export class RoleController {
     @Body() updateRoleDto: UpdateRoleDto,
     @Req() req: Request,
   ) {
-    const token = req.headers.authorization?.split(' ')[1] || '';
-    return this.roleService.updateRole(+id, updateRoleDto, token);
+    const user = req.user;
+    return this.roleService.updateRole(+id, updateRoleDto, user);
   }
 
   @Delete(':id')
   async remove(@Param('id') id: string, @Req() req: Request) {
-    const token = req.headers.authorization?.split(' ')[1] || '';
-    return this.roleService.softDeleteRole(+id, token);
+    const user = req.user;
+    return this.roleService.softDeleteRole(+id, user);
   }
 
   @Post(':roleId/permissions')
@@ -60,11 +60,11 @@ export class RoleController {
     @Body() permissionIds: number[],
     @Req() req: Request,
   ) {
-    const token = req.headers.authorization?.split(' ')[1] || '';
+    const user = req.user;
     return this.roleService.assignPermissionsToRole(
       +roleId,
       permissionIds,
-      token,
+      user,
     );
   }
 }
