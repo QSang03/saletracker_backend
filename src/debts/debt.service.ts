@@ -164,6 +164,17 @@ export class DebtService {
       let debtConfig = await this.debtConfigRepository.findOne({ where: { customer_code: row['Mã đối tác'] } });
       let sale_id: number | undefined = undefined;
       let sale_name_raw: string = '';
+      // --- Bổ sung cập nhật employee cho debtConfig nếu trùng mã ---
+      if (debtConfig && row['Kế toán công nợ']) {
+        const empCode = String(row['Kế toán công nợ']).split('-')[0].trim();
+        if (empCode) {
+          const user = await this.userRepository.findOne({ where: { employeeCode: empCode } });
+          if (user && (!debtConfig.employee || user.id !== debtConfig.employee.id)) {
+            debtConfig.employee = user;
+            await this.debtConfigRepository.save(debtConfig);
+          }
+        }
+      }
       if (row['NVKD']) {
         const code = row['NVKD'].split('-')[0];
         const user = await this.userRepository.createQueryBuilder('user')

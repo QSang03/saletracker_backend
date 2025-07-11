@@ -40,6 +40,9 @@ export class Order {
   @Column('json', { nullable: true })
   associated_message_ids: any;
 
+  @Column('json', { nullable: true })
+  order_history: any;
+
   @ManyToOne(() => User, { nullable: true })
   @JoinColumn({ name: 'sale_by' })
   sale_by: User;

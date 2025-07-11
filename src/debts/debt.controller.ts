@@ -34,9 +34,9 @@ export class DebtController {
     // Lấy toàn bộ dữ liệu theo filter (nếu có), không phân trang
     const result = await this.debtService.findAll(query, req.user, 1, 1000000); // lấy tối đa 1 triệu bản ghi
     const debts = result.data || [];
-    const totalAmount = debts.reduce((sum, d) => sum + (Number(d.total_amount) || 0), 0);
+    const totalAmount = debts.reduce((sum, d) => sum + (Number(d.remaining) || 0), 0);
     const totalBills = debts.length;
-    const totalCollected = debts.reduce((sum, d) => sum + (d.status === 'paid' ? (Number(d.total_amount) || 0) : 0), 0);
+    const totalCollected = debts.reduce((sum, d) => sum + (d.status === 'paid' ? (Number(d.remaining) || 0) : 0), 0);
     const totalPaidBills = debts.filter(d => d.status === 'paid').length;
     return { totalAmount, totalBills, totalCollected, totalPaidBills };
   }

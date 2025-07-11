@@ -27,11 +27,11 @@ export class DebtConfig {
   })
   customer_type: CustomerType;
 
-  @Column({ type: 'int', nullable: true })
-  day_of_week: number;
+  @Column({ type: 'simple-json', nullable: true })
+  day_of_week: number[] | null;
 
   @Column({ type: 'int', nullable: true })
-  gap_day: number;
+  gap_day: number | null;
 
   @Column({ type: 'boolean', default: false })
   is_send: boolean;
