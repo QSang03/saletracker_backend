@@ -361,4 +361,194 @@ export class DebtService {
     await this.update(id, { updated_at: debt.updated_at });
     return { success: true };
   }
+
+  // STATISTICS METHODS
+  
+  async getStatsOverview(query: any = {}, currentUser?: User) {
+    const { data: debts } = await this.findAll(query, currentUser, 1, 1000000);
+    
+    const total = debts.length;
+    const paid = debts.filter(d => d.status === 'paid').length;
+    const payLater = debts.filter(d => d.status === 'pay_later').length;
+    const noInfo = debts.filter(d => d.status === 'no_information_available').length;
+    
+    const totalAmount = debts.reduce((sum, d) => sum + (Number(d.total_amount) || 0), 0);
+    const remainingAmount = debts.reduce((sum, d) => sum + (Number(d.remaining) || 0), 0);
+    const collectedAmount = totalAmount - remainingAmount;
+    
+    const collectionRate = totalAmount > 0 ? (collectedAmount / totalAmount * 100) : 0;
+    
+    return {
+      total,
+      paid,
+      payLater,
+      noInfo,
+      totalAmount,
+      remainingAmount,
+      collectedAmount,
+      collectionRate: Math.round(collectionRate * 100) / 100,
+      avgDebtAmount: total > 0 ? Math.round(totalAmount / total) : 0,
+    };
+  }
+
+  async getAgingAnalysis(query: any = {}, currentUser?: User) {
+    const { data: debts } = await this.findAll(query, currentUser, 1, 1000000);
+    const today = new Date();
+    
+    const aging = {
+      current: { count: 0, amount: 0, label: '0-30 ngày' },
+      days30: { count: 0, amount: 0, label: '31-60 ngày' },
+      days60: { count: 0, amount: 0, label: '61-90 ngày' },
+      days90: { count: 0, amount: 0, label: '>90 ngày' }
+    };
+
+    debts.forEach(debt => {
+      if (debt.status === 'paid') return;
+      
+      const dueDate = new Date(debt.due_date);
+      const diffTime = today.getTime() - dueDate.getTime();
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      const amount = Number(debt.remaining) || 0;
+
+      if (diffDays <= 30) {
+        aging.current.count++;
+        aging.current.amount += amount;
+      } else if (diffDays <= 60) {
+        aging.days30.count++;
+        aging.days30.amount += amount;
+      } else if (diffDays <= 90) {
+        aging.days60.count++;
+        aging.days60.amount += amount;
+      } else {
+        aging.days90.count++;
+        aging.days90.amount += amount;
+      }
+    });
+
+    return Object.values(aging);
+  }
+
+  async getTrends(query: any = {}, currentUser?: User) {
+    const endDate = query.to ? new Date(query.to) : new Date();
+    const startDate = query.from ? new Date(query.from) : new Date(endDate.getTime() - 30 * 24 * 60 * 60 * 1000);
+    
+    const trends: any[] = [];
+    const dayMs = 24 * 60 * 60 * 1000;
+    
+    for (let date = new Date(startDate); date <= endDate; date.setTime(date.getTime() + dayMs)) {
+      const dateStr = date.toISOString().split('T')[0];
+      
+      const dayQuery = { ...query, singleDate: dateStr };
+      const { data: dayDebts } = await this.findAll(dayQuery, currentUser, 1, 1000000);
+      
+      const paid = dayDebts.filter(d => d.status === 'paid').length;
+      const payLater = dayDebts.filter(d => d.status === 'pay_later').length;
+      const noInfo = dayDebts.filter(d => d.status === 'no_information_available').length;
+      const total = dayDebts.length;
+      const totalAmount = dayDebts.reduce((sum, d) => sum + (Number(d.total_amount) || 0), 0);
+      
+      trends.push({
+        date: dateStr,
+        name: date.toLocaleDateString('vi-VN'),
+        paid,
+        pay_later: payLater,
+        no_info: noInfo,
+        total,
+        totalAmount,
+        collectionRate: total > 0 ? Math.round(paid / total * 100 * 100) / 100 : 0
+      });
+    }
+    
+    return trends;
+  }
+
+  async getEmployeePerformance(query: any = {}, currentUser?: User) {
+    const { data: debts } = await this.findAll(query, currentUser, 1, 1000000);
+    
+    const employeeStats = new Map();
+    
+    debts.forEach(debt => {
+      const employeeCode = debt.employee_code_raw || 'Unknown';
+      
+      if (!employeeStats.has(employeeCode)) {
+        employeeStats.set(employeeCode, {
+          employeeCode,
+          totalAssigned: 0,
+          totalCollected: 0,
+          totalAmount: 0,
+          collectedAmount: 0,
+          avgDaysToCollect: 0
+        });
+      }
+      
+      const stats = employeeStats.get(employeeCode);
+      stats.totalAssigned++;
+      stats.totalAmount += Number(debt.total_amount) || 0;
+      
+      if (debt.status === 'paid') {
+        stats.totalCollected++;
+        stats.collectedAmount += Number(debt.total_amount) || 0;
+      }
+    });
+    
+    return Array.from(employeeStats.values()).map(stats => ({
+      ...stats,
+      collectionRate: stats.totalAssigned > 0 ? Math.round(stats.totalCollected / stats.totalAssigned * 100 * 100) / 100 : 0,
+      avgDebtAmount: stats.totalAssigned > 0 ? Math.round(stats.totalAmount / stats.totalAssigned) : 0
+    })).sort((a, b) => b.collectionRate - a.collectionRate);
+  }
+
+  async getDepartmentBreakdown(query: any = {}, currentUser?: User) {
+    const { data: debts } = await this.findAll(query, currentUser, 1, 1000000);
+    
+    // Lấy thông tin departments từ users
+    const employeeCodes = [...new Set(debts.map(d => d.employee_code_raw).filter(Boolean))];
+    const users = await this.userRepository.find({
+      where: employeeCodes.length > 0 ? { employeeCode: In(employeeCodes) } : {},
+      relations: ['departments']
+    });
+    
+    const userDeptMap = new Map();
+    users.forEach(user => {
+      if (user.departments && user.departments.length > 0) {
+        userDeptMap.set(user.employeeCode, user.departments[0].name);
+      }
+    });
+    
+    const deptStats = new Map();
+    
+    debts.forEach(debt => {
+      const deptName = userDeptMap.get(debt.employee_code_raw) || 'Chưa phân bộ phận';
+      
+      if (!deptStats.has(deptName)) {
+        deptStats.set(deptName, {
+          department: deptName,
+          total: 0,
+          paid: 0,
+          payLater: 0,
+          noInfo: 0,
+          totalAmount: 0,
+          collectedAmount: 0
+        });
+      }
+      
+      const stats = deptStats.get(deptName);
+      stats.total++;
+      stats.totalAmount += Number(debt.total_amount) || 0;
+      
+      if (debt.status === 'paid') {
+        stats.paid++;
+        stats.collectedAmount += Number(debt.total_amount) || 0;
+      } else if (debt.status === 'pay_later') {
+        stats.payLater++;
+      } else {
+        stats.noInfo++;
+      }
+    });
+    
+    return Array.from(deptStats.values()).map(stats => ({
+      ...stats,
+      collectionRate: stats.total > 0 ? Math.round(stats.paid / stats.total * 100 * 100) / 100 : 0
+    })).sort((a, b) => b.collectionRate - a.collectionRate);
+  }
 }

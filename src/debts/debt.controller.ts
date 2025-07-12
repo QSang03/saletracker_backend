@@ -44,6 +44,36 @@ export class DebtController {
     return { totalAmount, totalBills, totalCollected, totalPaidBills };
   }
 
+  @Get('stats/overview')
+  @Permission('cong-no', 'read')
+  async getStatsOverview(@Query() query: any, @Req() req) {
+    return this.debtService.getStatsOverview(query, req.user);
+  }
+
+  @Get('stats/aging')
+  @Permission('cong-no', 'read')
+  async getAgingAnalysis(@Query() query: any, @Req() req) {
+    return this.debtService.getAgingAnalysis(query, req.user);
+  }
+
+  @Get('stats/trends')
+  @Permission('cong-no', 'read')
+  async getTrends(@Query() query: any, @Req() req) {
+    return this.debtService.getTrends(query, req.user);
+  }
+
+  @Get('stats/employee-performance')
+  @Permission('cong-no', 'read')
+  async getEmployeePerformance(@Query() query: any, @Req() req) {
+    return this.debtService.getEmployeePerformance(query, req.user);
+  }
+
+  @Get('stats/department-breakdown')
+  @Permission('cong-no', 'read')
+  async getDepartmentBreakdown(@Query() query: any, @Req() req) {
+    return this.debtService.getDepartmentBreakdown(query, req.user);
+  }
+
   @Get(':id')
   @Permission('cong-no', 'read')
   findOne(@Param('id') id: string) {

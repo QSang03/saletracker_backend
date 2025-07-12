@@ -23,6 +23,7 @@ import { DebtHistoriesModule } from './debt_histories/debt_histories.module';
 import { RolesPermissionsModule } from './roles_permissions/roles-permissions.module';
 import { NotificationModule } from './notifications/notification.module';
 import { OrderModule } from './orders/order.module';
+import { OrderDetailModule } from './order-details/order-detail.module';
 
 @Module({
   imports: [
@@ -50,6 +51,7 @@ import { OrderModule } from './orders/order.module';
     RolesPermissionsModule,
     NotificationModule,
     OrderModule,
+    OrderDetailModule,
   ],
   controllers: [AppController],
   providers: [AppService],
