@@ -31,13 +31,48 @@ export class DebtConfigService {
 
   async create(data: Partial<DebtConfig>): Promise<DebtConfig> {
     const entity = this.repo.create(data);
+    
+    // Tìm employee dựa trên debts có customer_raw_code trùng với customer_code
+    if (data.customer_code) {
+      const debt = await this.repo.manager.getRepository('Debt').findOne({ 
+        where: { customer_raw_code: data.customer_code } 
+      });
+      
+      if (debt && debt.employee_code_raw) {
+        // Lấy mã employee từ employee_code_raw (ví dụ: "CNO4321-Quốc Dương" -> "CNO4321")
+        const empCode = String(debt.employee_code_raw).split('-')[0].trim();
+        if (empCode) {
+          const user = await this.repo.manager.getRepository('User').findOne({ 
+            where: { employeeCode: empCode } 
+          });
+          if (user) {
+            entity.employee = { id: user.id } as any;
+          }
+        }
+      }
+    }
+    
     const savedConfig = await this.repo.save(entity);
+    
+    // Cập nhật debt_config cho các debts có customer_raw_code trùng với customer_code
+    if (data.customer_code) {
+      const debtsToUpdate = await this.repo.manager.getRepository('Debt').find({
+        where: { customer_raw_code: data.customer_code }
+      });
+      
+      for (const debt of debtsToUpdate) {
+        debt.debt_config = savedConfig;
+        await this.repo.manager.getRepository('Debt').save(debt);
+      }
+    }
+    
     // Tạo debt_logs tương ứng
     await this.debtLogsService.create({
       debt_config_id: savedConfig.id,
       debt_msg: '',
       remind_status: ReminderStatus.NotSent,
     });
+    
     return savedConfig;
   }
 
@@ -246,5 +281,50 @@ export class DebtConfigService {
       imported.push({ row: i + 2, customer_code });
     }
     return { imported, errors };
+  }
+
+  async getDebtConfigDetail(id: number): Promise<any> {
+    const config = await this.repo.findOne({
+      where: { id },
+      relations: ['debt_logs', 'actor', 'employee'],
+    });
+    
+    if (!config) {
+      throw new Error('DebtConfig not found');
+    }
+
+    // Lấy debt_log mới nhất
+    const latestDebtLog = config.debt_logs && config.debt_logs.length > 0 
+      ? config.debt_logs.reduce((latest, log) => {
+          return new Date(log.created_at) > new Date(latest.created_at) ? log : latest;
+        })
+      : null;
+
+    return {
+      id: config.id,
+      customer_code: config.customer_code,
+      customer_name: config.customer_name,
+      customer_type: config.customer_type,
+      // Từ debt_logs
+      image_url: latestDebtLog?.debt_img || null,
+      debt_message: latestDebtLog?.debt_msg || '',
+      remind_message_1: latestDebtLog?.first_remind || '',
+      remind_message_2: latestDebtLog?.second_remind || '',
+      business_remind_message: latestDebtLog?.sale_msg || '',
+      remind_status: latestDebtLog?.remind_status || 'Not Sent',
+      customer_gender: latestDebtLog?.gender || '',
+      send_time: latestDebtLog?.send_at ? latestDebtLog.send_at.toISOString() : null,
+      remind_time_1: latestDebtLog?.first_remind_at ? latestDebtLog.first_remind_at.toISOString() : null,
+      remind_time_2: latestDebtLog?.second_remind_at ? latestDebtLog.second_remind_at.toISOString() : null,
+      // Thông tin bổ sung
+      is_send: config.is_send,
+      is_repeat: config.is_repeat,
+      day_of_week: config.day_of_week,
+      gap_day: config.gap_day,
+      send_last_at: config.send_last_at ? config.send_last_at.toISOString() : null,
+      last_update_at: config.last_update_at ? config.last_update_at.toISOString() : null,
+      actor: config.actor ? { fullName: config.actor.fullName, username: config.actor.username } : null,
+      employee: config.employee ? { fullName: config.employee.fullName, username: config.employee.username } : null,
+    };
   }
 }

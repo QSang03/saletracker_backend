@@ -24,6 +24,12 @@ export class DebtConfigController {
     return this.debtConfigService.findOne(id);
   }
 
+  @Get(':id/detail')
+  @Permission('cong-no', 'read')
+  async getDebtConfigDetail(@Param('id') id: number) {
+    return this.debtConfigService.getDebtConfigDetail(id);
+  }
+
   @Post()
   @Permission('cong-no', 'create')
   create(@Body() data: Partial<DebtConfig>, @Req() req: any): Promise<DebtConfig> {

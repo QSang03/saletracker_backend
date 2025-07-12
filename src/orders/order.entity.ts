@@ -24,7 +24,7 @@ export class Order {
   @Column('bigint', { nullable: false })
   conversation_id: number;
 
-  @Column('int', { unsigned: true, default: 0 })
+  @Column('bigint', { unsigned: true, default: 0 })
   price: number;
 
   @Column({ type: 'varchar', length: 255, nullable: true })
