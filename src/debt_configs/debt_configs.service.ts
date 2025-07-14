@@ -30,20 +30,31 @@ export class DebtConfigService {
   }
 
   async create(data: Partial<DebtConfig>): Promise<DebtConfig> {
-    const entity = this.repo.create(data);
-    
-    // Tìm employee dựa trên debts có customer_raw_code trùng với customer_code
+    // Kiểm tra trùng lặp mã khách hàng
     if (data.customer_code) {
-      const debt = await this.repo.manager.getRepository('Debt').findOne({ 
-        where: { customer_raw_code: data.customer_code } 
+      const existingConfig = await this.repo.findOne({
+        where: { customer_code: data.customer_code },
       });
       
+      if (existingConfig) {
+        throw new Error(`Cấu hình công nợ cho mã khách hàng "${data.customer_code}" đã tồn tại`);
+      }
+    }
+
+    const entity = this.repo.create(data);
+
+    // Tìm employee dựa trên debts có customer_raw_code trùng với customer_code
+    if (data.customer_code) {
+      const debt = await this.repo.manager.getRepository('Debt').findOne({
+        where: { customer_raw_code: data.customer_code },
+      });
+
       if (debt && debt.employee_code_raw) {
         // Lấy mã employee từ employee_code_raw (ví dụ: "CNO4321-Quốc Dương" -> "CNO4321")
         const empCode = String(debt.employee_code_raw).split('-')[0].trim();
         if (empCode) {
-          const user = await this.repo.manager.getRepository('User').findOne({ 
-            where: { employeeCode: empCode } 
+          const user = await this.repo.manager.getRepository('User').findOne({
+            where: { employeeCode: empCode },
           });
           if (user) {
             entity.employee = { id: user.id } as any;
@@ -51,33 +62,86 @@ export class DebtConfigService {
         }
       }
     }
-    
+
     const savedConfig = await this.repo.save(entity);
-    
+
     // Cập nhật debt_config cho các debts có customer_raw_code trùng với customer_code
     if (data.customer_code) {
       const debtsToUpdate = await this.repo.manager.getRepository('Debt').find({
-        where: { customer_raw_code: data.customer_code }
+        where: { customer_raw_code: data.customer_code },
       });
-      
+
       for (const debt of debtsToUpdate) {
         debt.debt_config = savedConfig;
         await this.repo.manager.getRepository('Debt').save(debt);
       }
     }
-    
+
     // Tạo debt_logs tương ứng
     await this.debtLogsService.create({
       debt_config_id: savedConfig.id,
       debt_msg: '',
       remind_status: ReminderStatus.NotSent,
     });
-    
+
     return savedConfig;
   }
 
-  update(id: number, data: Partial<DebtConfig>): Promise<DebtConfig> {
-    return this.repo.save({ ...data, id });
+  async update(id: number, data: Partial<DebtConfig>): Promise<DebtConfig> {
+    // Check if config exists first
+    const config = await this.repo.findOne({ where: { id } });
+    if (!config) throw new Error('DebtConfig not found');
+
+    // Chỉ cho phép các trường này được update
+    const allowedFields = [
+      'is_send',
+      'is_repeat',
+      'gap_day',
+      'day_of_week',
+      'send_last_at',
+      'last_update_at',
+      'customer_type',
+    ];
+    const updateData: any = {};
+    for (const key of allowedFields) {
+      const value = data[key];
+      if (
+        value !== undefined &&
+        !(
+          typeof value === 'object' &&
+          value !== null &&
+          Object.keys(value).length === 0
+        )
+      ) {
+        updateData[key] = value;
+      }
+    }
+
+    // Handle actor relation separately if provided
+    if (data.actor && typeof data.actor === 'object' && data.actor.id) {
+      updateData.actor = { id: data.actor.id };
+    }
+
+    // Handle employee relation separately if provided
+    if (
+      data.employee &&
+      typeof data.employee === 'object' &&
+      data.employee.id
+    ) {
+      updateData.employee = { id: data.employee.id };
+    }
+
+    const result = await this.repo.update(id, updateData);
+    if (result.affected === 0) {
+      throw new Error('DebtConfig not found');
+    }
+
+    const updated = await this.repo.findOne({
+      where: { id },
+      relations: ['debts', 'debt_logs', 'employee', 'actor'],
+    });
+    if (!updated) throw new Error('DebtConfig not found after update');
+    return updated;
   }
 
   async remove(id: number): Promise<void> {
@@ -94,13 +158,13 @@ export class DebtConfigService {
   }
 
   async findAllWithRole(currentUser: any): Promise<any[]> {
-    const roleNames = (currentUser?.roles || []).map(
-      (r: any) =>
-        typeof r === 'string'
-          ? r.toLowerCase()
-          : (r.code || r.name || '').toLowerCase()
+    const roleNames = (currentUser?.roles || []).map((r: any) =>
+      typeof r === 'string'
+        ? r.toLowerCase()
+        : (r.code || r.name || '').toLowerCase(),
     );
-    const isAdminOrManager = roleNames.includes('admin') || roleNames.includes('manager-cong-no');
+    const isAdminOrManager =
+      roleNames.includes('admin') || roleNames.includes('manager-cong-no');
     let configs: DebtConfig[] = [];
     if (isAdminOrManager) {
       configs = await this.repo.find({
@@ -140,10 +204,13 @@ export class DebtConfigService {
     } else {
       return [];
     }
-    return configs.map(cfg => {
+    return configs.map((cfg) => {
       const total_bills = Array.isArray(cfg.debts) ? cfg.debts.length : 0;
       const total_debt = Array.isArray(cfg.debts)
-        ? cfg.debts.reduce((sum: number, d: any) => sum + (Number(d.remaining) || 0), 0)
+        ? cfg.debts.reduce(
+            (sum: number, d: any) => sum + (Number(d.remaining) || 0),
+            0,
+          )
         : 0;
       return {
         id: cfg.id,
@@ -155,16 +222,26 @@ export class DebtConfigService {
         is_send: cfg.is_send,
         is_repeat: cfg.is_repeat,
         send_last_at: cfg.send_last_at ? cfg.send_last_at.toISOString() : null,
-        last_update_at: cfg.last_update_at ? cfg.last_update_at.toISOString() : null,
-        actor: cfg.actor ? { fullName: cfg.actor.fullName, username: cfg.actor.username } : null,
-        employee: cfg.employee ? { id: cfg.employee.id, fullName: cfg.employee.fullName } : null,
+        last_update_at: cfg.last_update_at
+          ? cfg.last_update_at.toISOString()
+          : null,
+        actor: cfg.actor
+          ? { fullName: cfg.actor.fullName, username: cfg.actor.username }
+          : null,
+        employee: cfg.employee
+          ? { id: cfg.employee.id, fullName: cfg.employee.fullName }
+          : null,
         debt_logs: Array.isArray(cfg.debt_logs)
-          ? cfg.debt_logs.map(log => ({
+          ? cfg.debt_logs.map((log) => ({
               remind_status: log.remind_status,
               created_at: log.created_at ? log.created_at.toISOString() : null,
               send_at: log.send_at ? log.send_at.toISOString() : null,
-              first_remind_at: log.first_remind_at ? log.first_remind_at.toISOString() : null,
-              second_remind_at: log.second_remind_at ? log.second_remind_at.toISOString() : null,
+              first_remind_at: log.first_remind_at
+                ? log.first_remind_at.toISOString()
+                : null,
+              second_remind_at: log.second_remind_at
+                ? log.second_remind_at.toISOString()
+                : null,
             }))
           : [],
         total_bills,
@@ -173,16 +250,22 @@ export class DebtConfigService {
     });
   }
 
-  async toggleSend(id: number, is_send: boolean, user: any): Promise<DebtConfig> {
-    const config = await this.repo.findOne({ where: { id } });
-    if (!config) throw new Error('DebtConfig not found');
-    config.is_send = is_send;
-    config.last_update_at = new Date();
+  // Sửa lại toggleSend
+  async toggleSend(
+    id: number,
+    is_send: boolean,
+    user: any,
+  ): Promise<DebtConfig> {
+    const updateFields: any = {
+      is_send,
+      is_repeat: is_send,
+      last_update_at: new Date(),
+    };
     if (user && (user.id || user.userId)) {
-      config.actor = { id: user.id || user.userId } as any;
+      updateFields.actor = { id: user.id || user.userId };
     }
-    await this.repo.save(config);
-    // Trả về bản ghi đã populate relations
+    await this.repo.update(id, updateFields);
+
     const updated = await this.repo.findOne({
       where: { id },
       relations: ['actor', 'debt_logs', 'debts'],
@@ -191,16 +274,21 @@ export class DebtConfigService {
     return updated;
   }
 
-  async toggleRepeat(id: number, is_repeat: boolean, user: any): Promise<DebtConfig> {
-    const config = await this.repo.findOne({ where: { id } });
-    if (!config) throw new Error('DebtConfig not found');
-    config.is_repeat = is_repeat;
-    config.last_update_at = new Date();
+  // Sửa lại toggleRepeat
+  async toggleRepeat(
+    id: number,
+    is_repeat: boolean,
+    user: any,
+  ): Promise<DebtConfig> {
+    const updateFields: any = {
+      is_repeat,
+      last_update_at: new Date(),
+    };
     if (user && (user.id || user.userId)) {
-      config.actor = { id: user.id || user.userId } as any;
+      updateFields.actor = { id: user.id || user.userId };
     }
-    await this.repo.save(config);
-    // Trả về bản ghi đã populate relations
+    await this.repo.update(id, updateFields);
+
     const updated = await this.repo.findOne({
       where: { id },
       relations: ['actor', 'debt_logs', 'debts'],
@@ -209,11 +297,16 @@ export class DebtConfigService {
     return updated;
   }
 
-  async importExcelRows(rows: any[]): Promise<{ imported: any[]; errors: any[] }> {
+  async importExcelRows(
+    rows: any[],
+  ): Promise<{ imported: any[]; errors: any[] }> {
     const errors: any[] = [];
     const imported: any[] = [];
     if (!rows || !Array.isArray(rows) || rows.length === 0) {
-      return { imported, errors: [{ row: 0, error: 'Không có dữ liệu để import' }] };
+      return {
+        imported,
+        errors: [{ row: 0, error: 'Không có dữ liệu để import' }],
+      };
     }
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
@@ -228,10 +321,14 @@ export class DebtConfigService {
       // Mapping loại khách hàng
       let customer_type: 'fixed' | 'non-fixed' | 'cash' | undefined;
       if (customer_type_raw === 'Cố Định') customer_type = 'fixed';
-      else if (customer_type_raw === 'Không Cố Định') customer_type = 'non-fixed';
+      else if (customer_type_raw === 'Không Cố Định')
+        customer_type = 'non-fixed';
       else if (customer_type_raw === 'Tiền Mặt') customer_type = 'cash';
       else {
-        errors.push({ row: i + 2, error: `Loại khách hàng không hợp lệ: ${customer_type_raw}` });
+        errors.push({
+          row: i + 2,
+          error: `Loại khách hàng không hợp lệ: ${customer_type_raw}`,
+        });
         break;
       }
       // Validate và parse Ngày Hẹn/Lặp
@@ -239,19 +336,36 @@ export class DebtConfigService {
       let day_of_week: number[] | undefined = undefined;
       if (customer_type === 'cash' || customer_type === 'non-fixed') {
         if (ngay_hen_lap_raw.includes(',')) {
-          errors.push({ row: i + 2, error: 'Tiền Mặt/Không Cố Định chỉ được 1 số duy nhất cho Ngày Hẹn/Lặp' });
+          errors.push({
+            row: i + 2,
+            error:
+              'Tiền Mặt/Không Cố Định chỉ được 1 số duy nhất cho Ngày Hẹn/Lặp',
+          });
           break;
         }
         const num = Number(ngay_hen_lap_raw);
-        if (!Number.isInteger(num) || num < 1 || num > 10) {
-          errors.push({ row: i + 2, error: 'Ngày Hẹn/Lặp phải là số nguyên từ 1-10' });
+        if (!Number.isInteger(num) || num < 0 || num > 10) {
+          errors.push({
+            row: i + 2,
+            error: 'Ngày Hẹn/Lặp phải là số nguyên từ 0-10 (0 = Nhắc Mỗi Ngày)',
+          });
           break;
         }
         gap_day = num;
       } else if (customer_type === 'fixed') {
-        const arr = ngay_hen_lap_raw.split(',').map(s => Number(s.trim())).filter(n => !isNaN(n));
-        if (arr.length === 0 || arr.some(n => n < 2 || n > 7 || !Number.isInteger(n))) {
-          errors.push({ row: i + 2, error: 'Ngày Hẹn/Lặp cho Cố Định phải là số nguyên từ 2-7, cách nhau dấu phẩy' });
+        const arr = ngay_hen_lap_raw
+          .split(',')
+          .map((s) => Number(s.trim()))
+          .filter((n) => !isNaN(n));
+        if (
+          arr.length === 0 ||
+          arr.some((n) => n < 2 || n > 7 || !Number.isInteger(n))
+        ) {
+          errors.push({
+            row: i + 2,
+            error:
+              'Ngày Hẹn/Lặp cho Cố Định phải là số nguyên từ 2-7, cách nhau dấu phẩy',
+          });
           break;
         }
         day_of_week = arr;
@@ -259,26 +373,44 @@ export class DebtConfigService {
       // Tìm employee cho debt_config
       let employee: any = null;
       // Tìm debt có customer_raw_code = customer_code
-      const debt = await this.repo.manager.getRepository('Debt').findOne({ where: { customer_raw_code: customer_code } });
+      const debt = await this.repo.manager
+        .getRepository('Debt')
+        .findOne({ where: { customer_raw_code: customer_code } });
       if (debt && debt.employee_code_raw) {
         const empCode = String(debt.employee_code_raw).split('-')[0].trim();
         if (empCode) {
-          const user = await this.repo.manager.getRepository('User').findOne({ where: { employeeCode: empCode } });
+          const user = await this.repo.manager
+            .getRepository('User')
+            .findOne({ where: { employeeCode: empCode } });
           if (user) employee = user;
         }
       }
-      // Tạo hoặc cập nhật debt_config
-      let config = await this.repo.findOne({ where: { customer_code } });
-      if (!config) {
-        config = this.repo.create({ customer_code });
+      // Kiểm tra trùng lặp mã khách hàng
+      const existingConfig = await this.repo.findOne({ where: { customer_code } });
+      if (existingConfig) {
+        errors.push({ 
+          row: i + 2, 
+          error: `Mã khách hàng "${customer_code}" đã tồn tại trong hệ thống` 
+        });
+        continue; // Bỏ qua row này và tiếp tục với row tiếp theo
       }
+
+      // Tạo debt_config mới
+      const config = this.repo.create({ customer_code });
+      
+      // Cập nhật thông tin
       config.customer_type = customer_type as any; // ép kiểu về enum CustomerType
       config.gap_day = typeof gap_day === 'number' ? gap_day : null;
       config.day_of_week = Array.isArray(day_of_week) ? day_of_week : null;
       config.employee = employee || null;
       config.customer_name = customer_name;
+      
       await this.repo.save(config);
-      imported.push({ row: i + 2, customer_code });
+      imported.push({ 
+        row: i + 2, 
+        customer_code, 
+        action: 'created' 
+      });
     }
     return { imported, errors };
   }
@@ -288,17 +420,20 @@ export class DebtConfigService {
       where: { id },
       relations: ['debt_logs', 'actor', 'employee'],
     });
-    
+
     if (!config) {
       throw new Error('DebtConfig not found');
     }
 
     // Lấy debt_log mới nhất
-    const latestDebtLog = config.debt_logs && config.debt_logs.length > 0 
-      ? config.debt_logs.reduce((latest, log) => {
-          return new Date(log.created_at) > new Date(latest.created_at) ? log : latest;
-        })
-      : null;
+    const latestDebtLog =
+      config.debt_logs && config.debt_logs.length > 0
+        ? config.debt_logs.reduce((latest, log) => {
+            return new Date(log.created_at) > new Date(latest.created_at)
+              ? log
+              : latest;
+          })
+        : null;
 
     return {
       id: config.id,
@@ -313,18 +448,35 @@ export class DebtConfigService {
       business_remind_message: latestDebtLog?.sale_msg || '',
       remind_status: latestDebtLog?.remind_status || 'Not Sent',
       customer_gender: latestDebtLog?.gender || '',
-      send_time: latestDebtLog?.send_at ? latestDebtLog.send_at.toISOString() : null,
-      remind_time_1: latestDebtLog?.first_remind_at ? latestDebtLog.first_remind_at.toISOString() : null,
-      remind_time_2: latestDebtLog?.second_remind_at ? latestDebtLog.second_remind_at.toISOString() : null,
+      send_time: latestDebtLog?.send_at
+        ? latestDebtLog.send_at.toISOString()
+        : null,
+      remind_time_1: latestDebtLog?.first_remind_at
+        ? latestDebtLog.first_remind_at.toISOString()
+        : null,
+      remind_time_2: latestDebtLog?.second_remind_at
+        ? latestDebtLog.second_remind_at.toISOString()
+        : null,
       // Thông tin bổ sung
       is_send: config.is_send,
       is_repeat: config.is_repeat,
       day_of_week: config.day_of_week,
       gap_day: config.gap_day,
-      send_last_at: config.send_last_at ? config.send_last_at.toISOString() : null,
-      last_update_at: config.last_update_at ? config.last_update_at.toISOString() : null,
-      actor: config.actor ? { fullName: config.actor.fullName, username: config.actor.username } : null,
-      employee: config.employee ? { fullName: config.employee.fullName, username: config.employee.username } : null,
+      send_last_at: config.send_last_at
+        ? config.send_last_at.toISOString()
+        : null,
+      last_update_at: config.last_update_at
+        ? config.last_update_at.toISOString()
+        : null,
+      actor: config.actor
+        ? { fullName: config.actor.fullName, username: config.actor.username }
+        : null,
+      employee: config.employee
+        ? {
+            fullName: config.employee.fullName,
+            username: config.employee.username,
+          }
+        : null,
     };
-  }
+}
 }

@@ -2,12 +2,17 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { ValidationPipe } from '@nestjs/common';
 import { DatetimeInterceptor } from './common/interceptors/datetime.interceptor';
+import * as bodyParser from 'body-parser';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
+  // Increase body size limit for file uploads
+  app.use(bodyParser.json({ limit: '50mb' }));
+  app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }));
+
   app.enableCors({
-    origin: 'http://localhost:3000',
+    origin: true, // Cho phép tất cả origin (mọi port)
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
     credentials: true,
     allowedHeaders: ['Authorization', 'Content-Type'],

@@ -18,14 +18,15 @@ export class DebtService {
   ) {}
 
   async findAll(query: any = {}, currentUser?: User, page = 1, pageSize = 10) {
-    const roleNames = (currentUser?.roles || []).map(
-      (r: any) =>
-        typeof r === 'string'
-          ? r.toLowerCase()
-          : (r.code || r.name || '').toLowerCase()
+    const roleNames = (currentUser?.roles || []).map((r: any) =>
+      typeof r === 'string'
+        ? r.toLowerCase()
+        : (r.code || r.name || '').toLowerCase(),
     );
-    const isAdminOrManager = roleNames.includes('admin') || roleNames.includes('manager-cong-no');
-    const qb = this.debtRepository.createQueryBuilder('debt')
+    const isAdminOrManager =
+      roleNames.includes('admin') || roleNames.includes('manager-cong-no');
+    const qb = this.debtRepository
+      .createQueryBuilder('debt')
       .leftJoinAndSelect('debt.sale', 'sale')
       .leftJoinAndSelect('debt.debt_config', 'debt_config')
       .leftJoinAndSelect('debt_config.employee', 'employee');
@@ -46,7 +47,7 @@ export class DebtService {
       const search = `%${query.search.trim()}%`;
       qb.andWhere(
         '(debt.customer_raw_code LIKE :search OR debt.invoice_code LIKE :search OR debt.bill_code LIKE :search OR debt.sale_name_raw LIKE :search)',
-        { search }
+        { search },
       );
     }
     // Filter trạng thái
@@ -55,19 +56,27 @@ export class DebtService {
     }
     // Filter mã đối tác
     if (query.customerCode) {
-      qb.andWhere('debt.customer_raw_code = :customerCode', { customerCode: query.customerCode });
+      qb.andWhere('debt.customer_raw_code = :customerCode', {
+        customerCode: query.customerCode,
+      });
     }
     // Filter kế toán công nợ (employeeCode)
     if (query.employeeCode) {
-      qb.andWhere('debt.employee_code_raw LIKE :employeeCode', { employeeCode: `%${query.employeeCode}%` });
+      qb.andWhere('debt.employee_code_raw LIKE :employeeCode', {
+        employeeCode: `%${query.employeeCode}%`,
+      });
     }
     // Filter NVKD (saleCode)
     if (query.saleCode) {
-      qb.andWhere('debt.sale_name_raw LIKE :saleCode', { saleCode: `%${query.saleCode}%` });
+      qb.andWhere('debt.sale_name_raw LIKE :saleCode', {
+        saleCode: `%${query.saleCode}%`,
+      });
     }
     // Filter ngày công nợ (nếu có)
     if (query.debtDate) {
-      qb.andWhere('DATE(debt.issue_date) = :debtDate', { debtDate: query.debtDate });
+      qb.andWhere('DATE(debt.issue_date) = :debtDate', {
+        debtDate: query.debtDate,
+      });
     }
     // Filter nhiều trường khác nếu cần (mở rộng)
 
@@ -80,7 +89,7 @@ export class DebtService {
         {
           empCode: currentUser?.employeeCode,
           userId: currentUser?.id,
-        }
+        },
       );
     }
     // Pagination
@@ -111,23 +120,36 @@ export class DebtService {
     const errors: ImportResult[] = [];
     const imported: ImportResult[] = [];
     if (!rows || !Array.isArray(rows) || rows.length === 0) {
-      return { imported, errors: [{ row: 0, error: 'Không có dữ liệu để import' }] };
+      return {
+        imported,
+        errors: [{ row: 0, error: 'Không có dữ liệu để import' }],
+      };
     }
-    const excelInvoiceCodes = rows.map(row => row['Số chứng từ']).filter(Boolean);
-    const existingDebts = excelInvoiceCodes.length > 0
-      ? await this.debtRepository.find({ where: { invoice_code: In(excelInvoiceCodes) } })
-      : [];
-    const existingDebtsMap = new Map(existingDebts.map(d => [d.invoice_code, d]));
-    const debtsNotInExcel = excelInvoiceCodes.length > 0
-      ? await this.debtRepository.find({ where: { invoice_code: Not(In(excelInvoiceCodes)) } })
-      : [];
+    const excelInvoiceCodes = rows
+      .map((row) => row['Số chứng từ'])
+      .filter(Boolean);
+    const existingDebts =
+      excelInvoiceCodes.length > 0
+        ? await this.debtRepository.find({
+            where: { invoice_code: In(excelInvoiceCodes) },
+          })
+        : [];
+    const existingDebtsMap = new Map(
+      existingDebts.map((d) => [d.invoice_code, d]),
+    );
+    const debtsNotInExcel =
+      excelInvoiceCodes.length > 0
+        ? await this.debtRepository.find({
+            where: { invoice_code: Not(In(excelInvoiceCodes)) },
+          })
+        : [];
     for (const debt of debtsNotInExcel) {
       debt.status = 'paid' as any;
       debt.updated_at = new Date();
       await this.debtRepository.save(debt);
     }
     // Map customer_code -> pay_later (Date) từ DB
-    const customerCodes = rows.map(row => row['Mã đối tác']).filter(Boolean);
+    const customerCodes = rows.map((row) => row['Mã đối tác']).filter(Boolean);
     let payLaterMap = new Map<string, Date>();
     if (customerCodes.length > 0) {
       const debtsWithPayLater = await this.debtRepository.find({
@@ -138,7 +160,7 @@ export class DebtService {
         if (d.customer_raw_code && d.pay_later) {
           // Lấy ngày gần nhất nếu có nhiều phiếu cùng mã
           const old = payLaterMap.get(d.customer_raw_code);
-          if (!old || (d.pay_later > old)) {
+          if (!old || d.pay_later > old) {
             payLaterMap.set(d.customer_raw_code, d.pay_later);
           }
         }
@@ -146,30 +168,55 @@ export class DebtService {
     }
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
-      const keys = Object.keys(row).filter(k => k !== 'Còn lại');
-      const onlyHasConLai = keys.every(k => !row[k] || row[k] === '' || row[k] === null);
+      const keys = Object.keys(row).filter((k) => k !== 'Còn lại');
+      const onlyHasConLai = keys.every((k) => {
+        const value = row[k];
+        return (
+          value === null ||
+          value === undefined ||
+          value === '' ||
+          (typeof value === 'string' && value.trim() === '')
+        );
+      });
       if (onlyHasConLai && row['Còn lại']) {
         continue;
       }
       const required = [
-        'Mã đối tác', 'Số chứng từ', 'Ngày chứng từ', 'Số hóa đơn',
-        'Ngày đến hạn', 'Ngày công nợ', 'Số ngày quá hạn',
-        'Số tiền chứng từ', 'Còn lại', 'NVKD', 'Kế toán công nợ'
+        'Mã đối tác',
+        'Số chứng từ',
+        'Ngày chứng từ',
+        'Số hóa đơn',
+        'Ngày đến hạn',
+        'Ngày công nợ',
+        'Số ngày quá hạn',
+        'Thành tiền chứng từ',
+        'Còn lại',
+        'NVKD',
+        'Kế toán công nợ',
       ];
       const missing = required.filter((k) => !row[k]);
       if (missing.length) {
-        errors.push({ row: i + 2, error: `Thiếu trường: ${missing.join(', ')}` });
+        errors.push({
+          row: i + 2,
+          error: `Thiếu trường: ${missing.join(', ')}`,
+        });
         continue;
       }
-      let debtConfig = await this.debtConfigRepository.findOne({ where: { customer_code: row['Mã đối tác'] } });
+      let debtConfig = await this.debtConfigRepository.findOne({
+        where: { customer_code: row['Mã đối tác'] },
+      });
       let sale_id: number | undefined = undefined;
       let sale_name_raw: string = '';
-      // --- Bổ sung cập nhật employee cho debtConfig nếu trùng mã ---
       if (debtConfig && row['Kế toán công nợ']) {
         const empCode = String(row['Kế toán công nợ']).split('-')[0].trim();
         if (empCode) {
-          const user = await this.userRepository.findOne({ where: { employeeCode: empCode } });
-          if (user && (!debtConfig.employee || user.id !== debtConfig.employee.id)) {
+          const user = await this.userRepository.findOne({
+            where: { employeeCode: empCode },
+          });
+          if (
+            user &&
+            (!debtConfig.employee || user.id !== debtConfig.employee.id)
+          ) {
             debtConfig.employee = user;
             await this.debtConfigRepository.save(debtConfig);
           }
@@ -177,7 +224,8 @@ export class DebtService {
       }
       if (row['NVKD']) {
         const code = row['NVKD'].split('-')[0];
-        const user = await this.userRepository.createQueryBuilder('user')
+        const user = await this.userRepository
+          .createQueryBuilder('user')
           .where('user.employeeCode LIKE :code', { code: `%${code}%` })
           .getOne();
         if (user && user.employeeCode && user.employeeCode.startsWith(code)) {
@@ -196,22 +244,28 @@ export class DebtService {
       try {
         let pay_later: Date | undefined = undefined;
         if (oldDebt) {
-          pay_later = oldDebt.pay_later || payLaterMap.get(row['Mã đối tác']) || undefined;
+          pay_later =
+            oldDebt.pay_later ||
+            payLaterMap.get(row['Mã đối tác']) ||
+            undefined;
         } else {
           pay_later = payLaterMap.get(row['Mã đối tác']) || undefined;
         }
         if (oldDebt) {
           oldDebt.customer_raw_code = row['Mã đối tác'] || '';
           oldDebt.invoice_code = invoice_code;
-          oldDebt.issue_date = parseDate(row['Ngày chứng từ']) || oldDebt.issue_date;
+          oldDebt.issue_date =
+            parseDate(row['Ngày chứng từ']) || oldDebt.issue_date;
           oldDebt.bill_code = row['Số hóa đơn'] || '';
           oldDebt.due_date = parseDate(row['Ngày đến hạn']) || oldDebt.due_date;
-          oldDebt.total_amount = row['Số tiền chứng từ'] || 0;
+          oldDebt.total_amount = row['Thành tiền chứng từ'] || 0;
           oldDebt.remaining = row['Còn lại'] || 0;
-          oldDebt.sale = sale_id ? { id: sale_id } as any : undefined;
+          oldDebt.sale = sale_id ? ({ id: sale_id } as any) : undefined;
           oldDebt.sale_name_raw = sale_name_raw;
           oldDebt.employee_code_raw = employee_code_raw;
-          oldDebt.debt_config = debtConfig ? { id: debtConfig.id } as any : undefined;
+          oldDebt.debt_config = debtConfig
+            ? ({ id: debtConfig.id } as any)
+            : undefined;
           oldDebt.updated_at = new Date();
           oldDebt.pay_later = pay_later ?? null;
           await this.debtRepository.save(oldDebt);
@@ -223,12 +277,14 @@ export class DebtService {
             issue_date: parseDate(row['Ngày chứng từ']) || new Date(),
             bill_code: row['Số hóa đơn'] || '',
             due_date: parseDate(row['Ngày đến hạn']) || new Date(),
-            total_amount: row['Số tiền chứng từ'] || 0,
+            total_amount: row['Thành tiền chứng từ'] || 0,
             remaining: row['Còn lại'] || 0,
-            sale: sale_id ? { id: sale_id } as any : undefined,
+            sale: sale_id ? ({ id: sale_id } as any) : undefined,
             sale_name_raw,
             employee_code_raw,
-            debt_config: debtConfig ? { id: debtConfig.id } as any : undefined,
+            debt_config: debtConfig
+              ? ({ id: debtConfig.id } as any)
+              : undefined,
             created_at: new Date(),
             updated_at: new Date(),
             pay_later: pay_later ?? null,
@@ -247,7 +303,7 @@ export class DebtService {
     if (!val) return undefined;
     if (typeof val === 'number') {
       const excelEpoch = new Date(1899, 11, 30);
-      const date = new Date(excelEpoch.getTime() + (val * 24 * 60 * 60 * 1000));
+      const date = new Date(excelEpoch.getTime() + val * 24 * 60 * 60 * 1000);
       const yyyy = date.getFullYear();
       const mm = String(date.getMonth() + 1).padStart(2, '0');
       const dd = String(date.getDate()).padStart(2, '0');
@@ -267,19 +323,19 @@ export class DebtService {
   }
 
   async getUniqueCustomerList(currentUser?: User) {
-    const roleNames = (currentUser?.roles || []).map(
-      (r: any) =>
-        typeof r === 'string'
-          ? r.toLowerCase()
-          : (r.code || r.name || '').toLowerCase()
+    const roleNames = (currentUser?.roles || []).map((r: any) =>
+      typeof r === 'string'
+        ? r.toLowerCase()
+        : (r.code || r.name || '').toLowerCase(),
     );
-    const isAdminOrManager = roleNames.includes('admin') || roleNames.includes('manager-cong-no');
-    const configs = await this.debtConfigRepository.find({ select: ['customer_code', 'customer_name', 'employee', 'customer_type'] });
+    const isAdminOrManager =
+      roleNames.includes('admin') || roleNames.includes('manager-cong-no');
+    const configs = await this.debtConfigRepository.find({
+      select: ['customer_code', 'customer_name', 'employee', 'customer_type'],
+    });
     const configMap = new Map<string, string>();
     for (const c of configs) {
-      if (
-        c.customer_type === 'fixed'
-      ) continue;
+      if (c.customer_type === 'fixed') continue;
       if (
         isAdminOrManager ||
         (c.employee && currentUser && c.employee.id === currentUser.id)
@@ -287,27 +343,29 @@ export class DebtService {
         configMap.set(c.customer_code, c.customer_name);
       }
     }
-    const result: { code: string, name: string }[] = [];
+    const result: { code: string; name: string }[] = [];
     for (const [code, name] of configMap.entries()) {
       result.push({ code, name });
     }
-    let rawDebtsQuery = this.debtRepository.createQueryBuilder('debt')
+    let rawDebtsQuery = this.debtRepository
+      .createQueryBuilder('debt')
       .select(['debt.customer_raw_code']);
     if (!isAdminOrManager) {
-      rawDebtsQuery = rawDebtsQuery
-        .where(
-          `TRIM(LEFT(debt.employee_code_raw, CASE WHEN LOCATE('-', debt.employee_code_raw) > 0 THEN LOCATE('-', debt.employee_code_raw) - 1 ELSE CHAR_LENGTH(debt.employee_code_raw) END)) = :empCode`,
-          { empCode: currentUser?.employeeCode }
-        );
+      rawDebtsQuery = rawDebtsQuery.where(
+        `TRIM(LEFT(debt.employee_code_raw, CASE WHEN LOCATE('-', debt.employee_code_raw) > 0 THEN LOCATE('-', debt.employee_code_raw) - 1 ELSE CHAR_LENGTH(debt.employee_code_raw) END)) = :empCode`,
+        { empCode: currentUser?.employeeCode },
+      );
     }
-    const rawDebts = await rawDebtsQuery.groupBy('debt.customer_raw_code').getRawMany();
+    const rawDebts = await rawDebtsQuery
+      .groupBy('debt.customer_raw_code')
+      .getRawMany();
     for (const d of rawDebts) {
       const code = d.debt_customer_raw_code;
       let name = code;
       if (code && !configMap.has(code)) {
         result.push({ code, name });
       } else if (code && configMap.has(code) && !configMap.get(code) && name) {
-        const idx = result.findIndex(r => r.code === code);
+        const idx = result.findIndex((r) => r.code === code);
         if (idx !== -1) result[idx].name = name;
       }
     }
@@ -318,27 +376,35 @@ export class DebtService {
     if (!Array.isArray(customerCodes) || !payDate) return 0;
     // Lấy danh sách customer_code fixed
     const fixedConfigs = await this.debtConfigRepository.find({
-      where: { customer_code: In(customerCodes), customer_type: CustomerType.FIXED },
-      select: ['customer_code']
+      where: {
+        customer_code: In(customerCodes),
+        customer_type: CustomerType.FIXED,
+      },
+      select: ['customer_code'],
     });
-    const fixedCodes = new Set(fixedConfigs.map(c => c.customer_code));
+    const fixedCodes = new Set(fixedConfigs.map((c) => c.customer_code));
     // Lọc bỏ các mã thuộc fixed
-    const validCodes = customerCodes.filter(code => !fixedCodes.has(code));
+    const validCodes = customerCodes.filter((code) => !fixedCodes.has(code));
     if (!validCodes.length) return 0;
     // Lấy danh sách các phiếu sẽ bị cập nhật và lưu lại updated_at cũ
     const debts = await this.debtRepository.find({
       where: { customer_raw_code: In(validCodes) },
-      select: ['id', 'updated_at', 'status']
+      select: ['id', 'updated_at', 'status'],
     });
     const updatedAtMap = new Map<number, Date>();
-    debts.forEach(d => updatedAtMap.set(d.id, d.updated_at));
+    debts.forEach((d) => updatedAtMap.set(d.id, d.updated_at));
     // Chỉ cập nhật các phiếu chưa paid
-    const toUpdate = debts.filter(d => d.status !== 'paid');
+    const toUpdate = debts.filter((d) => d.status !== 'paid');
     if (toUpdate.length === 0) return 0;
     // Cập nhật pay_later và status = 'pay_later'
-    await Promise.all(toUpdate.map(d =>
-      this.debtRepository.update(d.id, { pay_later: payDate, status: 'pay_later' as any })
-    ));
+    await Promise.all(
+      toUpdate.map((d) =>
+        this.debtRepository.update(d.id, {
+          pay_later: payDate,
+          status: 'pay_later' as any,
+        }),
+      ),
+    );
     // Khôi phục lại updated_at cũ cho các phiếu vừa cập nhật
     for (const d of toUpdate) {
       await this.debtRepository.update(d.id, { updated_at: d.updated_at });
@@ -346,7 +412,10 @@ export class DebtService {
     return toUpdate.length;
   }
 
-  async updateNoteAndStatusKeepUpdatedAt(id: number, data: { note?: string; status?: string }) {
+  async updateNoteAndStatusKeepUpdatedAt(
+    id: number,
+    data: { note?: string; status?: string },
+  ) {
     if (!id || (!data.note && !data.status)) {
       throw new BadRequestException('Thiếu dữ liệu cập nhật');
     }
@@ -363,21 +432,30 @@ export class DebtService {
   }
 
   // STATISTICS METHODS
-  
+
   async getStatsOverview(query: any = {}, currentUser?: User) {
     const { data: debts } = await this.findAll(query, currentUser, 1, 1000000);
-    
+
     const total = debts.length;
-    const paid = debts.filter(d => d.status === 'paid').length;
-    const payLater = debts.filter(d => d.status === 'pay_later').length;
-    const noInfo = debts.filter(d => d.status === 'no_information_available').length;
-    
-    const totalAmount = debts.reduce((sum, d) => sum + (Number(d.total_amount) || 0), 0);
-    const remainingAmount = debts.reduce((sum, d) => sum + (Number(d.remaining) || 0), 0);
+    const paid = debts.filter((d) => d.status === 'paid').length;
+    const payLater = debts.filter((d) => d.status === 'pay_later').length;
+    const noInfo = debts.filter(
+      (d) => d.status === 'no_information_available',
+    ).length;
+
+    const totalAmount = debts.reduce(
+      (sum, d) => sum + (Number(d.total_amount) || 0),
+      0,
+    );
+    const remainingAmount = debts.reduce(
+      (sum, d) => sum + (Number(d.remaining) || 0),
+      0,
+    );
     const collectedAmount = totalAmount - remainingAmount;
-    
-    const collectionRate = totalAmount > 0 ? (collectedAmount / totalAmount * 100) : 0;
-    
+
+    const collectionRate =
+      totalAmount > 0 ? (collectedAmount / totalAmount) * 100 : 0;
+
     return {
       total,
       paid,
@@ -394,17 +472,17 @@ export class DebtService {
   async getAgingAnalysis(query: any = {}, currentUser?: User) {
     const { data: debts } = await this.findAll(query, currentUser, 1, 1000000);
     const today = new Date();
-    
+
     const aging = {
       current: { count: 0, amount: 0, label: '0-30 ngày' },
       days30: { count: 0, amount: 0, label: '31-60 ngày' },
       days60: { count: 0, amount: 0, label: '61-90 ngày' },
-      days90: { count: 0, amount: 0, label: '>90 ngày' }
+      days90: { count: 0, amount: 0, label: '>90 ngày' },
     };
 
-    debts.forEach(debt => {
+    debts.forEach((debt) => {
       if (debt.status === 'paid') return;
-      
+
       const dueDate = new Date(debt.due_date);
       const diffTime = today.getTime() - dueDate.getTime();
       const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
@@ -430,23 +508,39 @@ export class DebtService {
 
   async getTrends(query: any = {}, currentUser?: User) {
     const endDate = query.to ? new Date(query.to) : new Date();
-    const startDate = query.from ? new Date(query.from) : new Date(endDate.getTime() - 30 * 24 * 60 * 60 * 1000);
-    
+    const startDate = query.from
+      ? new Date(query.from)
+      : new Date(endDate.getTime() - 30 * 24 * 60 * 60 * 1000);
+
     const trends: any[] = [];
     const dayMs = 24 * 60 * 60 * 1000;
-    
-    for (let date = new Date(startDate); date <= endDate; date.setTime(date.getTime() + dayMs)) {
+
+    for (
+      let date = new Date(startDate);
+      date <= endDate;
+      date.setTime(date.getTime() + dayMs)
+    ) {
       const dateStr = date.toISOString().split('T')[0];
-      
+
       const dayQuery = { ...query, singleDate: dateStr };
-      const { data: dayDebts } = await this.findAll(dayQuery, currentUser, 1, 1000000);
-      
-      const paid = dayDebts.filter(d => d.status === 'paid').length;
-      const payLater = dayDebts.filter(d => d.status === 'pay_later').length;
-      const noInfo = dayDebts.filter(d => d.status === 'no_information_available').length;
+      const { data: dayDebts } = await this.findAll(
+        dayQuery,
+        currentUser,
+        1,
+        1000000,
+      );
+
+      const paid = dayDebts.filter((d) => d.status === 'paid').length;
+      const payLater = dayDebts.filter((d) => d.status === 'pay_later').length;
+      const noInfo = dayDebts.filter(
+        (d) => d.status === 'no_information_available',
+      ).length;
       const total = dayDebts.length;
-      const totalAmount = dayDebts.reduce((sum, d) => sum + (Number(d.total_amount) || 0), 0);
-      
+      const totalAmount = dayDebts.reduce(
+        (sum, d) => sum + (Number(d.total_amount) || 0),
+        0,
+      );
+
       trends.push({
         date: dateStr,
         name: date.toLocaleDateString('vi-VN'),
@@ -455,21 +549,22 @@ export class DebtService {
         no_info: noInfo,
         total,
         totalAmount,
-        collectionRate: total > 0 ? Math.round(paid / total * 100 * 100) / 100 : 0
+        collectionRate:
+          total > 0 ? Math.round((paid / total) * 100 * 100) / 100 : 0,
       });
     }
-    
+
     return trends;
   }
 
   async getEmployeePerformance(query: any = {}, currentUser?: User) {
     const { data: debts } = await this.findAll(query, currentUser, 1, 1000000);
-    
+
     const employeeStats = new Map();
-    
-    debts.forEach(debt => {
+
+    debts.forEach((debt) => {
       const employeeCode = debt.employee_code_raw || 'Unknown';
-      
+
       if (!employeeStats.has(employeeCode)) {
         employeeStats.set(employeeCode, {
           employeeCode,
@@ -477,49 +572,63 @@ export class DebtService {
           totalCollected: 0,
           totalAmount: 0,
           collectedAmount: 0,
-          avgDaysToCollect: 0
+          avgDaysToCollect: 0,
         });
       }
-      
+
       const stats = employeeStats.get(employeeCode);
       stats.totalAssigned++;
       stats.totalAmount += Number(debt.total_amount) || 0;
-      
+
       if (debt.status === 'paid') {
         stats.totalCollected++;
         stats.collectedAmount += Number(debt.total_amount) || 0;
       }
     });
-    
-    return Array.from(employeeStats.values()).map(stats => ({
-      ...stats,
-      collectionRate: stats.totalAssigned > 0 ? Math.round(stats.totalCollected / stats.totalAssigned * 100 * 100) / 100 : 0,
-      avgDebtAmount: stats.totalAssigned > 0 ? Math.round(stats.totalAmount / stats.totalAssigned) : 0
-    })).sort((a, b) => b.collectionRate - a.collectionRate);
+
+    return Array.from(employeeStats.values())
+      .map((stats) => ({
+        ...stats,
+        collectionRate:
+          stats.totalAssigned > 0
+            ? Math.round(
+                (stats.totalCollected / stats.totalAssigned) * 100 * 100,
+              ) / 100
+            : 0,
+        avgDebtAmount:
+          stats.totalAssigned > 0
+            ? Math.round(stats.totalAmount / stats.totalAssigned)
+            : 0,
+      }))
+      .sort((a, b) => b.collectionRate - a.collectionRate);
   }
 
   async getDepartmentBreakdown(query: any = {}, currentUser?: User) {
     const { data: debts } = await this.findAll(query, currentUser, 1, 1000000);
-    
+
     // Lấy thông tin departments từ users
-    const employeeCodes = [...new Set(debts.map(d => d.employee_code_raw).filter(Boolean))];
+    const employeeCodes = [
+      ...new Set(debts.map((d) => d.employee_code_raw).filter(Boolean)),
+    ];
     const users = await this.userRepository.find({
-      where: employeeCodes.length > 0 ? { employeeCode: In(employeeCodes) } : {},
-      relations: ['departments']
+      where:
+        employeeCodes.length > 0 ? { employeeCode: In(employeeCodes) } : {},
+      relations: ['departments'],
     });
-    
+
     const userDeptMap = new Map();
-    users.forEach(user => {
+    users.forEach((user) => {
       if (user.departments && user.departments.length > 0) {
         userDeptMap.set(user.employeeCode, user.departments[0].name);
       }
     });
-    
+
     const deptStats = new Map();
-    
-    debts.forEach(debt => {
-      const deptName = userDeptMap.get(debt.employee_code_raw) || 'Chưa phân bộ phận';
-      
+
+    debts.forEach((debt) => {
+      const deptName =
+        userDeptMap.get(debt.employee_code_raw) || 'Chưa phân bộ phận';
+
       if (!deptStats.has(deptName)) {
         deptStats.set(deptName, {
           department: deptName,
@@ -528,14 +637,14 @@ export class DebtService {
           payLater: 0,
           noInfo: 0,
           totalAmount: 0,
-          collectedAmount: 0
+          collectedAmount: 0,
         });
       }
-      
+
       const stats = deptStats.get(deptName);
       stats.total++;
       stats.totalAmount += Number(debt.total_amount) || 0;
-      
+
       if (debt.status === 'paid') {
         stats.paid++;
         stats.collectedAmount += Number(debt.total_amount) || 0;
@@ -545,10 +654,15 @@ export class DebtService {
         stats.noInfo++;
       }
     });
-    
-    return Array.from(deptStats.values()).map(stats => ({
-      ...stats,
-      collectionRate: stats.total > 0 ? Math.round(stats.paid / stats.total * 100 * 100) / 100 : 0
-    })).sort((a, b) => b.collectionRate - a.collectionRate);
+
+    return Array.from(deptStats.values())
+      .map((stats) => ({
+        ...stats,
+        collectionRate:
+          stats.total > 0
+            ? Math.round((stats.paid / stats.total) * 100 * 100) / 100
+            : 0,
+      }))
+      .sort((a, b) => b.collectionRate - a.collectionRate);
   }
 }

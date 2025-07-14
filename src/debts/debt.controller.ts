@@ -34,14 +34,31 @@ export class DebtController {
     // Lấy toàn bộ dữ liệu theo filter (nếu có), không phân trang
     const result = await this.debtService.findAll(query, req.user, 1, 1000000); // lấy tối đa 1 triệu bản ghi
     const debts = result.data || [];
+    
     // Tổng tiền của tất cả các phiếu
     const totalAmount = debts.reduce((sum, d) => sum + (Number(d.total_amount) || 0), 0);
+    
     // Tổng số phiếu
     const totalBills = debts.length;
-    // Tổng tiền đã thu = tổng (total_amount - remaining) của các phiếu đã thanh toán (status === 'paid')
-    const totalCollected = debts.filter(d => d.status === 'paid').reduce((sum, d) => sum + ((Number(d.total_amount) || 0) - (Number(d.remaining) || 0)), 0);
+    
+    // 1. Tổng tiền các phiếu có trạng thái "paid" (đã thanh toán)
+    const totalPaidAmount = debts
+      .filter(d => d.status === 'paid')
+      .reduce((sum, d) => sum + (Number(d.total_amount) || 0), 0);
+    
+    // 2. Tổng tiền thực tế đã thu (từ tất cả các phiếu)
+    const totalCollected = debts.reduce((sum, d) => sum + ((Number(d.total_amount) || 0) - (Number(d.remaining) || 0)), 0);
+    
+    // Số phiếu đã thanh toán
     const totalPaidBills = debts.filter(d => d.status === 'paid').length;
-    return { totalAmount, totalBills, totalCollected, totalPaidBills };
+    
+    return { 
+      totalAmount, 
+      totalBills, 
+      totalCollected,          // Tổng tiền thực tế đã thu (65tr trong ví dụ)
+      totalPaidAmount,         // Tổng tiền các phiếu đã thanh toán (60tr trong ví dụ) 
+      totalPaidBills 
+    };
   }
 
   @Get('stats/overview')
