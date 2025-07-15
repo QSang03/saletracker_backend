@@ -1,4 +1,17 @@
-import { Controller, Get, Post, Body, Param, Patch, Delete, UploadedFile, UseInterceptors, BadRequestException, Query, Req } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Param,
+  Patch,
+  Delete,
+  UploadedFile,
+  UseInterceptors,
+  BadRequestException,
+  Query,
+  Req,
+} from '@nestjs/common';
 import { DebtService } from './debt.service';
 import { FileInterceptor } from '@nestjs/platform-express';
 import * as XLSX from 'xlsx';
@@ -18,7 +31,12 @@ export class DebtController {
     // Lấy page và pageSize từ query, mặc định page=1, pageSize=10
     const page = Number(query.page) > 0 ? Number(query.page) : 1;
     const pageSize = Number(query.pageSize) > 0 ? Number(query.pageSize) : 10;
-    const result = await this.debtService.findAll(query, req.user, page, pageSize);
+    const result = await this.debtService.findAll(
+      query,
+      req.user,
+      page,
+      pageSize,
+    );
     return result;
   }
 
@@ -34,30 +52,37 @@ export class DebtController {
     // Lấy toàn bộ dữ liệu theo filter (nếu có), không phân trang
     const result = await this.debtService.findAll(query, req.user, 1, 1000000); // lấy tối đa 1 triệu bản ghi
     const debts = result.data || [];
-    
+
     // Tổng tiền của tất cả các phiếu
-    const totalAmount = debts.reduce((sum, d) => sum + (Number(d.total_amount) || 0), 0);
-    
+    const totalAmount = debts.reduce(
+      (sum, d) => sum + (Number(d.total_amount) || 0),
+      0,
+    );
+
     // Tổng số phiếu
     const totalBills = debts.length;
-    
+
     // 1. Tổng tiền các phiếu có trạng thái "paid" (đã thanh toán)
     const totalPaidAmount = debts
-      .filter(d => d.status === 'paid')
+      .filter((d) => d.status === 'paid')
       .reduce((sum, d) => sum + (Number(d.total_amount) || 0), 0);
-    
+
     // 2. Tổng tiền thực tế đã thu (từ tất cả các phiếu)
-    const totalCollected = debts.reduce((sum, d) => sum + ((Number(d.total_amount) || 0) - (Number(d.remaining) || 0)), 0);
-    
+    const totalCollected = debts.reduce(
+      (sum, d) =>
+        sum + ((Number(d.total_amount) || 0) - (Number(d.remaining) || 0)),
+      0,
+    );
+
     // Số phiếu đã thanh toán
-    const totalPaidBills = debts.filter(d => d.status === 'paid').length;
-    
-    return { 
-      totalAmount, 
-      totalBills, 
-      totalCollected,          // Tổng tiền thực tế đã thu (65tr trong ví dụ)
-      totalPaidAmount,         // Tổng tiền các phiếu đã thanh toán (60tr trong ví dụ) 
-      totalPaidBills 
+    const totalPaidBills = debts.filter((d) => d.status === 'paid').length;
+
+    return {
+      totalAmount,
+      totalBills,
+      totalCollected, // Tổng tiền thực tế đã thu (65tr trong ví dụ)
+      totalPaidAmount, // Tổng tiền các phiếu đã thanh toán (60tr trong ví dụ)
+      totalPaidBills,
     };
   }
 
@@ -134,18 +159,26 @@ export class DebtController {
 
   @Post('update-pay-later')
   @Permission('cong-no', 'update')
-  async updatePayLater(@Body() body: { customerCodes: string[], payDate: string }) {
+  async updatePayLater(
+    @Body() body: { customerCodes: string[]; payDate: string },
+  ) {
     if (!Array.isArray(body.customerCodes) || !body.payDate) {
       throw new BadRequestException('customerCodes và payDate là bắt buộc');
     }
     const payDate = new Date(body.payDate);
-    const updated = await this.debtService.updatePayLaterForCustomers(body.customerCodes, payDate);
+    const updated = await this.debtService.updatePayLaterForCustomers(
+      body.customerCodes,
+      payDate,
+    );
     return { updated };
   }
 
   @Patch(':id/note-status')
   @Permission('cong-no', 'update')
-  async updateNoteAndStatus(@Param('id') id: number, @Body() body: { note?: string; status?: string }) {
+  async updateNoteAndStatus(
+    @Param('id') id: number,
+    @Body() body: { note?: string; status?: string },
+  ) {
     return this.debtService.updateNoteAndStatusKeepUpdatedAt(id, body);
   }
 }

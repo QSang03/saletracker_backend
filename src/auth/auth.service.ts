@@ -1,4 +1,8 @@
-import { Injectable, UnauthorizedException, ForbiddenException } from '@nestjs/common';
+import {
+  Injectable,
+  UnauthorizedException,
+  ForbiddenException,
+} from '@nestjs/common';
 import { UserService } from '../users/user.service';
 import * as bcrypt from 'bcrypt';
 import { JwtService } from '@nestjs/jwt';
@@ -79,11 +83,12 @@ export class AuthService {
       zaloLinkStatus: updatedUser.zaloLinkStatus,
       zaloName: updatedUser.zaloName,
       avatarZalo: updatedUser.avatarZalo,
-      roles: updatedUser.roles?.map((role) => ({
-        id: role.id,
-        name: role.name,
-        display_name: role.display_name,
-      })) || [],
+      roles:
+        updatedUser.roles?.map((role) => ({
+          id: role.id,
+          name: role.name,
+          display_name: role.display_name,
+        })) || [],
       departments:
         updatedUser.departments?.map((d) => ({
           id: d.id,
@@ -108,7 +113,9 @@ export class AuthService {
     const refreshToken = this.jwtService.sign(
       { sub: updatedUser.id },
       {
-        secret: this.configService.get<string>('JWT_REFRESH_SECRET') || this.configService.get<string>('JWT_SECRET'),
+        secret:
+          this.configService.get<string>('JWT_REFRESH_SECRET') ||
+          this.configService.get<string>('JWT_SECRET'),
         expiresIn: '30d',
       },
     );
@@ -134,7 +141,11 @@ export class AuthService {
         email: updatedUser.email,
         status: updatedUser.status,
         isBlock: updatedUser.isBlock,
-        roles: updatedUser.roles?.map((role) => ({ id: role.id, name: role.name })) || [],
+        roles:
+          updatedUser.roles?.map((role) => ({
+            id: role.id,
+            name: role.name,
+          })) || [],
         zaloLinkStatus: updatedUser.zaloLinkStatus,
         zaloName: updatedUser.zaloName,
         avatarZalo: updatedUser.avatarZalo,
@@ -144,36 +155,57 @@ export class AuthService {
 
   async refreshToken({ refreshToken }: RefreshTokenDto) {
     try {
-      console.log('🔍 [RefreshToken] Received refresh request:', { 
+      console.log('🔍 [RefreshToken] Received refresh request:', {
         tokenExists: !!refreshToken,
         tokenLength: refreshToken?.length,
-        tokenPrefix: refreshToken?.substring(0, 20) + '...'
+        tokenPrefix: refreshToken?.substring(0, 20) + '...',
       });
-      
+
       // Verify refresh token
       const payload: any = this.jwtService.verify(refreshToken, {
-        secret: this.configService.get<string>('JWT_REFRESH_SECRET') || this.configService.get<string>('JWT_SECRET'),
+        secret:
+          this.configService.get<string>('JWT_REFRESH_SECRET') ||
+          this.configService.get<string>('JWT_SECRET'),
       });
-      
+
       console.log('🔍 [RefreshToken] Token verified, user ID:', payload.sub);
-      
+
       // Load user with full details including roles, permissions AND refresh token
-      const user = await this.usersService.findOneWithDetailsAndRefreshToken(payload.sub);
+      const user = await this.usersService.findOneWithDetailsAndRefreshToken(
+        payload.sub,
+      );
       console.log('🔍 [RefreshToken] User found:', !!user);
-      console.log('🔍 [RefreshToken] User refresh token from DB length:', user?.refreshToken?.length);
-      console.log('🔍 [RefreshToken] Sent refresh token length:', refreshToken?.length);
-      console.log('🔍 [RefreshToken] User refresh token from DB prefix:', user?.refreshToken?.substring(0, 50) + '...');
-      console.log('🔍 [RefreshToken] Sent refresh token prefix:', refreshToken?.substring(0, 50) + '...');
-      console.log('🔍 [RefreshToken] User refresh token matches:', user?.refreshToken === refreshToken);
-      
+      console.log(
+        '🔍 [RefreshToken] User refresh token from DB length:',
+        user?.refreshToken?.length,
+      );
+      console.log(
+        '🔍 [RefreshToken] Sent refresh token length:',
+        refreshToken?.length,
+      );
+      console.log(
+        '🔍 [RefreshToken] User refresh token from DB prefix:',
+        user?.refreshToken?.substring(0, 50) + '...',
+      );
+      console.log(
+        '🔍 [RefreshToken] Sent refresh token prefix:',
+        refreshToken?.substring(0, 50) + '...',
+      );
+      console.log(
+        '🔍 [RefreshToken] User refresh token matches:',
+        user?.refreshToken === refreshToken,
+      );
+
       // Debug full tokens (chỉ cho testing)
       if (user?.refreshToken !== refreshToken) {
         console.log('🔍 [RefreshToken] DB Token full:', user?.refreshToken);
         console.log('🔍 [RefreshToken] Sent Token full:', refreshToken);
       }
-      
+
       if (!user || user.refreshToken !== refreshToken) {
-        console.error('❌ [RefreshToken] Invalid refresh token - user not found or token mismatch');
+        console.error(
+          '❌ [RefreshToken] Invalid refresh token - user not found or token mismatch',
+        );
         throw new ForbiddenException('Invalid refresh token');
       }
 
@@ -199,11 +231,12 @@ export class AuthService {
         zaloLinkStatus: user.zaloLinkStatus,
         zaloName: user.zaloName,
         avatarZalo: user.avatarZalo,
-        roles: user.roles?.map((role) => ({
-          id: role.id,
-          name: role.name,
-          display_name: role.display_name,
-        })) || [],
+        roles:
+          user.roles?.map((role) => ({
+            id: role.id,
+            name: role.name,
+            display_name: role.display_name,
+          })) || [],
         departments:
           user.departments?.map((d) => ({
             id: d.id,
@@ -223,7 +256,7 @@ export class AuthService {
         ],
         lastLogin: user.lastLogin,
       };
-      
+
       const accessToken = this.jwtService.sign(accessPayload, {
         secret: this.configService.get<string>('JWT_SECRET'),
         expiresIn: '30d',
@@ -233,17 +266,21 @@ export class AuthService {
       const newRefreshToken = this.jwtService.sign(
         { sub: user.id },
         {
-          secret: this.configService.get<string>('JWT_REFRESH_SECRET') || this.configService.get<string>('JWT_SECRET'),
+          secret:
+            this.configService.get<string>('JWT_REFRESH_SECRET') ||
+            this.configService.get<string>('JWT_SECRET'),
           expiresIn: '30d',
         },
       );
 
       // Cập nhật refresh token mới vào DB
-      await this.usersService.updateUser(user.id, { refreshToken: newRefreshToken });
+      await this.usersService.updateUser(user.id, {
+        refreshToken: newRefreshToken,
+      });
 
-      return { 
+      return {
         access_token: accessToken,
-        refresh_token: newRefreshToken 
+        refresh_token: newRefreshToken,
       };
     } catch (e) {
       console.error('Refresh token error:', e);
@@ -272,11 +309,12 @@ export class AuthService {
       zaloLinkStatus: user.zaloLinkStatus,
       zaloName: user.zaloName,
       avatarZalo: user.avatarZalo,
-      roles: user.roles?.map((role) => ({
-        id: role.id,
-        name: role.name,
-        display_name: role.display_name,
-      })) || [],
+      roles:
+        user.roles?.map((role) => ({
+          id: role.id,
+          name: role.name,
+          display_name: role.display_name,
+        })) || [],
       departments:
         user.departments?.map((d) => ({
           id: d.id,
@@ -305,7 +343,9 @@ export class AuthService {
     const refreshToken = this.jwtService.sign(
       { sub: user.id },
       {
-        secret: this.configService.get<string>('JWT_REFRESH_SECRET') || this.configService.get<string>('JWT_SECRET'),
+        secret:
+          this.configService.get<string>('JWT_REFRESH_SECRET') ||
+          this.configService.get<string>('JWT_SECRET'),
         expiresIn: '30d',
       },
     );
@@ -334,11 +374,12 @@ export class AuthService {
       zaloLinkStatus: user.zaloLinkStatus,
       zaloName: user.zaloName,
       avatarZalo: user.avatarZalo,
-      roles: user.roles?.map((role) => ({
-        id: role.id,
-        name: role.name,
-        display_name: role.display_name,
-      })) || [],
+      roles:
+        user.roles?.map((role) => ({
+          id: role.id,
+          name: role.name,
+          display_name: role.display_name,
+        })) || [],
       departments:
         user.departments?.map((d) => ({
           id: d.id,
@@ -373,15 +414,21 @@ export class AuthService {
   // Test method để trigger force refresh
   async testForceRefresh(userId: number) {
     try {
-      console.log('🔄 [TestForceRefresh] Triggering force refresh for user:', userId);
-      
+      console.log(
+        '🔄 [TestForceRefresh] Triggering force refresh for user:',
+        userId,
+      );
+
       // Lấy user với full details
-      const user = await this.usersService.findOneWithDetailsAndRefreshToken(userId);
+      const user =
+        await this.usersService.findOneWithDetailsAndRefreshToken(userId);
       if (!user) {
         throw new Error('User not found');
       }
 
-      console.log('✅ [TestForceRefresh] User found, emitting status change event');
+      console.log(
+        '✅ [TestForceRefresh] User found, emitting status change event',
+      );
 
       // CHỈ emit event để trigger force refresh trên frontend
       // KHÔNG tạo refresh token mới để tránh mismatch
@@ -391,9 +438,10 @@ export class AuthService {
         oldStatus: Number(user.status), // Convert enum to number
       });
 
-      return { 
-        success: true, 
-        message: 'Force refresh triggered - frontend will refresh with existing token'
+      return {
+        success: true,
+        message:
+          'Force refresh triggered - frontend will refresh with existing token',
       };
     } catch (error) {
       console.error('❌ [TestForceRefresh] Error:', error);

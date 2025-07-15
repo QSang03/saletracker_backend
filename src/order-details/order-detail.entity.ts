@@ -1,4 +1,13 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, CreateDateColumn, UpdateDateColumn, DeleteDateColumn } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  ManyToOne,
+  JoinColumn,
+  CreateDateColumn,
+  UpdateDateColumn,
+  DeleteDateColumn,
+} from 'typeorm';
 import { Product } from '../products/product.entity';
 import { Order } from '../orders/order.entity';
 export enum OrderDetailStatus {
@@ -11,7 +20,7 @@ export class OrderDetail {
   @PrimaryGeneratedColumn('increment', { type: 'bigint' })
   id: number;
 
-  @ManyToOne(() => Order, order => order.details, { onDelete: 'CASCADE' })
+  @ManyToOne(() => Order, (order) => order.details, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'order_id' })
   order: Order;
 
@@ -41,7 +50,12 @@ export class OrderDetail {
   @Column('longtext', { nullable: true })
   raw_item: string;
 
-  @Column('varchar', { name: 'zaloMessageId', length: 255, nullable: true, default: null })
+  @Column('varchar', {
+    name: 'zaloMessageId',
+    length: 255,
+    nullable: true,
+    default: null,
+  })
   zaloMessageId: string;
 
   @CreateDateColumn({ type: 'timestamp' })

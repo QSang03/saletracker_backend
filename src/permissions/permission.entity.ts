@@ -16,7 +16,7 @@ export class Permission {
 
   @Column()
   name: string;
-  
+
   @Column()
   action: string;
 

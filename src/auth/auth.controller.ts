@@ -92,10 +92,13 @@ export class AuthController {
   @Post('test-force-refresh')
   @UseGuards(JwtAuthGuard)
   async testForceRefresh(@Req() req, @Body() body: { userId?: number }) {
-    const user = req.user as any;
+    const user = req.user;
     const targetUserId = body.userId || user.id;
 
-    console.log('🔄 [Test Force Refresh] Simulating status=2 for user:', targetUserId);
+    console.log(
+      '🔄 [Test Force Refresh] Simulating status=2 for user:',
+      targetUserId,
+    );
 
     // Giả lập update user status = 2 và trigger force refresh
     await this.authService.testForceRefresh(targetUserId);
@@ -110,14 +113,18 @@ export class AuthController {
   @Post('test-check-refresh-token')
   @UseGuards(JwtAuthGuard)
   async testCheckRefreshToken(@Req() req, @Body() body: { userId?: number }) {
-    const user = req.user as any;
+    const user = req.user;
     const targetUserId = body.userId || user.id;
 
-    console.log('🔍 [Test Check Refresh Token] Checking for user:', targetUserId);
+    console.log(
+      '🔍 [Test Check Refresh Token] Checking for user:',
+      targetUserId,
+    );
 
     // Lấy user với refresh token từ database
-    const userWithToken = await this.userService.findOneWithDetailsAndRefreshToken(targetUserId);
-    
+    const userWithToken =
+      await this.userService.findOneWithDetailsAndRefreshToken(targetUserId);
+
     if (!userWithToken) {
       return { error: 'User not found' };
     }

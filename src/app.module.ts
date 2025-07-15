@@ -33,7 +33,7 @@ import { DebtStatisticModule } from './debt_statistics/debt_statistic.module';
     EventEmitterModule.forRoot(),
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: '.env'
+      envFilePath: '.env',
     }),
     TypeOrmModule.forRoot(typeOrmConfig),
     AuthModule,

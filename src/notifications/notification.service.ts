@@ -19,14 +19,19 @@ export class NotificationService {
   }
 
   async markAsRead(id: number, userId: number) {
-    const noti = await this.notificationRepo.findOne({ where: { id, user: { id: userId } } });
+    const noti = await this.notificationRepo.findOne({
+      where: { id, user: { id: userId } },
+    });
     if (!noti) return null;
     noti.is_read = 1;
     return this.notificationRepo.save(noti);
   }
 
   async markManyAsRead(ids: number[], userId: number) {
-    await this.notificationRepo.update({ id: In(ids), user: { id: userId } }, { is_read: 1 });
+    await this.notificationRepo.update(
+      { id: In(ids), user: { id: userId } },
+      { is_read: 1 },
+    );
     return this.findAllByUser(userId);
   }
 
@@ -35,8 +40,10 @@ export class NotificationService {
   }
 
   async deleteAll(userId: number) {
-    const notis = await this.notificationRepo.find({ where: { user: { id: userId } } });
-    const ids = notis.map(n => n.id);
+    const notis = await this.notificationRepo.find({
+      where: { user: { id: userId } },
+    });
+    const ids = notis.map((n) => n.id);
     if (ids.length === 0) return { affected: 0 };
     return this.notificationRepo.softDelete(ids);
   }

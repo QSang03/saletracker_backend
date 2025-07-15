@@ -1,4 +1,12 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, DeleteDateColumn, ManyToOne } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  CreateDateColumn,
+  UpdateDateColumn,
+  DeleteDateColumn,
+  ManyToOne,
+} from 'typeorm';
 import { DebtConfig } from '../debt_configs/debt_configs.entity';
 import { User } from '../users/user.entity';
 
@@ -68,6 +76,10 @@ export class Debt {
   @ManyToOne(() => DebtConfig, (debtConfig) => debtConfig.debts)
   debt_config: DebtConfig;
 
-  @Column({ type: 'tinyint', default: 0, comment: '0: chưa thông báo, 1: đã thông báo' })
+  @Column({
+    type: 'tinyint',
+    default: 0,
+    comment: '0: chưa thông báo, 1: đã thông báo',
+  })
   is_notified: number;
 }

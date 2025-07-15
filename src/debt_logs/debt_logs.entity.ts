@@ -1,14 +1,22 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, CreateDateColumn, UpdateDateColumn } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  ManyToOne,
+  JoinColumn,
+  CreateDateColumn,
+  UpdateDateColumn,
+} from 'typeorm';
 import { DebtConfig } from '../debt_configs/debt_configs.entity';
 import { User } from '../users/user.entity';
 
 export enum ReminderStatus {
-  DebtReported = "Debt Reported",
-  FirstReminder = "First Reminder",
-  SecondReminder = "Second Reminder",
-  CustomerResponded = "Customer Responded",
-  NotSent = "Not Sent",
-  ERROR_SEND = "Error Send"
+  DebtReported = 'Debt Reported',
+  FirstReminder = 'First Reminder',
+  SecondReminder = 'Second Reminder',
+  CustomerResponded = 'Customer Responded',
+  NotSent = 'Not Sent',
+  ERROR_SEND = 'Error Send',
 }
 
 @Entity({ name: 'debt_logs' })
@@ -19,7 +27,9 @@ export class DebtLogs {
   @Column({ type: 'int' })
   debt_config_id: number;
 
-  @ManyToOne(() => DebtConfig, (debtConfig) => debtConfig.debt_logs, { onDelete: 'CASCADE' })
+  @ManyToOne(() => DebtConfig, (debtConfig) => debtConfig.debt_logs, {
+    onDelete: 'CASCADE',
+  })
   @JoinColumn({ name: 'debt_config_id' })
   debt_config: DebtConfig;
 

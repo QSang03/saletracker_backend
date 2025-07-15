@@ -26,7 +26,9 @@ export class CronjobService {
     @InjectRepository(Debt)
     private debtRepo: Repository<Debt>,
   ) {
-    this.logger.log('🎯 [CronjobService] Service đã được khởi tạo - Cronjob debt statistics sẽ chạy lúc 11h trưa hàng ngày');
+    this.logger.log(
+      '🎯 [CronjobService] Service đã được khởi tạo - Cronjob debt statistics sẽ chạy lúc 11h trưa hàng ngày',
+    );
   }
 
   @Cron('0 0 11 * * *') // Chạy lúc 11:00 AM mỗi ngày
@@ -35,16 +37,20 @@ export class CronjobService {
     today.setHours(0, 0, 0, 0);
     const todayStr = today.toISOString().split('T')[0]; // Format: YYYY-MM-DD
 
-    this.logger.log(`🔄 [Auto Cron] Bắt đầu capture debt statistics cho ngày: ${todayStr}`);
+    this.logger.log(
+      `🔄 [Auto Cron] Bắt đầu capture debt statistics cho ngày: ${todayStr}`,
+    );
 
     try {
       // Kiểm tra đã có data cho ngày hôm nay chưa
       const existingCount = await this.debtStatisticRepo.count({
-        where: { statistic_date: today }
+        where: { statistic_date: today },
       });
 
       if (existingCount > 0) {
-        this.logger.log(`⚠️ [Auto Cron] Đã có ${existingCount} bản ghi cho ngày ${todayStr}, bỏ qua`);
+        this.logger.log(
+          `⚠️ [Auto Cron] Đã có ${existingCount} bản ghi cho ngày ${todayStr}, bỏ qua`,
+        );
         return;
       }
 
@@ -72,10 +78,15 @@ export class CronjobService {
       `;
 
       const result = await this.debtStatisticRepo.query(query, [todayStr]);
-      
-      this.logger.log(`✅ [Auto Cron] Đã lưu ${result.affectedRows || 0} bản ghi cho ngày ${todayStr}`);
+
+      this.logger.log(
+        `✅ [Auto Cron] Đã lưu ${result.affectedRows || 0} bản ghi cho ngày ${todayStr}`,
+      );
     } catch (error) {
-      this.logger.error(`❌ [Auto Cron] Lỗi khi capture debt statistics:`, error);
+      this.logger.error(
+        `❌ [Auto Cron] Lỗi khi capture debt statistics:`,
+        error,
+      );
     }
   }
 
@@ -84,26 +95,30 @@ export class CronjobService {
     const dateToCapture = targetDate || new Date().toISOString().split('T')[0];
     const captureDate = new Date(dateToCapture);
     captureDate.setHours(0, 0, 0, 0);
-    
-    this.logger.log(`🔄 [Thống kê công nợ - Thủ công] Bắt đầu capture cho ngày: ${dateToCapture}`);
+
+    this.logger.log(
+      `🔄 [Thống kê công nợ - Thủ công] Bắt đầu capture cho ngày: ${dateToCapture}`,
+    );
 
     try {
       // Kiểm tra đã có data cho ngày này chưa
       const existingCount = await this.debtStatisticRepo.count({
-        where: { statistic_date: captureDate }
+        where: { statistic_date: captureDate },
       });
 
       if (existingCount > 0) {
-        this.logger.log(`⚠️ [Thống kê công nợ - Thủ công] Đã có ${existingCount} bản ghi cho ngày ${dateToCapture}`);
+        this.logger.log(
+          `⚠️ [Thống kê công nợ - Thủ công] Đã có ${existingCount} bản ghi cho ngày ${dateToCapture}`,
+        );
         return {
           success: false,
           message: `Đã có dữ liệu thống kê cho ngày ${dateToCapture}`,
-          existingRecords: existingCount
+          existingRecords: existingCount,
         };
       }
 
       // Raw query để copy data từ debts sang debt_statistics
-      // QUAN TRỌNG: Sử dụng ngày tạo debt làm statistic_date thay vì ngày hiện tại 
+      // QUAN TRỌNG: Sử dụng ngày tạo debt làm statistic_date thay vì ngày hiện tại
       const query = `
         INSERT INTO debt_statistics (
           statistic_date, customer_raw_code, invoice_code, bill_code,
@@ -125,25 +140,32 @@ export class CronjobService {
         AND DATE(d.created_at) = ?
       `;
 
-      this.logger.log(`💾 [Thống kê công nợ - Thủ công] Đang capture debts được tạo ngày ${dateToCapture}...`);
-      
+      this.logger.log(
+        `💾 [Thống kê công nợ - Thủ công] Đang capture debts được tạo ngày ${dateToCapture}...`,
+      );
+
       const result = await this.debtStatisticRepo.query(query, [dateToCapture]);
-      
-      this.logger.log(`✅ [Thống kê công nợ - Thủ công] Đã lưu ${result.affectedRows || 0} bản ghi cho ngày ${dateToCapture}`);
-      
+
+      this.logger.log(
+        `✅ [Thống kê công nợ - Thủ công] Đã lưu ${result.affectedRows || 0} bản ghi cho ngày ${dateToCapture}`,
+      );
+
       return {
         success: true,
         message: `Capture thành công ${result.affectedRows || 0} debt statistics`,
         recordsSaved: result.affectedRows || 0,
         date: dateToCapture,
-        note: 'Sử dụng ngày tạo debt làm statistic_date'
+        note: 'Sử dụng ngày tạo debt làm statistic_date',
       };
     } catch (error) {
-      this.logger.error(`❌ [Thống kê công nợ - Thủ công] Lỗi khi capture debt statistics:`, error);
+      this.logger.error(
+        `❌ [Thống kê công nợ - Thủ công] Lỗi khi capture debt statistics:`,
+        error,
+      );
       return {
         success: false,
         message: `Lỗi khi capture debt statistics: ${error.message}`,
-        error: error.message
+        error: error.message,
       };
     }
   }
@@ -158,8 +180,8 @@ export class CronjobService {
     this.logger.log(`[ProductSync] Start product sync...`);
 
     // Lấy sản phẩm từ API
-    let allProducts: any[] = [];
-    let apiIds = new Set<number>();
+    const allProducts: any[] = [];
+    const apiIds = new Set<number>();
     let page = 1;
     let done = false;
     while (!done) {

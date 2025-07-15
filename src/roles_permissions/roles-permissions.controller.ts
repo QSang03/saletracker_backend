@@ -9,11 +9,12 @@ export class RolesPermissionsController {
 
   @Post('bulk')
   async bulkUpdate(
-    @Body() permissions: Array<{
+    @Body()
+    permissions: Array<{
       roleId: number;
       permissionId: number;
       isActive: boolean;
-    }>
+    }>,
   ) {
     return this.service.bulkUpdate(permissions);
   }

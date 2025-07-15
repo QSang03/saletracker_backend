@@ -1,4 +1,9 @@
-import { Injectable, CanActivate, ExecutionContext, ForbiddenException } from '@nestjs/common';
+import {
+  Injectable,
+  CanActivate,
+  ExecutionContext,
+  ForbiddenException,
+} from '@nestjs/common';
 
 @Injectable()
 export class RolesGuard implements CanActivate {
@@ -8,11 +13,11 @@ export class RolesGuard implements CanActivate {
 
     // Logic kiểm tra quyền - ví dụ chỉ admin mới được truy cập
     const isAdmin = user?.permissions?.includes('admin');
-    
+
     if (!isAdmin) {
       throw new ForbiddenException('Bạn không có quyền truy cập chức năng này');
     }
-    
+
     return true;
   }
 }

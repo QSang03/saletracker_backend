@@ -1,4 +1,17 @@
-import { Controller, Get, Post, Body, Param, Patch, Delete, Query, UseGuards, Req, UploadedFile, UseInterceptors } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Param,
+  Patch,
+  Delete,
+  Query,
+  UseGuards,
+  Req,
+  UploadedFile,
+  UseInterceptors,
+} from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { DebtConfigService } from './debt_configs.service';
 import { DebtConfig } from './debt_configs.entity';
@@ -32,7 +45,10 @@ export class DebtConfigController {
 
   @Post()
   @Permission('cong-no', 'create')
-  create(@Body() data: Partial<DebtConfig>, @Req() req: any): Promise<DebtConfig> {
+  create(
+    @Body() data: Partial<DebtConfig>,
+    @Req() req: any,
+  ): Promise<DebtConfig> {
     // Gán employee từ user đăng nhập nếu có
     if (req.user && (req.user.id || req.user.userId)) {
       data.employee = { id: req.user.id || req.user.userId } as any;
@@ -42,7 +58,10 @@ export class DebtConfigController {
 
   @Patch(':id')
   @Permission('cong-no', 'update')
-  update(@Param('id') id: number, @Body() data: Partial<DebtConfig>): Promise<DebtConfig> {
+  update(
+    @Param('id') id: number,
+    @Body() data: Partial<DebtConfig>,
+  ): Promise<DebtConfig> {
     return this.debtConfigService.update(id, data);
   }
 
@@ -54,13 +73,21 @@ export class DebtConfigController {
 
   @Patch(':id/toggle-send')
   @Permission('cong-no', 'update')
-  async toggleSend(@Param('id') id: number, @Body('is_send') is_send: boolean, @Req() req: any) {
+  async toggleSend(
+    @Param('id') id: number,
+    @Body('is_send') is_send: boolean,
+    @Req() req: any,
+  ) {
     return this.debtConfigService.toggleSend(+id, is_send, req.user);
   }
 
   @Patch(':id/toggle-repeat')
   @Permission('cong-no', 'update')
-  async toggleRepeat(@Param('id') id: number, @Body('is_repeat') is_repeat: boolean, @Req() req: any) {
+  async toggleRepeat(
+    @Param('id') id: number,
+    @Body('is_repeat') is_repeat: boolean,
+    @Req() req: any,
+  ) {
     return this.debtConfigService.toggleRepeat(+id, is_repeat, req.user);
   }
 
@@ -69,7 +96,10 @@ export class DebtConfigController {
   @Permission('cong-no', 'create')
   async importExcel(@UploadedFile() file: Express.Multer.File) {
     if (!file) {
-      return { imported: [], errors: [{ row: 0, error: 'Không có file upload' }] };
+      return {
+        imported: [],
+        errors: [{ row: 0, error: 'Không có file upload' }],
+      };
     }
     // Đọc file excel, parse rows
     const xlsx = require('xlsx');

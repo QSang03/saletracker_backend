@@ -10,11 +10,11 @@ import { RolePermission } from '../roles_permissions/roles-permissions.entity';
 @Module({
   imports: [
     TypeOrmModule.forFeature([
-      Permission, 
-      Role, 
-      User, 
+      Permission,
+      Role,
+      User,
       Department,
-      RolePermission
+      RolePermission,
     ]),
   ],
   providers: [SeedService],

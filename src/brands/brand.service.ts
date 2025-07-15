@@ -15,7 +15,10 @@ export class BrandService {
   }
 
   findOne(id: number) {
-    return this.brandRepository.findOne({ where: { id }, relations: ['products'] });
+    return this.brandRepository.findOne({
+      where: { id },
+      relations: ['products'],
+    });
   }
 
   create(data: Partial<Brand>) {

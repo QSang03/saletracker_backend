@@ -34,10 +34,7 @@ export class DepartmentController {
     @Req() req: Request,
   ) {
     const user = req.user;
-    return this.departmentService.createDepartment(
-      createDepartmentDto,
-      user,
-    );
+    return this.departmentService.createDepartment(createDepartmentDto, user);
   }
 
   @Patch(':id')

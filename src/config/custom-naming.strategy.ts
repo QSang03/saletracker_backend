@@ -18,13 +18,13 @@ export class CustomNamingStrategy extends DefaultNamingStrategy {
 
   indexName(tableOrName: string, columnNames: string[]): string {
     return `idx_${snakeCase(tableOrName)}_${columnNames
-      .map(name => snakeCase(name))
+      .map((name) => snakeCase(name))
       .join('_')}`;
   }
 
   uniqueConstraintName(tableOrName: string, columnNames: string[]): string {
     return `uq_${snakeCase(tableOrName)}_${columnNames
-      .map(name => snakeCase(name))
+      .map((name) => snakeCase(name))
       .join('_')}`;
   }
 
@@ -34,7 +34,7 @@ export class CustomNamingStrategy extends DefaultNamingStrategy {
     where?: string,
   ): string {
     return `rel_${snakeCase(tableOrName)}_${columnNames
-      .map(name => snakeCase(name))
+      .map((name) => snakeCase(name))
       .join('_')}`;
   }
 }

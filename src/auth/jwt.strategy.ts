@@ -10,7 +10,7 @@ export type JwtPayload = {
   email?: string;
   phone?: string;
   avatar?: string;
-  status?: "active" | "inactive";
+  status?: 'active' | 'inactive';
   permissions: string[];
   department?: string;
   lastLogin?: string;
@@ -23,7 +23,7 @@ export type JwtPayload = {
 export class JwtStrategy extends PassportStrategy(Strategy) {
   constructor(private configService: ConfigService) {
     const secret = configService.get<string>('JWT_SECRET');
-    
+
     if (!secret) {
       throw new Error('JWT_SECRET environment variable is not defined');
     }

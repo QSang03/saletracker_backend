@@ -43,7 +43,7 @@ export class UserService {
       roles?: string[];
       statuses?: string[];
     },
-    user?: any // Thêm user để phân quyền động nếu cần
+    user?: any, // Thêm user để phân quyền động nếu cần
   ): Promise<{ data: User[]; total: number }> {
     // Nếu cần phân quyền động, có thể kiểm tra role ở đây bằng getRoleNames(user)
     const qb = this.userRepo
@@ -232,10 +232,13 @@ export class UserService {
     if (!oldUser) throw new NotFoundException('Không tìm thấy user');
 
     // Kiểm tra xem có thay đổi thông tin Zalo không (cần refresh token)
-    const zaloInfoChanged = 
-      (updateData.zaloLinkStatus !== undefined && updateData.zaloLinkStatus !== oldUser.zaloLinkStatus) ||
-      (updateData.zaloName !== undefined && updateData.zaloName !== oldUser.zaloName) ||
-      (updateData.avatarZalo !== undefined && updateData.avatarZalo !== oldUser.avatarZalo);
+    const zaloInfoChanged =
+      (updateData.zaloLinkStatus !== undefined &&
+        updateData.zaloLinkStatus !== oldUser.zaloLinkStatus) ||
+      (updateData.zaloName !== undefined &&
+        updateData.zaloName !== oldUser.zaloName) ||
+      (updateData.avatarZalo !== undefined &&
+        updateData.avatarZalo !== oldUser.avatarZalo);
 
     const updatePayload: Partial<User> = {
       email: updateData.email,
@@ -658,7 +661,11 @@ export class UserService {
     departmentIds: number[],
     roleIds: number[],
     permissionIds: number[],
-    rolePermissions?: { roleId: number; permissionId: number; isActive: boolean }[],
+    rolePermissions?: {
+      roleId: number;
+      permissionId: number;
+      isActive: boolean;
+    }[],
   ) {
     const user = await this.userRepo.findOne({
       where: { id: userId },
@@ -709,7 +716,7 @@ export class UserService {
 
     const oldStatus = user.zaloLinkStatus;
     user.zaloLinkStatus = status;
-    
+
     const updatedUser = await this.userRepo.save(user);
 
     // Thông báo cho observer về sự thay đổi status
@@ -718,7 +725,7 @@ export class UserService {
         userId,
         oldStatus,
         status,
-        'webhook'
+        'webhook',
       );
     }
 

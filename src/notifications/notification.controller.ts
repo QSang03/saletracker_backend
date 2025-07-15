@@ -1,4 +1,3 @@
-
 import {
   Controller,
   Get,
@@ -26,28 +25,19 @@ export class NotificationController {
   }
 
   @Patch(':id/read')
-  async markAsRead(
-    @Param('id', ParseIntPipe) id: number,
-    @Req() req: Request,
-  ) {
+  async markAsRead(@Param('id', ParseIntPipe) id: number, @Req() req: Request) {
     // @ts-ignore
     return this.notificationService.markAsRead(id, req.user.id);
   }
 
   @Patch('read-many')
-  async markManyAsRead(
-    @Body('ids') ids: number[],
-    @Req() req: Request,
-  ) {
+  async markManyAsRead(@Body('ids') ids: number[], @Req() req: Request) {
     // @ts-ignore
     return this.notificationService.markManyAsRead(ids, req.user.id);
   }
 
   @Delete(':id')
-  async deleteOne(
-    @Param('id', ParseIntPipe) id: number,
-    @Req() req: Request,
-  ) {
+  async deleteOne(@Param('id', ParseIntPipe) id: number, @Req() req: Request) {
     // @ts-ignore
     return this.notificationService.delete(id, req.user.id);
   }

@@ -47,16 +47,18 @@ export class DebtStatisticService {
       `;
 
       const result = await this.debtStatisticRepository.query(query);
-      
     } catch (error) {
-      this.logger.error(`Failed to capture debt statistics for ${date}:`, error);
+      this.logger.error(
+        `Failed to capture debt statistics for ${date}:`,
+        error,
+      );
       throw error;
     }
   }
 
   async getOverviewStatistics(fromDate: string, toDate: string) {
     const today = new Date().toISOString().split('T')[0];
-    
+
     const results = {
       total: 0,
       paid: 0,
@@ -70,8 +72,12 @@ export class DebtStatisticService {
 
     // Xử lý các ngày trong quá khứ từ debt_statistics
     if (fromDate < today) {
-      const endDateForHistory = toDate < today ? toDate : 
-        new Date(new Date(today).getTime() - 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+      const endDateForHistory =
+        toDate < today
+          ? toDate
+          : new Date(new Date(today).getTime() - 24 * 60 * 60 * 1000)
+              .toISOString()
+              .split('T')[0];
 
       const historyQuery = `
         SELECT 
@@ -86,8 +92,11 @@ export class DebtStatisticService {
         WHERE statistic_date >= ? AND statistic_date <= ?
       `;
 
-      const historyStats = await this.debtStatisticRepository.query(historyQuery, [fromDate, endDateForHistory]);
-      
+      const historyStats = await this.debtStatisticRepository.query(
+        historyQuery,
+        [fromDate, endDateForHistory],
+      );
+
       if (historyStats[0]) {
         const stats = historyStats[0];
         results.total += Number(stats.total) || 0;
@@ -116,7 +125,7 @@ export class DebtStatisticService {
       `;
 
       const todayStats = await this.debtRepository.query(todayQuery);
-      
+
       if (todayStats[0]) {
         const stats = todayStats[0];
         results.total += Number(stats.total) || 0;
@@ -137,7 +146,11 @@ export class DebtStatisticService {
     return results;
   }
 
-  async getTrendStatistics(fromDate: string, toDate: string, groupBy: 'day' | 'week' | 'month' = 'day') {
+  async getTrendStatistics(
+    fromDate: string,
+    toDate: string,
+    groupBy: 'day' | 'week' | 'month' = 'day',
+  ) {
     const today = new Date().toISOString().split('T')[0];
     const results: Array<{
       date: string;
@@ -182,7 +195,7 @@ export class DebtStatisticService {
           collectionRate: Number(data.collectionRate) || 0,
         });
       } else if (date === today) {
-        // Lấy từ debts
+        // Lấy từ debts với filter theo updated_at của ngày hiện tại
         const query = `
           SELECT 
             COUNT(*) as total,
@@ -192,10 +205,10 @@ export class DebtStatisticService {
             SUM(total_amount) as totalAmount,
             AVG(CASE WHEN total_amount > 0 THEN ((total_amount - remaining) / total_amount) * 100 ELSE 0 END) as collectionRate
           FROM debts
-          WHERE deleted_at IS NULL
+          WHERE deleted_at IS NULL AND DATE(updated_at) = ?
         `;
 
-        const stats = await this.debtRepository.query(query);
+        const stats = await this.debtRepository.query(query, [date]);
         const data = stats[0] || {};
 
         results.push({
@@ -249,7 +262,10 @@ export class DebtStatisticService {
         countParams.push(status);
       }
 
-      const totalResult = await this.debtStatisticRepository.query(countQuery, countParams);
+      const totalResult = await this.debtStatisticRepository.query(
+        countQuery,
+        countParams,
+      );
       const total = totalResult[0]?.total || 0;
 
       return {
@@ -260,7 +276,7 @@ export class DebtStatisticService {
         totalPages: Math.ceil(total / limit),
       };
     } else {
-      // Query từ debts
+      // Query từ debts (current day)
       let query = `
         SELECT d.*, dc.customer_code, dc.customer_name, u.fullName as sale_name
         FROM debts d
@@ -292,7 +308,10 @@ export class DebtStatisticService {
         countParams.push(status);
       }
 
-      const totalResult = await this.debtRepository.query(countQuery, countParams);
+      const totalResult = await this.debtRepository.query(
+        countQuery,
+        countParams,
+      );
       const total = totalResult[0]?.total || 0;
 
       return {
@@ -325,8 +344,12 @@ export class DebtStatisticService {
 
     // Lấy dữ liệu từ debt_statistics cho các ngày trong quá khứ
     if (fromDate < today) {
-      const endDateForHistory = toDate < today ? toDate : 
-        new Date(new Date(today).getTime() - 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+      const endDateForHistory =
+        toDate < today
+          ? toDate
+          : new Date(new Date(today).getTime() - 24 * 60 * 60 * 1000)
+              .toISOString()
+              .split('T')[0];
 
       const agingQuery = `
         SELECT 
@@ -345,7 +368,10 @@ export class DebtStatisticService {
         GROUP BY age_range
       `;
 
-      const historyAging = await this.debtStatisticRepository.query(agingQuery, [fromDate, endDateForHistory]);
+      const historyAging = await this.debtStatisticRepository.query(
+        agingQuery,
+        [fromDate, endDateForHistory],
+      );
       results.push(...historyAging);
     }
 
@@ -368,10 +394,10 @@ export class DebtStatisticService {
       `;
 
       const currentAging = await this.debtRepository.query(currentAgingQuery);
-      
+
       // Merge results
       for (const current of currentAging) {
-        const existing = results.find(r => r.age_range === current.age_range);
+        const existing = results.find((r) => r.age_range === current.age_range);
         if (existing) {
           existing.count = Number(existing.count) + Number(current.count);
           existing.amount = Number(existing.amount) + Number(current.amount);
@@ -381,26 +407,35 @@ export class DebtStatisticService {
       }
     }
 
-    return results.map(item => ({
+    return results.map((item) => ({
       range: item.age_range,
       count: Number(item.count) || 0,
-      amount: Number(item.amount) || 0
+      amount: Number(item.amount) || 0,
     }));
   }
 
-  async getTrends(fromDate: string, toDate: string, groupBy: 'day' | 'week' | 'month' = 'day') {
+  async getTrends(
+    fromDate: string,
+    toDate: string,
+    groupBy: 'day' | 'week' | 'month' = 'day',
+  ) {
     // Tương tự như getTrendStatistics nhưng với tên khác
     return this.getTrendStatistics(fromDate, toDate, groupBy);
   }
 
   async getEmployeePerformance(fromDate: string, toDate: string) {
+    
     const today = new Date().toISOString().split('T')[0];
     const results: any[] = [];
 
     // Lấy dữ liệu từ debt_statistics cho các ngày trong quá khứ
     if (fromDate < today) {
-      const endDateForHistory = toDate < today ? toDate : 
-        new Date(new Date(today).getTime() - 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+      const endDateForHistory =
+        toDate < today
+          ? toDate
+          : new Date(new Date(today).getTime() - 24 * 60 * 60 * 1000)
+              .toISOString()
+              .split('T')[0];
 
       const performanceQuery = `
         SELECT 
@@ -417,7 +452,10 @@ export class DebtStatisticService {
         GROUP BY sale_name_raw, employee_code_raw
       `;
 
-      const historyPerformance = await this.debtStatisticRepository.query(performanceQuery, [fromDate, endDateForHistory]);
+      const historyPerformance = await this.debtStatisticRepository.query(
+        performanceQuery,
+        [fromDate, endDateForHistory],
+      );
       results.push(...historyPerformance);
     }
 
@@ -438,35 +476,46 @@ export class DebtStatisticService {
         GROUP BY sale_name_raw, employee_code_raw
       `;
 
-      const currentPerformance = await this.debtRepository.query(currentPerformanceQuery);
-      
+      const currentPerformance = await this.debtRepository.query(
+        currentPerformanceQuery,
+      );
+
       // Merge results
       for (const current of currentPerformance) {
-        const existing = results.find(r => 
-          r.employee_code === current.employee_code && 
-          r.employee_name === current.employee_name
+        const existing = results.find(
+          (r) =>
+            r.employee_code === current.employee_code &&
+            r.employee_name === current.employee_name,
         );
         if (existing) {
-          existing.total_debts = Number(existing.total_debts) + Number(current.total_debts);
-          existing.paid_debts = Number(existing.paid_debts) + Number(current.paid_debts);
-          existing.total_amount = Number(existing.total_amount) + Number(current.total_amount);
-          existing.collected_amount = Number(existing.collected_amount) + Number(current.collected_amount);
+          existing.total_debts =
+            Number(existing.total_debts) + Number(current.total_debts);
+          existing.paid_debts =
+            Number(existing.paid_debts) + Number(current.paid_debts);
+          existing.total_amount =
+            Number(existing.total_amount) + Number(current.total_amount);
+          existing.collected_amount =
+            Number(existing.collected_amount) +
+            Number(current.collected_amount);
         } else {
           results.push(current);
         }
       }
     }
 
-    return results.map(item => ({
-      employee_name: item.employee_name,
-      employee_code: item.employee_code,
-      total_debts: Number(item.total_debts) || 0,
-      paid_debts: Number(item.paid_debts) || 0,
-      total_amount: Number(item.total_amount) || 0,
-      collected_amount: Number(item.collected_amount) || 0,
-      collection_rate: Number(item.total_debts) > 0 ? 
-        (Number(item.paid_debts) / Number(item.total_debts) * 100) : 0,
-      avg_collection_days: Number(item.avg_collection_days) || 0
+    return results.map((item) => ({
+      employeeCode: item.employee_code || item.employee_name, // fallback to name if code missing
+      totalAssigned: Number(item.total_debts) || 0,
+      totalCollected: Number(item.paid_debts) || 0,
+      totalAmount: Number(item.total_amount) || 0,
+      collectedAmount: Number(item.collected_amount) || 0,
+      collectionRate:
+        Number(item.total_debts) > 0
+          ? (Number(item.paid_debts) / Number(item.total_debts)) * 100
+          : 0,
+      avgDebtAmount: Number(item.total_debts) > 0 
+        ? Number(item.total_amount) / Number(item.total_debts)
+        : 0,
     }));
   }
 }

@@ -13,12 +13,7 @@ import { UserStatusObserver } from '../observers/user-status.observer';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([
-      User, 
-      Role,
-      Department,
-      ChangeUserLog,
-    ]),
+    TypeOrmModule.forFeature([User, Role, Department, ChangeUserLog]),
     JwtModule.register({}),
     RolesPermissionsModule,
   ],

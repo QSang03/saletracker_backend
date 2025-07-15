@@ -23,7 +23,7 @@ export class SystemConfigService {
   }
 
   async setConfig(name: string, value: string) {
-    let config = await this.configRepo.findOne({ where: { name } });
+    const config = await this.configRepo.findOne({ where: { name } });
     if (!config) throw new NotFoundException('Config not found');
     config.value = value;
     return this.configRepo.save(config);

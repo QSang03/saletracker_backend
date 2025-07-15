@@ -26,7 +26,7 @@ export const typeOrmConfig: TypeOrmModuleOptions = {
         return field.string();
       }
       return next();
-    }
+    },
   },
   timezone: '+07:00',
 };

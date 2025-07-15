@@ -150,7 +150,7 @@ export class DebtService {
     }
     // Map customer_code -> pay_later (Date) từ DB
     const customerCodes = rows.map((row) => row['Mã đối tác']).filter(Boolean);
-    let payLaterMap = new Map<string, Date>();
+    const payLaterMap = new Map<string, Date>();
     if (customerCodes.length > 0) {
       const debtsWithPayLater = await this.debtRepository.find({
         where: { customer_raw_code: In(customerCodes) },
@@ -202,7 +202,7 @@ export class DebtService {
         });
         continue;
       }
-      let debtConfig = await this.debtConfigRepository.findOne({
+      const debtConfig = await this.debtConfigRepository.findOne({
         where: { customer_code: row['Mã đối tác'] },
       });
       let sale_id: number | undefined = undefined;
@@ -234,7 +234,7 @@ export class DebtService {
           sale_name_raw = row['NVKD'] || '';
         }
       }
-      let employee_code_raw: string = row['Kế toán công nợ'] || '';
+      const employee_code_raw: string = row['Kế toán công nợ'] || '';
       const invoice_code = row['Số chứng từ'];
       const oldDebt = existingDebtsMap.get(invoice_code);
       const parseDate = (val: any): Date | null => {
@@ -361,7 +361,7 @@ export class DebtService {
       .getRawMany();
     for (const d of rawDebts) {
       const code = d.debt_customer_raw_code;
-      let name = code;
+      const name = code;
       if (code && !configMap.has(code)) {
         result.push({ code, name });
       } else if (code && configMap.has(code) && !configMap.get(code) && name) {

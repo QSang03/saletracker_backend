@@ -136,8 +136,12 @@ export class UserController {
       departmentIds: number[];
       roleIds: number[];
       permissionIds: number[];
-      rolePermissions: { roleId: number; permissionId: number; isActive: boolean }[];
-    }
+      rolePermissions: {
+        roleId: number;
+        permissionId: number;
+        isActive: boolean;
+      }[];
+    },
   ) {
     // Gọi service cập nhật roles, departments, permissions, role-permissions cho user
     await this.userService.updateUserRolesPermissions(
@@ -291,7 +295,7 @@ export class UserController {
     // Lấy tất cả role-permission của user này (theo các role hiện tại của user)
     const user = await this.userService.findOneWithDetails(id);
     if (!user) throw new NotFoundException('User not found');
-    const roleIds = user.roles?.map(r => r.id) || [];
+    const roleIds = user.roles?.map((r) => r.id) || [];
     if (roleIds.length === 0) return [];
     // Lấy tất cả role-permission mapping cho các role này
     return this.rolesPermissionsService.findByRoleIds(roleIds);

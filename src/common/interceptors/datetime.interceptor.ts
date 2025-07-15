@@ -1,4 +1,9 @@
-import { Injectable, NestInterceptor, ExecutionContext, CallHandler } from '@nestjs/common';
+import {
+  Injectable,
+  NestInterceptor,
+  ExecutionContext,
+  CallHandler,
+} from '@nestjs/common';
 import { Observable } from 'rxjs';
 import { map } from 'rxjs/operators';
 const dayjs = require('dayjs');
@@ -19,9 +24,12 @@ function convertDates(obj: any): any {
       const value = obj[key];
       if (
         FIELDS.includes(key) &&
-        (value instanceof Date || (typeof value === 'string' && !isNaN(Date.parse(value))))
+        (value instanceof Date ||
+          (typeof value === 'string' && !isNaN(Date.parse(value))))
       ) {
-        result[key] = dayjs(value).tz('Asia/Ho_Chi_Minh').format('YYYY-MM-DD HH:mm:ss');
+        result[key] = dayjs(value)
+          .tz('Asia/Ho_Chi_Minh')
+          .format('YYYY-MM-DD HH:mm:ss');
       } else if (typeof value === 'object' && value !== null) {
         result[key] = convertDates(value);
       } else {
@@ -36,6 +44,6 @@ function convertDates(obj: any): any {
 @Injectable()
 export class DatetimeInterceptor implements NestInterceptor {
   intercept(context: ExecutionContext, next: CallHandler): Observable<any> {
-    return next.handle().pipe(map(data => convertDates(data)));
+    return next.handle().pipe(map((data) => convertDates(data)));
   }
 }

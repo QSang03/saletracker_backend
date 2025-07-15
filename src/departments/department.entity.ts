@@ -21,6 +21,9 @@ export class Department {
   @Column({ unique: true })
   slug: string;
 
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  server_ip: string;
+
   @ManyToMany(() => User, (user) => user.departments, {
     nullable: true,
   })

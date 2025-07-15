@@ -15,20 +15,25 @@ export class DebtStatisticController {
   async testData() {
     try {
       const today = new Date().toISOString().split('T')[0];
-      const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-      
-      const overview = await this.debtStatisticService.getOverviewStatistics(weekAgo, today);
+      const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
+        .toISOString()
+        .split('T')[0];
+
+      const overview = await this.debtStatisticService.getOverviewStatistics(
+        weekAgo,
+        today,
+      );
       return {
         success: true,
         dateRange: { from: weekAgo, to: today },
         overview,
-        message: 'Test endpoint working'
+        message: 'Test endpoint working',
       };
     } catch (error) {
       return {
         success: false,
         error: error.message,
-        stack: error.stack
+        stack: error.stack,
       };
     }
   }
@@ -49,7 +54,11 @@ export class DebtStatisticController {
     @Query('to') toDate: string,
     @Query('groupBy') groupBy: 'day' | 'week' | 'month' = 'day',
   ) {
-    return this.debtStatisticService.getTrendStatistics(fromDate, toDate, groupBy);
+    return this.debtStatisticService.getTrendStatistics(
+      fromDate,
+      toDate,
+      groupBy,
+    );
   }
 
   @Get('aging')
@@ -82,9 +91,7 @@ export class DebtStatisticController {
 
   @Post('capture')
   @UseGuards(JwtAuthGuard)
-  async captureDebtStatistics(
-    @Query('date') date?: string,
-  ) {
+  async captureDebtStatistics(@Query('date') date?: string) {
     return this.cronjobService.captureDebtStatisticsManual(date);
   }
 

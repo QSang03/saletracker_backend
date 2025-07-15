@@ -41,9 +41,11 @@ export class PermissionGuard implements CanActivate {
     );
     // Debug log để kiểm tra user.roles và user.permissions
     // Nếu user có role admin thì cho phép tất cả
-    const isAdmin = Array.isArray(user.roles) && user.roles.some(
-      (r: any) => (typeof r === 'string' ? r : r.name) === 'admin'
-    );
+    const isAdmin =
+      Array.isArray(user.roles) &&
+      user.roles.some(
+        (r: any) => (typeof r === 'string' ? r : r.name) === 'admin',
+      );
     if (isAdmin) return true;
     if (!hasRole || !hasPermission) {
       throw new ForbiddenException(

@@ -31,7 +31,6 @@ export class UserGateway {
   ) {
     if (userId) {
       client.join(`user_${userId}`);
-      console.log(`👤 [UserGateway] Client joined room user_${userId}`);
     }
   }
 

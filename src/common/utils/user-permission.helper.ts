@@ -16,16 +16,23 @@ export function getPermissions(user: any): string[] {
   if (!user) return [];
   if (Array.isArray(user.permissions)) {
     if (typeof user.permissions[0] === 'string') return user.permissions;
-    if (typeof user.permissions[0] === 'object' && user.permissions[0] !== null) {
+    if (
+      typeof user.permissions[0] === 'object' &&
+      user.permissions[0] !== null
+    ) {
       return user.permissions.map((p: any) => p.name).filter(Boolean);
     }
   }
   // Có thể permissions nằm trong roles
   if (Array.isArray(user.roles)) {
-    let perms: string[] = [];
+    const perms: string[] = [];
     for (const role of user.roles) {
       if (role && Array.isArray(role.rolePermissions)) {
-        perms.push(...role.rolePermissions.map((rp: any) => rp.permission?.name).filter(Boolean));
+        perms.push(
+          ...role.rolePermissions
+            .map((rp: any) => rp.permission?.name)
+            .filter(Boolean),
+        );
       }
     }
     return perms;

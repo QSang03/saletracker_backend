@@ -1,4 +1,14 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, CreateDateColumn, UpdateDateColumn, DeleteDateColumn, OneToMany } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  ManyToOne,
+  JoinColumn,
+  CreateDateColumn,
+  UpdateDateColumn,
+  DeleteDateColumn,
+  OneToMany,
+} from 'typeorm';
 import { User } from '../users/user.entity';
 import { OrderDetail } from '../order-details/order-detail.entity';
 
@@ -23,7 +33,9 @@ export class Order {
   @Column('json', { nullable: true })
   associated_message_ids: any;
 
-  @OneToMany(() => OrderDetail, (orderDetail) => orderDetail.order, { cascade: true })
+  @OneToMany(() => OrderDetail, (orderDetail) => orderDetail.order, {
+    cascade: true,
+  })
   details: OrderDetail[];
 
   @CreateDateColumn({ type: 'timestamp' })

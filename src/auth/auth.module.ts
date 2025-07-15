@@ -21,7 +21,7 @@ import { PermissionModule } from '../permissions/permission.module';
       useFactory: async (configService: ConfigService) => ({
         secret: configService.get<string>('JWT_SECRET'),
         signOptions: { expiresIn: '7d' },
-        global: true
+        global: true,
       }),
       inject: [ConfigService],
     }),
@@ -30,7 +30,7 @@ import { PermissionModule } from '../permissions/permission.module';
     forwardRef(() => UserModule),
   ],
   providers: [
-    AuthService, 
+    AuthService,
     JwtStrategy,
     AuthGuard,
     JwtAuthGuard,
@@ -38,11 +38,6 @@ import { PermissionModule } from '../permissions/permission.module';
     Reflector,
   ],
   controllers: [AuthController],
-  exports: [
-    AuthService,
-    AuthGuard,
-    JwtModule,
-    JwtAuthGuard,
-  ],
+  exports: [AuthService, AuthGuard, JwtModule, JwtAuthGuard],
 })
 export class AuthModule {}

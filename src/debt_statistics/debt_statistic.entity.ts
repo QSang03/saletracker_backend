@@ -1,10 +1,10 @@
-import { 
-  Entity, 
-  PrimaryGeneratedColumn, 
-  Column, 
-  CreateDateColumn, 
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  CreateDateColumn,
   UpdateDateColumn,
-  Index
+  Index,
 } from 'typeorm';
 
 export enum DebtStatus {
@@ -84,7 +84,11 @@ export class DebtStatistic {
   @Column({ type: 'text', nullable: true })
   note: string;
 
-  @Column({ type: 'tinyint', default: 0, comment: '0: chưa thông báo, 1: đã thông báo' })
+  @Column({
+    type: 'tinyint',
+    default: 0,
+    comment: '0: chưa thông báo, 1: đã thông báo',
+  })
   is_notified: number;
 
   // Timestamps từ debt gốc

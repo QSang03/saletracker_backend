@@ -35,7 +35,10 @@ export class OrderDetailService {
     return this.orderDetailRepository.save(orderDetail);
   }
 
-  async update(id: number, orderDetailData: Partial<OrderDetail>): Promise<OrderDetail | null> {
+  async update(
+    id: number,
+    orderDetailData: Partial<OrderDetail>,
+  ): Promise<OrderDetail | null> {
     await this.orderDetailRepository.update(id, orderDetailData);
     return this.findById(id);
   }

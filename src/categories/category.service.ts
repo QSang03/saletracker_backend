@@ -11,11 +11,16 @@ export class CategoryService {
   ) {}
 
   findAll() {
-    return this.categoryRepository.find({ relations: ['parent', 'children', 'products'] });
+    return this.categoryRepository.find({
+      relations: ['parent', 'children', 'products'],
+    });
   }
 
   findOne(id: number) {
-    return this.categoryRepository.findOne({ where: { id }, relations: ['parent', 'children', 'products'] });
+    return this.categoryRepository.findOne({
+      where: { id },
+      relations: ['parent', 'children', 'products'],
+    });
   }
 
   create(data: Partial<Category>) {

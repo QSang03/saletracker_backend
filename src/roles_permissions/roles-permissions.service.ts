@@ -16,7 +16,7 @@ export class RolesPermissionsService {
     const results: RolePermission[] = [];
     for (const item of permissions) {
       const { roleId, permissionId, isActive } = item;
-      let rolePermission = await this.rolePermissionRepo.findOne({
+      const rolePermission = await this.rolePermissionRepo.findOne({
         where: {
           role: { id: roleId },
           permission: { id: permissionId },
@@ -43,7 +43,9 @@ export class RolesPermissionsService {
   }
 
   async findAll(): Promise<any[]> {
-    const list = await this.rolePermissionRepo.find({ relations: ['role', 'permission'] });
+    const list = await this.rolePermissionRepo.find({
+      relations: ['role', 'permission'],
+    });
     return list.map((item) => ({
       id: item.id,
       roleId: item.role?.id,
@@ -59,7 +61,10 @@ export class RolesPermissionsService {
     return this.rolePermissionRepo.findOneBy({ id });
   }
 
-  async updateIsActive(id: number, isActive: boolean): Promise<RolePermission | null> {
+  async updateIsActive(
+    id: number,
+    isActive: boolean,
+  ): Promise<RolePermission | null> {
     await this.rolePermissionRepo.update(id, { isActive });
     return this.rolePermissionRepo.findOneBy({ id });
   }

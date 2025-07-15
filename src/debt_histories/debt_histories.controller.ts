@@ -1,4 +1,13 @@
-import { Controller, Get, Post, Body, Param, Patch, Delete, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Param,
+  Patch,
+  Delete,
+  UseGuards,
+} from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { DebtHistoryService } from './debt_histories.service';
 import { DebtHistory } from './debt_histories.entity';
@@ -30,7 +39,10 @@ export class DebtHistoryController {
 
   @Patch(':id')
   @Permission('cong-no', 'update')
-  update(@Param('id') id: number, @Body() data: Partial<DebtHistory>): Promise<DebtHistory> {
+  update(
+    @Param('id') id: number,
+    @Body() data: Partial<DebtHistory>,
+  ): Promise<DebtHistory> {
     return this.debtHistoryService.update(id, data);
   }
 

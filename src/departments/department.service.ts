@@ -119,10 +119,7 @@ export class DepartmentService {
     throw new UnauthorizedException('Bạn không có quyền xem phòng ban');
   }
 
-  async createDepartment(
-    createDepartmentDto: CreateDepartmentDto,
-    user: any,
-  ) {
+  async createDepartment(createDepartmentDto: CreateDepartmentDto, user: any) {
     if (!getRoleNames(user).includes('admin')) {
       throw new UnauthorizedException('Chỉ admin mới được tạo phòng ban');
     }

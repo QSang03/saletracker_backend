@@ -15,7 +15,10 @@ export class ProductService {
   }
 
   findOne(id: number) {
-    return this.productRepository.findOne({ where: { id }, relations: ['categories', 'brand'] });
+    return this.productRepository.findOne({
+      where: { id },
+      relations: ['categories', 'brand'],
+    });
   }
 
   create(data: Partial<Product>) {

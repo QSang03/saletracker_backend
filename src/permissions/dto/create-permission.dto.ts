@@ -4,7 +4,7 @@ export class CreatePermissionDto {
   @IsString()
   @IsNotEmpty()
   name: string;
-  
+
   @IsString()
   @IsNotEmpty()
   action: string;

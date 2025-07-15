@@ -35,9 +35,11 @@ export class DebtConfigService {
       const existingConfig = await this.repo.findOne({
         where: { customer_code: data.customer_code },
       });
-      
+
       if (existingConfig) {
-        throw new Error(`Cấu hình công nợ cho mã khách hàng "${data.customer_code}" đã tồn tại`);
+        throw new Error(
+          `Cấu hình công nợ cho mã khách hàng "${data.customer_code}" đã tồn tại`,
+        );
       }
     }
 
@@ -386,30 +388,32 @@ export class DebtConfigService {
         }
       }
       // Kiểm tra trùng lặp mã khách hàng
-      const existingConfig = await this.repo.findOne({ where: { customer_code } });
+      const existingConfig = await this.repo.findOne({
+        where: { customer_code },
+      });
       if (existingConfig) {
-        errors.push({ 
-          row: i + 2, 
-          error: `Mã khách hàng "${customer_code}" đã tồn tại trong hệ thống` 
+        errors.push({
+          row: i + 2,
+          error: `Mã khách hàng "${customer_code}" đã tồn tại trong hệ thống`,
         });
         continue; // Bỏ qua row này và tiếp tục với row tiếp theo
       }
 
       // Tạo debt_config mới
       const config = this.repo.create({ customer_code });
-      
+
       // Cập nhật thông tin
       config.customer_type = customer_type as any; // ép kiểu về enum CustomerType
       config.gap_day = typeof gap_day === 'number' ? gap_day : null;
       config.day_of_week = Array.isArray(day_of_week) ? day_of_week : null;
       config.employee = employee || null;
       config.customer_name = customer_name;
-      
+
       await this.repo.save(config);
-      imported.push({ 
-        row: i + 2, 
-        customer_code, 
-        action: 'created' 
+      imported.push({
+        row: i + 2,
+        customer_code,
+        action: 'created',
       });
     }
     return { imported, errors };
@@ -478,5 +482,5 @@ export class DebtConfigService {
           }
         : null,
     };
-}
+  }
 }
