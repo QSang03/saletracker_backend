@@ -24,6 +24,7 @@ import { RolesPermissionsModule } from './roles_permissions/roles-permissions.mo
 import { NotificationModule } from './notifications/notification.module';
 import { OrderModule } from './orders/order.module';
 import { OrderDetailModule } from './order-details/order-detail.module';
+import { WebhookModule } from './webhook/webhook.module';
 
 @Module({
   imports: [
@@ -52,6 +53,7 @@ import { OrderDetailModule } from './order-details/order-detail.module';
     NotificationModule,
     OrderModule,
     OrderDetailModule,
+    WebhookModule,
   ],
   controllers: [AppController],
   providers: [AppService],

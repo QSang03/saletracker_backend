@@ -682,4 +682,15 @@ export class UserService {
     }
     return { success: true };
   }
+
+  async updateZaloLinkStatus(userId: number, status: number): Promise<User> {
+    const user = await this.userRepo.findOne({ where: { id: userId } });
+
+    if (!user) {
+      throw new NotFoundException(`User with ID ${userId} not found`);
+    }
+
+    user.zaloLinkStatus = status;
+    return this.userRepo.save(user);
+  }
 }
