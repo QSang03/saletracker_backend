@@ -29,5 +29,6 @@ async function bootstrap() {
 
   // Lắng nghe trên tất cả IP để dùng LAN
   await app.listen(3001);
+  console.log('🚀 Backend API đang chạy trên port 3001');
 }
 bootstrap();

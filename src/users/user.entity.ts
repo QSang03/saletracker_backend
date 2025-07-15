@@ -91,4 +91,6 @@ export class User {
 
   @OneToMany(() => Notification, (notification) => notification.user)
   notifications: Notification[];
+  @Column({ nullable: true, name: 'refresh_token', select: false })
+  refreshToken?: string;
 }

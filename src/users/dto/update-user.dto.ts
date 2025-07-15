@@ -69,4 +69,8 @@ export class UpdateUserDto {
   @IsOptional()
   @IsString()
   avatarZalo?: string;
+
+  @IsOptional()
+  @IsString()
+  refreshToken?: string;
 }

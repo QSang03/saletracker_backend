@@ -23,6 +23,18 @@ export class UserGateway {
     }
   }
 
+  // Handle join user room specifically
+  @SubscribeMessage('join-user-room')
+  handleJoinUserRoom(
+    @MessageBody() userId: number,
+    @ConnectedSocket() client: Socket,
+  ) {
+    if (userId) {
+      client.join(`user_${userId}`);
+      console.log(`👤 [UserGateway] Client joined room user_${userId}`);
+    }
+  }
+
   @SubscribeMessage('joinAdmin')
   handleJoinAdmin(@ConnectedSocket() client: Socket) {
     client.join('admin_dashboard');

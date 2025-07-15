@@ -16,6 +16,7 @@ import { UserGateway } from './user.gateway';
 import { ChangeUserLog } from './change-user-log.entity';
 import { getRoleNames } from '../common/utils/user-permission.helper';
 import { RolesPermissionsService } from '../roles_permissions/roles-permissions.service';
+import { UserStatusObserver } from '../observers/user-status.observer';
 
 @Injectable()
 export class UserService {
@@ -30,6 +31,7 @@ export class UserService {
     private readonly changeUserLogRepo: Repository<ChangeUserLog>,
     private readonly userGateway: UserGateway,
     private readonly rolesPermissionsService: RolesPermissionsService, // Inject service
+    private readonly userStatusObserver: UserStatusObserver, // Inject observer
   ) {}
 
   async findAll(
@@ -229,6 +231,12 @@ export class UserService {
     });
     if (!oldUser) throw new NotFoundException('Không tìm thấy user');
 
+    // Kiểm tra xem có thay đổi thông tin Zalo không (cần refresh token)
+    const zaloInfoChanged = 
+      (updateData.zaloLinkStatus !== undefined && updateData.zaloLinkStatus !== oldUser.zaloLinkStatus) ||
+      (updateData.zaloName !== undefined && updateData.zaloName !== oldUser.zaloName) ||
+      (updateData.avatarZalo !== undefined && updateData.avatarZalo !== oldUser.avatarZalo);
+
     const updatePayload: Partial<User> = {
       email: updateData.email,
       status,
@@ -239,6 +247,15 @@ export class UserService {
       zaloName: updateData.zaloName,
       avatarZalo: updateData.avatarZalo,
     };
+
+    // Xử lý refresh token
+    if (updateData.refreshToken !== undefined) {
+      // Nếu có refreshToken trong updateData, cập nhật nó
+      updatePayload.refreshToken = updateData.refreshToken;
+    } else if (zaloInfoChanged) {
+      // Nếu thông tin Zalo thay đổi và không có refreshToken mới, xóa refresh token để buộc user phải refresh
+      updatePayload.refreshToken = undefined;
+    }
 
     if (typeof updateData.nickName === 'string') {
       updatePayload.nickName = updateData.nickName;
@@ -690,7 +707,71 @@ export class UserService {
       throw new NotFoundException(`User with ID ${userId} not found`);
     }
 
+    const oldStatus = user.zaloLinkStatus;
     user.zaloLinkStatus = status;
-    return this.userRepo.save(user);
+    
+    const updatedUser = await this.userRepo.save(user);
+
+    // Thông báo cho observer về sự thay đổi status
+    if (oldStatus !== status) {
+      this.userStatusObserver.notifyUserStatusChange(
+        userId,
+        oldStatus,
+        status,
+        'webhook'
+      );
+    }
+
+    return updatedUser;
+  }
+
+  async findOneWithDetailsAndRefreshToken(id: number): Promise<User | null> {
+    if (isNaN(id) || !Number.isInteger(id) || id <= 0) {
+      throw new BadRequestException('Invalid user ID');
+    }
+
+    return this.userRepo.findOne({
+      where: { id, deletedAt: IsNull() },
+      relations: [
+        'roles',
+        'roles.rolePermissions',
+        'roles.rolePermissions.permission',
+        'departments',
+      ],
+      select: {
+        id: true,
+        username: true,
+        email: true,
+        fullName: true,
+        nickName: true,
+        status: true,
+        isBlock: true,
+        employeeCode: true,
+        zaloLinkStatus: true,
+        zaloName: true,
+        avatarZalo: true,
+        lastLogin: true,
+        refreshToken: true, // Include refresh token
+        roles: {
+          id: true,
+          name: true,
+          display_name: true,
+          rolePermissions: {
+            id: true,
+            isActive: true,
+            permission: {
+              id: true,
+              name: true,
+              action: true,
+            },
+          },
+        },
+        departments: {
+          id: true,
+          name: true,
+          slug: true,
+        },
+      },
+    });
   }
 }

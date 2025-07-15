@@ -1,12 +1,13 @@
 import { ExecutionContext, Injectable, UnauthorizedException } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
-import { UserService } from 'src/users/user.service';
+import { Reflector } from '@nestjs/core';
 
 @Injectable()
 export class JwtAuthGuard extends AuthGuard('jwt') {
-  constructor(private readonly userService: UserService) {
+  constructor(private reflector: Reflector) {
     super();
   }
+  
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const can = await super.canActivate(context);
     if (!can) return false;
@@ -14,8 +15,12 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
     const request = context.switchToHttp().getRequest();
     const user = request.user;
 
-    const dbUser = await this.userService.findOne(user.id);
-    if (!dbUser || dbUser.isBlock) {
+    // Basic validation from JWT payload
+    if (!user || !user.id) {
+      throw new UnauthorizedException('Token không hợp lệ');
+    }
+
+    if (user.isBlock) {
       throw new UnauthorizedException('Tài khoản đã bị khóa');
     }
 

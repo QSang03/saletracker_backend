@@ -1,3 +1,4 @@
+import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { Controller, Post, Body, UseGuards, Req, Get } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { CreateUserDto } from '../users/dto/create-user.dto';
@@ -68,9 +69,64 @@ export class AuthController {
         })) || [],
       roles: user.roles?.map((r) => ({ id: r.id, name: r.name })),
       email: user.email,
-      // lastLogin: user.lastLogin,
-      // createdAt: user.createdAt,
-      // updatedAt: user.updatedAt,
+    };
+  }
+
+  @Post('refresh')
+  async refresh(@Body() refreshTokenDto: RefreshTokenDto) {
+    return this.authService.refreshToken(refreshTokenDto);
+  }
+
+  @Post('refresh-after-update')
+  @UseGuards(JwtAuthGuard)
+  async refreshAfterUpdate(@Req() req) {
+    // Tạo chỉ access token mới với thông tin user mới nhất, giữ nguyên refresh token
+    const user = await this.userService.findOneWithDetails(req.user.id);
+    if (!user) {
+      throw new Error('User not found');
+    }
+    return this.authService.generateNewAccessToken(user);
+  }
+
+  // Test endpoint để force refresh token
+  @Post('test-force-refresh')
+  @UseGuards(JwtAuthGuard)
+  async testForceRefresh(@Req() req, @Body() body: { userId?: number }) {
+    const user = req.user as any;
+    const targetUserId = body.userId || user.id;
+
+    console.log('🔄 [Test Force Refresh] Simulating status=2 for user:', targetUserId);
+
+    // Giả lập update user status = 2 và trigger force refresh
+    await this.authService.testForceRefresh(targetUserId);
+
+    return {
+      message: 'Force refresh triggered',
+      targetUserId,
+    };
+  }
+
+  // Test endpoint để kiểm tra refresh token trong database
+  @Post('test-check-refresh-token')
+  @UseGuards(JwtAuthGuard)
+  async testCheckRefreshToken(@Req() req, @Body() body: { userId?: number }) {
+    const user = req.user as any;
+    const targetUserId = body.userId || user.id;
+
+    console.log('🔍 [Test Check Refresh Token] Checking for user:', targetUserId);
+
+    // Lấy user với refresh token từ database
+    const userWithToken = await this.userService.findOneWithDetailsAndRefreshToken(targetUserId);
+    
+    if (!userWithToken) {
+      return { error: 'User not found' };
+    }
+
+    return {
+      userId: targetUserId,
+      hasRefreshToken: !!userWithToken.refreshToken,
+      refreshTokenLength: userWithToken.refreshToken?.length,
+      refreshTokenPrefix: userWithToken.refreshToken?.substring(0, 50) + '...',
     };
   }
 }

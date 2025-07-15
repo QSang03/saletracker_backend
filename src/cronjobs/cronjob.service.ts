@@ -7,6 +7,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { NKCProduct } from '../nkc_products/nkc_product.entity';
 import { Category } from '../categories/category.entity';
+import { DebtStatistic } from '../debt_statistics/debt_statistic.entity';
+import { Debt } from '../debts/debt.entity';
 
 @Injectable()
 export class CronjobService {
@@ -19,7 +21,132 @@ export class CronjobService {
     private readonly nkcProductRepo: Repository<NKCProduct>,
     @InjectRepository(Category)
     private readonly categoryRepo: Repository<Category>,
-  ) {}
+    @InjectRepository(DebtStatistic)
+    private debtStatisticRepo: Repository<DebtStatistic>,
+    @InjectRepository(Debt)
+    private debtRepo: Repository<Debt>,
+  ) {
+    this.logger.log('🎯 [CronjobService] Service đã được khởi tạo - Cronjob debt statistics sẽ chạy lúc 11h trưa hàng ngày');
+  }
+
+  @Cron('0 0 11 * * *') // Chạy lúc 11:00 AM mỗi ngày
+  async handleDebtStatisticsCron() {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayStr = today.toISOString().split('T')[0]; // Format: YYYY-MM-DD
+
+    this.logger.log(`🔄 [Auto Cron] Bắt đầu capture debt statistics cho ngày: ${todayStr}`);
+
+    try {
+      // Kiểm tra đã có data cho ngày hôm nay chưa
+      const existingCount = await this.debtStatisticRepo.count({
+        where: { statistic_date: today }
+      });
+
+      if (existingCount > 0) {
+        this.logger.log(`⚠️ [Auto Cron] Đã có ${existingCount} bản ghi cho ngày ${todayStr}, bỏ qua`);
+        return;
+      }
+
+      // Raw query để copy data từ debts sang debt_statistics
+      // QUAN TRỌNG: Sử dụng ngày tạo debt làm statistic_date
+      const query = `
+        INSERT INTO debt_statistics (
+          statistic_date, customer_raw_code, invoice_code, bill_code,
+          total_amount, remaining, issue_date, due_date, pay_later,
+          status, sale_id, sale_name_raw, employee_code_raw,
+          debt_config_id, customer_code, customer_name, note,
+          is_notified, original_created_at, original_updated_at, original_debt_id
+        )
+        SELECT 
+          DATE(d.created_at) as statistic_date,
+          d.customer_raw_code, d.invoice_code, d.bill_code,
+          d.total_amount, d.remaining, d.issue_date, d.due_date, d.pay_later,
+          d.status, d.sale_id, d.sale_name_raw, d.employee_code_raw,
+          d.debt_config_id, dc.customer_code, dc.customer_name, d.note,
+          d.is_notified, d.created_at, d.updated_at, d.id
+        FROM debts d
+        LEFT JOIN debt_configs dc ON d.debt_config_id = dc.id
+        WHERE d.deleted_at IS NULL
+        AND DATE(d.created_at) = ?
+      `;
+
+      const result = await this.debtStatisticRepo.query(query, [todayStr]);
+      
+      this.logger.log(`✅ [Auto Cron] Đã lưu ${result.affectedRows || 0} bản ghi cho ngày ${todayStr}`);
+    } catch (error) {
+      this.logger.error(`❌ [Auto Cron] Lỗi khi capture debt statistics:`, error);
+    }
+  }
+
+  // Method để chạy thủ công - có thể chạy bất cứ khi nào
+  async captureDebtStatisticsManual(targetDate?: string) {
+    const dateToCapture = targetDate || new Date().toISOString().split('T')[0];
+    const captureDate = new Date(dateToCapture);
+    captureDate.setHours(0, 0, 0, 0);
+    
+    this.logger.log(`🔄 [Thống kê công nợ - Thủ công] Bắt đầu capture cho ngày: ${dateToCapture}`);
+
+    try {
+      // Kiểm tra đã có data cho ngày này chưa
+      const existingCount = await this.debtStatisticRepo.count({
+        where: { statistic_date: captureDate }
+      });
+
+      if (existingCount > 0) {
+        this.logger.log(`⚠️ [Thống kê công nợ - Thủ công] Đã có ${existingCount} bản ghi cho ngày ${dateToCapture}`);
+        return {
+          success: false,
+          message: `Đã có dữ liệu thống kê cho ngày ${dateToCapture}`,
+          existingRecords: existingCount
+        };
+      }
+
+      // Raw query để copy data từ debts sang debt_statistics
+      // QUAN TRỌNG: Sử dụng ngày tạo debt làm statistic_date thay vì ngày hiện tại 
+      const query = `
+        INSERT INTO debt_statistics (
+          statistic_date, customer_raw_code, invoice_code, bill_code,
+          total_amount, remaining, issue_date, due_date, pay_later,
+          status, sale_id, sale_name_raw, employee_code_raw,
+          debt_config_id, customer_code, customer_name, note,
+          is_notified, original_created_at, original_updated_at, original_debt_id
+        )
+        SELECT 
+          DATE(d.created_at) as statistic_date,
+          d.customer_raw_code, d.invoice_code, d.bill_code,
+          d.total_amount, d.remaining, d.issue_date, d.due_date, d.pay_later,
+          d.status, d.sale_id, d.sale_name_raw, d.employee_code_raw,
+          d.debt_config_id, dc.customer_code, dc.customer_name, d.note,
+          d.is_notified, d.created_at, d.updated_at, d.id
+        FROM debts d
+        LEFT JOIN debt_configs dc ON d.debt_config_id = dc.id
+        WHERE d.deleted_at IS NULL
+        AND DATE(d.created_at) = ?
+      `;
+
+      this.logger.log(`💾 [Thống kê công nợ - Thủ công] Đang capture debts được tạo ngày ${dateToCapture}...`);
+      
+      const result = await this.debtStatisticRepo.query(query, [dateToCapture]);
+      
+      this.logger.log(`✅ [Thống kê công nợ - Thủ công] Đã lưu ${result.affectedRows || 0} bản ghi cho ngày ${dateToCapture}`);
+      
+      return {
+        success: true,
+        message: `Capture thành công ${result.affectedRows || 0} debt statistics`,
+        recordsSaved: result.affectedRows || 0,
+        date: dateToCapture,
+        note: 'Sử dụng ngày tạo debt làm statistic_date'
+      };
+    } catch (error) {
+      this.logger.error(`❌ [Thống kê công nợ - Thủ công] Lỗi khi capture debt statistics:`, error);
+      return {
+        success: false,
+        message: `Lỗi khi capture debt statistics: ${error.message}`,
+        error: error.message
+      };
+    }
+  }
 
   @Cron(process.env.CRON_PRODUCT_TIME || '0 2 * * *')
   async fetchAndSaveProducts() {

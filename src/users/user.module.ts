@@ -9,6 +9,7 @@ import { Department } from '../departments/department.entity';
 import { UserGateway } from './user.gateway';
 import { ChangeUserLog } from './change-user-log.entity';
 import { RolesPermissionsModule } from '../roles_permissions/roles-permissions.module';
+import { UserStatusObserver } from '../observers/user-status.observer';
 
 @Module({
   imports: [
@@ -21,8 +22,8 @@ import { RolesPermissionsModule } from '../roles_permissions/roles-permissions.m
     JwtModule.register({}),
     RolesPermissionsModule,
   ],
-  providers: [UserService, UserGateway],
+  providers: [UserService, UserGateway, UserStatusObserver],
   controllers: [UserController],
-  exports: [UserService, UserGateway],
+  exports: [UserService, UserGateway, UserStatusObserver],
 })
 export class UserModule {}

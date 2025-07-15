@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { EventEmitterModule } from '@nestjs/event-emitter';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { UserModule } from './users/user.module';
@@ -25,9 +26,11 @@ import { NotificationModule } from './notifications/notification.module';
 import { OrderModule } from './orders/order.module';
 import { OrderDetailModule } from './order-details/order-detail.module';
 import { WebhookModule } from './webhook/webhook.module';
+import { DebtStatisticModule } from './debt_statistics/debt_statistic.module';
 
 @Module({
   imports: [
+    EventEmitterModule.forRoot(),
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: '.env'
@@ -54,6 +57,7 @@ import { WebhookModule } from './webhook/webhook.module';
     OrderModule,
     OrderDetailModule,
     WebhookModule,
+    DebtStatisticModule,
   ],
   controllers: [AppController],
   providers: [AppService],
