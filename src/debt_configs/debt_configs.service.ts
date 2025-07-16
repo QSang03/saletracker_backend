@@ -16,14 +16,14 @@ export class DebtConfigService {
 
   findAll(): Promise<DebtConfig[]> {
     return this.repo.find({
-      relations: ['debts', 'debt_logs', 'employee', 'actor'],
+      relations: ['debts', 'debt_log', 'employee', 'actor'],
     });
   }
 
   async findOne(id: number): Promise<DebtConfig> {
     const config = await this.repo.findOne({
       where: { id },
-      relations: ['debts', 'debt_logs', 'employee', 'actor'],
+      relations: ['debts', 'debt_log', 'employee', 'actor'],
     });
     if (!config) throw new Error('DebtConfig not found');
     return config;
@@ -274,7 +274,7 @@ export class DebtConfigService {
 
     const updated = await this.repo.findOne({
       where: { id },
-      relations: ['actor', 'debt_logs', 'debts'],
+      relations: ['actor', 'debt_log', 'debts'],
     });
     if (!updated) throw new Error('DebtConfig not found after update');
     return updated;
@@ -297,7 +297,7 @@ export class DebtConfigService {
 
     const updated = await this.repo.findOne({
       where: { id },
-      relations: ['actor', 'debt_logs', 'debts'],
+      relations: ['actor', 'debt_log', 'debts'],
     });
     if (!updated) throw new Error('DebtConfig not found after update');
     return updated;
