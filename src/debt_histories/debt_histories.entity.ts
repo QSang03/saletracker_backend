@@ -30,6 +30,9 @@ export class DebtHistory {
   @Column({ type: 'longtext', nullable: true })
   first_remind: string;
 
+  @Column({ type: 'longtext', nullable: true })
+  error_msg: string;
+
   @Column({ type: 'datetime', nullable: true })
   first_remind_at: Date;
 

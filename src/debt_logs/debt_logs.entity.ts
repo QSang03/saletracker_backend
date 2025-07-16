@@ -28,6 +28,9 @@ export class DebtLogs {
   @Column({ type: 'int' })
   debt_config_id: number;
 
+  @Column({ type: 'longtext', nullable: true })
+  error_msg: string;
+
   @OneToOne(() => DebtConfig, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'debt_config_id' })
   debt_config: DebtConfig;

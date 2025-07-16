@@ -37,7 +37,7 @@ export class DebtConfigService {
       });
       if (existingConfig) {
         return {
-          error: true,
+          success: false,
           message: `Cấu hình công nợ cho mã khách hàng "${data.customer_code}" đã tồn tại`,
         } as any;
       }
