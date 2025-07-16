@@ -35,11 +35,11 @@ export class DebtConfigService {
       const existingConfig = await this.repo.findOne({
         where: { customer_code: data.customer_code },
       });
-
       if (existingConfig) {
-        throw new Error(
-          `Cấu hình công nợ cho mã khách hàng "${data.customer_code}" đã tồn tại`,
-        );
+        return {
+          error: true,
+          message: `Cấu hình công nợ cho mã khách hàng "${data.customer_code}" đã tồn tại`,
+        } as any;
       }
     }
 
@@ -48,20 +48,25 @@ export class DebtConfigService {
     // Tìm employee dựa trên debts có customer_raw_code trùng với customer_code
     if (data.customer_code) {
       const debt = await this.repo.manager.getRepository('Debt').findOne({
-        where: { customer_raw_code: data.customer_code },
+      where: { customer_raw_code: data.customer_code },
       });
 
       if (debt && debt.employee_code_raw) {
-        // Lấy mã employee từ employee_code_raw (ví dụ: "CNO4321-Quốc Dương" -> "CNO4321")
-        const empCode = String(debt.employee_code_raw).split('-')[0].trim();
-        if (empCode) {
-          const user = await this.repo.manager.getRepository('User').findOne({
-            where: { employeeCode: empCode },
-          });
-          if (user) {
-            entity.employee = { id: user.id } as any;
-          }
+      const empCode = String(debt.employee_code_raw).split('-')[0].trim();
+      if (empCode) {
+        const user = await this.repo.manager.getRepository('User').findOne({
+        where: { employeeCode: empCode },
+        });
+        if (user) {
+        entity.employee = { id: user.id } as any;
+        } else {
+        entity.employee = undefined;
         }
+      } else {
+        entity.employee = undefined;
+      }
+      } else {
+      entity.employee = undefined;
       }
     }
 
@@ -79,12 +84,15 @@ export class DebtConfigService {
       }
     }
 
-    // Tạo debt_logs tương ứng
-    await this.debtLogsService.create({
+    // Tạo debt_log tương ứng (1-1)
+    const debtLog = await this.debtLogsService.create({
       debt_config_id: savedConfig.id,
       debt_msg: '',
       remind_status: ReminderStatus.NotSent,
     });
+    // Gán debt_log vào debt_config
+    savedConfig.debt_log = debtLog;
+    await this.repo.save(savedConfig);
 
     return savedConfig;
   }
@@ -140,7 +148,7 @@ export class DebtConfigService {
 
     const updated = await this.repo.findOne({
       where: { id },
-      relations: ['debts', 'debt_logs', 'employee', 'actor'],
+      relations: ['debts', 'debt_log', 'employee', 'actor'],
     });
     if (!updated) throw new Error('DebtConfig not found after update');
     return updated;
@@ -155,7 +163,7 @@ export class DebtConfigService {
   async findByEmployee(employeeId: number): Promise<DebtConfig[]> {
     return this.repo.find({
       where: { employee: { id: employeeId } },
-      relations: ['debts', 'debt_logs', 'employee', 'actor'],
+      relations: ['debts', 'debt_log', 'employee', 'actor'],
     });
   }
 
@@ -170,7 +178,7 @@ export class DebtConfigService {
     let configs: DebtConfig[] = [];
     if (isAdminOrManager) {
       configs = await this.repo.find({
-        relations: ['debt_logs', 'actor', 'debts', 'employee'], // thêm 'employee' vào relations
+        relations: ['debt_log', 'actor', 'debts', 'employee'],
         select: [
           'id',
           'customer_code',
@@ -188,7 +196,7 @@ export class DebtConfigService {
     } else if (roleNames.includes('user-cong-no')) {
       configs = await this.repo.find({
         where: { employee: { id: currentUser?.id } },
-        relations: ['debt_logs', 'actor', 'debts', 'employee'], // thêm 'employee' vào relations
+        relations: ['debt_log', 'actor', 'debts', 'employee'],
         select: [
           'id',
           'customer_code',
@@ -233,19 +241,15 @@ export class DebtConfigService {
         employee: cfg.employee
           ? { id: cfg.employee.id, fullName: cfg.employee.fullName }
           : null,
-        debt_logs: Array.isArray(cfg.debt_logs)
-          ? cfg.debt_logs.map((log) => ({
-              remind_status: log.remind_status,
-              created_at: log.created_at ? log.created_at.toISOString() : null,
-              send_at: log.send_at ? log.send_at.toISOString() : null,
-              first_remind_at: log.first_remind_at
-                ? log.first_remind_at.toISOString()
-                : null,
-              second_remind_at: log.second_remind_at
-                ? log.second_remind_at.toISOString()
-                : null,
-            }))
-          : [],
+        debt_log: cfg.debt_log
+          ? {
+              remind_status: cfg.debt_log.remind_status,
+              created_at: cfg.debt_log.created_at ? cfg.debt_log.created_at.toISOString() : null,
+              send_at: cfg.debt_log.send_at ? cfg.debt_log.send_at.toISOString() : null,
+              first_remind_at: cfg.debt_log.first_remind_at ? cfg.debt_log.first_remind_at.toISOString() : null,
+              second_remind_at: cfg.debt_log.second_remind_at ? cfg.debt_log.second_remind_at.toISOString() : null,
+            }
+          : null,
         total_bills,
         total_debt,
       };
@@ -422,65 +426,40 @@ export class DebtConfigService {
   async getDebtConfigDetail(id: number): Promise<any> {
     const config = await this.repo.findOne({
       where: { id },
-      relations: ['debt_logs', 'actor', 'employee'],
+      relations: ['debt_log', 'actor', 'employee'],
     });
 
     if (!config) {
       throw new Error('DebtConfig not found');
     }
 
-    // Lấy debt_log mới nhất
-    const latestDebtLog =
-      config.debt_logs && config.debt_logs.length > 0
-        ? config.debt_logs.reduce((latest, log) => {
-            return new Date(log.created_at) > new Date(latest.created_at)
-              ? log
-              : latest;
-          })
-        : null;
+    const debtLog = config.debt_log || null;
 
     return {
       id: config.id,
       customer_code: config.customer_code,
       customer_name: config.customer_name,
       customer_type: config.customer_type,
-      // Từ debt_logs
-      image_url: latestDebtLog?.debt_img || null,
-      debt_message: latestDebtLog?.debt_msg || '',
-      remind_message_1: latestDebtLog?.first_remind || '',
-      remind_message_2: latestDebtLog?.second_remind || '',
-      business_remind_message: latestDebtLog?.sale_msg || '',
-      remind_status: latestDebtLog?.remind_status || 'Not Sent',
-      customer_gender: latestDebtLog?.gender || '',
-      send_time: latestDebtLog?.send_at
-        ? latestDebtLog.send_at.toISOString()
-        : null,
-      remind_time_1: latestDebtLog?.first_remind_at
-        ? latestDebtLog.first_remind_at.toISOString()
-        : null,
-      remind_time_2: latestDebtLog?.second_remind_at
-        ? latestDebtLog.second_remind_at.toISOString()
-        : null,
+      // Từ debt_log
+      image_url: debtLog?.debt_img || null,
+      debt_message: debtLog?.debt_msg || '',
+      remind_message_1: debtLog?.first_remind || '',
+      remind_message_2: debtLog?.second_remind || '',
+      business_remind_message: debtLog?.sale_msg || '',
+      remind_status: debtLog?.remind_status || 'Not Sent',
+      customer_gender: debtLog?.gender || '',
+      send_time: debtLog?.send_at ? debtLog.send_at.toISOString() : null,
+      remind_time_1: debtLog?.first_remind_at ? debtLog.first_remind_at.toISOString() : null,
+      remind_time_2: debtLog?.second_remind_at ? debtLog.second_remind_at.toISOString() : null,
       // Thông tin bổ sung
       is_send: config.is_send,
       is_repeat: config.is_repeat,
       day_of_week: config.day_of_week,
       gap_day: config.gap_day,
-      send_last_at: config.send_last_at
-        ? config.send_last_at.toISOString()
-        : null,
-      last_update_at: config.last_update_at
-        ? config.last_update_at.toISOString()
-        : null,
-      actor: config.actor
-        ? { fullName: config.actor.fullName, username: config.actor.username }
-        : null,
-      employee: config.employee
-        ? {
-            fullName: config.employee.fullName,
-            username: config.employee.username,
-          }
-        : null,
+      send_last_at: config.send_last_at ? config.send_last_at.toISOString() : null,
+      last_update_at: config.last_update_at ? config.last_update_at.toISOString() : null,
+      actor: config.actor ? { fullName: config.actor.fullName, username: config.actor.username } : null,
+      employee: config.employee ? { fullName: config.employee.fullName, username: config.employee.username } : null,
     };
   }
 }

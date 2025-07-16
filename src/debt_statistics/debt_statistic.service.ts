@@ -18,7 +18,10 @@ export class DebtStatisticService {
 
   @Cron(CronExpression.EVERY_DAY_AT_11PM)
   async captureDailyStatistics() {
-    const date = new Date().toISOString().split('T')[0];
+    // Sử dụng timezone Việt Nam (UTC+7)
+    const now = new Date();
+    const vietnamTime = new Date(now.getTime() + (7 * 60 * 60 * 1000)); // Add 7 hours
+    const date = vietnamTime.toISOString().split('T')[0];
 
     try {
       // Query để capture debts chưa có trong debt_statistics
@@ -228,12 +231,20 @@ export class DebtStatisticService {
   }
 
   async getDetailedDebts(filters: any) {
-    const today = new Date().toISOString().split('T')[0];
-    const { date, status, page = 1, limit = 10 } = filters;
-    const offset = (page - 1) * limit;
-
-    if (date < today) {
-      // Query từ debt_statistics
+    try {
+      // Get today's date in the same timezone/format
+      const now = new Date();
+      const today = now.toISOString().split('T')[0];
+      
+      const { date, status, contactStatus, page = 1, limit = 10 } = filters;
+      if (!date) {
+        throw new Error('Date parameter is required');
+      }
+      
+      const offset = (page - 1) * limit;
+    const isHistoricalDate = date < today;
+    
+    if (isHistoricalDate) {
       let query = `
         SELECT * FROM debt_statistics 
         WHERE statistic_date = ?
@@ -250,7 +261,6 @@ export class DebtStatisticService {
 
       const data = await this.debtStatisticRepository.query(query, params);
 
-      // Count total
       let countQuery = `
         SELECT COUNT(*) as total FROM debt_statistics 
         WHERE statistic_date = ?
@@ -260,6 +270,13 @@ export class DebtStatisticService {
       if (status) {
         countQuery += ` AND status = ?`;
         countParams.push(status);
+      }
+
+      // Add contactStatus filter for count query if needed
+      if (contactStatus) {
+        // Note: debt_statistics table might need a contact_status column
+        // countQuery += ` AND contact_status = ?`;
+        // countParams.push(contactStatus);
       }
 
       const totalResult = await this.debtStatisticRepository.query(
@@ -276,32 +293,31 @@ export class DebtStatisticService {
         totalPages: Math.ceil(total / limit),
       };
     } else {
-      // Query từ debts (current day)
       let query = `
-        SELECT d.*, dc.customer_code, dc.customer_name, u.fullName as sale_name
+        SELECT d.*, dc.customer_code, dc.customer_name, u.full_name as sale_name
         FROM debts d
         LEFT JOIN debt_configs dc ON d.debt_config_id = dc.id
         LEFT JOIN users u ON d.sale_id = u.id
         WHERE d.deleted_at IS NULL
+        AND DATE(d.created_at) = ?
       `;
-      const params: any[] = [];
+      const params: any[] = [date];
 
       if (status) {
         query += ` AND d.status = ?`;
         params.push(status);
       }
-
       query += ` LIMIT ? OFFSET ?`;
       params.push(limit, offset);
 
       const data = await this.debtRepository.query(query, params);
 
-      // Count total
       let countQuery = `
         SELECT COUNT(*) as total FROM debts d
         WHERE d.deleted_at IS NULL
+        AND DATE(d.created_at) = ?
       `;
-      const countParams: any[] = [];
+      const countParams: any[] = [date];
 
       if (status) {
         countQuery += ` AND d.status = ?`;
@@ -322,7 +338,11 @@ export class DebtStatisticService {
         totalPages: Math.ceil(total / limit),
       };
     }
+  } catch (error) {
+    this.logger.error('Error in getDetailedDebts:', error);
+    throw error;
   }
+}
 
   private generateDateRange(fromDate: string, toDate: string): string[] {
     const dates: string[] = [];

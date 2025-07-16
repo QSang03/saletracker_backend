@@ -6,6 +6,7 @@ import { Role } from '../roles/role.entity';
 import { User } from '../users/user.entity';
 import { Department } from '../departments/department.entity';
 import { RolePermission } from '../roles_permissions/roles-permissions.entity';
+import { SystemConfig } from '../system_config/system_config.entity';
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { RolePermission } from '../roles_permissions/roles-permissions.entity';
       User,
       Department,
       RolePermission,
+      SystemConfig,
     ]),
   ],
   providers: [SeedService],

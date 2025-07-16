@@ -103,14 +103,28 @@ export class DebtStatisticController {
     @Query('contactStatus') contactStatus?: string,
     @Query('page') page: string = '1',
     @Query('limit') limit: string = '50',
+    @Query('all') all?: string,
   ) {
+    if (!date) {
+      throw new Error('Date parameter is required');
+    }
+    
+    let parsedLimit = parseInt(limit, 10);
+    
+    // Hỗ trợ lấy tất cả dữ liệu cho frontend lazy loading
+    if (all === 'true' || parsedLimit >= 100000) {
+      parsedLimit = 100000; // Giới hạn tối đa để tránh memory issues
+    }
+    
     const filters = {
       date,
       status,
       contactStatus,
       page: parseInt(page, 10),
-      limit: parseInt(limit, 10),
+      limit: parsedLimit,
     };
-    return this.debtStatisticService.getDetailedDebts(filters);
+    
+    const result = await this.debtStatisticService.getDetailedDebts(filters);
+    return result;
   }
 }

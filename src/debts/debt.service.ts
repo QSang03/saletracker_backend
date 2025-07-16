@@ -1,6 +1,6 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Not, In } from 'typeorm';
+import { Repository, Not, In, Raw } from 'typeorm';
 import { Debt } from './debt.entity';
 import { DebtConfig, CustomerType } from '../debt_configs/debt_configs.entity';
 import { User } from '../users/user.entity';
@@ -429,6 +429,30 @@ export class DebtService {
     // Khôi phục updated_at cũ
     await this.update(id, { updated_at: debt.updated_at });
     return { success: true };
+  }
+
+  async deleteAllTodayDebts(): Promise<number> {
+    // Sử dụng timezone Việt Nam (UTC+7)
+    const now = new Date();
+    const vietnamTime = new Date(now.getTime() + 7 * 60 * 60 * 1000);
+    const todayStr = vietnamTime.toISOString().split('T')[0]; // Format: YYYY-MM-DD
+
+    // Tìm tất cả phiếu có updated_at = ngày hôm nay
+    const debtsToDelete = await this.debtRepository.find({
+      where: {
+        updated_at: Raw((alias) => `DATE(${alias}) = :today`, { today: todayStr }),
+      },
+    });
+
+    if (debtsToDelete.length === 0) {
+      return 0;
+    }
+
+    // Xóa mềm tất cả phiếu
+    const ids = debtsToDelete.map((debt) => debt.id);
+    await this.debtRepository.softDelete(ids);
+
+    return debtsToDelete.length;
   }
 
   // STATISTICS METHODS

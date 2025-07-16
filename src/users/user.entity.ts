@@ -32,13 +32,13 @@ export class User {
   @Column({ nullable: true, name: 'full_name' })
   fullName?: string;
 
-  @Column({ unique: true, nullable: true })
+  @Column({ nullable: true })
   email?: string;
 
   @Column({ default: false, name: 'is_block' })
   isBlock: boolean;
 
-  @Column({ unique: true, nullable: true, name: 'employee_code' })
+  @Column({ nullable: true, name: 'employee_code' })
   employeeCode?: string;
 
   @Column({ type: 'enum', enum: UserStatus, default: UserStatus.ACTIVE })

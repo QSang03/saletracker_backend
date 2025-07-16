@@ -26,14 +26,6 @@ export class AuthService {
     private readonly eventEmitter: EventEmitter2,
   ) {}
 
-  async register(createUserDto: CreateUserDto) {
-    const hashedPassword = await bcrypt.hash(createUserDto.password, 10);
-    return this.usersService.createUser({
-      ...createUserDto,
-      password: hashedPassword,
-    });
-  }
-
   async validateUser(username: string, password: string): Promise<any> {
     const user = await this.usersService.findByUsername(username);
 

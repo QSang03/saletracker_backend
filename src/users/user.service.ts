@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -42,6 +43,7 @@ export class UserService {
       departments?: string[];
       roles?: string[];
       statuses?: string[];
+      zaloLinkStatuses?: number[];
     },
     user?: any, // Thêm user để phân quyền động nếu cần
   ): Promise<{ data: User[]; total: number }> {
@@ -55,7 +57,7 @@ export class UserService {
     if (filter) {
       if (filter.search) {
         qb.andWhere(
-          '(user.fullName LIKE :search OR user.username LIKE :search OR user.email LIKE :search)',
+          '(user.fullName LIKE :search OR user.username LIKE :search OR user.email LIKE :search OR user.employeeCode LIKE :search OR user.zaloName LIKE :search)',
           { search: `%${filter.search}%` },
         );
       }
@@ -72,6 +74,12 @@ export class UserService {
           statuses: filter.statuses,
         });
       }
+      if (filter.zaloLinkStatuses && filter.zaloLinkStatuses.length > 0) {
+        qb.andWhere('user.zaloLinkStatus IN (:...zaloLinkStatuses)', {
+          zaloLinkStatuses: filter.zaloLinkStatuses,
+        });
+      }
+      // Filtering logic ends here, continue building the query for paginated results
     }
 
     qb.select([
@@ -84,6 +92,9 @@ export class UserService {
       'user.createdAt',
       'user.lastLogin',
       'user.email',
+      'user.zaloLinkStatus',
+      'user.zaloName',
+      'user.avatarZalo',
       'user.isBlock',
       'department.id',
       'department.name',
@@ -162,7 +173,29 @@ export class UserService {
   }
 
   async createUser(userData: CreateUserDto): Promise<User> {
-    const hashedPassword = await bcrypt.hash(userData.password, 10);
+    // Kiểm tra trùng username
+    const existed = await this.userRepo.findOne({
+      where: { username: userData.username },
+    });
+    if (existed) {
+      if (existed.deletedAt) {
+        // Trùng với user đã bị xóa mềm
+        throw new ConflictException({
+          message: 'Tên đăng nhập đã tồn tại nhưng đã bị xóa mềm',
+          code: 'SOFT_DELETED_DUPLICATE',
+          userId: existed.id,
+        });
+      }
+      // Trùng với user đang hoạt động
+      throw new ConflictException({
+        message: 'Tên đăng nhập đã tồn tại',
+        code: 'DUPLICATE_USERNAME',
+      });
+    }
+
+    // Lấy password default từ env nếu không truyền password
+    const password = process.env.PASSWORD_DEFAULT || 'default_password';
+    const hashedPassword = await bcrypt.hash(password, 10);
 
     let roles: Role[] = [];
     if (userData.roleIds && userData.roleIds.length > 0) {
@@ -228,6 +261,27 @@ export class UserService {
     const oldUser = await this.userRepo.findOne({
       where: { id },
       relations: ['departments', 'roles'],
+      select: {
+        id: true,
+        username: true,
+        password: true, // Explicitly select password field
+        fullName: true,
+        nickName: true,
+        email: true,
+        status: true,
+        isBlock: true,
+        employeeCode: true,
+        zaloLinkStatus: true,
+        zaloName: true,
+        avatarZalo: true,
+        refreshToken: true,
+        createdAt: true,
+        updatedAt: true,
+        deletedAt: true,
+        lastLogin: true,
+        departments: true,
+        roles: true,
+      },
     });
     if (!oldUser) throw new NotFoundException('Không tìm thấy user');
 
@@ -291,7 +345,36 @@ export class UserService {
       }
     }
 
-    if (updateData.password) {
+    if (updateData.password !== undefined) {      
+      // Kiểm tra password không được rỗng
+      if (!updateData.password || updateData.password.trim() === '') {
+        throw new BadRequestException('Mật khẩu mới không được để trống');
+      }
+      
+      // Nếu là user tự đổi mật khẩu (changerId bằng chính id của user)
+      if (changerId === id) {
+        // Bắt buộc phải có currentPassword
+        if (!updateData.currentPassword || updateData.currentPassword.trim() === '') {
+          throw new BadRequestException('Bạn phải nhập mật khẩu hiện tại để đổi mật khẩu');
+        }
+        
+        // Kiểm tra user có mật khẩu hiện tại không (logic này có vấn đề vì user đã login được rồi)
+        if (!oldUser.password) {
+          console.log('ERROR: User has no password but was able to login - this should not happen!');
+          throw new BadRequestException('Lỗi hệ thống: Tài khoản không có mật khẩu nhưng đã đăng nhập được. Vui lòng liên hệ quản trị viên.');
+        }
+        
+        // Kiểm tra mật khẩu hiện tại có đúng không
+        const isCurrentPasswordValid = await bcrypt.compare(
+          updateData.currentPassword,
+          oldUser.password,
+        );
+        if (!isCurrentPasswordValid) {
+          throw new BadRequestException('Mật khẩu hiện tại không đúng');
+        }
+      }
+      // Nếu là admin đổi cho người khác thì không cần kiểm tra currentPassword
+      
       updatePayload.password = await bcrypt.hash(updateData.password, 10);
     }
 
@@ -780,5 +863,16 @@ export class UserService {
         },
       },
     });
+  }
+
+  async resetPasswordToDefault(id: number): Promise<User> {
+    const user = await this.userRepo.findOne({ where: { id } });
+    if (!user) throw new NotFoundException('Không tìm thấy user');
+
+    const password = process.env.PASSWORD_DEFAULT || 'default_password';
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    await this.userRepo.update(id, { password: hashedPassword });
+    return this.userRepo.findOneOrFail({ where: { id } });
   }
 }

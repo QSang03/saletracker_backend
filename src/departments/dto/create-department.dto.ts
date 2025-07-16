@@ -4,4 +4,7 @@ export class CreateDepartmentDto {
   @IsString()
   @IsNotEmpty()
   name: string;
+
+  @IsString()
+  server_ip: string;
 }

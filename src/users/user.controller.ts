@@ -43,6 +43,7 @@ export class UserController {
     @Query('departments') departments?: string,
     @Query('roles') roles?: string,
     @Query('statuses') statuses?: string,
+    @Query('zaloLinkStatus') zaloLinkStatus?: string,
   ) {
     const currentUser = req.user;
     const user = await this.userService.findOneWithDetails(currentUser.id);
@@ -57,6 +58,7 @@ export class UserController {
       departments: departments ? departments.split(',') : [],
       roles: roles ? roles.split(',') : [],
       statuses: statuses ? statuses.split(',') : [],
+      zaloLinkStatuses: zaloLinkStatus ? zaloLinkStatus.split(',').map(s => parseInt(s, 10)) : [],
     };
 
     if (getRoleNames(user).includes('admin')) {
@@ -246,7 +248,8 @@ export class UserController {
       ) {
         throw new ForbiddenException('Bạn không có quyền đổi họ và tên');
       }
-      return this.userService.updateUser(id, updateUserDto);
+      // User tự đổi thông tin (có thể bao gồm đổi mật khẩu) - truyền changerId là chính user đó
+      return this.userService.updateUser(id, updateUserDto, currentUser.id);
     }
 
     throw new ForbiddenException('Bạn không có quyền sửa user này');
@@ -280,6 +283,21 @@ export class UserController {
     }
 
     return this.userService.restoreUser(id);
+  }
+
+  @Patch(':id/reset-password')
+  async resetPasswordToDefault(
+    @Param('id', ParseIntPipe) id: number,
+    @Req() req: CustomRequest,
+  ) {
+    const currentUser = req.user;
+    const user = await this.userService.findOneWithDetails(currentUser.id);
+
+    if (!user || !getRoleNames(user).includes('admin')) {
+      throw new ForbiddenException('Bạn không có quyền reset mật khẩu user này');
+    }
+
+    return this.userService.resetPasswordToDefault(id);
   }
 
   @Post(':userId/roles')

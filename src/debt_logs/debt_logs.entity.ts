@@ -6,6 +6,7 @@ import {
   JoinColumn,
   CreateDateColumn,
   UpdateDateColumn,
+  OneToOne,
 } from 'typeorm';
 import { DebtConfig } from '../debt_configs/debt_configs.entity';
 import { User } from '../users/user.entity';
@@ -27,9 +28,7 @@ export class DebtLogs {
   @Column({ type: 'int' })
   debt_config_id: number;
 
-  @ManyToOne(() => DebtConfig, (debtConfig) => debtConfig.debt_logs, {
-    onDelete: 'CASCADE',
-  })
+  @OneToOne(() => DebtConfig, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'debt_config_id' })
   debt_config: DebtConfig;
 

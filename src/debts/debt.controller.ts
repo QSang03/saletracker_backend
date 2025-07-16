@@ -29,8 +29,15 @@ export class DebtController {
   @Permission('cong-no', 'read')
   async findAll(@Query() query: any, @Req() req) {
     // Lấy page và pageSize từ query, mặc định page=1, pageSize=10
+    // Nếu có query.all=true hoặc pageSize rất lớn, lấy tất cả
     const page = Number(query.page) > 0 ? Number(query.page) : 1;
-    const pageSize = Number(query.pageSize) > 0 ? Number(query.pageSize) : 10;
+    let pageSize = Number(query.pageSize) > 0 ? Number(query.pageSize) : 10;
+    
+    // Hỗ trợ lấy tất cả dữ liệu cho frontend lazy loading
+    if (query.all === 'true' || pageSize >= 100000) {
+      pageSize = 100000; // Giới hạn tối đa để tránh memory issues
+    }
+    
     const result = await this.debtService.findAll(
       query,
       req.user,
@@ -171,6 +178,17 @@ export class DebtController {
       payDate,
     );
     return { updated };
+  }
+
+  @Delete('bulk/today')
+  @Permission('cong-no', 'delete')
+  async deleteAllTodayDebts() {
+    const deleted = await this.debtService.deleteAllTodayDebts();
+    return { 
+      success: true, 
+      deleted,
+      message: `Đã xóa ${deleted} phiếu công nợ có ngày cập nhật hôm nay`
+    };
   }
 
   @Patch(':id/note-status')

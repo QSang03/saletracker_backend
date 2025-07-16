@@ -3,7 +3,7 @@ import { snakeCase } from 'typeorm/util/StringUtils';
 
 export class CustomNamingStrategy extends DefaultNamingStrategy {
   tableName(targetName: string, userSpecifiedName: string | undefined): string {
-    return userSpecifiedName || snakeCase(targetName);
+    return userSpecifiedName || snakeCase(String(targetName));
   }
 
   columnName(
@@ -12,19 +12,19 @@ export class CustomNamingStrategy extends DefaultNamingStrategy {
     embeddedPrefixes: string[],
   ): string {
     return snakeCase(
-      embeddedPrefixes.concat(customName || propertyName).join('_'),
+      embeddedPrefixes.concat(customName || propertyName).map(String).join('_'),
     );
   }
 
   indexName(tableOrName: string, columnNames: string[]): string {
-    return `idx_${snakeCase(tableOrName)}_${columnNames
-      .map((name) => snakeCase(name))
+    return `idx_${snakeCase(String(tableOrName))}_${columnNames
+      .map((name) => snakeCase(String(name)))
       .join('_')}`;
   }
 
   uniqueConstraintName(tableOrName: string, columnNames: string[]): string {
-    return `uq_${snakeCase(tableOrName)}_${columnNames
-      .map((name) => snakeCase(name))
+    return `uq_${snakeCase(String(tableOrName))}_${columnNames
+      .map((name) => snakeCase(String(name)))
       .join('_')}`;
   }
 
@@ -33,8 +33,8 @@ export class CustomNamingStrategy extends DefaultNamingStrategy {
     columnNames: string[],
     where?: string,
   ): string {
-    return `rel_${snakeCase(tableOrName)}_${columnNames
-      .map((name) => snakeCase(name))
+    return `rel_${snakeCase(String(tableOrName))}_${columnNames
+      .map((name) => snakeCase(String(name)))
       .join('_')}`;
   }
 }

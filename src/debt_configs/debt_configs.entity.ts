@@ -7,6 +7,8 @@ import {
   DeleteDateColumn,
   OneToMany,
   ManyToOne,
+  OneToOne,
+  JoinColumn,
 } from 'typeorm';
 import { Debt } from '../debts/debt.entity';
 import { DebtLogs } from '../debt_logs/debt_logs.entity';
@@ -58,13 +60,13 @@ export class DebtConfig {
   actor: User;
 
   @ManyToOne(() => User, { nullable: true })
-  employee: User;
+  employee?: User;
 
   @OneToMany(() => Debt, (debt) => debt.debt_config)
   debts: Debt[];
 
-  @OneToMany(() => DebtLogs, (log) => log.debt_config)
-  debt_logs: DebtLogs[];
+  @OneToOne(() => DebtLogs, (log) => log.debt_config)
+  debt_log: DebtLogs;
 
   @CreateDateColumn({ name: 'created_at' })
   created_at: Date;

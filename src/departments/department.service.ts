@@ -33,6 +33,7 @@ export class DepartmentService {
       id: number;
       name: string;
       slug: string;
+      server_ip: string,
       createdAt: Date;
       manager?: { id: number; fullName: string; username: string };
     }[];
@@ -57,6 +58,7 @@ export class DepartmentService {
             id: dep.id,
             name: dep.name,
             slug: dep.slug,
+            server_ip: dep.server_ip,
             createdAt: dep.createdAt,
             manager: manager
               ? {
@@ -96,6 +98,7 @@ export class DepartmentService {
             id: dep.id,
             name: dep.name,
             slug: dep.slug,
+            server_ip: dep.server_ip,
             createdAt: dep.createdAt,
             manager: manager
               ? {
@@ -129,9 +132,38 @@ export class DepartmentService {
       strict: true,
     });
 
-    const existed = await this.departmentRepo.findOne({ where: { slug } });
-    if (existed) {
+    // Kiểm tra trùng tên hoặc slug với phòng ban đang hoạt động
+    const activeExisted = await this.departmentRepo.findOne({ 
+      where: [
+        { name: createDepartmentDto.name },
+        { slug: slug }
+      ]
+    });
+    if (activeExisted) {
       throw new BadRequestException('Phòng ban đã tồn tại!');
+    }
+
+    // Kiểm tra trùng tên hoặc slug với phòng ban đã xóa
+    const deletedExisted = await this.departmentRepo.findOne({ 
+      where: [
+        { name: createDepartmentDto.name },
+        { slug: slug }
+      ],
+      withDeleted: true
+    });
+    
+    if (deletedExisted && deletedExisted.deletedAt) {
+      // Trả về thông tin phòng ban đã xóa để frontend xử lý
+      throw new BadRequestException({
+        message: 'Phòng ban đã tồn tại trong danh sách đã xóa',
+        code: 'DEPARTMENT_EXISTS_DELETED',
+        deletedDepartment: {
+          id: deletedExisted.id,
+          name: deletedExisted.name,
+          slug: deletedExisted.slug,
+          deletedAt: deletedExisted.deletedAt
+        }
+      });
     }
 
     // Tạo phòng ban mới
@@ -205,12 +237,39 @@ export class DepartmentService {
       strict: true,
     });
     if (newSlug !== department.slug) {
-      // Kiểm tra trùng slug
-      const existed = await this.departmentRepo.findOne({
-        where: { slug: newSlug },
+      // Kiểm tra trùng slug với phòng ban đang hoạt động (trừ chính nó)
+      const activeExisted = await this.departmentRepo.findOne({
+        where: [
+          { name: updateDepartmentDto.name },
+          { slug: newSlug }
+        ]
       });
-      if (existed) throw new BadRequestException('Phòng ban đã tồn tại!');
-      // Cập nhật name của các permission liên quan thông qua PermissionService
+      if (activeExisted && activeExisted.id !== department.id) {
+        throw new BadRequestException('Phòng ban đã tồn tại!');
+      }
+
+      // Kiểm tra trùng với phòng ban đã xóa
+      const deletedExisted = await this.departmentRepo.findOne({
+        where: [
+          { name: updateDepartmentDto.name },
+          { slug: newSlug }
+        ],
+        withDeleted: true
+      });
+      
+      if (deletedExisted && deletedExisted.deletedAt && deletedExisted.id !== department.id) {
+        throw new BadRequestException({
+          message: 'Phòng ban đã tồn tại trong danh sách đã xóa',
+          code: 'DEPARTMENT_EXISTS_DELETED',
+          deletedDepartment: {
+            id: deletedExisted.id,
+            name: deletedExisted.name,
+            slug: deletedExisted.slug,
+            deletedAt: deletedExisted.deletedAt
+          }
+        });
+      }
+
       await this.permissionService.updatePermissionNameBySlug(
         department.slug,
         newSlug,
@@ -218,6 +277,9 @@ export class DepartmentService {
       department.slug = newSlug;
     }
     department.name = updateDepartmentDto.name;
+    if (typeof updateDepartmentDto.server_ip !== 'undefined') {
+      department.server_ip = updateDepartmentDto.server_ip;
+    }
     await this.departmentRepo.save(department);
     return department;
   }

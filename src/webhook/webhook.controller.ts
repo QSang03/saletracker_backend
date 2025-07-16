@@ -1,4 +1,4 @@
-import { Controller, Post, Body, UseGuards, Put } from '@nestjs/common';
+import { Controller, Post, Body, UseGuards, Put, Get } from '@nestjs/common';
 import { UserService } from '../users/user.service';
 import { UpdateZaloStatusDto } from '../users/dto/update-zalo-status.dto';
 import { WebhookAuthGuard } from '../common/guards/webhook-auth.guard';
@@ -27,6 +27,28 @@ export class WebhookController {
       return {
         success: false,
         message: 'Failed to update zalo link status',
+        error: error.message,
+      };
+    }
+  }
+
+  @Get('check-auth')
+  async checkAuth() {
+    try {
+      const currentTime = new Date().toISOString();
+      return {
+        success: true,
+        message: 'Thành công',
+        data: {
+          timestamp: currentTime,
+          server: 'NKC-AutoZalo-V2',
+          status: 'Thành công',
+        },
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: 'Thất bại',
         error: error.message,
       };
     }
