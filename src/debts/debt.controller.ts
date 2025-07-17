@@ -173,6 +173,17 @@ export class DebtController {
     return { updated };
   }
 
+  @Delete('bulk/today')
+  @Permission('cong-no', 'delete')
+  async deleteAllTodayDebts() {
+    const deleted = await this.debtService.deleteAllTodayDebts();
+    return { 
+      success: true, 
+      deleted,
+      message: `Đã xóa ${deleted} phiếu công nợ có ngày cập nhật hôm nay`
+    };
+  }
+
   @Patch(':id/note-status')
   @Permission('cong-no', 'update')
   async updateNoteAndStatus(
