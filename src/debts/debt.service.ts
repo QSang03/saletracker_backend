@@ -119,242 +119,242 @@ export class DebtService {
   }
 
   async importExcelRows(rows: any[]) {
-  type ImportResult = { row: number; error?: string; success?: boolean };
-  const errors: ImportResult[] = [];
-  const imported: ImportResult[] = [];
-  
-  if (!rows || !Array.isArray(rows) || rows.length === 0) {
-    return {
-      imported,
-      errors: [{ row: 0, error: 'Không có dữ liệu để import' }],
-    };
-  }
+    type ImportResult = { row: number; error?: string; success?: boolean };
+    const errors: ImportResult[] = [];
+    const imported: ImportResult[] = [];
 
-  const excelInvoiceCodes = rows
-    .map((row) => row['Số chứng từ'])
-    .filter(Boolean);
-  
-  const existingDebts =
-    excelInvoiceCodes.length > 0
-      ? await this.debtRepository.find({
-          where: { invoice_code: In(excelInvoiceCodes) },
-        })
-      : [];
-  
-  const existingDebtsMap = new Map(
-    existingDebts.map((d) => [d.invoice_code, d]),
-  );
-
-  // Lấy các phiếu không có trong Excel để cập nhật thành 'paid'
-  const debtsNotInExcel =
-    excelInvoiceCodes.length > 0
-      ? await this.debtRepository.find({
-          where: { 
-            invoice_code: Not(In(excelInvoiceCodes)),
-            status: Not(DebtStatus.PAID) // Chỉ lấy các phiếu chưa paid
-          },
-        })
-      : [];
-
-  // Lưu lại updated_at cũ của các phiếu sẽ được cập nhật thành paid
-  const updatedAtMap = new Map<number, Date>();
-  for (const debt of debtsNotInExcel) {
-    updatedAtMap.set(debt.id, debt.updated_at);
-  }
-
-  // Cập nhật status = 'paid' cho các phiếu không có trong Excel
-  for (const debt of debtsNotInExcel) {
-    const oldUpdatedAt = updatedAtMap.get(debt.id);
-    if (oldUpdatedAt) {
-      // Cập nhật status = paid
-      await this.debtRepository.update(debt.id, { status: DebtStatus.PAID });
-      
-      // Khôi phục lại updated_at cũ
-      await this.debtRepository.update(debt.id, { updated_at: oldUpdatedAt });
-      
-      // Cập nhật trạng thái paid cho debt_statistics snapshot đúng ngày updated_at cũ
-      await this.debtStatisticRepo
-        .createQueryBuilder()
-        .update()
-        .set({ status: DebtStatus.PAID })
-        .where('original_debt_id = :id', { id: debt.id })
-        .andWhere('DATE(statistic_date) = :date', { 
-          date: oldUpdatedAt.toISOString().slice(0, 10) 
-        })
-        .execute();
+    if (!rows || !Array.isArray(rows) || rows.length === 0) {
+      return {
+        imported,
+        errors: [{ row: 0, error: 'Không có dữ liệu để import' }],
+      };
     }
-  }
 
-  // Map customer_code -> pay_later (Date) từ DB
-  const customerCodes = rows.map((row) => row['Mã đối tác']).filter(Boolean);
-  const payLaterMap = new Map<string, Date>();
-  
-  if (customerCodes.length > 0) {
-    const debtsWithPayLater = await this.debtRepository.find({
-      where: { customer_raw_code: In(customerCodes) },
-      select: ['customer_raw_code', 'pay_later'],
-    });
-    
-    for (const d of debtsWithPayLater) {
-      if (d.customer_raw_code && d.pay_later) {
-        // Lấy ngày gần nhất nếu có nhiều phiếu cùng mã
-        const old = payLaterMap.get(d.customer_raw_code);
-        if (!old || d.pay_later > old) {
-          payLaterMap.set(d.customer_raw_code, d.pay_later);
-        }
+    const excelInvoiceCodes = rows
+      .map((row) => row['Số chứng từ'])
+      .filter(Boolean);
+
+    const existingDebts =
+      excelInvoiceCodes.length > 0
+        ? await this.debtRepository.find({
+            where: { invoice_code: In(excelInvoiceCodes) },
+          })
+        : [];
+
+    const existingDebtsMap = new Map(
+      existingDebts.map((d) => [d.invoice_code, d]),
+    );
+
+    // Lấy các phiếu không có trong Excel để cập nhật thành 'paid'
+    const debtsNotInExcel =
+      excelInvoiceCodes.length > 0
+        ? await this.debtRepository.find({
+            where: {
+              invoice_code: Not(In(excelInvoiceCodes)),
+              status: Not(DebtStatus.PAID), // Chỉ lấy các phiếu chưa paid
+            },
+          })
+        : [];
+
+    // Lưu lại updated_at cũ của các phiếu sẽ được cập nhật thành paid
+    const updatedAtMap = new Map<number, Date>();
+    for (const debt of debtsNotInExcel) {
+      updatedAtMap.set(debt.id, debt.updated_at);
+    }
+
+    // Cập nhật status = 'paid' cho các phiếu không có trong Excel
+    for (const debt of debtsNotInExcel) {
+      const oldUpdatedAt = updatedAtMap.get(debt.id);
+      if (oldUpdatedAt) {
+        // Cập nhật status = paid
+        await this.debtRepository.update(debt.id, { status: DebtStatus.PAID });
+
+        // Khôi phục lại updated_at cũ
+        await this.debtRepository.update(debt.id, { updated_at: oldUpdatedAt });
+
+        // Cập nhật trạng thái paid cho debt_statistics snapshot đúng ngày updated_at cũ
+        await this.debtStatisticRepo
+          .createQueryBuilder()
+          .update()
+          .set({ status: DebtStatus.PAID })
+          .where('original_debt_id = :id', { id: debt.id })
+          .andWhere('DATE(statistic_date) = :date', {
+            date: oldUpdatedAt.toISOString().slice(0, 10),
+          })
+          .execute();
       }
     }
-  }
 
-  // Xử lý từng dòng trong Excel
-  for (let i = 0; i < rows.length; i++) {
-    const row = rows[i];
-    const keys = Object.keys(row).filter((k) => k !== 'Còn lại');
-    const onlyHasConLai = keys.every((k) => {
-      const value = row[k];
-      return (
-        value === null ||
-        value === undefined ||
-        value === '' ||
-        (typeof value === 'string' && value.trim() === '')
-      );
-    });
-    
-    if (onlyHasConLai && row['Còn lại']) {
-      continue;
-    }
+    // Map customer_code -> pay_later (Date) từ DB
+    const customerCodes = rows.map((row) => row['Mã đối tác']).filter(Boolean);
+    const payLaterMap = new Map<string, Date>();
 
-    const required = [
-      'Mã đối tác',
-      'Số chứng từ',
-      'Ngày chứng từ',
-      'Số hóa đơn',
-      'Ngày đến hạn',
-      'Ngày công nợ',
-      'Số ngày quá hạn',
-      'Thành tiền chứng từ',
-      'Còn lại',
-      'NVKD',
-      'Kế toán công nợ',
-    ];
-    
-    const missing = required.filter((k) => !row[k]);
-    if (missing.length) {
-      errors.push({
-        row: i + 2,
-        error: `Thiếu trường: ${missing.join(', ')}`,
+    if (customerCodes.length > 0) {
+      const debtsWithPayLater = await this.debtRepository.find({
+        where: { customer_raw_code: In(customerCodes) },
+        select: ['customer_raw_code', 'pay_later'],
       });
-      continue;
-    }
 
-    const debtConfig = await this.debtConfigRepository.findOne({
-      where: { customer_code: row['Mã đối tác'] },
-    });
-    
-    let sale_id: number | undefined = undefined;
-    let sale_name_raw: string = '';
-    
-    if (debtConfig && row['Kế toán công nợ']) {
-      const empCode = String(row['Kế toán công nợ']).split('-')[0].trim();
-      if (empCode) {
-        const user = await this.userRepository.findOne({
-          where: { employeeCode: empCode },
-        });
-        if (
-          user &&
-          (!debtConfig.employee || user.id !== debtConfig.employee.id)
-        ) {
-          debtConfig.employee = user;
-          await this.debtConfigRepository.save(debtConfig);
+      for (const d of debtsWithPayLater) {
+        if (d.customer_raw_code && d.pay_later) {
+          // Lấy ngày gần nhất nếu có nhiều phiếu cùng mã
+          const old = payLaterMap.get(d.customer_raw_code);
+          if (!old || d.pay_later > old) {
+            payLaterMap.set(d.customer_raw_code, d.pay_later);
+          }
         }
       }
     }
-    
-    if (row['NVKD']) {
-      const code = row['NVKD'].split('-')[0];
-      const user = await this.userRepository
-        .createQueryBuilder('user')
-        .where('user.employeeCode LIKE :code', { code: `%${code}%` })
-        .getOne();
-      if (user && user.employeeCode && user.employeeCode.startsWith(code)) {
-        sale_id = user.id;
-      } else {
-        sale_name_raw = row['NVKD'] || '';
-      }
-    }
-    
-    const employee_code_raw: string = row['Kế toán công nợ'] || '';
-    const invoice_code = row['Số chứng từ'];
-    const oldDebt = existingDebtsMap.get(invoice_code);
-    
-    const parseDate = (val: any): Date | null => {
-      const str = this.parseExcelDate(val);
-      return str ? new Date(str) : null;
-    };
 
-    try {
-      let pay_later: Date | undefined = undefined;
-      if (oldDebt) {
-        pay_later =
-          oldDebt.pay_later ||
-          payLaterMap.get(row['Mã đối tác']) ||
-          undefined;
-      } else {
-        pay_later = payLaterMap.get(row['Mã đối tác']) || undefined;
+    // Xử lý từng dòng trong Excel
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const keys = Object.keys(row).filter((k) => k !== 'Còn lại');
+      const onlyHasConLai = keys.every((k) => {
+        const value = row[k];
+        return (
+          value === null ||
+          value === undefined ||
+          value === '' ||
+          (typeof value === 'string' && value.trim() === '')
+        );
+      });
+
+      if (onlyHasConLai && row['Còn lại']) {
+        continue;
       }
-      
-      if (oldDebt) {
-        // Cập nhật phiếu đã tồn tại
-        oldDebt.customer_raw_code = row['Mã đối tác'] || '';
-        oldDebt.invoice_code = invoice_code;
-        oldDebt.issue_date =
-          parseDate(row['Ngày chứng từ']) || oldDebt.issue_date;
-        oldDebt.bill_code = row['Số hóa đơn'] || '';
-        oldDebt.due_date = parseDate(row['Ngày đến hạn']) || oldDebt.due_date;
-        oldDebt.total_amount = row['Thành tiền chứng từ'] || 0;
-        oldDebt.remaining = row['Còn lại'] || 0;
-        oldDebt.sale = sale_id ? ({ id: sale_id } as any) : undefined;
-        oldDebt.sale_name_raw = sale_name_raw;
-        oldDebt.employee_code_raw = employee_code_raw;
-        oldDebt.debt_config = debtConfig
-          ? ({ id: debtConfig.id } as any)
-          : undefined;
-        oldDebt.updated_at = new Date();
-        oldDebt.pay_later = pay_later ?? null;
-        
-        await this.debtRepository.save(oldDebt);
-        imported.push({ row: i + 2, success: true });
-      } else {
-        // Tạo phiếu mới
-        const debt = this.debtRepository.create({
-          customer_raw_code: row['Mã đối tác'] || '',
-          invoice_code: invoice_code,
-          issue_date: parseDate(row['Ngày chứng từ']) || new Date(),
-          bill_code: row['Số hóa đơn'] || '',
-          due_date: parseDate(row['Ngày đến hạn']) || new Date(),
-          total_amount: row['Thành tiền chứng từ'] || 0,
-          remaining: row['Còn lại'] || 0,
-          sale: sale_id ? ({ id: sale_id } as any) : undefined,
-          sale_name_raw,
-          employee_code_raw,
-          debt_config: debtConfig
-            ? ({ id: debtConfig.id } as any)
-            : undefined,
-          created_at: new Date(),
-          updated_at: new Date(),
-          pay_later: pay_later ?? null,
+
+      const required = [
+        'Mã đối tác',
+        'Số chứng từ',
+        'Ngày chứng từ',
+        'Số hóa đơn',
+        'Ngày đến hạn',
+        'Ngày công nợ',
+        'Số ngày quá hạn',
+        'Thành tiền chứng từ',
+        'Còn lại',
+        'NVKD',
+        'Kế toán công nợ',
+      ];
+
+      const missing = required.filter((k) => !row[k]);
+      if (missing.length) {
+        errors.push({
+          row: i + 2,
+          error: `Thiếu trường: ${missing.join(', ')}`,
         });
-        
-        await this.debtRepository.save(debt);
-        imported.push({ row: i + 2, success: true });
+        continue;
       }
-    } catch (err) {
-      errors.push({ row: i + 2, error: err?.message || 'Unknown error' });
+
+      const debtConfig = await this.debtConfigRepository.findOne({
+        where: { customer_code: row['Mã đối tác'] },
+      });
+
+      let sale_id: number | undefined = undefined;
+      let sale_name_raw: string = '';
+
+      if (debtConfig && row['Kế toán công nợ']) {
+        const empCode = String(row['Kế toán công nợ']).split('-')[0].trim();
+        if (empCode) {
+          const user = await this.userRepository.findOne({
+            where: { employeeCode: empCode },
+          });
+          if (
+            user &&
+            (!debtConfig.employee || user.id !== debtConfig.employee.id)
+          ) {
+            debtConfig.employee = user;
+            await this.debtConfigRepository.save(debtConfig);
+          }
+        }
+      }
+
+      if (row['NVKD']) {
+        const code = row['NVKD'].split('-')[0];
+        const user = await this.userRepository
+          .createQueryBuilder('user')
+          .where('user.employeeCode LIKE :code', { code: `%${code}%` })
+          .getOne();
+        if (user && user.employeeCode && user.employeeCode.startsWith(code)) {
+          sale_id = user.id;
+        } else {
+          sale_name_raw = row['NVKD'] || '';
+        }
+      }
+
+      const employee_code_raw: string = row['Kế toán công nợ'] || '';
+      const invoice_code = row['Số chứng từ'];
+      const oldDebt = existingDebtsMap.get(invoice_code);
+
+      const parseDate = (val: any): Date | null => {
+        const str = this.parseExcelDate(val);
+        return str ? new Date(str) : null;
+      };
+
+      try {
+        let pay_later: Date | undefined = undefined;
+        if (oldDebt) {
+          pay_later =
+            oldDebt.pay_later ||
+            payLaterMap.get(row['Mã đối tác']) ||
+            undefined;
+        } else {
+          pay_later = payLaterMap.get(row['Mã đối tác']) || undefined;
+        }
+
+        if (oldDebt) {
+          // Cập nhật phiếu đã tồn tại
+          oldDebt.customer_raw_code = row['Mã đối tác'] || '';
+          oldDebt.invoice_code = invoice_code;
+          oldDebt.issue_date =
+            parseDate(row['Ngày chứng từ']) || oldDebt.issue_date;
+          oldDebt.bill_code = row['Số hóa đơn'] || '';
+          oldDebt.due_date = parseDate(row['Ngày đến hạn']) || oldDebt.due_date;
+          oldDebt.total_amount = row['Thành tiền chứng từ'] || 0;
+          oldDebt.remaining = row['Còn lại'] || 0;
+          oldDebt.sale = sale_id ? ({ id: sale_id } as any) : undefined;
+          oldDebt.sale_name_raw = sale_name_raw;
+          oldDebt.employee_code_raw = employee_code_raw;
+          oldDebt.debt_config = debtConfig
+            ? ({ id: debtConfig.id } as any)
+            : undefined;
+          oldDebt.updated_at = new Date();
+          oldDebt.pay_later = pay_later ?? null;
+
+          await this.debtRepository.save(oldDebt);
+          imported.push({ row: i + 2, success: true });
+        } else {
+          // Tạo phiếu mới
+          const debt = this.debtRepository.create({
+            customer_raw_code: row['Mã đối tác'] || '',
+            invoice_code: invoice_code,
+            issue_date: parseDate(row['Ngày chứng từ']) || new Date(),
+            bill_code: row['Số hóa đơn'] || '',
+            due_date: parseDate(row['Ngày đến hạn']) || new Date(),
+            total_amount: row['Thành tiền chứng từ'] || 0,
+            remaining: row['Còn lại'] || 0,
+            sale: sale_id ? ({ id: sale_id } as any) : undefined,
+            sale_name_raw,
+            employee_code_raw,
+            debt_config: debtConfig
+              ? ({ id: debtConfig.id } as any)
+              : undefined,
+            created_at: new Date(),
+            updated_at: new Date(),
+            pay_later: pay_later ?? null,
+          });
+
+          await this.debtRepository.save(debt);
+          imported.push({ row: i + 2, success: true });
+        }
+      } catch (err) {
+        errors.push({ row: i + 2, error: err?.message || 'Unknown error' });
+      }
     }
+
+    return { imported, errors };
   }
-  
-  return { imported, errors };
-}
 
   private parseExcelDate(val: any): string | undefined {
     if (!val) return undefined;
@@ -387,26 +387,32 @@ export class DebtService {
     );
     const isAdminOrManager =
       roleNames.includes('admin') || roleNames.includes('manager-cong-no');
+
+    // 1. Lấy các debt config hợp lệ theo quyền
     const configs = await this.debtConfigRepository.find({
       select: ['customer_code', 'customer_name', 'employee', 'customer_type'],
     });
     const configMap = new Map<string, string>();
     for (const c of configs) {
       if (c.customer_type === 'fixed') continue;
-      if (
-        isAdminOrManager ||
-        (c.employee && currentUser && c.employee.id === currentUser.id)
+
+      if (isAdminOrManager) {
+        configMap.set(c.customer_code, c.customer_name);
+      } else if (
+        c.employee &&
+        currentUser &&
+        c.employee.id === currentUser.id
       ) {
         configMap.set(c.customer_code, c.customer_name);
       }
+      // Dòng không hợp lệ quyền, bỏ qua
     }
-    const result: { code: string; name: string }[] = [];
-    for (const [code, name] of configMap.entries()) {
-      result.push({ code, name });
-    }
+
+    // 2. Lấy tất cả customer_raw_code (đã lọc theo quyền ở SQL)
     let rawDebtsQuery = this.debtRepository
       .createQueryBuilder('debt')
       .select(['debt.customer_raw_code']);
+
     if (!isAdminOrManager) {
       rawDebtsQuery = rawDebtsQuery.where(
         `TRIM(LEFT(debt.employee_code_raw, CASE WHEN LOCATE('-', debt.employee_code_raw) > 0 THEN LOCATE('-', debt.employee_code_raw) - 1 ELSE CHAR_LENGTH(debt.employee_code_raw) END)) = :empCode`,
@@ -416,14 +422,25 @@ export class DebtService {
     const rawDebts = await rawDebtsQuery
       .groupBy('debt.customer_raw_code')
       .getRawMany();
+
+    // 3. Gộp kết quả duy nhất: ưu tiên tên từ configMap nếu có
+    const result: { code: string; name: string }[] = [];
+    const seen = new Set();
+
+    // Lấy hết mã từ configMap (theo quyền)
+    for (const [code, name] of configMap.entries()) {
+      if (!seen.has(code)) {
+        result.push({ code, name });
+        seen.add(code);
+      }
+    }
+
+    // Lấy thêm mã mới từ bảng debt chưa có trong configMap
     for (const d of rawDebts) {
       const code = d.debt_customer_raw_code;
-      const name = code;
-      if (code && !configMap.has(code)) {
-        result.push({ code, name });
-      } else if (code && configMap.has(code) && !configMap.get(code) && name) {
-        const idx = result.findIndex((r) => r.code === code);
-        if (idx !== -1) result[idx].name = name;
+      if (code && !seen.has(code)) {
+        result.push({ code, name: code });
+        seen.add(code);
       }
     }
     return result;
@@ -497,7 +514,9 @@ export class DebtService {
     // Tìm tất cả phiếu có updated_at = ngày hôm nay
     const debtsToDelete = await this.debtRepository.find({
       where: {
-        updated_at: Raw((alias) => `DATE(${alias}) = :today`, { today: todayStr }),
+        updated_at: Raw((alias) => `DATE(${alias}) = :today`, {
+          today: todayStr,
+        }),
       },
     });
 
