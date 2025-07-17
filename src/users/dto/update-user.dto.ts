@@ -6,6 +6,7 @@ import {
   IsArray,
   IsNumber,
   IsBoolean,
+  ValidateIf,
 } from 'class-validator';
 import { UserStatus } from '../user-status.enum';
 
@@ -22,9 +23,10 @@ export class UpdateUserDto {
   @IsString()
   currentPassword?: string;
 
+  @ValidateIf((obj) => obj.email !== '' && obj.email !== null && obj.email !== undefined)
+  @IsEmail({}, { message: 'email must be an email', each: false })
   @IsOptional()
-  @IsEmail()
-  email?: string;
+  email?: string | null;
 
   @IsOptional()
   @IsEnum(UserStatus)
@@ -47,7 +49,7 @@ export class UpdateUserDto {
 
   @IsOptional()
   @IsString()
-  employeeCode?: string;
+  employeeCode?: string | null;
 
   @IsOptional()
   @IsArray()

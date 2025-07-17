@@ -73,7 +73,10 @@ export class Debt {
   @Column({ length: 255, nullable: true })
   sale_name_raw: string;
 
-  @ManyToOne(() => DebtConfig, (debtConfig) => debtConfig.debts)
+  @ManyToOne(() => DebtConfig, (debtConfig) => debtConfig.debts, { 
+    onDelete: 'SET NULL',
+    nullable: true 
+  })
   debt_config: DebtConfig;
 
   @Column({

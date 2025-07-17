@@ -32,14 +32,14 @@ export class User {
   @Column({ nullable: true, name: 'full_name' })
   fullName?: string;
 
-  @Column({ nullable: true })
-  email?: string;
+  @Column({ type: 'varchar', nullable: true })
+  email?: string | null;
 
   @Column({ default: false, name: 'is_block' })
   isBlock: boolean;
 
-  @Column({ nullable: true, name: 'employee_code' })
-  employeeCode?: string;
+  @Column({ type: 'varchar', nullable: true, name: 'employee_code' })
+  employeeCode?: string | null;
 
   @Column({ type: 'enum', enum: UserStatus, default: UserStatus.ACTIVE })
   status: UserStatus;

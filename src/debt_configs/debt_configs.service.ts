@@ -156,9 +156,8 @@ export class DebtConfigService {
   }
 
   async remove(id: number): Promise<void> {
-    // Soft delete debt_config
-    await this.repo.update(id, { deleted_at: new Date() });
-    // Không xóa mềm debt_logs nữa
+    // Hard delete debt_config
+    await this.repo.delete(id);
   }
 
   async findByEmployee(employeeId: number): Promise<DebtConfig[]> {

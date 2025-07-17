@@ -350,20 +350,28 @@ export class UserService {
       if (!updateData.password || updateData.password.trim() === '') {
         throw new BadRequestException('Mật khẩu mới không được để trống');
       }
-      
+
+      // Không cho phép đổi mật khẩu mới trùng hoặc chứa mật khẩu mặc định
+      const passwordDefault = process.env.PASSWORD_DEFAULT || 'default_password';
+      const newPassword = updateData.password.trim();
+      if (
+        newPassword === passwordDefault ||
+        newPassword.includes(passwordDefault)
+      ) {
+        throw new BadRequestException('Mật khẩu mới không được trùng hoặc chứa mật khẩu mặc định');
+      }
+
       // Nếu là user tự đổi mật khẩu (changerId bằng chính id của user)
       if (changerId === id) {
         // Bắt buộc phải có currentPassword
         if (!updateData.currentPassword || updateData.currentPassword.trim() === '') {
           throw new BadRequestException('Bạn phải nhập mật khẩu hiện tại để đổi mật khẩu');
         }
-        
         // Kiểm tra user có mật khẩu hiện tại không (logic này có vấn đề vì user đã login được rồi)
         if (!oldUser.password) {
           console.log('ERROR: User has no password but was able to login - this should not happen!');
           throw new BadRequestException('Lỗi hệ thống: Tài khoản không có mật khẩu nhưng đã đăng nhập được. Vui lòng liên hệ quản trị viên.');
         }
-        
         // Kiểm tra mật khẩu hiện tại có đúng không
         const isCurrentPasswordValid = await bcrypt.compare(
           updateData.currentPassword,
@@ -374,7 +382,7 @@ export class UserService {
         }
       }
       // Nếu là admin đổi cho người khác thì không cần kiểm tra currentPassword
-      
+
       updatePayload.password = await bcrypt.hash(updateData.password, 10);
     }
 
