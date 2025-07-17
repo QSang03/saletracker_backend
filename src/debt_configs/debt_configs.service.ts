@@ -414,6 +414,12 @@ export class DebtConfigService {
       config.customer_name = customer_name;
 
       await this.repo.save(config);
+
+      await this.repo.manager.getRepository('Debt').update(
+        { customer_raw_code: customer_code },
+        { debt_config: config }
+      );
+      
       imported.push({
         row: i + 2,
         customer_code,
