@@ -20,7 +20,7 @@ export class DebtStatisticService {
   async captureDailyStatistics() {
     // Sử dụng timezone Việt Nam (UTC+7)
     const now = new Date();
-    const vietnamTime = new Date(now.getTime() + (7 * 60 * 60 * 1000)); // Add 7 hours
+    const vietnamTime = new Date(now.getTime() + 7 * 60 * 60 * 1000); // Add 7 hours
     const date = vietnamTime.toISOString().split('T')[0];
 
     try {
@@ -115,19 +115,20 @@ export class DebtStatisticService {
     // Xử lý ngày hôm nay từ debts
     if (toDate >= today) {
       const todayQuery = `
-        SELECT 
-          COUNT(*) as total,
-          SUM(CASE WHEN d.status = 'paid' THEN 1 ELSE 0 END) as paid,
-          SUM(CASE WHEN d.status = 'pay_later' THEN 1 ELSE 0 END) as payLater,
-          SUM(CASE WHEN d.status = 'no_information_available' THEN 1 ELSE 0 END) as noInfo,
-          SUM(d.total_amount) as totalAmount,
-          SUM(d.total_amount - d.remaining) as paidAmount,
-          SUM(d.remaining) as remainingAmount
-        FROM debts d
-        WHERE d.deleted_at IS NULL
-      `;
+    SELECT 
+      COUNT(*) as total,
+      SUM(CASE WHEN d.status = 'paid' THEN 1 ELSE 0 END) as paid,
+      SUM(CASE WHEN d.status = 'pay_later' THEN 1 ELSE 0 END) as payLater,
+      SUM(CASE WHEN d.status = 'no_information_available' THEN 1 ELSE 0 END) as noInfo,
+      SUM(d.total_amount) as totalAmount,
+      SUM(d.total_amount - d.remaining) as paidAmount,
+      SUM(d.remaining) as remainingAmount
+    FROM debts d
+    WHERE d.deleted_at IS NULL
+      AND DATE(d.updated_at) = ?
+  `;
 
-      const todayStats = await this.debtRepository.query(todayQuery);
+      const todayStats = await this.debtRepository.query(todayQuery, [today]);
 
       if (todayStats[0]) {
         const stats = todayStats[0];
@@ -235,114 +236,114 @@ export class DebtStatisticService {
       // Get today's date in the same timezone/format
       const now = new Date();
       const today = now.toISOString().split('T')[0];
-      
+
       const { date, status, contactStatus, page = 1, limit = 10 } = filters;
       if (!date) {
         throw new Error('Date parameter is required');
       }
-      
+
       const offset = (page - 1) * limit;
-    const isHistoricalDate = date < today;
-    
-    if (isHistoricalDate) {
-      let query = `
+      const isHistoricalDate = date < today;
+
+      if (isHistoricalDate) {
+        let query = `
         SELECT * FROM debt_statistics 
         WHERE statistic_date = ?
       `;
-      const params: any[] = [date];
+        const params: any[] = [date];
 
-      if (status) {
-        query += ` AND status = ?`;
-        params.push(status);
-      }
+        if (status) {
+          query += ` AND status = ?`;
+          params.push(status);
+        }
 
-      query += ` LIMIT ? OFFSET ?`;
-      params.push(limit, offset);
+        query += ` LIMIT ? OFFSET ?`;
+        params.push(limit, offset);
 
-      const data = await this.debtStatisticRepository.query(query, params);
+        const data = await this.debtStatisticRepository.query(query, params);
 
-      let countQuery = `
+        let countQuery = `
         SELECT COUNT(*) as total FROM debt_statistics 
         WHERE statistic_date = ?
       `;
-      const countParams: any[] = [date];
+        const countParams: any[] = [date];
 
-      if (status) {
-        countQuery += ` AND status = ?`;
-        countParams.push(status);
-      }
+        if (status) {
+          countQuery += ` AND status = ?`;
+          countParams.push(status);
+        }
 
-      // Add contactStatus filter for count query if needed
-      if (contactStatus) {
-        // Note: debt_statistics table might need a contact_status column
-        // countQuery += ` AND contact_status = ?`;
-        // countParams.push(contactStatus);
-      }
+        // Add contactStatus filter for count query if needed
+        if (contactStatus) {
+          // Note: debt_statistics table might need a contact_status column
+          // countQuery += ` AND contact_status = ?`;
+          // countParams.push(contactStatus);
+        }
 
-      const totalResult = await this.debtStatisticRepository.query(
-        countQuery,
-        countParams,
-      );
-      const total = totalResult[0]?.total || 0;
+        const totalResult = await this.debtStatisticRepository.query(
+          countQuery,
+          countParams,
+        );
+        const total = totalResult[0]?.total || 0;
 
-      return {
-        data,
-        total,
-        page,
-        limit,
-        totalPages: Math.ceil(total / limit),
-      };
-    } else {
-      let query = `
+        return {
+          data,
+          total,
+          page,
+          limit,
+          totalPages: Math.ceil(total / limit),
+        };
+      } else {
+        let query = `
         SELECT d.*, dc.customer_code, dc.customer_name, u.full_name as sale_name
         FROM debts d
         LEFT JOIN debt_configs dc ON d.debt_config_id = dc.id
         LEFT JOIN users u ON d.sale_id = u.id
         WHERE d.deleted_at IS NULL
-        AND DATE(d.created_at) = ?
+        AND DATE(d.updated_at) = ?
       `;
-      const params: any[] = [date];
+        const params: any[] = [date];
 
-      if (status) {
-        query += ` AND d.status = ?`;
-        params.push(status);
-      }
-      query += ` LIMIT ? OFFSET ?`;
-      params.push(limit, offset);
+        if (status) {
+          query += ` AND d.status = ?`;
+          params.push(status);
+        }
+        query += ` LIMIT ? OFFSET ?`;
+        params.push(limit, offset);
 
-      const data = await this.debtRepository.query(query, params);
+        const data = await this.debtRepository.query(query, params);
 
-      let countQuery = `
+        let countQuery = `
         SELECT COUNT(*) as total FROM debts d
         WHERE d.deleted_at IS NULL
-        AND DATE(d.created_at) = ?
+        AND DATE(d.updated_at) = ?
       `;
-      const countParams: any[] = [date];
+        const countParams: any[] = [date];
 
-      if (status) {
-        countQuery += ` AND d.status = ?`;
-        countParams.push(status);
+        if (status) {
+          countQuery += ` AND d.status = ?`;
+          countParams.push(status);
+        }
+
+        const totalResult = await this.debtRepository.query(
+          countQuery,
+          countParams,
+        );
+        const total = totalResult[0]?.total || 0;
+
+        return {
+          data,
+          total,
+          page,
+          limit,
+          totalPages: Math.ceil(total / limit),
+        };
       }
-
-      const totalResult = await this.debtRepository.query(
-        countQuery,
-        countParams,
-      );
-      const total = totalResult[0]?.total || 0;
-
-      return {
-        data,
-        total,
-        page,
-        limit,
-        totalPages: Math.ceil(total / limit),
-      };
+    } catch (error) {
+      this.logger.error('Error in getDetailedDebts:', error);
+      throw error;
     }
-  } catch (error) {
-    this.logger.error('Error in getDetailedDebts:', error);
-    throw error;
   }
-}
 
   private generateDateRange(fromDate: string, toDate: string): string[] {
     const dates: string[] = [];
@@ -444,7 +445,6 @@ export class DebtStatisticService {
   }
 
   async getEmployeePerformance(fromDate: string, toDate: string) {
-    
     const today = new Date().toISOString().split('T')[0];
     const results: any[] = [];
 
@@ -533,9 +533,10 @@ export class DebtStatisticService {
         Number(item.total_debts) > 0
           ? (Number(item.paid_debts) / Number(item.total_debts)) * 100
           : 0,
-      avgDebtAmount: Number(item.total_debts) > 0 
-        ? Number(item.total_amount) / Number(item.total_debts)
-        : 0,
+      avgDebtAmount:
+        Number(item.total_debts) > 0
+          ? Number(item.total_amount) / Number(item.total_debts)
+          : 0,
     }));
   }
 }

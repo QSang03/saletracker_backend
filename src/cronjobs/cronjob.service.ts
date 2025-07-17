@@ -67,7 +67,7 @@ export class CronjobService {
           is_notified, original_created_at, original_updated_at, original_debt_id
         )
         SELECT 
-          ? as statistic_date,
+          DATE(d.updated_at) as statistic_date,
           d.customer_raw_code, d.invoice_code, d.bill_code,
           d.total_amount, d.remaining, d.issue_date, d.due_date, d.pay_later,
           d.status, d.sale_id, d.sale_name_raw, d.employee_code_raw,
@@ -76,6 +76,7 @@ export class CronjobService {
         FROM debts d
         LEFT JOIN debt_configs dc ON d.debt_config_id = dc.id
         WHERE d.deleted_at IS NULL
+        AND DATE(d.updated_at) = ?
       `;
 
       const result = await this.debtStatisticRepo.query(query, [todayStr]);
@@ -93,16 +94,7 @@ export class CronjobService {
 
   // Method để chạy thủ công - có thể chạy bất cứ khi nào
   async captureDebtStatisticsManual(targetDate?: string) {
-    // Sử dụng timezone Việt Nam (UTC+7) nếu không có targetDate
-    let dateToCapture: string;
-    if (targetDate) {
-      dateToCapture = targetDate;
-    } else {
-      const now = new Date();
-      const vietnamTime = new Date(now.getTime() + (7 * 60 * 60 * 1000)); // Add 7 hours
-      dateToCapture = vietnamTime.toISOString().split('T')[0];
-    }
-    
+    const dateToCapture = targetDate || new Date().toISOString().split('T')[0];
     const captureDate = new Date(dateToCapture);
     captureDate.setHours(0, 0, 0, 0);
 
@@ -136,7 +128,7 @@ export class CronjobService {
           is_notified, original_created_at, original_updated_at, original_debt_id
         )
         SELECT 
-          ? as statistic_date,
+          DATE(d.created_at) as statistic_date,
           d.customer_raw_code, d.invoice_code, d.bill_code,
           d.total_amount, d.remaining, d.issue_date, d.due_date, d.pay_later,
           d.status, d.sale_id, d.sale_name_raw, d.employee_code_raw,
@@ -145,10 +137,11 @@ export class CronjobService {
         FROM debts d
         LEFT JOIN debt_configs dc ON d.debt_config_id = dc.id
         WHERE d.deleted_at IS NULL
+        AND DATE(d.created_at) = ?
       `;
 
       this.logger.log(
-        `💾 [Thống kê công nợ - Thủ công] Đang capture TẤT CẢ debts hiện có cho ngày ${dateToCapture}...`,
+        `💾 [Thống kê công nợ - Thủ công] Đang capture debts được tạo ngày ${dateToCapture}...`,
       );
 
       const result = await this.debtStatisticRepo.query(query, [dateToCapture]);
@@ -162,7 +155,7 @@ export class CronjobService {
         message: `Capture thành công ${result.affectedRows || 0} debt statistics`,
         recordsSaved: result.affectedRows || 0,
         date: dateToCapture,
-        note: 'Duplicate tất cả phiếu công nợ hiện có cho ngày này',
+        note: 'Sử dụng ngày tạo debt làm statistic_date',
       };
     } catch (error) {
       this.logger.error(

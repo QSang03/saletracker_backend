@@ -14,6 +14,7 @@ export enum OrderDetailStatus {
   PENDING = 'pending',
   COMPLETED = 'completed',
   DEMAND = 'demand',
+  CONSULTING = 'consulting',
 }
 @Entity('order_details')
 export class OrderDetail {

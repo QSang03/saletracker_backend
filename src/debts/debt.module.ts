@@ -5,9 +5,10 @@ import { DebtService } from './debt.service';
 import { DebtController } from './debt.controller';
 import { DebtConfig } from '../debt_configs/debt_configs.entity';
 import { User } from '../users/user.entity';
+import { DebtStatistic } from 'src/debt_statistics/debt_statistic.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Debt, DebtConfig, User])],
+  imports: [TypeOrmModule.forFeature([Debt, DebtConfig, User, DebtStatistic])],
   controllers: [DebtController],
   providers: [DebtService],
   exports: [DebtService],
