@@ -14,9 +14,11 @@ import { AuthGuard } from '../common/guards/auth.guard';
 import { AdminAuthGuard } from '../common/guards/admin-auth.guard';
 import { CreateSystemConfigDto } from './dto/create-system-config.dto';
 import { UpdateSystemConfigDto } from './dto/update-system-config.dto';
+import { Permission } from '../common/guards/permission.decorator';
+import { PermissionGuard } from '../common/guards/permission.guard';
 
 @Controller('system-config')
-@UseGuards(AuthGuard)
+@UseGuards(AuthGuard, PermissionGuard)
 export class SystemConfigController {
   constructor(private readonly configService: SystemConfigService) {}
 
@@ -35,6 +37,7 @@ export class SystemConfigController {
 
   @Get('by-section/:section/:name')
   @UseGuards(AdminAuthGuard)
+  @Permission('cong-no', 'read')
   async getBySectionAndName(
     @Param('section') section: string,
     @Param('name') name: string,
@@ -43,7 +46,7 @@ export class SystemConfigController {
   }
 
   @Patch('by-section/:section/:name')
-  @UseGuards(AdminAuthGuard)
+  @Permission('cong-no', 'update')
   async updateBySectionAndName(
     @Param('section') section: string,
     @Param('name') name: string,
