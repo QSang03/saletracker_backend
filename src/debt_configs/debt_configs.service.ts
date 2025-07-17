@@ -108,6 +108,7 @@ export class DebtConfigService {
       'is_repeat',
       'gap_day',
       'day_of_week',
+      'customer_name',
       'send_last_at',
       'last_update_at',
       'customer_type',
