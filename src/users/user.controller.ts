@@ -208,6 +208,20 @@ export class UserController {
     }
 
     if (getRoleNames(user).includes('admin')) {
+      // Check if trying to block admin user or current user
+      if (updateUserDto.isBlock !== undefined) {
+        // Prevent blocking self
+        if (id === currentUser.id) {
+          throw new ForbiddenException('Bạn không thể khóa chính mình');
+        }
+        
+        // Prevent blocking admin users
+        const targetUser = await this.userService.findOneWithDetails(id);
+        if (targetUser && getRoleNames(targetUser).includes('admin')) {
+          throw new ForbiddenException('Không thể khóa tài khoản admin');
+        }
+      }
+      
       // Admin đổi cho ai cũng truyền changerId là chính họ
       return this.userService.updateUser(id, updateUserDto, currentUser.id);
     }
@@ -228,6 +242,12 @@ export class UserController {
           'Bạn chỉ được sửa user trong nhóm của mình',
         );
       }
+      
+      // Check if trying to block admin user
+      if (updateUserDto.isBlock !== undefined && targetUser && getRoleNames(targetUser).includes('admin')) {
+        throw new ForbiddenException('Không thể khóa tài khoản admin');
+      }
+      
       // Manager đổi cho user trong nhóm
       return this.userService.updateUser(
         id,
@@ -265,6 +285,17 @@ export class UserController {
 
     if (!user || !getRoleNames(user).includes('admin')) {
       throw new ForbiddenException('Bạn không có quyền xóa user này');
+    }
+
+    // Prevent deleting self
+    if (id === currentUser.id) {
+      throw new ForbiddenException('Bạn không thể xóa chính mình');
+    }
+
+    // Prevent deleting admin users
+    const targetUser = await this.userService.findOneWithDetails(id);
+    if (targetUser && getRoleNames(targetUser).includes('admin')) {
+      throw new ForbiddenException('Không thể xóa tài khoản admin');
     }
 
     return this.userService.softDeleteUser(id);
