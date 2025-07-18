@@ -14,7 +14,7 @@ export enum OrderDetailStatus {
   PENDING = 'pending',
   COMPLETED = 'completed',
   DEMAND = 'demand',
-  CANCELLED = 'cancelled',
+  QUOTED = 'quoted',
   CONFIRMED = 'confirmed',
 }
 @Entity('order_details')
