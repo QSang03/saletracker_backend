@@ -112,7 +112,10 @@ export class AuthService {
       },
     );
     // Lưu refresh token vào DB
-    await this.usersService.updateUser(updatedUser.id, { refreshToken });
+    await this.usersService.updateUser(updatedUser.id, {
+      status: UserStatus.ACTIVE,
+      refreshToken,
+    });
 
     this.userGateway.server.to('admin_dashboard').emit('user_login', {
       userId: updatedUser.id,
@@ -282,7 +285,15 @@ export class AuthService {
 
   // Logout method - clear refresh token
   async logout(user: any) {
-    await this.usersService.updateUser(user.id, { refreshToken: undefined });
+    const updatedUser = await this.usersService.updateUser(user.id, {
+      status: UserStatus.INACTIVE,
+      refreshToken: undefined,
+    });
+
+    this.userGateway.server.to('admin_dashboard').emit('user_logout', {
+      userId: updatedUser.id,
+      status: updatedUser.status,
+    });
     return { message: 'Logged out successfully' };
   }
 
