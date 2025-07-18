@@ -116,6 +116,12 @@ export class DebtController {
     return this.debtService.getDepartmentBreakdown(query, req.user);
   }
 
+  @Get('employees')
+  @Permission('cong-no', 'read')
+  async getUniqueEmployees(@Req() req) {
+    return this.debtService.getUniqueEmployeeList(req.user);
+  }
+
   @Get(':id')
   @Permission('cong-no', 'read')
   findOne(@Param('id') id: string) {

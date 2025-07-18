@@ -446,6 +446,52 @@ export class DebtService {
     return result;
   }
 
+  async getUniqueEmployeeList(currentUser?: User) {
+    const roleNames = (currentUser?.roles || []).map((r: any) =>
+      typeof r === 'string'
+        ? r.toLowerCase()
+        : (r.code || r.name || '').toLowerCase(),
+    );
+    const isAdminOrManager =
+      roleNames.includes('admin') || roleNames.includes('manager-cong-no');
+
+    // Lấy danh sách employee_code_raw từ bảng debt (có lọc theo quyền)
+    let employeeQuery = this.debtRepository
+      .createQueryBuilder('debt')
+      .select(['debt.employee_code_raw'])
+      .where('debt.employee_code_raw IS NOT NULL')
+      .andWhere('debt.employee_code_raw != ""');
+
+    if (!isAdminOrManager) {
+      employeeQuery = employeeQuery.andWhere(
+        `TRIM(LEFT(debt.employee_code_raw, CASE WHEN LOCATE('-', debt.employee_code_raw) > 0 THEN LOCATE('-', debt.employee_code_raw) - 1 ELSE CHAR_LENGTH(debt.employee_code_raw) END)) = :empCode`,
+        { empCode: currentUser?.employeeCode },
+      );
+    }
+
+    const employees = await employeeQuery
+      .groupBy('debt.employee_code_raw')
+      .getRawMany();
+
+    // Tạo danh sách unique employee codes
+    const result: { code: string; name: string }[] = [];
+    const seen = new Set();
+
+    for (const emp of employees) {
+      const code = emp.debt_employee_code_raw;
+      if (code && !seen.has(code)) {
+        // Trích xuất tên nhân viên từ employee_code_raw (nếu có format "code - name")
+        const parts = code.split(' - ');
+        const name = parts.length > 1 ? parts[1] : code;
+        
+        result.push({ code, name });
+        seen.add(code);
+      }
+    }
+
+    return result.sort((a, b) => a.name.localeCompare(b.name));
+  }
+
   async updatePayLaterForCustomers(customerCodes: string[], payDate: Date) {
     if (!Array.isArray(customerCodes) || !payDate) return 0;
     // Lấy danh sách customer_code fixed
