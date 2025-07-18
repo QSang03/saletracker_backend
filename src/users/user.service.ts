@@ -13,11 +13,10 @@ import { UpdateUserDto } from './dto/update-user.dto';
 import { Role } from '../roles/role.entity';
 import { Department } from '../departments/department.entity';
 import { UserStatus } from './user-status.enum';
-import { UserGateway } from './user.gateway';
 import { ChangeUserLog } from './change-user-log.entity';
-import { getRoleNames } from '../common/utils/user-permission.helper';
 import { RolesPermissionsService } from '../roles_permissions/roles-permissions.service';
 import { UserStatusObserver } from '../observers/user-status.observer';
+import { WebsocketGateway } from 'src/websocket/websocket.gateway';
 
 @Injectable()
 export class UserService {
@@ -30,7 +29,7 @@ export class UserService {
     private readonly roleRepo: Repository<Role>,
     @InjectRepository(ChangeUserLog)
     private readonly changeUserLogRepo: Repository<ChangeUserLog>,
-    private readonly userGateway: UserGateway,
+    private readonly wsGateway: WebsocketGateway,
     private readonly rolesPermissionsService: RolesPermissionsService, // Inject service
     private readonly userStatusObserver: UserStatusObserver, // Inject observer
   ) {}
@@ -333,12 +332,14 @@ export class UserService {
         if (!log) {
           log = this.changeUserLogRepo.create({
             user: oldUser,
-            changes: [{
-              oldFullName: oldUser.fullName || '',
-              newFullName: updateData.fullName,
-              timeChange: new Date().toISOString(),
-              changerId,
-            }],
+            changes: [
+              {
+                oldFullName: oldUser.fullName || '',
+                newFullName: updateData.fullName,
+                timeChange: new Date().toISOString(),
+                changerId,
+              },
+            ],
           });
         } else {
           log.changes.push({
@@ -352,32 +353,41 @@ export class UserService {
       }
     }
 
-    if (updateData.password !== undefined) {      
+    if (updateData.password !== undefined) {
       // Kiểm tra password không được rỗng
       if (!updateData.password || updateData.password.trim() === '') {
         throw new BadRequestException('Mật khẩu mới không được để trống');
       }
 
       // Không cho phép đổi mật khẩu mới trùng hoặc chứa mật khẩu mặc định
-      const passwordDefault = process.env.PASSWORD_DEFAULT || 'default_password';
+      const passwordDefault =
+        process.env.PASSWORD_DEFAULT || 'default_password';
       const newPassword = updateData.password.trim();
       if (
         newPassword === passwordDefault ||
         newPassword.includes(passwordDefault)
       ) {
-        throw new BadRequestException('Mật khẩu mới không được trùng hoặc chứa mật khẩu mặc định');
+        throw new BadRequestException(
+          'Mật khẩu mới không được trùng hoặc chứa mật khẩu mặc định',
+        );
       }
 
       // Nếu là user tự đổi mật khẩu (changerId bằng chính id của user)
       if (changerId === id) {
         // Bắt buộc phải có currentPassword
-        if (!updateData.currentPassword || updateData.currentPassword.trim() === '') {
-          throw new BadRequestException('Bạn phải nhập mật khẩu hiện tại để đổi mật khẩu');
+        if (
+          !updateData.currentPassword ||
+          updateData.currentPassword.trim() === ''
+        ) {
+          throw new BadRequestException(
+            'Bạn phải nhập mật khẩu hiện tại để đổi mật khẩu',
+          );
         }
         // Kiểm tra user có mật khẩu hiện tại không (logic này có vấn đề vì user đã login được rồi)
         if (!oldUser.password) {
-          console.log('ERROR: User has no password but was able to login - this should not happen!');
-          throw new BadRequestException('Lỗi hệ thống: Tài khoản không có mật khẩu nhưng đã đăng nhập được. Vui lòng liên hệ quản trị viên.');
+          throw new BadRequestException(
+            'Lỗi hệ thống: Tài khoản không có mật khẩu nhưng đã đăng nhập được. Vui lòng liên hệ quản trị viên.',
+          );
         }
         // Kiểm tra mật khẩu hiện tại có đúng không
         const isCurrentPasswordValid = await bcrypt.compare(
@@ -417,17 +427,20 @@ export class UserService {
 
     // Emit block event
     if (typeof updateData.isBlock === 'boolean') {
-      this.userGateway.server.to('admin_dashboard').emit('user_block', {
+      // Emit to ALL users để update UI trong UserManager
+      this.wsGateway.emitToAll('user_block', {
         userId: id,
         isBlock: updateData.isBlock,
       });
+
+      // Nếu user bị block, emit riêng cho user đó để logout
       if (updateData.isBlock) {
-        this.userGateway.server.to(`user_${id}`).emit('user_block', {
-          reason: 'blocked',
+        this.wsGateway.emitToUser(String(id), 'user_blocked', {
+          userId: id,
+          message: 'Tài khoản của bạn đã bị khóa',
         });
       }
     }
-
     // Cập nhật departments và roles phòng ban
     if (updateData.departmentIds !== undefined) {
       const newDepartments = await this.departmentRepo.findBy({
@@ -686,7 +699,9 @@ export class UserService {
       .filter(Boolean) as ChangeUserLog[];
 
     // 3. Lấy tất cả changerIds để lấy tên người đổi
-    const allChangerIds = logs.flatMap((log) => log.changes.map(change => Number(change.changerId)));
+    const allChangerIds = logs.flatMap((log) =>
+      log.changes.map((change) => Number(change.changerId)),
+    );
     const uniqueChangerIds = Array.from(new Set(allChangerIds));
     const changers = uniqueChangerIds.length
       ? await this.userRepo.findBy({ id: In(uniqueChangerIds) })
@@ -703,7 +718,8 @@ export class UserService {
         departmentName: department?.name || '',
         changerFullNames: log.changes.map(
           (change) =>
-            changers.find((u) => u.id === Number(change.changerId))?.fullName || `ID:${change.changerId}`,
+            changers.find((u) => u.id === Number(change.changerId))?.fullName ||
+            `ID:${change.changerId}`,
         ),
         changes: log.changes.map((change) => ({
           oldFullName: change.oldFullName,
@@ -711,7 +727,8 @@ export class UserService {
           timeChange: change.timeChange,
           changerId: change.changerId,
           changerFullName:
-            changers.find((u) => u.id === Number(change.changerId))?.fullName || `ID:${change.changerId}`,
+            changers.find((u) => u.id === Number(change.changerId))?.fullName ||
+            `ID:${change.changerId}`,
         })),
       };
     });
@@ -730,7 +747,7 @@ export class UserService {
     const department = user?.departments?.[0];
 
     const changers = await this.userRepo.findBy({
-      id: In(log.changes.map(change => Number(change.changerId))),
+      id: In(log.changes.map((change) => Number(change.changerId))),
     });
 
     return {
@@ -741,7 +758,8 @@ export class UserService {
       departmentName: department?.name || '',
       changerFullNames: log.changes.map(
         (change) =>
-          changers.find((u) => u.id === Number(change.changerId))?.fullName || `ID:${change.changerId}`,
+          changers.find((u) => u.id === Number(change.changerId))?.fullName ||
+          `ID:${change.changerId}`,
       ),
       changes: log.changes.map((change) => ({
         oldFullName: change.oldFullName,
@@ -749,7 +767,8 @@ export class UserService {
         timeChange: change.timeChange,
         changerId: change.changerId,
         changerFullName:
-          changers.find((u) => u.id === Number(change.changerId))?.fullName || `ID:${change.changerId}`,
+          changers.find((u) => u.id === Number(change.changerId))?.fullName ||
+          `ID:${change.changerId}`,
       })),
     };
   }

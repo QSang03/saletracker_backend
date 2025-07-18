@@ -49,6 +49,9 @@ export class OrderDetail {
   @Column('bigint', { unsigned: true, default: 0 })
   unit_price: number;
 
+  @Column({ type: 'longtext', nullable: true })
+  customer_request_summary: string;
+
   @Column('longtext', { nullable: true })
   raw_item: string;
 

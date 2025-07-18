@@ -7,14 +7,12 @@ import { UserService } from '../users/user.service';
 import * as bcrypt from 'bcrypt';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
-import { CreateUserDto } from '../users/dto/create-user.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { Role } from 'src/roles/role.entity';
 import { RolePermission } from 'src/roles_permissions/roles-permissions.entity';
-import { Permission } from 'src/permissions/permission.entity';
-import { UserGateway } from 'src/users/user.gateway';
 import { UserStatus } from '../users/user-status.enum';
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import { WebsocketGateway } from 'src/websocket/websocket.gateway';
 
 @Injectable()
 export class AuthService {
@@ -22,7 +20,7 @@ export class AuthService {
     private readonly usersService: UserService,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
-    private readonly userGateway: UserGateway,
+    private readonly wsGateway: WebsocketGateway,
     private readonly eventEmitter: EventEmitter2,
   ) {}
 
@@ -52,6 +50,16 @@ export class AuthService {
   }
 
   async login(user: any) {
+    const currentUser = await this.usersService.findOneWithDetails(user.id);
+    if (!currentUser) {
+      throw new UnauthorizedException('User not found');
+    }
+
+    if (currentUser.isBlock) {
+      throw new UnauthorizedException(
+        'Tài khoản của bạn đã bị khóa. Vui lòng liên hệ quản trị viên!',
+      );
+    }
     await this.usersService.updateUser(user.id, {
       status: UserStatus.ACTIVE,
       lastLogin: true,
@@ -117,7 +125,7 @@ export class AuthService {
       refreshToken,
     });
 
-    this.userGateway.server.to('admin_dashboard').emit('user_login', {
+    this.wsGateway.emitToAll('user_login', {
       userId: updatedUser.id,
       status: updatedUser.status,
       last_login: updatedUser.lastLogin,
@@ -150,12 +158,6 @@ export class AuthService {
 
   async refreshToken({ refreshToken }: RefreshTokenDto) {
     try {
-      console.log('🔍 [RefreshToken] Received refresh request:', {
-        tokenExists: !!refreshToken,
-        tokenLength: refreshToken?.length,
-        tokenPrefix: refreshToken?.substring(0, 20) + '...',
-      });
-
       // Verify refresh token
       const payload: any = this.jwtService.verify(refreshToken, {
         secret:
@@ -163,39 +165,10 @@ export class AuthService {
           this.configService.get<string>('JWT_SECRET'),
       });
 
-      console.log('🔍 [RefreshToken] Token verified, user ID:', payload.sub);
-
       // Load user with full details including roles, permissions AND refresh token
       const user = await this.usersService.findOneWithDetailsAndRefreshToken(
         payload.sub,
       );
-      console.log('🔍 [RefreshToken] User found:', !!user);
-      console.log(
-        '🔍 [RefreshToken] User refresh token from DB length:',
-        user?.refreshToken?.length,
-      );
-      console.log(
-        '🔍 [RefreshToken] Sent refresh token length:',
-        refreshToken?.length,
-      );
-      console.log(
-        '🔍 [RefreshToken] User refresh token from DB prefix:',
-        user?.refreshToken?.substring(0, 50) + '...',
-      );
-      console.log(
-        '🔍 [RefreshToken] Sent refresh token prefix:',
-        refreshToken?.substring(0, 50) + '...',
-      );
-      console.log(
-        '🔍 [RefreshToken] User refresh token matches:',
-        user?.refreshToken === refreshToken,
-      );
-
-      // Debug full tokens (chỉ cho testing)
-      if (user?.refreshToken !== refreshToken) {
-        console.log('🔍 [RefreshToken] DB Token full:', user?.refreshToken);
-        console.log('🔍 [RefreshToken] Sent Token full:', refreshToken);
-      }
 
       if (!user || user.refreshToken !== refreshToken) {
         console.error(
@@ -209,8 +182,6 @@ export class AuthService {
         console.error('❌ [RefreshToken] User is blocked');
         throw new ForbiddenException('User is blocked');
       }
-
-      console.log('✅ [RefreshToken] Generating new tokens for user:', user.id);
 
       // Tạo access token mới với đầy đủ thông tin
       const accessPayload = {
@@ -290,7 +261,7 @@ export class AuthService {
       refreshToken: undefined,
     });
 
-    this.userGateway.server.to('admin_dashboard').emit('user_logout', {
+    this.wsGateway.emitToAll('user_logout', {
       userId: updatedUser.id,
       status: updatedUser.status,
     });
@@ -412,43 +383,5 @@ export class AuthService {
     return {
       access_token: accessToken,
     };
-  }
-
-  // Test method để trigger force refresh
-  async testForceRefresh(userId: number) {
-    try {
-      console.log(
-        '🔄 [TestForceRefresh] Triggering force refresh for user:',
-        userId,
-      );
-
-      // Lấy user với full details
-      const user =
-        await this.usersService.findOneWithDetailsAndRefreshToken(userId);
-      if (!user) {
-        throw new Error('User not found');
-      }
-
-      console.log(
-        '✅ [TestForceRefresh] User found, emitting status change event',
-      );
-
-      // CHỈ emit event để trigger force refresh trên frontend
-      // KHÔNG tạo refresh token mới để tránh mismatch
-      this.eventEmitter.emit('user.status.changed', {
-        userId: user.id,
-        newStatus: 2, // Giả lập status = 2 (Zalo link error)
-        oldStatus: Number(user.status), // Convert enum to number
-      });
-
-      return {
-        success: true,
-        message:
-          'Force refresh triggered - frontend will refresh with existing token',
-      };
-    } catch (error) {
-      console.error('❌ [TestForceRefresh] Error:', error);
-      throw error;
-    }
   }
 }

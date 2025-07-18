@@ -20,9 +20,6 @@ export class Order {
   @Column('bigint', { nullable: false })
   conversation_id: number;
 
-  @Column({ type: 'longtext', nullable: true })
-  customer_request_summary: string;
-
   @Column('json', { nullable: true })
   order_history: any;
 

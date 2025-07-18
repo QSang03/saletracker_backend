@@ -1,3 +1,4 @@
+import { WebsocketModule } from './websocket/websocket.module';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { EventEmitterModule } from '@nestjs/event-emitter';
@@ -58,6 +59,7 @@ import { DebtStatisticModule } from './debt_statistics/debt_statistic.module';
     OrderDetailModule,
     WebhookModule,
     DebtStatisticModule,
+    WebsocketModule,
   ],
   controllers: [AppController],
   providers: [AppService],
