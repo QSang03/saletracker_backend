@@ -99,6 +99,7 @@ export class UserService {
       'department.id',
       'department.name',
       'department.slug',
+      'department.server_ip',
       'role.id',
       'role.name',
     ])
@@ -332,14 +333,20 @@ export class UserService {
         if (!log) {
           log = this.changeUserLogRepo.create({
             user: oldUser,
-            fullNames: [updateData.fullName],
-            timeChanges: [new Date().toISOString()],
-            changerIds: [changerId],
+            changes: [{
+              oldFullName: oldUser.fullName || '',
+              newFullName: updateData.fullName,
+              timeChange: new Date().toISOString(),
+              changerId,
+            }],
           });
         } else {
-          log.fullNames.push(updateData.fullName);
-          log.timeChanges.push(new Date().toISOString());
-          log.changerIds.push(changerId);
+          log.changes.push({
+            oldFullName: oldUser.fullName || '',
+            newFullName: updateData.fullName,
+            timeChange: new Date().toISOString(),
+            changerId,
+          });
         }
         await this.changeUserLogRepo.save(log);
       }
@@ -679,7 +686,7 @@ export class UserService {
       .filter(Boolean) as ChangeUserLog[];
 
     // 3. Lấy tất cả changerIds để lấy tên người đổi
-    const allChangerIds = logs.flatMap((log) => log.changerIds.map(Number));
+    const allChangerIds = logs.flatMap((log) => log.changes.map(change => Number(change.changerId)));
     const uniqueChangerIds = Array.from(new Set(allChangerIds));
     const changers = uniqueChangerIds.length
       ? await this.userRepo.findBy({ id: In(uniqueChangerIds) })
@@ -694,17 +701,17 @@ export class UserService {
         userFullName: user?.fullName || '',
         departmentId: department?.id || null,
         departmentName: department?.name || '',
-        changerFullNames: log.changerIds.map(
-          (id) =>
-            changers.find((u) => u.id === Number(id))?.fullName || `ID:${id}`,
+        changerFullNames: log.changes.map(
+          (change) =>
+            changers.find((u) => u.id === Number(change.changerId))?.fullName || `ID:${change.changerId}`,
         ),
-        changes: log.fullNames.map((fullName, idx) => ({
-          newFullName: fullName,
-          timeChange: log.timeChanges[idx],
-          changerId: log.changerIds[idx],
+        changes: log.changes.map((change) => ({
+          oldFullName: change.oldFullName,
+          newFullName: change.newFullName,
+          timeChange: change.timeChange,
+          changerId: change.changerId,
           changerFullName:
-            changers.find((u) => u.id === Number(log.changerIds[idx]))
-              ?.fullName || `ID:${log.changerIds[idx]}`,
+            changers.find((u) => u.id === Number(change.changerId))?.fullName || `ID:${change.changerId}`,
         })),
       };
     });
@@ -723,7 +730,7 @@ export class UserService {
     const department = user?.departments?.[0];
 
     const changers = await this.userRepo.findBy({
-      id: In(log.changerIds.map(Number)),
+      id: In(log.changes.map(change => Number(change.changerId))),
     });
 
     return {
@@ -732,17 +739,17 @@ export class UserService {
       userFullName: user?.fullName || '',
       departmentId: department?.id || null,
       departmentName: department?.name || '',
-      changerFullNames: log.changerIds.map(
-        (id) =>
-          changers.find((u) => u.id === Number(id))?.fullName || `ID:${id}`,
+      changerFullNames: log.changes.map(
+        (change) =>
+          changers.find((u) => u.id === Number(change.changerId))?.fullName || `ID:${change.changerId}`,
       ),
-      changes: log.fullNames.map((fullName, idx) => ({
-        newFullName: fullName,
-        timeChange: log.timeChanges[idx],
-        changerId: log.changerIds[idx],
+      changes: log.changes.map((change) => ({
+        oldFullName: change.oldFullName,
+        newFullName: change.newFullName,
+        timeChange: change.timeChange,
+        changerId: change.changerId,
         changerFullName:
-          changers.find((u) => u.id === Number(log.changerIds[idx]))
-            ?.fullName || `ID:${log.changerIds[idx]}`,
+          changers.find((u) => u.id === Number(change.changerId))?.fullName || `ID:${change.changerId}`,
       })),
     };
   }

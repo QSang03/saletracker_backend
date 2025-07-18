@@ -7,6 +7,13 @@ import {
 } from 'typeorm';
 import { User } from './user.entity';
 
+export interface ChangeFullNameLog {
+  oldFullName: string;
+  newFullName: string;
+  timeChange: string;
+  changerId: number;
+}
+
 @Entity('change_user_logs')
 export class ChangeUserLog {
   @PrimaryGeneratedColumn()
@@ -16,12 +23,6 @@ export class ChangeUserLog {
   @JoinColumn({ name: 'user_id' })
   user: User;
 
-  @Column('simple-array')
-  fullNames: string[];
-
-  @Column('simple-array')
-  timeChanges: string[];
-
-  @Column('simple-array')
-  changerIds: number[];
+  @Column('json')
+  changes: ChangeFullNameLog[];
 }
