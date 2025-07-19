@@ -5,12 +5,14 @@ import { CreateUserDto } from '../users/dto/create-user.dto';
 import { LoginDto } from './dto/login.dto';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import { UserService } from '../users/user.service';
+import { DepartmentService } from 'src/departments/department.service';
 
 @Controller('auth')
 export class AuthController {
   constructor(
     private readonly authService: AuthService,
     private readonly userService: UserService,
+    private readonly departmentService: DepartmentService,
   ) {}
 
   @Post('login')
@@ -44,6 +46,24 @@ export class AuthController {
         })),
     );
 
+    let departments: any;
+    const isAdmin = user.roles?.some((role) => role.name === 'admin');
+    if (isAdmin) {
+      const allDepartments = await this.departmentService.findAllActive();
+      departments = allDepartments.map((d) => ({
+        id: d.id,
+        name: d.name,
+        slug: d.slug,
+      }));
+    } else {
+      departments =
+        user.departments?.map((d) => ({
+          id: d.id,
+          name: d.name,
+          slug: d.slug,
+        })) || [];
+    }
+
     return {
       id: user.id,
       username: user.username,
@@ -56,12 +76,7 @@ export class AuthController {
       zaloName: user.zaloName,
       avatarZalo: user.avatarZalo,
       permissions,
-      departments:
-        user.departments?.map((d) => ({
-          id: d.id,
-          name: d.name,
-          slug: d.slug,
-        })) || [],
+      departments,
       roles: user.roles?.map((r) => ({ id: r.id, name: r.name })),
       email: user.email,
     };

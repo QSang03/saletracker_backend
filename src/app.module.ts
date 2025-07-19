@@ -28,6 +28,7 @@ import { OrderModule } from './orders/order.module';
 import { OrderDetailModule } from './order-details/order-detail.module';
 import { WebhookModule } from './webhook/webhook.module';
 import { DebtStatisticModule } from './debt_statistics/debt_statistic.module';
+import { ObserversModule } from './observers/observers.module';
 
 @Module({
   imports: [
@@ -60,6 +61,7 @@ import { DebtStatisticModule } from './debt_statistics/debt_statistic.module';
     WebhookModule,
     DebtStatisticModule,
     WebsocketModule,
+    ObserversModule,
   ],
   controllers: [AppController],
   providers: [AppService],

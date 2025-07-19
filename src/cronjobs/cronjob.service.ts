@@ -9,6 +9,7 @@ import { NKCProduct } from '../nkc_products/nkc_product.entity';
 import { Category } from '../categories/category.entity';
 import { DebtStatistic } from '../debt_statistics/debt_statistic.entity';
 import { Debt } from '../debts/debt.entity';
+import { DebtHistory } from 'src/debt_histories/debt_histories.entity';
 
 @Injectable()
 export class CronjobService {
@@ -25,6 +26,8 @@ export class CronjobService {
     private debtStatisticRepo: Repository<DebtStatistic>,
     @InjectRepository(Debt)
     private debtRepo: Repository<Debt>,
+    @InjectRepository(DebtHistory)
+    private debtHistoryRepo: Repository<DebtHistory>,
   ) {
     this.logger.log(
       '🎯 [CronjobService] Service đã được khởi tạo - Cronjob debt statistics sẽ chạy lúc 11h trưa hàng ngày',
@@ -35,7 +38,7 @@ export class CronjobService {
   async handleDebtStatisticsCron() {
     // Sử dụng timezone Việt Nam (UTC+7)
     const today = new Date();
-    const vietnamTime = new Date(today.getTime() + (7 * 60 * 60 * 1000)); // Add 7 hours
+    const vietnamTime = new Date(today.getTime() + 7 * 60 * 60 * 1000); // Add 7 hours
     const todayStr = vietnamTime.toISOString().split('T')[0]; // Format: YYYY-MM-DD
     const vietnamDate = new Date(todayStr); // Parse as date for comparison
 
@@ -327,5 +330,40 @@ export class CronjobService {
     this.logger.log(
       `Hoàn tất đồng bộ danh mục. Đã lưu ${flatCategories.length} danh mục, đánh dấu xóa ${deletedCatCount} danh mục không còn trong API.`,
     );
+  }
+
+  @Cron(process.env.CRON_CLONE_DEBT_LOGS_TIME || '0 23 * * *')
+  async cloneDebtLogsToHistories() {
+    const today = new Date();
+    const vietnamTime = new Date(today.getTime() + 7 * 60 * 60 * 1000); // Cộng thêm 7 tiếng
+    const todayStr = vietnamTime.toISOString().split('T')[0]; // Định dạng YYYY-MM-DD
+
+    this.logger.log(
+      `[CRON] Bắt đầu clone debt_logs sang debt_histories cho ngày ${todayStr}`,
+    );
+
+    const query = `
+  INSERT INTO debt_histories (
+    debt_log_id, debt_msg, send_at, user_name, full_name, first_remind, error_msg,
+    first_remind_at, second_remind, second_remind_at, sale_msg, conv_id, debt_img,
+    remind_status, gender, created_at
+  )
+  SELECT
+    dl.id, dl.debt_msg, dl.send_at, u.username AS user_name, u.full_name,
+    dl.first_remind, dl.error_msg, dl.first_remind_at, dl.second_remind,
+    dl.second_remind_at, dl.sale_msg, dl.conv_id, dl.debt_img,
+    dl.remind_status, dl.gender, NOW()
+  FROM debt_logs dl
+  LEFT JOIN debt_configs dc ON dl.debt_config_id = dc.id
+  LEFT JOIN users u ON dc.employee_id = u.id
+  WHERE DATE(CONVERT_TZ(dl.updated_at, '+00:00', '+07:00')) = ?
+    AND dl.id NOT IN (SELECT debt_log_id FROM debt_histories)
+`;
+    const result = await this.debtHistoryRepo.query(query, [todayStr]);
+
+    this.logger.log(
+      `[CRON] Đã clone xong debt_logs sang debt_histories cho ngày ${todayStr}`,
+    );
+    this.logger.debug(`[CRON] Query result: ${JSON.stringify(result)}`);
   }
 }

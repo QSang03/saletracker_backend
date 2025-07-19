@@ -146,6 +146,7 @@ export class DebtService {
     );
 
     // Lấy các phiếu không có trong Excel để cập nhật thành 'paid'
+    // CHỈ lấy các phiếu chưa PAID
     const debtsNotInExcel =
       excelInvoiceCodes.length > 0
         ? await this.debtRepository.find({
@@ -287,6 +288,15 @@ export class DebtService {
       const invoice_code = row['Số chứng từ'];
       const oldDebt = existingDebtsMap.get(invoice_code);
 
+      // ✅ LOGIC MỚI: Check nếu phiếu đã PAID thì bỏ qua
+      if (oldDebt && oldDebt.status === DebtStatus.PAID) {
+        errors.push({
+          row: i + 2,
+          error: `Phiếu ${invoice_code} đã được thanh toán, không thể cập nhật`,
+        });
+        continue;
+      }
+
       const parseDate = (val: any): Date | null => {
         const str = this.parseExcelDate(val);
         return str ? new Date(str) : null;
@@ -304,7 +314,7 @@ export class DebtService {
         }
 
         if (oldDebt) {
-          // Cập nhật phiếu đã tồn tại
+          // ✅ CHỈ cập nhật phiếu chưa PAID (đã check ở trên)
           oldDebt.customer_raw_code = row['Mã đối tác'] || '';
           oldDebt.invoice_code = invoice_code;
           oldDebt.issue_date =

@@ -12,6 +12,7 @@ import { AuthGuard } from '../common/guards/auth.guard';
 import { UserModule } from '../users/user.module';
 import { Permission } from '../permissions/permission.entity';
 import { PermissionModule } from '../permissions/permission.module';
+import { DepartmentModule } from '../departments/department.module';
 
 @Module({
   imports: [
@@ -27,6 +28,7 @@ import { PermissionModule } from '../permissions/permission.module';
     }),
     ConfigModule,
     PermissionModule,
+    DepartmentModule,
     forwardRef(() => UserModule),
   ],
   providers: [

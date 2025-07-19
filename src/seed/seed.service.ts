@@ -2,33 +2,27 @@ import { Injectable, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
-
-import { Department } from '../departments/department.entity';
-import { Permission } from '../permissions/permission.entity';
 import { Role } from '../roles/role.entity';
 import { User } from '../users/user.entity';
 import { UserStatus } from '../users/user-status.enum';
-import { RolePermission } from '../roles_permissions/roles-permissions.entity';
 import { SystemConfig } from '../system_config/system_config.entity';
+import { SeedDebtTriggerService } from './seed-debt-trigger.service';
 
 @Injectable()
 export class SeedService implements OnModuleInit {
   constructor(
-    @InjectRepository(Permission)
-    private readonly permissionRepo: Repository<Permission>,
     @InjectRepository(Role)
     private readonly roleRepo: Repository<Role>,
     @InjectRepository(User)
     private readonly userRepo: Repository<User>,
-    @InjectRepository(Department)
-    private readonly departmentRepo: Repository<Department>,
-    @InjectRepository(RolePermission)
-    private readonly rolePermissionRepo: Repository<RolePermission>,
     @InjectRepository(SystemConfig)
     private readonly systemConfigRepo: Repository<SystemConfig>,
+    private readonly seedDebtTriggerService: SeedDebtTriggerService,
   ) {}
 
   async onModuleInit() {
+    await this.seedDebtTriggerService.seedTriggers();
+
     const existed = await this.userRepo.findOne({
       where: { username: 'admin' },
     });

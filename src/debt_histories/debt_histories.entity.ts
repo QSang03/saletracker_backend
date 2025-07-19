@@ -21,11 +21,17 @@ export class DebtHistory {
   @JoinColumn({ name: 'debt_log_id' })
   debt_log: DebtLogs;
 
-  @Column({ type: 'longtext' })
+  @Column({ type: 'longtext', nullable: true })
   debt_msg: string;
 
-  @Column({ type: 'datetime' })
+  @Column({ type: 'datetime', nullable: true })
   send_at: Date;
+
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  user_name: string;
+
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  full_name: string;
 
   @Column({ type: 'longtext', nullable: true })
   first_remind: string;

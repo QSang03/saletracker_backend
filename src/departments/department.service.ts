@@ -33,7 +33,7 @@ export class DepartmentService {
       id: number;
       name: string;
       slug: string;
-      server_ip: string,
+      server_ip: string;
       createdAt: Date;
       manager?: { id: number; fullName: string; username: string };
     }[];
@@ -133,25 +133,19 @@ export class DepartmentService {
     });
 
     // Kiểm tra trùng tên hoặc slug với phòng ban đang hoạt động
-    const activeExisted = await this.departmentRepo.findOne({ 
-      where: [
-        { name: createDepartmentDto.name },
-        { slug: slug }
-      ]
+    const activeExisted = await this.departmentRepo.findOne({
+      where: [{ name: createDepartmentDto.name }, { slug: slug }],
     });
     if (activeExisted) {
       throw new BadRequestException('Phòng ban đã tồn tại!');
     }
 
     // Kiểm tra trùng tên hoặc slug với phòng ban đã xóa
-    const deletedExisted = await this.departmentRepo.findOne({ 
-      where: [
-        { name: createDepartmentDto.name },
-        { slug: slug }
-      ],
-      withDeleted: true
+    const deletedExisted = await this.departmentRepo.findOne({
+      where: [{ name: createDepartmentDto.name }, { slug: slug }],
+      withDeleted: true,
     });
-    
+
     if (deletedExisted && deletedExisted.deletedAt) {
       // Trả về thông tin phòng ban đã xóa để frontend xử lý
       throw new BadRequestException({
@@ -161,8 +155,8 @@ export class DepartmentService {
           id: deletedExisted.id,
           name: deletedExisted.name,
           slug: deletedExisted.slug,
-          deletedAt: deletedExisted.deletedAt
-        }
+          deletedAt: deletedExisted.deletedAt,
+        },
       });
     }
 
@@ -239,10 +233,7 @@ export class DepartmentService {
     if (newSlug !== department.slug) {
       // Kiểm tra trùng slug với phòng ban đang hoạt động (trừ chính nó)
       const activeExisted = await this.departmentRepo.findOne({
-        where: [
-          { name: updateDepartmentDto.name },
-          { slug: newSlug }
-        ]
+        where: [{ name: updateDepartmentDto.name }, { slug: newSlug }],
       });
       if (activeExisted && activeExisted.id !== department.id) {
         throw new BadRequestException('Phòng ban đã tồn tại!');
@@ -250,14 +241,15 @@ export class DepartmentService {
 
       // Kiểm tra trùng với phòng ban đã xóa
       const deletedExisted = await this.departmentRepo.findOne({
-        where: [
-          { name: updateDepartmentDto.name },
-          { slug: newSlug }
-        ],
-        withDeleted: true
+        where: [{ name: updateDepartmentDto.name }, { slug: newSlug }],
+        withDeleted: true,
       });
-      
-      if (deletedExisted && deletedExisted.deletedAt && deletedExisted.id !== department.id) {
+
+      if (
+        deletedExisted &&
+        deletedExisted.deletedAt &&
+        deletedExisted.id !== department.id
+      ) {
         throw new BadRequestException({
           message: 'Phòng ban đã tồn tại trong danh sách đã xóa',
           code: 'DEPARTMENT_EXISTS_DELETED',
@@ -265,8 +257,8 @@ export class DepartmentService {
             id: deletedExisted.id,
             name: deletedExisted.name,
             slug: deletedExisted.slug,
-            deletedAt: deletedExisted.deletedAt
-          }
+            deletedAt: deletedExisted.deletedAt,
+          },
         });
       }
 
@@ -356,5 +348,12 @@ export class DepartmentService {
       page,
       pageSize,
     };
+  }
+
+  async findAllActive(): Promise<Department[]> {
+    return this.departmentRepo.find({
+      where: { deletedAt: IsNull() },
+      order: { id: 'ASC' },
+    });
   }
 }

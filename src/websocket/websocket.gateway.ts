@@ -71,6 +71,14 @@ export class WebsocketGateway
     return { event: 'pong', data };
   }
 
+  @SubscribeMessage('joinRoom')
+  handleJoinRoom(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() room: string,
+  ) {
+    client.join(room);
+  }
+
   // Emit to a specific user
   emitToUser(userId: string, event: string, data: any) {
     const socketId = this.userSocketMap.get(userId);
@@ -87,5 +95,9 @@ export class WebsocketGateway
   // Emit to a group of users
   emitToUsers(userIds: string[], event: string, data: any) {
     userIds.forEach((userId) => this.emitToUser(userId, event, data));
+  }
+
+  emitToRoom(roomName: string, event: string, data: any) {
+    this.server.to(roomName).emit(event, data);
   }
 }

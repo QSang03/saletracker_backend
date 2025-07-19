@@ -7,12 +7,13 @@ import { NKCProduct } from '../nkc_products/nkc_product.entity';
 import { Category } from '../categories/category.entity';
 import { DebtStatistic } from '../debt_statistics/debt_statistic.entity';
 import { Debt } from '../debts/debt.entity';
+import { DebtHistory } from 'src/debt_histories/debt_histories.entity';
 
 @Module({
   imports: [
     ScheduleModule.forRoot(),
     HttpModule,
-    TypeOrmModule.forFeature([NKCProduct, Category, DebtStatistic, Debt]),
+    TypeOrmModule.forFeature([NKCProduct, Category, DebtStatistic, Debt, DebtHistory]),
   ],
   providers: [CronjobService],
   exports: [CronjobService],

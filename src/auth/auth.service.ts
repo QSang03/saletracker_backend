@@ -13,6 +13,7 @@ import { RolePermission } from 'src/roles_permissions/roles-permissions.entity';
 import { UserStatus } from '../users/user-status.enum';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { WebsocketGateway } from 'src/websocket/websocket.gateway';
+import { DepartmentService } from 'src/departments/department.service';
 
 @Injectable()
 export class AuthService {
@@ -22,6 +23,7 @@ export class AuthService {
     private readonly configService: ConfigService,
     private readonly wsGateway: WebsocketGateway,
     private readonly eventEmitter: EventEmitter2,
+    private readonly departmentService: DepartmentService,
   ) {}
 
   async validateUser(username: string, password: string): Promise<any> {
@@ -70,6 +72,26 @@ export class AuthService {
       throw new UnauthorizedException('User not found after update');
     }
 
+    let departments: any;
+    const isAdmin = updatedUser.roles?.some((role) => role.name === 'admin');
+
+    if (isAdmin) {
+      const allDepartments = await this.departmentService.findAllActive();
+
+      departments = allDepartments.map((d) => ({
+        id: d.id,
+        name: d.name,
+        slug: d.slug,
+      }));
+    } else {
+      departments =
+        updatedUser.departments?.map((d) => ({
+          id: d.id,
+          name: d.name,
+          slug: d.slug,
+        })) || [];
+    }
+
     const payload = {
       sub: updatedUser.id,
       id: updatedUser.id,
@@ -89,12 +111,7 @@ export class AuthService {
           name: role.name,
           display_name: role.display_name,
         })) || [],
-      departments:
-        updatedUser.departments?.map((d) => ({
-          id: d.id,
-          name: d.name,
-          slug: d.slug,
-        })) || [],
+      departments, // Sử dụng biến departments đã xử lý ở trên
       permissions: [
         ...updatedUser.roles?.flatMap(
           (role: Role) =>
@@ -152,6 +169,7 @@ export class AuthService {
         zaloLinkStatus: updatedUser.zaloLinkStatus,
         zaloName: updatedUser.zaloName,
         avatarZalo: updatedUser.avatarZalo,
+        departments,
       },
     };
   }
@@ -183,6 +201,23 @@ export class AuthService {
         throw new ForbiddenException('User is blocked');
       }
 
+      let departments: any;
+      const isAdmin = user.roles?.some((role) => role.name === 'admin');
+      if (isAdmin) {
+        const allDepartments = await this.departmentService.findAllActive();
+        departments = allDepartments.map((d) => ({
+          id: d.id,
+          name: d.name,
+          slug: d.slug,
+        }));
+      } else {
+        departments =
+          user.departments?.map((d) => ({
+            id: d.id,
+            name: d.name,
+            slug: d.slug,
+          })) || [];
+      }
       // Tạo access token mới với đầy đủ thông tin
       const accessPayload = {
         sub: user.id,
@@ -203,12 +238,7 @@ export class AuthService {
             name: role.name,
             display_name: role.display_name,
           })) || [],
-        departments:
-          user.departments?.map((d) => ({
-            id: d.id,
-            name: d.name,
-            slug: d.slug,
-          })) || [],
+        departments,
         permissions: [
           ...user.roles?.flatMap(
             (role: Role) =>
@@ -270,6 +300,23 @@ export class AuthService {
 
   // Generate new tokens method
   async generateNewTokens(user: any) {
+    let departments: any;
+    const isAdmin = user.roles?.some((role) => role.name === 'admin');
+    if (isAdmin) {
+      const allDepartments = await this.departmentService.findAllActive();
+      departments = allDepartments.map((d) => ({
+        id: d.id,
+        name: d.name,
+        slug: d.slug,
+      }));
+    } else {
+      departments =
+        user.departments?.map((d) => ({
+          id: d.id,
+          name: d.name,
+          slug: d.slug,
+        })) || [];
+    }
     const payload = {
       sub: user.id,
       id: user.id,
@@ -289,12 +336,7 @@ export class AuthService {
           name: role.name,
           display_name: role.display_name,
         })) || [],
-      departments:
-        user.departments?.map((d) => ({
-          id: d.id,
-          name: d.name,
-          slug: d.slug,
-        })) || [],
+      departments,
       permissions: [
         ...user.roles?.flatMap(
           (role: Role) =>
@@ -335,6 +377,24 @@ export class AuthService {
 
   // Generate only new access token, keep existing refresh token
   async generateNewAccessToken(user: any): Promise<{ access_token: string }> {
+    let departments: any;
+    const isAdmin = user.roles?.some((role) => role.name === 'admin');
+    if (isAdmin) {
+      const allDepartments = await this.departmentService.findAllActive();
+      departments = allDepartments.map((d) => ({
+        id: d.id,
+        name: d.name,
+        slug: d.slug,
+      }));
+    } else {
+      departments =
+        user.departments?.map((d) => ({
+          id: d.id,
+          name: d.name,
+          slug: d.slug,
+        })) || [];
+    }
+
     const payload = {
       sub: user.id,
       id: user.id,
@@ -354,12 +414,7 @@ export class AuthService {
           name: role.name,
           display_name: role.display_name,
         })) || [],
-      departments:
-        user.departments?.map((d) => ({
-          id: d.id,
-          name: d.name,
-          slug: d.slug,
-        })) || [],
+      departments,
       permissions: [
         ...user.roles?.flatMap(
           (role: Role) =>

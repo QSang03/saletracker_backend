@@ -7,6 +7,8 @@ import { User } from '../users/user.entity';
 import { Department } from '../departments/department.entity';
 import { RolePermission } from '../roles_permissions/roles-permissions.entity';
 import { SystemConfig } from '../system_config/system_config.entity';
+import { DatabaseChangeLog } from 'src/observers/change_log.entity';
+import { SeedDebtTriggerService } from './seed-debt-trigger.service';
 
 @Module({
   imports: [
@@ -17,8 +19,9 @@ import { SystemConfig } from '../system_config/system_config.entity';
       Department,
       RolePermission,
       SystemConfig,
+      DatabaseChangeLog,
     ]),
   ],
-  providers: [SeedService],
+  providers: [SeedService, SeedDebtTriggerService],
 })
 export class SeedModule {}
