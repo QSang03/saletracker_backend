@@ -14,7 +14,7 @@ import {
 } from '@nestjs/common';
 import { DebtService } from './debt.service';
 import { FileInterceptor } from '@nestjs/platform-express';
-import * as XLSX from 'xlsx';
+import * as ExcelJS from 'exceljs';
 import { UseGuards } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { Permission } from '../common/guards/permission.decorator';
@@ -157,9 +157,18 @@ export class DebtController {
   @UseInterceptors(FileInterceptor('file'))
   async importExcel(@UploadedFile() file: Express.Multer.File) {
     if (!file) throw new BadRequestException('No file uploaded');
-    const workbook = XLSX.read(file.buffer, { type: 'buffer' });
-    const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    const rows = XLSX.utils.sheet_to_json(sheet, { defval: null });
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(file.buffer);
+    const worksheet = workbook.worksheets[0];
+    const rows: Record<string, any>[] = [];
+    worksheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+      if (rowNumber === 1) return; // Bỏ qua header nếu cần
+      const rowData: Record<string, any> = {};
+      worksheet.getRow(1).eachCell((cell, colNumber) => {
+        rowData[cell.value as string] = row.getCell(colNumber).value;
+      });
+      rows.push(rowData);
+    });
     return this.debtService.importExcelRows(rows);
   }
 

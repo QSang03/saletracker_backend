@@ -12,6 +12,7 @@ import {
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
+import * as ExcelJS from 'exceljs';
 import { AuthGuard } from '@nestjs/passport';
 import { DebtConfigService } from './debt_configs.service';
 import { DebtConfig } from './debt_configs.entity';
@@ -102,11 +103,18 @@ export class DebtConfigController {
       };
     }
     // Đọc file excel, parse rows
-    const xlsx = require('xlsx');
-    const workbook = xlsx.read(file.buffer, { type: 'buffer' });
-    const sheetName = workbook.SheetNames[0];
-    const sheet = workbook.Sheets[sheetName];
-    const rows = xlsx.utils.sheet_to_json(sheet, { defval: '' });
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(file.buffer);
+    const worksheet = workbook.worksheets[0];
+    const rows: Record<string, any>[] = [];
+    worksheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+      if (rowNumber === 1) return; // Bỏ qua header nếu cần
+      const rowData: Record<string, any> = {};
+      worksheet.getRow(1).eachCell((cell, colNumber) => {
+        rowData[cell.value as string] = row.getCell(colNumber).value;
+      });
+      rows.push(rowData);
+    });
     return this.debtConfigService.importExcelRows(rows);
   }
 }
