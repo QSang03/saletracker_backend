@@ -121,6 +121,12 @@ export class RealTimeDebtObserver implements OnModuleInit, OnModuleDestroy {
       changed_fields,
     } = change;
 
+    // Không xử lý action insert
+    if (action === ChangeAction.INSERT) {
+      this.logger.log(`[RealTimeDebtObserver] Skip insert for table: ${table_name}`);
+      return;
+    }
+
     this.logger.log(`[RealTimeDebtObserver] Processing table: ${table_name}`);
 
     if (table_name === 'debt_logs') {

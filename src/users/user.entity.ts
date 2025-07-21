@@ -89,6 +89,9 @@ export class User {
   @Column({ nullable: true, name: 'avatar_zalo' })
   avatarZalo?: string;
 
+  @Column({ nullable: true, name: 'zalo_gender' })
+  zaloGender?: string;
+
   @OneToMany(() => Notification, (notification) => notification.user)
   notifications: Notification[];
   @Column({ nullable: true, name: 'refresh_token', select: false })

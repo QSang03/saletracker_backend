@@ -28,8 +28,23 @@ export class DebtConfigController {
 
   @Get()
   @Permission('cong-no', 'read')
-  findAll(@Query() query: any, @Req() req): Promise<DebtConfig[]> {
-    return this.debtConfigService.findAllWithRole(req.user);
+  findAll(@Query() query: any, @Req() req): Promise<{
+    data: any[];
+    total: number;
+    page: number;
+    limit: number;
+    totalPages: number;
+  }> {
+    // Parse query parameters
+    const filters = {
+      search: query.search,
+      employees: query.employees ? (Array.isArray(query.employees) ? query.employees.map(Number) : [Number(query.employees)]) : undefined,
+      singleDate: query.singleDate,
+      page: query.page ? Number(query.page) : 1,
+      limit: query.limit ? Number(query.limit) : 10,
+    };
+
+    return this.debtConfigService.findAllWithRole(req.user, filters);
   }
 
   @Get(':id')

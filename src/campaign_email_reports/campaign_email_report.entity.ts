@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, OneToOne, JoinColumn, Check } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, OneToOne, JoinColumn, Check, CreateDateColumn, UpdateDateColumn } from 'typeorm';
 import { Campaign } from '../campaigns/campaign.entity';
 
 @Entity('campaign_email_reports')
@@ -12,7 +12,7 @@ export class CampaignEmailReport {
   campaign: Campaign;
 
   @Column({ type: 'text', nullable: false })
-  recipients_to: string;
+  recipient_to: string;
 
   @Column({ type: 'json', nullable: true })
   recipients_cc?: string[];
@@ -28,6 +28,15 @@ export class CampaignEmailReport {
 
   @Column({ type: 'boolean', default: false })
   send_when_campaign_completed: boolean;
+
+  @Column({ type: 'timestamp', nullable: true })
+  last_sent_at?: Date;
+  
+  @CreateDateColumn()
+  created_at: Date;
+
+  @UpdateDateColumn()
+  updated_at: Date;
 
   // Ensure business logic at entity level
   setSendWhenCampaignCompleted(value: boolean) {

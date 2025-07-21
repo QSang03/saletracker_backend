@@ -23,7 +23,9 @@ export class UpdateUserDto {
   @IsString()
   currentPassword?: string;
 
-  @ValidateIf((obj) => obj.email !== '' && obj.email !== null && obj.email !== undefined)
+  @ValidateIf(
+    (obj) => obj.email !== '' && obj.email !== null && obj.email !== undefined,
+  )
   @IsEmail({}, { message: 'email must be an email', each: false })
   @IsOptional()
   email?: string | null;
@@ -75,6 +77,10 @@ export class UpdateUserDto {
   @IsOptional()
   @IsString()
   avatarZalo?: string;
+
+  @IsOptional()
+  @IsString()
+  zaloGender?: string;
 
   @IsOptional()
   @IsString()

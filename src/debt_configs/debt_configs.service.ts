@@ -1,10 +1,18 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, Like, In, Between } from 'typeorm';
 import { DebtConfig } from './debt_configs.entity';
 import { instanceToPlain } from 'class-transformer';
 import { DebtLogsService } from '../debt_logs/debt_logs.service';
 import { ReminderStatus } from '../debt_logs/debt_logs.entity';
+
+interface DebtConfigFilters {
+  search?: string;
+  employees?: number[];
+  singleDate?: string;
+  page?: number;
+  limit?: number;
+}
 
 @Injectable()
 export class DebtConfigService {
@@ -14,10 +22,69 @@ export class DebtConfigService {
     private readonly debtLogsService: DebtLogsService,
   ) {}
 
-  findAll(): Promise<DebtConfig[]> {
-    return this.repo.find({
-      relations: ['debts', 'debt_log', 'employee', 'actor'],
-    });
+  async findAll(filters: DebtConfigFilters = {}): Promise<{
+    data: DebtConfig[];
+    total: number;
+    page: number;
+    limit: number;
+    totalPages: number;
+  }> {
+    const page = filters.page || 1;
+    const limit = filters.limit || 10;
+    const skip = (page - 1) * limit;
+
+    const queryBuilder = this.repo.createQueryBuilder('debt_config')
+      .leftJoinAndSelect('debt_config.debts', 'debts')
+      .leftJoinAndSelect('debt_config.debt_log', 'debt_log')
+      .leftJoinAndSelect('debt_config.employee', 'employee')
+      .leftJoinAndSelect('debt_config.actor', 'actor');
+
+    // Search filter (tìm theo mã khách hàng hoặc tên khách hàng)
+    if (filters.search && filters.search.trim()) {
+      queryBuilder.andWhere(
+        '(debt_config.customer_code LIKE :search OR debt_config.customer_name LIKE :search)',
+        { search: `%${filters.search.trim()}%` }
+      );
+    }
+
+    // Employee filter
+    if (filters.employees && filters.employees.length > 0) {
+      queryBuilder.andWhere('employee.id IN (:...employeeIds)', {
+        employeeIds: filters.employees
+      });
+    }
+
+    // Single date filter (lọc theo ngày đã nhắc - send_last_at)
+    if (filters.singleDate) {
+      const filterDate = new Date(filters.singleDate);
+      const startOfDay = new Date(filterDate);
+      startOfDay.setHours(0, 0, 0, 0);
+      const endOfDay = new Date(filterDate);
+      endOfDay.setHours(23, 59, 59, 999);
+
+      queryBuilder.andWhere('debt_config.send_last_at BETWEEN :startOfDay AND :endOfDay', {
+        startOfDay,
+        endOfDay
+      });
+    }
+
+    // Count total for pagination
+    const total = await queryBuilder.getCount();
+
+    // Apply pagination and ordering
+    const data = await queryBuilder
+      .orderBy('debt_config.id', 'DESC')
+      .skip(skip)
+      .take(limit)
+      .getMany();
+
+    return {
+      data,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
   }
 
   async findOne(id: number): Promise<DebtConfig> {
@@ -167,7 +234,13 @@ export class DebtConfigService {
     });
   }
 
-  async findAllWithRole(currentUser: any): Promise<any[]> {
+  async findAllWithRole(currentUser: any, filters: DebtConfigFilters = {}): Promise<{
+    data: any[];
+    total: number;
+    page: number;
+    limit: number;
+    totalPages: number;
+  }> {
     const roleNames = (currentUser?.roles || []).map((r: any) =>
       typeof r === 'string'
         ? r.toLowerCase()
@@ -175,46 +248,88 @@ export class DebtConfigService {
     );
     const isAdminOrManager =
       roleNames.includes('admin') || roleNames.includes('manager-cong-no');
-    let configs: DebtConfig[] = [];
-    if (isAdminOrManager) {
-      configs = await this.repo.find({
-        relations: ['debt_log', 'actor', 'debts', 'employee'],
-        select: [
-          'id',
-          'customer_code',
-          'customer_name',
-          'customer_type',
-          'day_of_week',
-          'gap_day',
-          'is_send',
-          'is_repeat',
-          'send_last_at',
-          'last_update_at',
-        ],
-        order: { id: 'DESC' },
-      });
-    } else if (roleNames.includes('user-cong-no')) {
-      configs = await this.repo.find({
-        where: { employee: { id: currentUser?.id } },
-        relations: ['debt_log', 'actor', 'debts', 'employee'],
-        select: [
-          'id',
-          'customer_code',
-          'customer_name',
-          'customer_type',
-          'day_of_week',
-          'gap_day',
-          'is_send',
-          'is_repeat',
-          'send_last_at',
-          'last_update_at',
-        ],
-        order: { id: 'DESC' },
-      });
-    } else {
-      return [];
+
+    const page = filters.page || 1;
+    const limit = filters.limit || 10;
+    const skip = (page - 1) * limit;
+
+    const queryBuilder = this.repo.createQueryBuilder('debt_config')
+      .leftJoinAndSelect('debt_config.debt_log', 'debt_log')
+      .leftJoinAndSelect('debt_config.actor', 'actor')
+      .leftJoinAndSelect('debt_config.debts', 'debts')
+      .leftJoinAndSelect('debt_config.employee', 'employee')
+      .select([
+        'debt_config.id',
+        'debt_config.customer_code',
+        'debt_config.customer_name',
+        'debt_config.customer_type',
+        'debt_config.day_of_week',
+        'debt_config.gap_day',
+        'debt_config.is_send',
+        'debt_config.is_repeat',
+        'debt_config.send_last_at',
+        'debt_config.last_update_at',
+        'debt_log',
+        'actor',
+        'debts',
+        'employee.id',
+        'employee.fullName',
+        'employee.username'
+      ]);
+
+    // Role-based filtering
+    if (!isAdminOrManager && roleNames.includes('user-cong-no')) {
+      queryBuilder.andWhere('employee.id = :userId', { userId: currentUser?.id });
+    } else if (!isAdminOrManager) {
+      return {
+        data: [],
+        total: 0,
+        page,
+        limit,
+        totalPages: 0,
+      };
     }
-    return configs.map((cfg) => {
+
+    // Search filter
+    if (filters.search && filters.search.trim()) {
+      queryBuilder.andWhere(
+        '(debt_config.customer_code LIKE :search OR debt_config.customer_name LIKE :search)',
+        { search: `%${filters.search.trim()}%` }
+      );
+    }
+
+    // Employee filter
+    if (filters.employees && filters.employees.length > 0) {
+      queryBuilder.andWhere('employee.id IN (:...employeeIds)', {
+        employeeIds: filters.employees
+      });
+    }
+
+    // Single date filter
+    if (filters.singleDate) {
+      const filterDate = new Date(filters.singleDate);
+      const startOfDay = new Date(filterDate);
+      startOfDay.setHours(0, 0, 0, 0);
+      const endOfDay = new Date(filterDate);
+      endOfDay.setHours(23, 59, 59, 999);
+
+      queryBuilder.andWhere('debt_config.send_last_at BETWEEN :startOfDay AND :endOfDay', {
+        startOfDay,
+        endOfDay
+      });
+    }
+
+    // Count total
+    const total = await queryBuilder.getCount();
+
+    // Get data with pagination
+    const configs = await queryBuilder
+      .orderBy('debt_config.id', 'DESC')
+      .skip(skip)
+      .take(limit)
+      .getMany();
+
+    const data = configs.map((cfg) => {
       const total_bills = Array.isArray(cfg.debts) ? cfg.debts.length : 0;
       const total_debt = Array.isArray(cfg.debts)
         ? cfg.debts.reduce(
@@ -222,6 +337,7 @@ export class DebtConfigService {
             0,
           )
         : 0;
+
       return {
         id: cfg.id,
         customer_code: cfg.customer_code,
@@ -254,6 +370,14 @@ export class DebtConfigService {
         total_debt,
       };
     });
+
+    return {
+      data,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
   }
 
   // Sửa lại toggleSend

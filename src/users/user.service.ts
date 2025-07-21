@@ -95,6 +95,7 @@ export class UserService {
       'user.zaloLinkStatus',
       'user.zaloName',
       'user.avatarZalo',
+      'user.zaloGender',
       'user.isBlock',
       'user.lastOnlineAt',
       'department.id',
@@ -280,6 +281,7 @@ export class UserService {
         zaloLinkStatus: true,
         zaloName: true,
         avatarZalo: true,
+        zaloGender: true,
         refreshToken: true,
         createdAt: true,
         updatedAt: true,
@@ -309,6 +311,7 @@ export class UserService {
       zaloLinkStatus: updateData.zaloLinkStatus,
       zaloName: updateData.zaloName,
       avatarZalo: updateData.avatarZalo,
+      zaloGender: updateData.zaloGender,
     };
 
     // Xử lý refresh token

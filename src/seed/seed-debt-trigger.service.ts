@@ -4,6 +4,39 @@ import { DataSource } from 'typeorm';
 
 @Injectable()
 export class SeedDebtTriggerService implements OnModuleInit {
+  /**
+   * Remove all *_after_insert triggers if they exist in the database
+   */
+  public async removeInsertTriggers() {
+    const insertTriggers = [
+      'debt_logs_after_insert',
+      'debt_configs_after_insert',
+      'debts_after_insert',
+    ];
+    // Query for existing insert triggers
+    const query = `
+      SELECT TRIGGER_NAME 
+      FROM information_schema.TRIGGERS 
+      WHERE TRIGGER_SCHEMA = DATABASE()
+        AND TRIGGER_NAME IN (${insertTriggers.map(t => `'${t}'`).join(',')})
+    `;
+    const result = await this.dataSource.query(query);
+    const existingInsertTriggers = result.map(row => row.TRIGGER_NAME);
+    for (const triggerName of existingInsertTriggers) {
+      try {
+        await this.dataSource.query(`DROP TRIGGER \`${triggerName}\``);
+        this.logger.log(`🗑️ [SeedDebtTriggerService] Dropped insert trigger: ${triggerName}`);
+      } catch (error) {
+        if (!error.message.includes("doesn't exist")) {
+          this.logger.warn(`⚠️ [SeedDebtTriggerService] Warning dropping insert trigger ${triggerName}: ${error.message}`);
+        }
+      }
+      await new Promise(res => setTimeout(res, 100));
+    }
+    if (existingInsertTriggers.length === 0) {
+      this.logger.log('✅ [SeedDebtTriggerService] No insert triggers found to remove.');
+    }
+  }
   private readonly logger = new Logger(SeedDebtTriggerService.name);
 
   constructor(
@@ -12,6 +45,7 @@ export class SeedDebtTriggerService implements OnModuleInit {
   ) {}
 
   async onModuleInit() {
+    await this.removeInsertTriggers();
   }
 
   public async seedTriggers() {
@@ -45,11 +79,8 @@ export class SeedDebtTriggerService implements OnModuleInit {
       FROM information_schema.TRIGGERS 
       WHERE TRIGGER_SCHEMA = DATABASE()
         AND TRIGGER_NAME IN (
-          'debt_logs_after_insert',
           'debt_logs_after_update', 
-          'debt_configs_after_insert',
           'debt_configs_after_update',
-          'debts_after_insert',
           'debts_after_update'
         )
     `;
@@ -58,11 +89,8 @@ export class SeedDebtTriggerService implements OnModuleInit {
     const existingTriggers = result.map(row => row.TRIGGER_NAME);
     
     const expectedTriggers = [
-      'debt_logs_after_insert',
       'debt_logs_after_update', 
-      'debt_configs_after_insert',
       'debt_configs_after_update',
-      'debts_after_insert',
       'debts_after_update'
     ];
 
@@ -79,11 +107,8 @@ export class SeedDebtTriggerService implements OnModuleInit {
   private async dropExistingTriggers(existingTriggers: string[]) {
     // Get all possible trigger names to ensure we drop everything
     const allPossibleTriggers = [
-      'debt_logs_after_insert',
       'debt_logs_after_update', 
-      'debt_configs_after_insert',
       'debt_configs_after_update',
-      'debts_after_insert',
       'debts_after_update'
     ];
 
@@ -106,24 +131,12 @@ export class SeedDebtTriggerService implements OnModuleInit {
   private async createTriggers(existingTriggers: string[] = []) {
     const triggers = [
       {
-        name: 'debt_logs_after_insert',
-        sql: this.getDebtLogsInsertTrigger()
-      },
-      {
         name: 'debt_logs_after_update', 
         sql: this.getDebtLogsUpdateTrigger()
       },
       {
-        name: 'debt_configs_after_insert',
-        sql: this.getDebtConfigsInsertTrigger()
-      },
-      {
         name: 'debt_configs_after_update',
         sql: this.getDebtConfigsUpdateTrigger()
-      },
-      {
-        name: 'debts_after_insert',
-        sql: this.getDebtsInsertTrigger()
       },
       {
         name: 'debts_after_update',
@@ -459,11 +472,8 @@ export class SeedDebtTriggerService implements OnModuleInit {
       hasAllTriggers: existingTriggers.hasAll,
       existingTriggers: existingTriggers.triggers,
       expectedTriggers: [
-        'debt_logs_after_insert',
         'debt_logs_after_update', 
-        'debt_configs_after_insert',
         'debt_configs_after_update',
-        'debts_after_insert',
         'debts_after_update'
       ]
     };

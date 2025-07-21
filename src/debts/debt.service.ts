@@ -53,8 +53,19 @@ export class DebtService {
         { search },
       );
     }
-    // Filter trạng thái
-    if (query.status) {
+    // Filter trạng thái (hỗ trợ truyền nhiều status, giống employeeCodes)
+    if (query.statuses && typeof query.statuses === 'string' && query.statuses.trim()) {
+      // Hỗ trợ truyền vào dạng "paid,pay_later,no_information_available"
+      let statuses: string[] = [];
+      if (typeof query.statuses === 'string') {
+        statuses = query.statuses.split(',').map((s: string) => s.trim()).filter(Boolean);
+      } else {
+        statuses = query.statuses.map((s: string) => s.trim()).filter(Boolean);
+      }
+      if (statuses.length > 0) {
+        qb.andWhere('debt.status IN (:...statuses)', { statuses });
+      }
+    } else if (query.status) {
       qb.andWhere('debt.status = :status', { status: query.status });
     }
     // Filter mã đối tác
@@ -64,10 +75,26 @@ export class DebtService {
       });
     }
     // Filter kế toán công nợ (employeeCode)
-    if (query.employeeCode) {
-      qb.andWhere('debt.employee_code_raw LIKE :employeeCode', {
-        employeeCode: `%${query.employeeCode}%`,
-      });
+    if (query.employeeCodes && typeof query.employeeCodes === 'string' && query.employeeCodes.trim()) {
+      // Hỗ trợ truyền vào dạng "NKTO01-TRẦN THỊ THÙY QUYÊN,NKTO05-TRẦN THỊ NGỌC HÂN"
+      let employeeCodes: string[] = [];
+      if (typeof query.employeeCodes === 'string') {
+      employeeCodes = query.employeeCodes
+        .split(',')
+        .map((s: string) => s.split('-')[0].trim())
+        .filter(Boolean);
+      } else {
+      employeeCodes = query.employeeCodes
+        .map((s: string) => s.split('-')[0].trim())
+        .filter(Boolean);
+      }
+      // Debug log
+      if (employeeCodes.length > 0) {
+      qb.andWhere(
+        `TRIM(LEFT(debt.employee_code_raw, CASE WHEN LOCATE('-', debt.employee_code_raw) > 0 THEN LOCATE('-', debt.employee_code_raw) - 1 ELSE CHAR_LENGTH(debt.employee_code_raw) END)) IN (:...employeeCodes)`,
+        { employeeCodes }
+      );
+      }
     }
     // Filter NVKD (saleCode)
     if (query.saleCode) {
@@ -207,9 +234,25 @@ export class DebtService {
       }
     }
 
-    // Xử lý từng dòng trong Excel
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i];
+    // Refactor xử lý batch song song
+    const updatePromises: Promise<any>[] = [];
+    const insertPromises: Promise<any>[] = [];
+    const importedResults: ImportResult[] = [];
+    const errorResults: ImportResult[] = [];
+
+    // Truy vấn debtConfig và user cho tất cả dòng trước
+    const customerCodesSet = new Set(rows.map(r => r['Mã đối tác']).filter(Boolean));
+    const debtConfigs = await this.debtConfigRepository.find({ where: { customer_code: In([...customerCodesSet]) } });
+    const debtConfigMap = new Map(debtConfigs.map(dc => [dc.customer_code, dc]));
+
+    // Truy vấn tất cả employeeCode và saleCode trước
+    const empCodesSet = new Set(rows.map(r => String(r['Kế toán công nợ']).split('-')[0].trim()).filter(Boolean));
+    const saleCodesSet = new Set(rows.map(r => r['NVKD'] ? r['NVKD'].split('-')[0] : '').filter(Boolean));
+    const users = await this.userRepository.find({ where: { employeeCode: In([...empCodesSet, ...saleCodesSet]) } });
+    const userMap = new Map(users.map(u => [u.employeeCode, u]));
+
+    // Xử lý từng dòng, gom batch
+    rows.forEach((row, i) => {
       const keys = Object.keys(row).filter((k) => k !== 'Còn lại');
       const onlyHasConLai = keys.every((k) => {
         const value = row[k];
@@ -220,63 +263,40 @@ export class DebtService {
           (typeof value === 'string' && value.trim() === '')
         );
       });
-
-      if (onlyHasConLai && row['Còn lại']) {
-        continue;
-      }
+      if (onlyHasConLai && row['Còn lại']) return;
 
       const required = [
         'Mã đối tác',
         'Số chứng từ',
         'Ngày chứng từ',
-        'Số hóa đơn',
         'Ngày đến hạn',
-        'Ngày công nợ',
-        'Số ngày quá hạn',
         'Thành tiền chứng từ',
         'Còn lại',
         'NVKD',
         'Kế toán công nợ',
       ];
-
       const missing = required.filter((k) => !row[k]);
       if (missing.length) {
-        errors.push({
-          row: i + 2,
-          error: `Thiếu trường: ${missing.join(', ')}`,
-        });
-        continue;
+        errorResults.push({ row: i + 2, error: `Thiếu trường: ${missing.join(', ')}` });
+        return;
       }
 
-      const debtConfig = await this.debtConfigRepository.findOne({
-        where: { customer_code: row['Mã đối tác'] },
-      });
-
+      const debtConfig = debtConfigMap.get(row['Mã đối tác']);
       let sale_id: number | undefined = undefined;
       let sale_name_raw: string = '';
 
       if (debtConfig && row['Kế toán công nợ']) {
         const empCode = String(row['Kế toán công nợ']).split('-')[0].trim();
-        if (empCode) {
-          const user = await this.userRepository.findOne({
-            where: { employeeCode: empCode },
-          });
-          if (
-            user &&
-            (!debtConfig.employee || user.id !== debtConfig.employee.id)
-          ) {
-            debtConfig.employee = user;
-            await this.debtConfigRepository.save(debtConfig);
-          }
+        const user = userMap.get(empCode);
+        if (user && (!debtConfig.employee || user.id !== debtConfig.employee.id)) {
+          debtConfig.employee = user;
+          updatePromises.push(this.debtConfigRepository.save(debtConfig));
         }
       }
 
       if (row['NVKD']) {
         const code = row['NVKD'].split('-')[0];
-        const user = await this.userRepository
-          .createQueryBuilder('user')
-          .where('user.employeeCode LIKE :code', { code: `%${code}%` })
-          .getOne();
+        const user = userMap.get(code);
         if (user && user.employeeCode && user.employeeCode.startsWith(code)) {
           sale_id = user.id;
         } else {
@@ -288,13 +308,9 @@ export class DebtService {
       const invoice_code = row['Số chứng từ'];
       const oldDebt = existingDebtsMap.get(invoice_code);
 
-      // ✅ LOGIC MỚI: Check nếu phiếu đã PAID thì bỏ qua
       if (oldDebt && oldDebt.status === DebtStatus.PAID) {
-        errors.push({
-          row: i + 2,
-          error: `Phiếu ${invoice_code} đã được thanh toán, không thể cập nhật`,
-        });
-        continue;
+        errorResults.push({ row: i + 2, error: `Phiếu ${invoice_code} đã được thanh toán, không thể cập nhật` });
+        return;
       }
 
       const parseDate = (val: any): Date | null => {
@@ -302,23 +318,18 @@ export class DebtService {
         return str ? new Date(str) : null;
       };
 
-      try {
-        let pay_later: Date | undefined = undefined;
-        if (oldDebt) {
-          pay_later =
-            oldDebt.pay_later ||
-            payLaterMap.get(row['Mã đối tác']) ||
-            undefined;
-        } else {
-          pay_later = payLaterMap.get(row['Mã đối tác']) || undefined;
-        }
+      let pay_later: Date | undefined = undefined;
+      if (oldDebt) {
+        pay_later = oldDebt.pay_later || payLaterMap.get(row['Mã đối tác']) || undefined;
+      } else {
+        pay_later = payLaterMap.get(row['Mã đối tác']) || undefined;
+      }
 
+      try {
         if (oldDebt) {
-          // ✅ CHỈ cập nhật phiếu chưa PAID (đã check ở trên)
           oldDebt.customer_raw_code = row['Mã đối tác'] || '';
           oldDebt.invoice_code = invoice_code;
-          oldDebt.issue_date =
-            parseDate(row['Ngày chứng từ']) || oldDebt.issue_date;
+          oldDebt.issue_date = parseDate(row['Ngày chứng từ']) || oldDebt.issue_date;
           oldDebt.bill_code = row['Số hóa đơn'] || '';
           oldDebt.due_date = parseDate(row['Ngày đến hạn']) || oldDebt.due_date;
           oldDebt.total_amount = row['Thành tiền chứng từ'] || 0;
@@ -326,16 +337,15 @@ export class DebtService {
           oldDebt.sale = sale_id ? ({ id: sale_id } as any) : undefined;
           oldDebt.sale_name_raw = sale_name_raw;
           oldDebt.employee_code_raw = employee_code_raw;
-          oldDebt.debt_config = debtConfig
-            ? ({ id: debtConfig.id } as any)
-            : undefined;
+          oldDebt.debt_config = debtConfig ? ({ id: debtConfig.id } as any) : undefined;
           oldDebt.updated_at = new Date();
           oldDebt.pay_later = pay_later ?? null;
-
-          await this.debtRepository.save(oldDebt);
-          imported.push({ row: i + 2, success: true });
+          updatePromises.push(
+            this.debtRepository.save(oldDebt)
+              .then(() => importedResults.push({ row: i + 2, success: true }))
+              .catch((err) => errorResults.push({ row: i + 2, error: err?.message || 'Unknown error' }))
+          );
         } else {
-          // Tạo phiếu mới
           const debt = this.debtRepository.create({
             customer_raw_code: row['Mã đối tác'] || '',
             invoice_code: invoice_code,
@@ -347,23 +357,25 @@ export class DebtService {
             sale: sale_id ? ({ id: sale_id } as any) : undefined,
             sale_name_raw,
             employee_code_raw,
-            debt_config: debtConfig
-              ? ({ id: debtConfig.id } as any)
-              : undefined,
+            debt_config: debtConfig ? ({ id: debtConfig.id } as any) : undefined,
             created_at: new Date(),
             updated_at: new Date(),
             pay_later: pay_later ?? null,
           });
-
-          await this.debtRepository.save(debt);
-          imported.push({ row: i + 2, success: true });
+          insertPromises.push(
+            this.debtRepository.save(debt)
+              .then(() => importedResults.push({ row: i + 2, success: true }))
+              .catch((err) => errorResults.push({ row: i + 2, error: err?.message || 'Unknown error' }))
+          );
         }
       } catch (err) {
-        errors.push({ row: i + 2, error: err?.message || 'Unknown error' });
+        errorResults.push({ row: i + 2, error: err?.message || 'Unknown error' });
       }
-    }
+    });
 
-    return { imported, errors };
+    // Chờ tất cả update/insert xong
+    await Promise.all([...updatePromises, ...insertPromises]);
+    return { imported: importedResults, errors: errorResults };
   }
 
   private parseExcelDate(val: any): string | undefined {

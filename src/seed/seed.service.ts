@@ -73,18 +73,13 @@ export class SeedService implements OnModuleInit {
         { name: 'system_aiTemperature', display_name: 'Temperature Model AI', value: '0.0', type: 'number', section: 'system', status: 1 },
         { name: 'system_aiTimeout', display_name: 'Thời gian timeout xử lý AI', value: '30', type: 'number', section: 'system', status: 1 },
         { name: 'system_aiRetry', display_name: 'Số lần thử lại xử lý AI', value: '3', type: 'number', section: 'system', status: 1 },
+        { name: 'system_processCampaign', display_name: 'Xử lý chiến dịch', value: '1', type: 'number', section: 'system', status: 1 },
 
         // transaction
         { name: 'transaction_threads', display_name: 'Tổng luồng chạy Giao dịch', value: '3', type: 'number', section: 'transaction', status: 1 },
         { name: 'transaction_batch', display_name: 'Tổng xử lý số lượng hội thoại 1 lần Giao dịch ', value: '300', type: 'number', section: 'transaction', status: 1 },
         { name: 'transaction_rest', display_name: 'Thời gian nghỉ khi xử lý Giao dịch ', value: '300', type: 'number', section: 'transaction', status: 1 },
         { name: 'transaction_timeout', display_name: 'Thời gian timeout của luồng Giao dịch ', value: '30', type: 'number', section: 'transaction', status: 1 },
-
-        // debt
-        { name: 'debt_threads', display_name: 'Tổng luồng chạy Công nợ', value: '3', type: 'number', section: 'debt', status: 1 },
-        { name: 'debt_batch', display_name: 'Tổng xử lý số lượng hội thoại 1 lần Công nợ', value: '300', type: 'number', section: 'debt', status: 1 },
-        { name: 'debt_rest', display_name: 'Thời gian nghỉ khi xử lý Công nợ', value: '30', type: 'number', section: 'debt', status: 1 },
-        { name: 'debt_timeout', display_name: 'Thời gian timeout của luồng Công nợ', value: '30', type: 'number', section: 'debt', status: 1 },
 
         // holiday
         { name: 'holiday_multi_days', display_name: 'Lịch nghỉ nhiều ngày liên tục', value: '[]', type: 'json', section: 'holiday', status: 1 },
@@ -98,14 +93,17 @@ export class SeedService implements OnModuleInit {
         { name: 'debt_secondReminderDelayTime', display_name: 'Thời gian trì hoãn nhắc nợ lần 2', value: '1', type: 'number', section: 'debt', status: 1 },
         { name: 'debt_reminderForSale', display_name: 'Câu nhắc báo cho sale', value: 'Nhờ KD hỗ trợ nhắc lại với khách hàng {customer_code} hiện còn nợ số tiền {amount} đến hạn. Kế toán đã nhắc vài lần nhưng chưa thấy phản hồi. Mong KD hỗ trợ giúp để thu hồi công nợ đúng hạn. Em cảm ơn KD nhiều!', type: 'text', section: 'debt', status: 1 },
         { name: 'debt_runTime', display_name: 'Thời gian chạy công nợ', value: '08:00', type: 'time', section: 'debt', status: 1 },
+        { name: 'debt_rest', display_name: 'Thời gian nghỉ công nợ', value: '5', type: 'number', section: 'debt', status: 1 },
+        { name: 'debt_timeout', display_name: 'Thời gian timeout công nợ', value: '30', type: 'number', section: 'debt', status: 1 },
+        { name: 'debt_max_workers', display_name: 'Số lượng worker tối đa cho công nợ', value: '5', type: 'number', section: 'debt', status: 1 },
+        { name: 'debt_batch', display_name: 'Tổng xử lý số lượng hội thoại 1 lần Công nợ', value: '300', type: 'number', section: 'debt', status: 1 },
 
-        // sale
-        { name: 'sale_campaignRest', display_name: 'Thời gian nghỉ sale_campaign', value: '5', type: 'number', section: 'sale', status: 1 },
-        { name: 'sale_customerRest', display_name: 'Thời gian nghỉ giữa từng khách hàng', value: '1', type: 'number', section: 'sale', status: 1 },
-        { name: 'sale_rest', display_name: 'Thời gian nghỉ chung của sale', value: '5', type: 'number', section: 'sale', status: 1 },
-        { name: 'sale_customerCount', display_name: 'Số lượng khách mỗi sale gửi', value: '8', type: 'number', section: 'sale', status: 1 },
-        { name: 'sale_delayLink', display_name: 'Thời gian delay link', value: '15', type: 'number', section: 'sale', status: 1 },
-        { name: 'sale_delayText', display_name: 'Thời gian delay text', value: '5', type: 'number', section: 'sale', status: 1 },
+        // campaign
+        { name: 'campaign_runTime', display_name: 'Thời gian chạy chiến dịch', value: '08:00', type: 'time', section: 'campaign', status: 1 },
+        { name: 'campaign_rest', display_name: 'Thời gian nghỉ chiến dịch', value: '5', type: 'number', section: 'campaign', status: 1 },
+        { name: 'campaign_timeout', display_name: 'Thời gian timeout chiến dịch', value: '30', type: 'number', section: 'campaign', status: 1 },
+        { name: 'campaign_max_workers', display_name: 'Số lượng worker tối đa cho chiến dịch', value: '5', type: 'number', section: 'campaign', status: 1 },
+        { name: 'campaign_batch', display_name: 'Tổng xử lý số lượng hội thoại 1 lần Chiến dịch', value: '300', type: 'number', section: 'campaign', status: 1 },
       ];
       for (const config of configs) {
         await this.systemConfigRepo.save(this.systemConfigRepo.create(config));
