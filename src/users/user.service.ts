@@ -1,6 +1,8 @@
 import {
   BadRequestException,
   ConflictException,
+  forwardRef,
+  Inject,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -29,9 +31,10 @@ export class UserService {
     private readonly roleRepo: Repository<Role>,
     @InjectRepository(ChangeUserLog)
     private readonly changeUserLogRepo: Repository<ChangeUserLog>,
+    @Inject(forwardRef(() => WebsocketGateway))
     private readonly wsGateway: WebsocketGateway,
     private readonly rolesPermissionsService: RolesPermissionsService, // Inject service
-    private readonly userStatusObserver: UserStatusObserver, // Inject observer
+    private readonly userStatusObserver: UserStatusObserver,
   ) {}
 
   async findAll(
@@ -45,8 +48,7 @@ export class UserService {
       zaloLinkStatuses?: number[];
     },
     user?: any, // Thêm user để phân quyền động nếu cần
-  ): Promise<{ data: User[]; total: number }> {
-    // Nếu cần phân quyền động, có thể kiểm tra role ở đây bằng getRoleNames(user)
+  ): Promise<{ data: Array<{ [key: string]: any }>; total: number }> {
     const qb = this.userRepo
       .createQueryBuilder('user')
       .leftJoinAndSelect('user.departments', 'department')
@@ -78,7 +80,6 @@ export class UserService {
           zaloLinkStatuses: filter.zaloLinkStatuses,
         });
       }
-      // Filtering logic ends here, continue building the query for paginated results
     }
 
     qb.select([
@@ -95,6 +96,7 @@ export class UserService {
       'user.zaloName',
       'user.avatarZalo',
       'user.isBlock',
+      'user.lastOnlineAt',
       'department.id',
       'department.name',
       'department.slug',
@@ -107,7 +109,11 @@ export class UserService {
       .take(limit);
 
     const [data, total] = await qb.getManyAndCount();
-    return { data, total };
+    const mappedData = data.map(user => ({
+      ...user,
+      lastOnlineAt: user.lastOnlineAt ? user.lastOnlineAt.toISOString() : null,
+    }));
+    return { data: mappedData, total };
   }
 
   async findOne(id: number): Promise<User | null> {
@@ -908,5 +914,9 @@ export class UserService {
 
     await this.userRepo.update(id, { password: hashedPassword });
     return this.userRepo.findOneOrFail({ where: { id } });
+  }
+
+  async updateLastOnline(userId: number) {
+    await this.userRepo.update(userId, { lastOnlineAt: new Date() });
   }
 }

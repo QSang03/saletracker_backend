@@ -93,4 +93,7 @@ export class User {
   notifications: Notification[];
   @Column({ nullable: true, name: 'refresh_token', select: false })
   refreshToken?: string;
+
+  @Column({ nullable: true, name: 'last_online_at' })
+  lastOnlineAt?: Date;
 }

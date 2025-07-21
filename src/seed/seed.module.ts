@@ -9,6 +9,7 @@ import { RolePermission } from '../roles_permissions/roles-permissions.entity';
 import { SystemConfig } from '../system_config/system_config.entity';
 import { DatabaseChangeLog } from 'src/observers/change_log.entity';
 import { SeedDebtTriggerService } from './seed-debt-trigger.service';
+import { SeedCampaignTriggerService } from './seed-campaign-trigger.seed';
 
 @Module({
   imports: [
@@ -22,6 +23,6 @@ import { SeedDebtTriggerService } from './seed-debt-trigger.service';
       DatabaseChangeLog,
     ]),
   ],
-  providers: [SeedService, SeedDebtTriggerService],
+  providers: [SeedService, SeedDebtTriggerService, SeedCampaignTriggerService],
 })
 export class SeedModule {}

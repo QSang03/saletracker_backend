@@ -12,7 +12,7 @@ const timezone = require('dayjs/plugin/timezone');
 dayjs.extend(utc);
 dayjs.extend(timezone);
 
-const FIELDS = ['createdAt', 'updatedAt', 'lastLogin', 'deletedAt'];
+const FIELDS = ['createdAt', 'updatedAt', 'lastLogin', 'lastOnlineAt', 'deletedAt'];
 
 function convertDates(obj: any): any {
   if (Array.isArray(obj)) {

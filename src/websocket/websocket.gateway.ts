@@ -8,9 +8,9 @@ import {
   OnGatewayDisconnect,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
-import { UseGuards, Logger, Injectable } from '@nestjs/common';
+import { Logger, Injectable } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { UserService } from 'src/users/user.service';
 
 interface AuthenticatedSocket extends Socket {
   user?: any;
@@ -32,7 +32,10 @@ export class WebsocketGateway
   private logger = new Logger('WebsocketGateway');
   private userSocketMap: Map<string, string> = new Map(); // userId <-> socketId
 
-  constructor(private readonly jwtService: JwtService) {}
+  constructor(
+    private readonly jwtService: JwtService,
+    private readonly userService: UserService,
+  ) {}
 
   async handleConnection(client: AuthenticatedSocket) {
     try {
@@ -46,7 +49,7 @@ export class WebsocketGateway
       const payload = this.jwtService.verify(token, {
         secret: process.env.JWT_SECRET || 'your_default_secret',
       });
-      client.user = payload;
+      client.user = payload;5
       this.userSocketMap.set(payload.sub, client.id);
       this.logger.log(`User ${payload.sub} connected with socket ${client.id}`);
     } catch (err) {
@@ -77,6 +80,16 @@ export class WebsocketGateway
     @MessageBody() room: string,
   ) {
     client.join(room);
+  }
+
+  @SubscribeMessage('heartbeat')
+  async handleHeartbeat(
+    @ConnectedSocket() client: AuthenticatedSocket,
+  ) {
+    if (client.user?.sub) {
+      await this.userService.updateLastOnline(Number(client.user.sub));
+      client.emit('heartbeat_ack', { serverTime: Date.now() });
+    }
   }
 
   // Emit to a specific user
