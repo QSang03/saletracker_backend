@@ -218,6 +218,10 @@ export class AuthService {
             slug: d.slug,
           })) || [];
       }
+      let server_ip: string | null = null;
+      const allDepartments = await this.departmentService.findAllActive();
+      const found = allDepartments.find((d) => !!d.server_ip);
+      if (found) server_ip = found.server_ip;
       // Tạo access token mới với đầy đủ thông tin
       const accessPayload = {
         sub: user.id,
@@ -239,6 +243,7 @@ export class AuthService {
             display_name: role.display_name,
           })) || [],
         departments,
+        server_ip,
         permissions: [
           ...user.roles?.flatMap(
             (role: Role) =>
@@ -317,6 +322,10 @@ export class AuthService {
           slug: d.slug,
         })) || [];
     }
+    let server_ip: string | null = null;
+    const allDepartments = await this.departmentService.findAllActive();
+    const found = allDepartments.find((d) => !!d.server_ip);
+    if (found) server_ip = found.server_ip;
     const payload = {
       sub: user.id,
       id: user.id,
@@ -337,6 +346,7 @@ export class AuthService {
           display_name: role.display_name,
         })) || [],
       departments,
+      server_ip,
       permissions: [
         ...user.roles?.flatMap(
           (role: Role) =>
@@ -394,7 +404,10 @@ export class AuthService {
           slug: d.slug,
         })) || [];
     }
-
+    let server_ip: string | null = null;
+    const allDepartments = await this.departmentService.findAllActive();
+    const found = allDepartments.find((d) => !!d.server_ip);
+    if (found) server_ip = found.server_ip;
     const payload = {
       sub: user.id,
       id: user.id,
@@ -415,6 +428,7 @@ export class AuthService {
           display_name: role.display_name,
         })) || [],
       departments,
+      server_ip,
       permissions: [
         ...user.roles?.flatMap(
           (role: Role) =>
