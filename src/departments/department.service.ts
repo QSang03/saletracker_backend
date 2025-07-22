@@ -180,7 +180,7 @@ export class DepartmentService {
     await this.departmentRepo.manager.save([managerRole, userRole]);
 
     // Tạo permissions cho phòng ban
-    const actions = ['create', 'read', 'update', 'delete', 'import', 'export'];
+    const actions = ['create', 'read', 'update', 'delete', 'import', 'export', 'allow_analysis'];
     const permissions: Permission[] = [];
     for (const action of actions) {
       const permission = await this.permissionService.createPermission({

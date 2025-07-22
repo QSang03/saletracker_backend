@@ -122,6 +122,21 @@ export class DebtController {
     return this.debtService.getUniqueEmployeeList(req.user);
   }
 
+  @Get('import-history')
+  @Permission('cong-no', 'read')
+  async getImportHistory(@Query('date') date?: string) {
+    return this.debtService.getImportHistory(date);
+  }
+
+  @Post('import-rollback')
+  @Permission('cong-no', 'delete')
+  async rollbackImport(@Body('import_session_id') sessionId: string) {
+    if (!sessionId) {
+      throw new BadRequestException('import_session_id là bắt buộc');
+    }
+    return this.debtService.rollbackImport(sessionId);
+  }
+
   @Get(':id')
   @Permission('cong-no', 'read')
   findOne(@Param('id') id: string) {
