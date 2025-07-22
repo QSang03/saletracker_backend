@@ -33,7 +33,8 @@ export class DebtConfigService {
     const limit = filters.limit || 10;
     const skip = (page - 1) * limit;
 
-    const queryBuilder = this.repo.createQueryBuilder('debt_config')
+    const queryBuilder = this.repo
+      .createQueryBuilder('debt_config')
       .leftJoinAndSelect('debt_config.debts', 'debts')
       .leftJoinAndSelect('debt_config.debt_log', 'debt_log')
       .leftJoinAndSelect('debt_config.employee', 'employee')
@@ -43,14 +44,14 @@ export class DebtConfigService {
     if (filters.search && filters.search.trim()) {
       queryBuilder.andWhere(
         '(debt_config.customer_code LIKE :search OR debt_config.customer_name LIKE :search)',
-        { search: `%${filters.search.trim()}%` }
+        { search: `%${filters.search.trim()}%` },
       );
     }
 
     // Employee filter
     if (filters.employees && filters.employees.length > 0) {
       queryBuilder.andWhere('employee.id IN (:...employeeIds)', {
-        employeeIds: filters.employees
+        employeeIds: filters.employees,
       });
     }
 
@@ -62,10 +63,13 @@ export class DebtConfigService {
       const endOfDay = new Date(filterDate);
       endOfDay.setHours(23, 59, 59, 999);
 
-      queryBuilder.andWhere('debt_config.send_last_at BETWEEN :startOfDay AND :endOfDay', {
-        startOfDay,
-        endOfDay
-      });
+      queryBuilder.andWhere(
+        'debt_config.send_last_at BETWEEN :startOfDay AND :endOfDay',
+        {
+          startOfDay,
+          endOfDay,
+        },
+      );
     }
 
     // Count total for pagination
@@ -115,25 +119,25 @@ export class DebtConfigService {
     // Tìm employee dựa trên debts có customer_raw_code trùng với customer_code
     if (data.customer_code) {
       const debt = await this.repo.manager.getRepository('Debt').findOne({
-      where: { customer_raw_code: data.customer_code },
+        where: { customer_raw_code: data.customer_code },
       });
 
       if (debt && debt.employee_code_raw) {
-      const empCode = String(debt.employee_code_raw).split('-')[0].trim();
-      if (empCode) {
-        const user = await this.repo.manager.getRepository('User').findOne({
-        where: { employeeCode: empCode },
-        });
-        if (user) {
-        entity.employee = { id: user.id } as any;
+        const empCode = String(debt.employee_code_raw).split('-')[0].trim();
+        if (empCode) {
+          const user = await this.repo.manager.getRepository('User').findOne({
+            where: { employeeCode: empCode },
+          });
+          if (user) {
+            entity.employee = { id: user.id } as any;
+          } else {
+            entity.employee = undefined;
+          }
         } else {
-        entity.employee = undefined;
+          entity.employee = undefined;
         }
       } else {
         entity.employee = undefined;
-      }
-      } else {
-      entity.employee = undefined;
       }
     }
 
@@ -169,6 +173,19 @@ export class DebtConfigService {
     const config = await this.repo.findOne({ where: { id } });
     if (!config) throw new Error('DebtConfig not found');
 
+    // Kiểm tra trùng lặp customer_code nếu có thay đổi
+    if (data.customer_code && data.customer_code !== config.customer_code) {
+      const existingConfig = await this.repo.findOne({
+        where: { customer_code: data.customer_code },
+      });
+      if (existingConfig) {
+        return {
+          success: false,
+          message: `Cấu hình công nợ cho mã khách hàng "${data.customer_code}" đã tồn tại`,
+        } as any;
+      }
+    }
+
     // Chỉ cho phép các trường này được update
     const allowedFields = [
       'is_send',
@@ -176,6 +193,7 @@ export class DebtConfigService {
       'gap_day',
       'day_of_week',
       'customer_name',
+      'customer_code',
       'send_last_at',
       'last_update_at',
       'customer_type',
@@ -209,9 +227,87 @@ export class DebtConfigService {
       updateData.employee = { id: data.employee.id };
     }
 
+    // Xử lý logic employee khi customer_code thay đổi
+    const isCustomerCodeChanged =
+      'customer_code' in data && data.customer_code !== config.customer_code;
+
+    if (isCustomerCodeChanged) {
+      if (data.customer_code) {
+        // Kiểm tra customer_code mới có hợp lệ không (tồn tại trong bảng Debt)
+        const debt = await this.repo.manager.getRepository('Debt').findOne({
+          where: { customer_raw_code: data.customer_code },
+        });
+
+        if (debt) {
+          // customer_code hợp lệ - tìm employee tương ứng từ debt.employee_code_raw
+          if (debt.employee_code_raw) {
+            const empCode = String(debt.employee_code_raw).split('-')[0].trim();
+            if (empCode) {
+              const user = await this.repo.manager
+                .getRepository('User')
+                .findOne({
+                  where: { employeeCode: empCode },
+                });
+              if (user) {
+                updateData.employee = { id: user.id };
+              } else {
+                updateData.employee = null;
+              }
+            } else {
+              updateData.employee = null;
+            }
+          } else {
+            updateData.employee = null;
+          }
+        } else {
+          // customer_code không hợp lệ (không tồn tại trong Debt) - xóa employee
+          updateData.employee = null;
+        }
+      } else {
+        // customer_code bị xóa - xóa employee
+        updateData.employee = null;
+      }
+    }
+
     const result = await this.repo.update(id, updateData);
     if (result.affected === 0) {
       throw new Error('DebtConfig not found');
+    }
+
+    // Cập nhật debt_config cho các debts khi customer_code thay đổi
+
+    if (isCustomerCodeChanged) {
+      // Xóa liên kết cũ với customer_code cũ
+      if (config.customer_code) {
+        const oldDebtsToUpdate = await this.repo.manager
+          .getRepository('Debt')
+          .find({
+            where: { customer_raw_code: config.customer_code },
+          });
+
+        for (const debt of oldDebtsToUpdate) {
+          debt.debt_config = null;
+          await this.repo.manager.getRepository('Debt').save(debt);
+        }
+      }
+
+      // Tạo liên kết mới với customer_code mới (chỉ nếu customer_code hợp lệ)
+      if (data.customer_code) {
+        const newDebtsToUpdate = await this.repo.manager
+          .getRepository('Debt')
+          .find({
+            where: { customer_raw_code: data.customer_code },
+          });
+
+        // Chỉ cập nhật nếu có debts tương ứng (customer_code hợp lệ)
+        if (newDebtsToUpdate.length > 0) {
+          const updatedConfig = await this.repo.findOne({ where: { id } });
+          for (const debt of newDebtsToUpdate) {
+            debt.debt_config = updatedConfig;
+            await this.repo.manager.getRepository('Debt').save(debt);
+          }
+        }
+      }
     }
 
     const updated = await this.repo.findOne({
@@ -234,7 +330,10 @@ export class DebtConfigService {
     });
   }
 
-  async findAllWithRole(currentUser: any, filters: DebtConfigFilters = {}): Promise<{
+  async findAllWithRole(
+    currentUser: any,
+    filters: DebtConfigFilters = {},
+  ): Promise<{
     data: any[];
     total: number;
     page: number;
@@ -253,7 +352,8 @@ export class DebtConfigService {
     const limit = filters.limit || 10;
     const skip = (page - 1) * limit;
 
-    const queryBuilder = this.repo.createQueryBuilder('debt_config')
+    const queryBuilder = this.repo
+      .createQueryBuilder('debt_config')
       .leftJoinAndSelect('debt_config.debt_log', 'debt_log')
       .leftJoinAndSelect('debt_config.actor', 'actor')
       .leftJoinAndSelect('debt_config.debts', 'debts')
@@ -274,12 +374,14 @@ export class DebtConfigService {
         'debts',
         'employee.id',
         'employee.fullName',
-        'employee.username'
+        'employee.username',
       ]);
 
     // Role-based filtering
     if (!isAdminOrManager && roleNames.includes('user-cong-no')) {
-      queryBuilder.andWhere('employee.id = :userId', { userId: currentUser?.id });
+      queryBuilder.andWhere('employee.id = :userId', {
+        userId: currentUser?.id,
+      });
     } else if (!isAdminOrManager) {
       return {
         data: [],
@@ -294,14 +396,14 @@ export class DebtConfigService {
     if (filters.search && filters.search.trim()) {
       queryBuilder.andWhere(
         '(debt_config.customer_code LIKE :search OR debt_config.customer_name LIKE :search)',
-        { search: `%${filters.search.trim()}%` }
+        { search: `%${filters.search.trim()}%` },
       );
     }
 
     // Employee filter
     if (filters.employees && filters.employees.length > 0) {
       queryBuilder.andWhere('employee.id IN (:...employeeIds)', {
-        employeeIds: filters.employees
+        employeeIds: filters.employees,
       });
     }
 
@@ -313,10 +415,13 @@ export class DebtConfigService {
       const endOfDay = new Date(filterDate);
       endOfDay.setHours(23, 59, 59, 999);
 
-      queryBuilder.andWhere('debt_config.send_last_at BETWEEN :startOfDay AND :endOfDay', {
-        startOfDay,
-        endOfDay
-      });
+      queryBuilder.andWhere(
+        'debt_config.send_last_at BETWEEN :startOfDay AND :endOfDay',
+        {
+          startOfDay,
+          endOfDay,
+        },
+      );
     }
 
     // Count total
@@ -360,10 +465,18 @@ export class DebtConfigService {
         debt_log: cfg.debt_log
           ? {
               remind_status: cfg.debt_log.remind_status,
-              created_at: cfg.debt_log.created_at ? cfg.debt_log.created_at.toISOString() : null,
-              send_at: cfg.debt_log.send_at ? cfg.debt_log.send_at.toISOString() : null,
-              first_remind_at: cfg.debt_log.first_remind_at ? cfg.debt_log.first_remind_at.toISOString() : null,
-              second_remind_at: cfg.debt_log.second_remind_at ? cfg.debt_log.second_remind_at.toISOString() : null,
+              created_at: cfg.debt_log.created_at
+                ? cfg.debt_log.created_at.toISOString()
+                : null,
+              send_at: cfg.debt_log.send_at
+                ? cfg.debt_log.send_at.toISOString()
+                : null,
+              first_remind_at: cfg.debt_log.first_remind_at
+                ? cfg.debt_log.first_remind_at.toISOString()
+                : null,
+              second_remind_at: cfg.debt_log.second_remind_at
+                ? cfg.debt_log.second_remind_at.toISOString()
+                : null,
             }
           : null,
         total_bills,
@@ -539,11 +652,10 @@ export class DebtConfigService {
 
       await this.repo.save(config);
 
-      await this.repo.manager.getRepository('Debt').update(
-        { customer_raw_code: customer_code },
-        { debt_config: config }
-      );
-      
+      await this.repo.manager
+        .getRepository('Debt')
+        .update({ customer_raw_code: customer_code }, { debt_config: config });
+
       imported.push({
         row: i + 2,
         customer_code,
@@ -579,17 +691,32 @@ export class DebtConfigService {
       remind_status: debtLog?.remind_status || 'Not Sent',
       customer_gender: debtLog?.gender || '',
       send_time: debtLog?.send_at ? debtLog.send_at.toISOString() : null,
-      remind_time_1: debtLog?.first_remind_at ? debtLog.first_remind_at.toISOString() : null,
-      remind_time_2: debtLog?.second_remind_at ? debtLog.second_remind_at.toISOString() : null,
+      remind_time_1: debtLog?.first_remind_at
+        ? debtLog.first_remind_at.toISOString()
+        : null,
+      remind_time_2: debtLog?.second_remind_at
+        ? debtLog.second_remind_at.toISOString()
+        : null,
       // Thông tin bổ sung
       is_send: config.is_send,
       is_repeat: config.is_repeat,
       day_of_week: config.day_of_week,
       gap_day: config.gap_day,
-      send_last_at: config.send_last_at ? config.send_last_at.toISOString() : null,
-      last_update_at: config.last_update_at ? config.last_update_at.toISOString() : null,
-      actor: config.actor ? { fullName: config.actor.fullName, username: config.actor.username } : null,
-      employee: config.employee ? { fullName: config.employee.fullName, username: config.employee.username } : null,
+      send_last_at: config.send_last_at
+        ? config.send_last_at.toISOString()
+        : null,
+      last_update_at: config.last_update_at
+        ? config.last_update_at.toISOString()
+        : null,
+      actor: config.actor
+        ? { fullName: config.actor.fullName, username: config.actor.username }
+        : null,
+      employee: config.employee
+        ? {
+            fullName: config.employee.fullName,
+            username: config.employee.username,
+          }
+        : null,
     };
   }
 }
