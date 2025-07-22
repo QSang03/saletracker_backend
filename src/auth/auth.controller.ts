@@ -46,6 +46,11 @@ export class AuthController {
         })),
     );
 
+    let server_ip: string | null = null;
+    const allDepartments = await this.departmentService.findAllActive();
+    const found = allDepartments.find((d) => !!d.server_ip);
+    if (found) server_ip = found.server_ip;
+
     let departments: any;
     const isAdmin = user.roles?.some((role) => role.name === 'admin');
     if (isAdmin) {
@@ -54,6 +59,7 @@ export class AuthController {
         id: d.id,
         name: d.name,
         slug: d.slug,
+        server_ip: d.server_ip,
       }));
     } else {
       departments =
@@ -61,6 +67,7 @@ export class AuthController {
           id: d.id,
           name: d.name,
           slug: d.slug,
+          server_ip: d.server_ip,
         })) || [];
     }
 
@@ -77,6 +84,7 @@ export class AuthController {
       avatarZalo: user.avatarZalo,
       permissions,
       departments,
+      server_ip,
       roles: user.roles?.map((r) => ({ id: r.id, name: r.name })),
       email: user.email,
     };
