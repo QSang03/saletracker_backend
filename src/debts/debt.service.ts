@@ -703,27 +703,107 @@ export class DebtService {
     });
   }
 
-  private parseExcelDate(val: any): string | undefined {
-    if (!val) return undefined;
-    if (typeof val === 'number') {
-      const excelEpoch = new Date(1899, 11, 30);
-      const date = new Date(excelEpoch.getTime() + val * 24 * 60 * 60 * 1000);
-      const yyyy = date.getFullYear();
-      const mm = String(date.getMonth() + 1).padStart(2, '0');
-      const dd = String(date.getDate()).padStart(2, '0');
+  private parseExcelDate(value: any): string | null {
+    if (!value) return null;
+    
+    // Nếu là số (Excel date serial number)
+    if (typeof value === 'number') {
+      // Excel date serial number (ngày 1 = 1/1/1900, nhưng Excel có bug nên dùng 1899/12/30)
+      const excelEpoch = new Date(1899, 11, 30); // 30/12/1899
+      const jsDate = new Date(excelEpoch.getTime() + value * 24 * 60 * 60 * 1000);
+      
+      const yyyy = jsDate.getFullYear();
+      const mm = String(jsDate.getMonth() + 1).padStart(2, '0');
+      const dd = String(jsDate.getDate()).padStart(2, '0');
       return `${yyyy}-${mm}-${dd}`;
     }
-    if (typeof val === 'string') {
-      const parts = val.split(/[\/-]/);
-      if (parts.length === 3) {
-        const dd = parts[0].padStart(2, '0');
-        const mm = parts[1].padStart(2, '0');
-        let yyyy = parts[2];
-        if (yyyy.length === 2) yyyy = '20' + yyyy;
-        return `${yyyy}-${mm}-${dd}`;
+    
+    // Nếu là string
+    if (typeof value === 'string') {
+      value = value.trim();
+      if (!value) return null;
+      
+      // Thử parse các format phổ biến (dd/mm/yyyy format từ Excel VN)
+      const formats = [
+        {
+          regex: /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/,
+          parse: (match: RegExpMatchArray) => {
+            // Format dd/mm/yyyy (Vietnam format)
+            const [, day, month, year] = match;
+            return { day: parseInt(day), month: parseInt(month), year: parseInt(year) };
+          }
+        },
+        {
+          regex: /^(\d{4})-(\d{1,2})-(\d{1,2})$/,
+          parse: (match: RegExpMatchArray) => {
+            // Format yyyy-mm-dd
+            const [, year, month, day] = match;
+            return { day: parseInt(day), month: parseInt(month), year: parseInt(year) };
+          }
+        },
+        {
+          regex: /^(\d{1,2})-(\d{1,2})-(\d{4})$/,
+          parse: (match: RegExpMatchArray) => {
+            // Format dd-mm-yyyy
+            const [, day, month, year] = match;
+            return { day: parseInt(day), month: parseInt(month), year: parseInt(year) };
+          }
+        },
+        {
+          regex: /^(\d{1,2})\.(\d{1,2})\.(\d{4})$/,
+          parse: (match: RegExpMatchArray) => {
+            // Format dd.mm.yyyy
+            const [, day, month, year] = match;
+            return { day: parseInt(day), month: parseInt(month), year: parseInt(year) };
+          }
+        }
+      ];
+      
+      for (const format of formats) {
+        const match = value.match(format.regex);
+        if (match) {
+          const { day, month, year } = format.parse(match);
+          
+          // Kiểm tra tháng và ngày hợp lệ
+          if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+            const parsedDate = new Date(year, month - 1, day);
+            
+            // Kiểm tra ngày được tạo có đúng với input không
+            if (parsedDate.getFullYear() === year && 
+                parsedDate.getMonth() === month - 1 && 
+                parsedDate.getDate() === day) {
+              const yyyy = parsedDate.getFullYear();
+              const mm = String(parsedDate.getMonth() + 1).padStart(2, '0');
+              const dd = String(parsedDate.getDate()).padStart(2, '0');
+              return `${yyyy}-${mm}-${dd}`;
+            }
+          }
+        }
       }
     }
-    return undefined;
+    
+    // Nếu là Date object
+    if (value instanceof Date && !isNaN(value.getTime())) {
+      const yyyy = value.getFullYear();
+      const mm = String(value.getMonth() + 1).padStart(2, '0');
+      const dd = String(value.getDate()).padStart(2, '0');
+      return `${yyyy}-${mm}-${dd}`;
+    }
+    
+    // Thử parse trực tiếp
+    try {
+      const parsed = new Date(value);
+      if (!isNaN(parsed.getTime())) {
+        const yyyy = parsed.getFullYear();
+        const mm = String(parsed.getMonth() + 1).padStart(2, '0');
+        const dd = String(parsed.getDate()).padStart(2, '0');
+        return `${yyyy}-${mm}-${dd}`;
+      }
+    } catch (e) {
+      // Ignore
+    }
+    
+    return null;
   }
 
   async getUniqueCustomerList(currentUser?: User) {
