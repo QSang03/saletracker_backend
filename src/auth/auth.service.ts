@@ -223,9 +223,16 @@ export class AuthService {
           })) || [];
       }
       let server_ip: string | null = null;
-      const allDepartments = await this.departmentService.findAllActive();
-      const found = allDepartments.find((d) => !!d.server_ip);
-      if (found) server_ip = found.server_ip;
+      if (isAdmin) {
+        // Admin lấy server_ip của bất kỳ phòng ban nào (ưu tiên phòng ban đầu tiên có server_ip)
+        const allDepartments = await this.departmentService.findAllActive();
+        const found = allDepartments.find((d) => !!d.server_ip);
+        if (found) server_ip = found.server_ip;
+      } else {
+        // User thường chỉ lấy server_ip của phòng ban mình thuộc về
+        const found = user.departments?.find((d) => !!d.server_ip);
+        if (found) server_ip = found.server_ip;
+      }
       // Tạo access token mới với đầy đủ thông tin
       const accessPayload = {
         sub: user.id,
@@ -327,9 +334,16 @@ export class AuthService {
         })) || [];
     }
     let server_ip: string | null = null;
-    const allDepartments = await this.departmentService.findAllActive();
-    const found = allDepartments.find((d) => !!d.server_ip);
-    if (found) server_ip = found.server_ip;
+    if (isAdmin) {
+      // Admin lấy server_ip của bất kỳ phòng ban nào (ưu tiên phòng ban đầu tiên có server_ip)
+      const allDepartments = await this.departmentService.findAllActive();
+      const found = allDepartments.find((d) => !!d.server_ip);
+      if (found) server_ip = found.server_ip;
+    } else {
+      // User thường chỉ lấy server_ip của phòng ban mình thuộc về
+      const found = user.departments?.find((d) => !!d.server_ip);
+      if (found) server_ip = found.server_ip;
+    }
     const payload = {
       sub: user.id,
       id: user.id,
@@ -409,9 +423,16 @@ export class AuthService {
         })) || [];
     }
     let server_ip: string | null = null;
-    const allDepartments = await this.departmentService.findAllActive();
-    const found = allDepartments.find((d) => !!d.server_ip);
-    if (found) server_ip = found.server_ip;
+    if (isAdmin) {
+      // Admin lấy server_ip của bất kỳ phòng ban nào (ưu tiên phòng ban đầu tiên có server_ip)
+      const allDepartments = await this.departmentService.findAllActive();
+      const found = allDepartments.find((d) => !!d.server_ip);
+      if (found) server_ip = found.server_ip;
+    } else {
+      // User thường chỉ lấy server_ip của phòng ban mình thuộc về
+      const found = user.departments?.find((d) => !!d.server_ip);
+      if (found) server_ip = found.server_ip;
+    }
     const payload = {
       sub: user.id,
       id: user.id,
