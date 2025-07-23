@@ -74,6 +74,12 @@ export class DebtController {
       0,
     );
 
+    const totalRemaining = debts.reduce(
+      (sum, d) =>
+        sum + (Number(d.remaining) || 0),
+      0,
+    );
+
     // Số phiếu đã thanh toán
     const totalPaidBills = debts.filter((d) => d.status === 'paid').length;
 
@@ -83,6 +89,7 @@ export class DebtController {
       totalCollected, // Tổng tiền thực tế đã thu (65tr trong ví dụ)
       totalPaidAmount, // Tổng tiền các phiếu đã thanh toán (60tr trong ví dụ)
       totalPaidBills,
+      totalRemaining, // Tổng tiền còn lại (5tr trong ví dụ)
     };
   }
 
