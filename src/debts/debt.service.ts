@@ -58,11 +58,18 @@ export class DebtService {
       );
     }
     // Filter trạng thái (hỗ trợ truyền nhiều status, giống employeeCodes)
-    if (query.statuses && typeof query.statuses === 'string' && query.statuses.trim()) {
+    if (
+      query.statuses &&
+      typeof query.statuses === 'string' &&
+      query.statuses.trim()
+    ) {
       // Hỗ trợ truyền vào dạng "paid,pay_later,no_information_available"
       let statuses: string[] = [];
       if (typeof query.statuses === 'string') {
-        statuses = query.statuses.split(',').map((s: string) => s.trim()).filter(Boolean);
+        statuses = query.statuses
+          .split(',')
+          .map((s: string) => s.trim())
+          .filter(Boolean);
       } else {
         statuses = query.statuses.map((s: string) => s.trim()).filter(Boolean);
       }
@@ -79,25 +86,29 @@ export class DebtService {
       });
     }
     // Filter kế toán công nợ (employeeCode)
-    if (query.employeeCodes && typeof query.employeeCodes === 'string' && query.employeeCodes.trim()) {
+    if (
+      query.employeeCodes &&
+      typeof query.employeeCodes === 'string' &&
+      query.employeeCodes.trim()
+    ) {
       // Hỗ trợ truyền vào dạng "NKTO01-TRẦN THỊ THÙY QUYÊN,NKTO05-TRẦN THỊ NGỌC HÂN"
       let employeeCodes: string[] = [];
       if (typeof query.employeeCodes === 'string') {
-      employeeCodes = query.employeeCodes
-        .split(',')
-        .map((s: string) => s.split('-')[0].trim())
-        .filter(Boolean);
+        employeeCodes = query.employeeCodes
+          .split(',')
+          .map((s: string) => s.split('-')[0].trim())
+          .filter(Boolean);
       } else {
-      employeeCodes = query.employeeCodes
-        .map((s: string) => s.split('-')[0].trim())
-        .filter(Boolean);
+        employeeCodes = query.employeeCodes
+          .map((s: string) => s.split('-')[0].trim())
+          .filter(Boolean);
       }
       // Debug log
       if (employeeCodes.length > 0) {
-      qb.andWhere(
-        `TRIM(LEFT(debt.employee_code_raw, CASE WHEN LOCATE('-', debt.employee_code_raw) > 0 THEN LOCATE('-', debt.employee_code_raw) - 1 ELSE CHAR_LENGTH(debt.employee_code_raw) END)) IN (:...employeeCodes)`,
-        { employeeCodes }
-      );
+        qb.andWhere(
+          `TRIM(LEFT(debt.employee_code_raw, CASE WHEN LOCATE('-', debt.employee_code_raw) > 0 THEN LOCATE('-', debt.employee_code_raw) - 1 ELSE CHAR_LENGTH(debt.employee_code_raw) END)) IN (:...employeeCodes)`,
+          { employeeCodes },
+        );
       }
     }
     // Filter NVKD (saleCode)
@@ -157,7 +168,7 @@ export class DebtService {
     const hour = now.getHours().toString().padStart(2, '0');
     const minute = now.getMinutes().toString().padStart(2, '0');
     const second = now.getSeconds().toString().padStart(2, '0');
-    
+
     return `import_${day}_${month}_${year}_${hour}${minute}${second}`;
   }
 
@@ -258,15 +269,31 @@ export class DebtService {
     const errorResults: ImportResult[] = [];
 
     // Truy vấn debtConfig và user cho tất cả dòng trước
-    const customerCodesSet = new Set(rows.map(r => r['Mã đối tác']).filter(Boolean));
-    const debtConfigs = await this.debtConfigRepository.find({ where: { customer_code: In([...customerCodesSet]) } });
-    const debtConfigMap = new Map(debtConfigs.map(dc => [dc.customer_code, dc]));
+    const customerCodesSet = new Set(
+      rows.map((r) => r['Mã đối tác']).filter(Boolean),
+    );
+    const debtConfigs = await this.debtConfigRepository.find({
+      where: { customer_code: In([...customerCodesSet]) },
+    });
+    const debtConfigMap = new Map(
+      debtConfigs.map((dc) => [dc.customer_code, dc]),
+    );
 
     // Truy vấn tất cả employeeCode và saleCode trước
-    const empCodesSet = new Set(rows.map(r => String(r['Kế toán công nợ']).split('-')[0].trim()).filter(Boolean));
-    const saleCodesSet = new Set(rows.map(r => r['NVKD'] ? r['NVKD'].split('-')[0] : '').filter(Boolean));
-    const users = await this.userRepository.find({ where: { employeeCode: In([...empCodesSet, ...saleCodesSet]) } });
-    const userMap = new Map(users.map(u => [u.employeeCode, u]));
+    const empCodesSet = new Set(
+      rows
+        .map((r) => String(r['Kế toán công nợ']).split('-')[0].trim())
+        .filter(Boolean),
+    );
+    const saleCodesSet = new Set(
+      rows
+        .map((r) => (r['NVKD'] ? r['NVKD'].split('-')[0] : ''))
+        .filter(Boolean),
+    );
+    const users = await this.userRepository.find({
+      where: { employeeCode: In([...empCodesSet, ...saleCodesSet]) },
+    });
+    const userMap = new Map(users.map((u) => [u.employeeCode, u]));
 
     // Xử lý từng dòng, gom batch
     rows.forEach((row, i) => {
@@ -294,7 +321,10 @@ export class DebtService {
       ];
       const missing = required.filter((k) => !row[k]);
       if (missing.length) {
-        errorResults.push({ row: i + 2, error: `Thiếu trường: ${missing.join(', ')}` });
+        errorResults.push({
+          row: i + 2,
+          error: `Thiếu trường: ${missing.join(', ')}`,
+        });
         return;
       }
 
@@ -305,7 +335,10 @@ export class DebtService {
       if (debtConfig && row['Kế toán công nợ']) {
         const empCode = String(row['Kế toán công nợ']).split('-')[0].trim();
         const user = userMap.get(empCode);
-        if (user && (!debtConfig.employee || user.id !== debtConfig.employee.id)) {
+        if (
+          user &&
+          (!debtConfig.employee || user.id !== debtConfig.employee.id)
+        ) {
           debtConfig.employee = user;
           updatePromises.push(this.debtConfigRepository.save(debtConfig));
         }
@@ -326,7 +359,10 @@ export class DebtService {
       const oldDebt = existingDebtsMap.get(invoice_code);
 
       if (oldDebt && oldDebt.status === DebtStatus.PAID) {
-        errorResults.push({ row: i + 2, error: `Phiếu ${invoice_code} đã được thanh toán, không thể cập nhật` });
+        errorResults.push({
+          row: i + 2,
+          error: `Phiếu ${invoice_code} đã được thanh toán, không thể cập nhật`,
+        });
         return;
       }
 
@@ -337,7 +373,8 @@ export class DebtService {
 
       let pay_later: Date | undefined = undefined;
       if (oldDebt) {
-        pay_later = oldDebt.pay_later || payLaterMap.get(row['Mã đối tác']) || undefined;
+        pay_later =
+          oldDebt.pay_later || payLaterMap.get(row['Mã đối tác']) || undefined;
       } else {
         pay_later = payLaterMap.get(row['Mã đối tác']) || undefined;
       }
@@ -346,7 +383,8 @@ export class DebtService {
         if (oldDebt) {
           oldDebt.customer_raw_code = row['Mã đối tác'] || '';
           oldDebt.invoice_code = invoice_code;
-          oldDebt.issue_date = parseDate(row['Ngày chứng từ']) || oldDebt.issue_date;
+          oldDebt.issue_date =
+            parseDate(row['Ngày chứng từ']) || oldDebt.issue_date;
           oldDebt.bill_code = row['Số hóa đơn'] || '';
           oldDebt.due_date = parseDate(row['Ngày đến hạn']) || oldDebt.due_date;
           oldDebt.total_amount = row['Thành tiền chứng từ'] || 0;
@@ -354,13 +392,21 @@ export class DebtService {
           oldDebt.sale = sale_id ? ({ id: sale_id } as any) : undefined;
           oldDebt.sale_name_raw = sale_name_raw;
           oldDebt.employee_code_raw = employee_code_raw;
-          oldDebt.debt_config = debtConfig ? ({ id: debtConfig.id } as any) : undefined;
+          oldDebt.debt_config = debtConfig
+            ? ({ id: debtConfig.id } as any)
+            : undefined;
           oldDebt.updated_at = new Date();
           oldDebt.pay_later = pay_later ?? null;
           updatePromises.push(
-            this.debtRepository.save(oldDebt)
+            this.debtRepository
+              .save(oldDebt)
               .then(() => importedResults.push({ row: i + 2, success: true }))
-              .catch((err) => errorResults.push({ row: i + 2, error: err?.message || 'Unknown error' }))
+              .catch((err) =>
+                errorResults.push({
+                  row: i + 2,
+                  error: err?.message || 'Unknown error',
+                }),
+              ),
           );
         } else {
           const debt = this.debtRepository.create({
@@ -374,19 +420,30 @@ export class DebtService {
             sale: sale_id ? ({ id: sale_id } as any) : undefined,
             sale_name_raw,
             employee_code_raw,
-            debt_config: debtConfig ? ({ id: debtConfig.id } as any) : undefined,
+            debt_config: debtConfig
+              ? ({ id: debtConfig.id } as any)
+              : undefined,
             created_at: new Date(),
             updated_at: new Date(),
             pay_later: pay_later ?? null,
           });
           insertPromises.push(
-            this.debtRepository.save(debt)
+            this.debtRepository
+              .save(debt)
               .then(() => importedResults.push({ row: i + 2, success: true }))
-              .catch((err) => errorResults.push({ row: i + 2, error: err?.message || 'Unknown error' }))
+              .catch((err) =>
+                errorResults.push({
+                  row: i + 2,
+                  error: err?.message || 'Unknown error',
+                }),
+              ),
           );
         }
       } catch (err) {
-        errorResults.push({ row: i + 2, error: err?.message || 'Unknown error' });
+        errorResults.push({
+          row: i + 2,
+          error: err?.message || 'Unknown error',
+        });
       }
     });
 
@@ -498,7 +555,9 @@ export class DebtService {
       }
 
       // Map customer_code -> pay_later từ DB
-      const customerCodes = rows.map((row) => row['Mã đối tác']).filter(Boolean);
+      const customerCodes = rows
+        .map((row) => row['Mã đối tác'])
+        .filter(Boolean);
       const payLaterMap = new Map<string, Date>();
 
       if (customerCodes.length > 0) {
@@ -524,19 +583,35 @@ export class DebtService {
       const errorResults: ImportResult[] = [];
 
       // Truy vấn debtConfig và user cho tất cả dòng trước
-      const customerCodesSet = new Set(rows.map(r => r['Mã đối tác']).filter(Boolean));
-      const debtConfigs = await debtConfigRepo.find({ where: { customer_code: In([...customerCodesSet]) } });
-      const debtConfigMap = new Map(debtConfigs.map(dc => [dc.customer_code, dc]));
+      const customerCodesSet = new Set(
+        rows.map((r) => r['Mã đối tác']).filter(Boolean),
+      );
+      const debtConfigs = await debtConfigRepo.find({
+        where: { customer_code: In([...customerCodesSet]) },
+      });
+      const debtConfigMap = new Map(
+        debtConfigs.map((dc) => [dc.customer_code, dc]),
+      );
 
-      const empCodesSet = new Set(rows.map(r => String(r['Kế toán công nợ']).split('-')[0].trim()).filter(Boolean));
-      const saleCodesSet = new Set(rows.map(r => r['NVKD'] ? r['NVKD'].split('-')[0] : '').filter(Boolean));
-      const users = await userRepo.find({ where: { employeeCode: In([...empCodesSet, ...saleCodesSet]) } });
-      const userMap = new Map(users.map(u => [u.employeeCode, u]));
+      const empCodesSet = new Set(
+        rows
+          .map((r) => String(r['Kế toán công nợ']).split('-')[0].trim())
+          .filter(Boolean),
+      );
+      const saleCodesSet = new Set(
+        rows
+          .map((r) => (r['NVKD'] ? r['NVKD'].split('-')[0] : ''))
+          .filter(Boolean),
+      );
+      const users = await userRepo.find({
+        where: { employeeCode: In([...empCodesSet, ...saleCodesSet]) },
+      });
+      const userMap = new Map(users.map((u) => [u.employeeCode, u]));
 
       // Xử lý từng dòng
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
-        
+
         // Kiểm tra dòng trống
         const keys = Object.keys(row).filter((k) => k !== 'Còn lại');
         const onlyHasConLai = keys.every((k) => {
@@ -552,12 +627,21 @@ export class DebtService {
 
         // Kiểm tra trường bắt buộc
         const required = [
-          'Mã đối tác', 'Số chứng từ', 'Ngày chứng từ', 'Ngày đến hạn',
-          'Thành tiền chứng từ', 'Còn lại', 'NVKD', 'Kế toán công nợ',
+          'Mã đối tác',
+          'Số chứng từ',
+          'Ngày chứng từ',
+          'Ngày đến hạn',
+          'Thành tiền chứng từ',
+          'Còn lại',
+          'NVKD',
+          'Kế toán công nợ',
         ];
         const missing = required.filter((k) => !row[k]);
         if (missing.length) {
-          errorResults.push({ row: i + 2, error: `Thiếu trường: ${missing.join(', ')}` });
+          errorResults.push({
+            row: i + 2,
+            error: `Thiếu trường: ${missing.join(', ')}`,
+          });
           continue;
         }
 
@@ -569,7 +653,10 @@ export class DebtService {
         if (debtConfig && row['Kế toán công nợ']) {
           const empCode = String(row['Kế toán công nợ']).split('-')[0].trim();
           const user = userMap.get(empCode);
-          if (user && (!debtConfig.employee || user.id !== debtConfig.employee.id)) {
+          if (
+            user &&
+            (!debtConfig.employee || user.id !== debtConfig.employee.id)
+          ) {
             debtConfig.employee = user;
             updatePromises.push(debtConfigRepo.save(debtConfig));
           }
@@ -592,7 +679,10 @@ export class DebtService {
 
         // Kiểm tra phiếu đã thanh toán
         if (oldDebt && oldDebt.status === DebtStatus.PAID) {
-          errorResults.push({ row: i + 2, error: `Phiếu ${invoice_code} đã được thanh toán, không thể cập nhật` });
+          errorResults.push({
+            row: i + 2,
+            error: `Phiếu ${invoice_code} đã được thanh toán, không thể cập nhật`,
+          });
           continue;
         }
 
@@ -603,7 +693,10 @@ export class DebtService {
 
         let pay_later: Date | undefined = undefined;
         if (oldDebt) {
-          pay_later = oldDebt.pay_later || payLaterMap.get(row['Mã đối tác']) || undefined;
+          pay_later =
+            oldDebt.pay_later ||
+            payLaterMap.get(row['Mã đối tác']) ||
+            undefined;
         } else {
           pay_later = payLaterMap.get(row['Mã đối tác']) || undefined;
         }
@@ -637,25 +730,34 @@ export class DebtService {
             // Update debt
             oldDebt.customer_raw_code = row['Mã đối tác'] || '';
             oldDebt.invoice_code = invoice_code;
-            oldDebt.issue_date = parseDate(row['Ngày chứng từ']) || oldDebt.issue_date;
+            oldDebt.issue_date =
+              parseDate(row['Ngày chứng từ']) || oldDebt.issue_date;
             oldDebt.bill_code = row['Số hóa đơn'] || '';
-            oldDebt.due_date = parseDate(row['Ngày đến hạn']) || oldDebt.due_date;
+            oldDebt.due_date =
+              parseDate(row['Ngày đến hạn']) || oldDebt.due_date;
             oldDebt.total_amount = row['Thành tiền chứng từ'] || 0;
             oldDebt.remaining = row['Còn lại'] || 0;
             oldDebt.sale = sale_id ? ({ id: sale_id } as any) : undefined;
             oldDebt.sale_name_raw = sale_name_raw;
             oldDebt.employee_code_raw = employee_code_raw;
-            oldDebt.debt_config = debtConfig ? ({ id: debtConfig.id } as any) : undefined;
+            oldDebt.debt_config = debtConfig
+              ? ({ id: debtConfig.id } as any)
+              : undefined;
             oldDebt.updated_at = new Date();
             oldDebt.pay_later = pay_later ?? null;
 
             updatePromises.push(
-              debtRepo.save(oldDebt)
+              debtRepo
+                .save(oldDebt)
                 .then(() => importedResults.push({ row: i + 2, success: true }))
-                .catch((err) => errorResults.push({ row: i + 2, error: err?.message || 'Unknown error' }))
+                .catch((err) =>
+                  errorResults.push({
+                    row: i + 2,
+                    error: err?.message || 'Unknown error',
+                  }),
+                ),
             );
           } else {
-            // Create new debt
             const debt = debtRepo.create({
               customer_raw_code: row['Mã đối tác'] || '',
               invoice_code: invoice_code,
@@ -667,62 +769,79 @@ export class DebtService {
               sale: sale_id ? ({ id: sale_id } as any) : undefined,
               sale_name_raw,
               employee_code_raw,
-              debt_config: debtConfig ? ({ id: debtConfig.id } as any) : undefined,
+              debt_config: debtConfig
+                ? ({ id: debtConfig.id } as any)
+                : undefined,
               created_at: new Date(),
               updated_at: new Date(),
               pay_later: pay_later ?? null,
             });
 
             insertPromises.push(
-              debtRepo.save(debt).then((savedDebt) => {
-                // Backup sau khi create
-                return backupRepo.save({
-                  import_session_id,
-                  original_debt_id: savedDebt.id,
-                  original_data: null, // Không có data gốc vì là tạo mới
-                  action_type: 'CREATE',
-                }).then(() => {
-                  importedResults.push({ row: i + 2, success: true });
-                });
-              }).catch((err) => errorResults.push({ row: i + 2, error: err?.message || 'Unknown error' }))
+              debtRepo
+                .save(debt)
+                .then((savedDebt) => {
+                  // Backup sau khi create
+                  return backupRepo
+                    .save({
+                      import_session_id,
+                      original_debt_id: savedDebt.id,
+                      original_data: null, // Không có data gốc vì là tạo mới
+                      action_type: 'CREATE',
+                    })
+                    .then(() => {
+                      importedResults.push({ row: i + 2, success: true });
+                    });
+                })
+                .catch((err) =>
+                  errorResults.push({
+                    row: i + 2,
+                    error: err?.message || 'Unknown error',
+                  }),
+                ),
             );
           }
         } catch (err) {
-          errorResults.push({ row: i + 2, error: err?.message || 'Unknown error' });
+          errorResults.push({
+            row: i + 2,
+            error: err?.message || 'Unknown error',
+          });
         }
       }
 
       // Chờ tất cả update/insert xong
       await Promise.all([...updatePromises, ...insertPromises]);
-      
-      return { 
-        imported: importedResults, 
-        errors: errorResults, 
-        import_session_id 
+
+      return {
+        imported: importedResults,
+        errors: errorResults,
+        import_session_id,
       };
     });
   }
 
   private parseExcelDate(value: any): string | null {
     if (!value) return null;
-    
+
     // Nếu là số (Excel date serial number)
     if (typeof value === 'number') {
       // Excel date serial number (ngày 1 = 1/1/1900, nhưng Excel có bug nên dùng 1899/12/30)
       const excelEpoch = new Date(1899, 11, 30); // 30/12/1899
-      const jsDate = new Date(excelEpoch.getTime() + value * 24 * 60 * 60 * 1000);
-      
+      const jsDate = new Date(
+        excelEpoch.getTime() + value * 24 * 60 * 60 * 1000,
+      );
+
       const yyyy = jsDate.getFullYear();
       const mm = String(jsDate.getMonth() + 1).padStart(2, '0');
       const dd = String(jsDate.getDate()).padStart(2, '0');
       return `${yyyy}-${mm}-${dd}`;
     }
-    
+
     // Nếu là string
     if (typeof value === 'string') {
       value = value.trim();
       if (!value) return null;
-      
+
       // Thử parse các format phổ biến (dd/mm/yyyy format từ Excel VN)
       const formats = [
         {
@@ -730,48 +849,66 @@ export class DebtService {
           parse: (match: RegExpMatchArray) => {
             // Format dd/mm/yyyy (Vietnam format)
             const [, day, month, year] = match;
-            return { day: parseInt(day), month: parseInt(month), year: parseInt(year) };
-          }
+            return {
+              day: parseInt(day),
+              month: parseInt(month),
+              year: parseInt(year),
+            };
+          },
         },
         {
           regex: /^(\d{4})-(\d{1,2})-(\d{1,2})$/,
           parse: (match: RegExpMatchArray) => {
             // Format yyyy-mm-dd
             const [, year, month, day] = match;
-            return { day: parseInt(day), month: parseInt(month), year: parseInt(year) };
-          }
+            return {
+              day: parseInt(day),
+              month: parseInt(month),
+              year: parseInt(year),
+            };
+          },
         },
         {
           regex: /^(\d{1,2})-(\d{1,2})-(\d{4})$/,
           parse: (match: RegExpMatchArray) => {
             // Format dd-mm-yyyy
             const [, day, month, year] = match;
-            return { day: parseInt(day), month: parseInt(month), year: parseInt(year) };
-          }
+            return {
+              day: parseInt(day),
+              month: parseInt(month),
+              year: parseInt(year),
+            };
+          },
         },
         {
           regex: /^(\d{1,2})\.(\d{1,2})\.(\d{4})$/,
           parse: (match: RegExpMatchArray) => {
             // Format dd.mm.yyyy
             const [, day, month, year] = match;
-            return { day: parseInt(day), month: parseInt(month), year: parseInt(year) };
-          }
-        }
+            return {
+              day: parseInt(day),
+              month: parseInt(month),
+              year: parseInt(year),
+            };
+          },
+        },
       ];
-      
+
       for (const format of formats) {
         const match = value.match(format.regex);
         if (match) {
           const { day, month, year } = format.parse(match);
-          
+
           // Kiểm tra tháng và ngày hợp lệ
           if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
             const parsedDate = new Date(year, month - 1, day);
-            
+
             // Kiểm tra ngày được tạo có đúng với input không
-            if (parsedDate.getFullYear() === year && 
-                parsedDate.getMonth() === month - 1 && 
-                parsedDate.getDate() === day) {
+            if (
+              parsedDate.getFullYear() === year &&
+              parsedDate.getMonth() === month - 1 &&
+              parsedDate.getDate() === day
+            ) {
               const yyyy = parsedDate.getFullYear();
               const mm = String(parsedDate.getMonth() + 1).padStart(2, '0');
               const dd = String(parsedDate.getDate()).padStart(2, '0');
@@ -781,7 +918,7 @@ export class DebtService {
         }
       }
     }
-    
+
     // Nếu là Date object
     if (value instanceof Date && !isNaN(value.getTime())) {
       const yyyy = value.getFullYear();
@@ -789,7 +926,28 @@ export class DebtService {
       const dd = String(value.getDate()).padStart(2, '0');
       return `${yyyy}-${mm}-${dd}`;
     }
-    
+
+    if (typeof value === 'object' && value.result) {
+      // Nếu result là string hoặc Date
+      if (typeof value.result === 'string') {
+        // Nếu là ISO string
+        const parsed = new Date(value.result);
+        if (!isNaN(parsed.getTime())) {
+          const yyyy = parsed.getFullYear();
+          const mm = String(parsed.getMonth() + 1).padStart(2, '0');
+          const dd = String(parsed.getDate()).padStart(2, '0');
+          return `${yyyy}-${mm}-${dd}`;
+        }
+      }
+      // Nếu result là Date object
+      if (value.result instanceof Date && !isNaN(value.result.getTime())) {
+        const yyyy = value.result.getFullYear();
+        const mm = String(value.result.getMonth() + 1).padStart(2, '0');
+        const dd = String(value.result.getDate()).padStart(2, '0');
+        return `${yyyy}-${mm}-${dd}`;
+      }
+    }
+
     // Thử parse trực tiếp
     try {
       const parsed = new Date(value);
@@ -802,7 +960,7 @@ export class DebtService {
     } catch (e) {
       // Ignore
     }
-    
+
     return null;
   }
 
@@ -910,7 +1068,7 @@ export class DebtService {
         // Trích xuất tên nhân viên từ employee_code_raw (nếu có format "code - name")
         const parts = code.split(' - ');
         const name = parts.length > 1 ? parts[1] : code;
-        
+
         result.push({ code, name });
         seen.add(code);
       }
@@ -1242,20 +1400,20 @@ export class DebtService {
   // Lấy danh sách các session import trong ngày
   async getImportHistory(date?: string) {
     const filterDate = date || new Date().toISOString().slice(0, 10);
-    
+
     const sessions = await this.debtImportBackupRepo
       .createQueryBuilder('backup')
       .select([
         'backup.import_session_id',
         'MIN(backup.created_at) as created_at',
-        'COUNT(*) as total_records'
+        'COUNT(*) as total_records',
       ])
       .where('DATE(backup.created_at) = :date', { date: filterDate })
       .groupBy('backup.import_session_id')
       .orderBy('MIN(backup.created_at)', 'DESC')
       .getRawMany();
 
-    return sessions.map(session => ({
+    return sessions.map((session) => ({
       import_session_id: session.backup_import_session_id,
       created_at: session.created_at,
       total_records: parseInt(session.total_records),
@@ -1276,7 +1434,9 @@ export class DebtService {
       });
 
       if (backups.length === 0) {
-        throw new BadRequestException(`Không tìm thấy session import: ${sessionId}`);
+        throw new BadRequestException(
+          `Không tìm thấy session import: ${sessionId}`,
+        );
       }
 
       let rollbackCount = 0;
@@ -1287,21 +1447,28 @@ export class DebtService {
             // Xóa mềm record đã tạo
             await debtRepo.softDelete(backup.original_debt_id);
             rollbackCount++;
-          } 
-          else if (backup.action_type === 'UPDATE') {
+          } else if (backup.action_type === 'UPDATE') {
             // Khôi phục dữ liệu cũ
             const originalData = backup.original_data;
             await debtRepo.update(backup.original_debt_id, {
               customer_raw_code: originalData.customer_raw_code,
               invoice_code: originalData.invoice_code,
               bill_code: originalData.bill_code,
-              issue_date: originalData.issue_date ? new Date(originalData.issue_date) : undefined,
-              due_date: originalData.due_date ? new Date(originalData.due_date) : undefined,
+              issue_date: originalData.issue_date
+                ? new Date(originalData.issue_date)
+                : undefined,
+              due_date: originalData.due_date
+                ? new Date(originalData.due_date)
+                : undefined,
               total_amount: originalData.total_amount,
               remaining: originalData.remaining,
               status: originalData.status,
-              updated_at: originalData.updated_at ? new Date(originalData.updated_at) : new Date(),
-              pay_later: originalData.pay_later ? new Date(originalData.pay_later) : undefined,
+              updated_at: originalData.updated_at
+                ? new Date(originalData.updated_at)
+                : new Date(),
+              pay_later: originalData.pay_later
+                ? new Date(originalData.pay_later)
+                : undefined,
               sale: originalData.sale,
               sale_name_raw: originalData.sale_name_raw,
               employee_code_raw: originalData.employee_code_raw,
@@ -1309,14 +1476,17 @@ export class DebtService {
               debt_config: originalData.debt_config,
             });
             rollbackCount++;
-          }
-          else if (backup.action_type === 'MARK_PAID') {
+          } else if (backup.action_type === 'MARK_PAID') {
             // Khôi phục trạng thái từ PAID về trạng thái cũ
             const originalData = backup.original_data;
             await debtRepo.update(backup.original_debt_id, {
               status: originalData.status,
-              updated_at: originalData.updated_at ? new Date(originalData.updated_at) : new Date(),
-              pay_later: originalData.pay_later ? new Date(originalData.pay_later) : null,
+              updated_at: originalData.updated_at
+                ? new Date(originalData.updated_at)
+                : new Date(),
+              pay_later: originalData.pay_later
+                ? new Date(originalData.pay_later)
+                : null,
             });
 
             // Khôi phục debt_statistics
@@ -1325,16 +1495,23 @@ export class DebtService {
                 .createQueryBuilder()
                 .update()
                 .set({ status: originalData.status })
-                .where('original_debt_id = :id', { id: backup.original_debt_id })
+                .where('original_debt_id = :id', {
+                  id: backup.original_debt_id,
+                })
                 .andWhere('DATE(statistic_date) = :date', {
-                  date: new Date(originalData.updated_at).toISOString().slice(0, 10),
+                  date: new Date(originalData.updated_at)
+                    .toISOString()
+                    .slice(0, 10),
                 })
                 .execute();
             }
             rollbackCount++;
           }
         } catch (error) {
-          console.error(`Lỗi khi rollback record ${backup.original_debt_id}:`, error);
+          console.error(
+            `Lỗi khi rollback record ${backup.original_debt_id}:`,
+            error,
+          );
           // Tiếp tục rollback các record khác
         }
       }
@@ -1346,7 +1523,7 @@ export class DebtService {
         success: true,
         rollback_count: rollbackCount,
         session_id: sessionId,
-        message: `Đã rollback thành công ${rollbackCount} bản ghi từ session ${sessionId}`
+        message: `Đã rollback thành công ${rollbackCount} bản ghi từ session ${sessionId}`,
       };
     });
   }
