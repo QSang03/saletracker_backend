@@ -28,7 +28,10 @@ export class DebtConfigController {
 
   @Get()
   @Permission('cong-no', 'read')
-  findAll(@Query() query: any, @Req() req): Promise<{
+  findAll(
+    @Query() query: any,
+    @Req() req,
+  ): Promise<{
     data: any[];
     total: number;
     page: number;
@@ -36,13 +39,26 @@ export class DebtConfigController {
     totalPages: number;
   }> {
     // Parse query parameters
+    const sortValues = ['asc', 'desc'];
+    const sort: 'asc' | 'desc' | undefined = sortValues.includes(query.sort)
+      ? query.sort
+      : undefined;
     const filters = {
       search: query.search,
-      employees: query.employees ? (Array.isArray(query.employees) ? query.employees.map(Number) : [Number(query.employees)]) : undefined,
+      employees: query.employees
+        ? Array.isArray(query.employees)
+          ? query.employees.map(Number)
+          : [Number(query.employees)]
+        : undefined,
       singleDate: query.singleDate,
       page: query.page ? Number(query.page) : 1,
       limit: query.limit ? Number(query.limit) : 10,
-      statuses: query.statuses ? (Array.isArray(query.statuses) ? query.statuses : [query.statuses]) : undefined,
+      sort,
+      statuses: query.statuses
+        ? Array.isArray(query.statuses)
+          ? query.statuses
+          : [query.statuses]
+        : undefined,
     };
 
     return this.debtConfigService.findAllWithRole(req.user, filters);

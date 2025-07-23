@@ -13,6 +13,7 @@ interface DebtConfigFilters {
   page?: number;
   limit?: number;
   statuses?: string[];
+  sort?: 'asc' | 'desc';
 }
 
 @Injectable()
@@ -341,6 +342,7 @@ export class DebtConfigService {
     limit: number;
     totalPages: number;
     statuses?: string[];
+    sort?: 'asc' | 'desc';
   }> {
     const roleNames = (currentUser?.roles || []).map((r: any) =>
       typeof r === 'string'
@@ -450,12 +452,19 @@ export class DebtConfigService {
       );
     }
 
+    if (filters.sort === 'asc') {
+      queryBuilder.orderBy('debt_config.send_last_at', 'ASC');
+    } else if (filters.sort === 'desc') {
+      queryBuilder.orderBy('debt_config.send_last_at', 'DESC');
+    } else {
+      queryBuilder.orderBy('debt_config.id', 'DESC');
+    }
+
     // Count total
     const total = await queryBuilder.getCount();
 
     // Get data with pagination
     const configs = await queryBuilder
-      .orderBy('debt_config.id', 'DESC')
       .skip(skip)
       .take(limit)
       .getMany();
