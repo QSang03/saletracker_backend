@@ -1040,7 +1040,7 @@ export class DebtService {
     const isAdminOrManager =
       roleNames.includes('admin') || roleNames.includes('manager-cong-no');
 
-    // Lấy danh sách employee_code_raw từ bảng debt (có lọc theo quyền)
+    // Lấy employee_code_raw từ bảng debt
     let employeeQuery = this.debtRepository
       .createQueryBuilder('debt')
       .select(['debt.employee_code_raw'])
@@ -1058,22 +1058,46 @@ export class DebtService {
       .groupBy('debt.employee_code_raw')
       .getRawMany();
 
-    // Tạo danh sách unique employee codes
-    const result: { code: string; name: string }[] = [];
-    const seen = new Set();
-
+    // Tách mã nhân viên phía trước dấu "-", gom unique code
+    const codeSet = new Set<string>();
+    const rawToOnlyCode = new Map<string, string>(); // mapping raw => onlyCode
     for (const emp of employees) {
-      const code = emp.debt_employee_code_raw;
-      if (code && !seen.has(code)) {
-        // Trích xuất tên nhân viên từ employee_code_raw (nếu có format "code - name")
-        const parts = code.split(' - ');
-        const name = parts.length > 1 ? parts[1] : code;
+      const raw = emp.debt_employee_code_raw;
+      if (!raw) continue;
+      // lấy phần trước dấu "-"
+      const onlyCode = raw.split('-')[0].trim();
+      rawToOnlyCode.set(raw, onlyCode);
+      codeSet.add(onlyCode);
+    }
 
-        result.push({ code, name });
-        seen.add(code);
+    // Lấy danh sách user có employeeCode nằm trong codeSet
+    const userList = await this.userRepository.find({
+      where: { employeeCode: In([...codeSet]) },
+    });
+    const codeToFullName = new Map<string, string>();
+    for (const user of userList) {
+      if (user.employeeCode) {
+        codeToFullName.set(user.employeeCode.trim(), user.fullName || '');
       }
     }
 
+    // Tạo danh sách kết quả cuối cùng
+    const result: { code: string; name: string }[] = [];
+    const seen = new Set();
+    for (const emp of employees) {
+      const raw = emp.debt_employee_code_raw;
+      if (!raw || seen.has(raw)) continue;
+
+      const onlyCode = rawToOnlyCode.get(raw) || '';
+      const fullName = codeToFullName.get(onlyCode);
+      result.push({
+        code: raw,
+        name: fullName || raw, // fallback nếu user không có
+      });
+      seen.add(raw);
+    }
+
+    // Sắp xếp theo tên
     return result.sort((a, b) => a.name.localeCompare(b.name));
   }
 
