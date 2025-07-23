@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Like, In, Between } from 'typeorm';
+import { Repository, Like, In, Between, Brackets } from 'typeorm';
 import { DebtConfig } from './debt_configs.entity';
 import { instanceToPlain } from 'class-transformer';
 import { DebtLogsService } from '../debt_logs/debt_logs.service';
@@ -12,6 +12,7 @@ interface DebtConfigFilters {
   singleDate?: string;
   page?: number;
   limit?: number;
+  statuses?: string[];
 }
 
 @Injectable()
@@ -339,6 +340,7 @@ export class DebtConfigService {
     page: number;
     limit: number;
     totalPages: number;
+    statuses?: string[];
   }> {
     const roleNames = (currentUser?.roles || []).map((r: any) =>
       typeof r === 'string'
@@ -421,6 +423,30 @@ export class DebtConfigService {
           startOfDay,
           endOfDay,
         },
+      );
+    }
+
+    if (filters.statuses && filters.statuses.length > 0) {
+      queryBuilder.andWhere(
+        new Brackets((qb) => {
+          (filters.statuses ?? []).forEach((status) => {
+            if (status === 'normal') {
+              qb.orWhere(
+                'debt_config.employee IS NOT NULL AND debt_config.id = debt_log.debt_config_id AND (debt_log.remind_status IS NULL OR debt_log.remind_status != :errorSend)',
+                { errorSend: 'Error Send' },
+              );
+            }
+            if (status === 'not_matched_debt') {
+              qb.orWhere('debt_config.employee IS NULL');
+            }
+            if (status === 'wrong_customer_name') {
+              qb.orWhere(
+                'debt_config.id = debt_log.debt_config_id AND debt_log.remind_status = :errorSend',
+                { errorSend: 'Error Send' },
+              );
+            }
+          });
+        }),
       );
     }
 

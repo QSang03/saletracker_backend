@@ -42,6 +42,7 @@ export class DebtConfigController {
       singleDate: query.singleDate,
       page: query.page ? Number(query.page) : 1,
       limit: query.limit ? Number(query.limit) : 10,
+      statuses: query.statuses ? (Array.isArray(query.statuses) ? query.statuses : [query.statuses]) : undefined,
     };
 
     return this.debtConfigService.findAllWithRole(req.user, filters);
