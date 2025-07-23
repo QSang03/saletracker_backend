@@ -103,10 +103,10 @@ export class DebtService {
           .map((s: string) => s.split('-')[0].trim())
           .filter(Boolean);
       }
-      // Debug log
+      
       if (employeeCodes.length > 0) {
         qb.andWhere(
-          `TRIM(LEFT(debt.employee_code_raw, CASE WHEN LOCATE('-', debt.employee_code_raw) > 0 THEN LOCATE('-', debt.employee_code_raw) - 1 ELSE CHAR_LENGTH(debt.employee_code_raw) END)) IN (:...employeeCodes)`,
+          `TRIM(SUBSTRING(debt.employee_code_raw, LOCATE('-', debt.employee_code_raw) + 1)) IN (:...employeeCodes)`,
           { employeeCodes },
         );
       }
