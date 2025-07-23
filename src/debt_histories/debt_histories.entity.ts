@@ -6,10 +6,14 @@ import {
   JoinColumn,
   CreateDateColumn,
   UpdateDateColumn,
+  Index,
 } from 'typeorm';
 import { DebtLogs } from '../debt_logs/debt_logs.entity';
 
 @Entity({ name: 'debt_histories' })
+@Index('idx_debt_log_id', ['debt_log_id'])
+@Index('idx_remind_status', ['remind_status'])
+@Index('idx_send_at', ['send_at'])
 export class DebtHistory {
   @PrimaryGeneratedColumn()
   id: number;

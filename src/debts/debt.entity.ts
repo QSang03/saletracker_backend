@@ -6,6 +6,7 @@ import {
   UpdateDateColumn,
   DeleteDateColumn,
   ManyToOne,
+  Index,
 } from 'typeorm';
 import { DebtConfig } from '../debt_configs/debt_configs.entity';
 import { User } from '../users/user.entity';
@@ -17,6 +18,13 @@ export enum DebtStatus {
 }
 
 @Entity('debts')
+@Index('idx_customer_raw_code', ['customer_raw_code'])
+@Index('idx_invoice_code', ['invoice_code'])
+@Index('idx_bill_code', ['bill_code'])
+@Index('idx_status', ['status'])
+@Index('idx_employee_code_raw', ['employee_code_raw'])
+@Index('idx_debt_config_id', ['debt_config'])
+@Index('idx_due_date', ['due_date'])
 export class Debt {
   @PrimaryGeneratedColumn()
   id: number;

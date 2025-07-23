@@ -8,6 +8,7 @@ import {
   ManyToOne,
   OneToOne,
   JoinColumn,
+  Index,
 } from 'typeorm';
 import { Debt } from '../debts/debt.entity';
 import { DebtLogs } from '../debt_logs/debt_logs.entity';
@@ -20,6 +21,13 @@ export enum CustomerType {
 }
 
 @Entity({ name: 'debt_configs' })
+@Index('idx_customer_code', ['customer_code'])
+@Index('idx_customer_name', ['customer_name'])
+@Index('idx_employee', ['employee'])
+@Index('idx_send_last_at', ['send_last_at'])
+@Index('idx_is_send', ['is_send'])
+@Index('idx_is_repeat', ['is_repeat'])
+@Index('idx_customer_type', ['customer_type'])
 export class DebtConfig {
   @PrimaryGeneratedColumn()
   id: number;

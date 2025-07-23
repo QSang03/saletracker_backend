@@ -7,6 +7,7 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   OneToOne,
+  Index,
 } from 'typeorm';
 import { DebtConfig } from '../debt_configs/debt_configs.entity';
 import { User } from '../users/user.entity';
@@ -21,6 +22,9 @@ export enum ReminderStatus {
 }
 
 @Entity({ name: 'debt_logs' })
+@Index('idx_debt_config_id', ['debt_config_id'])
+@Index('idx_remind_status', ['remind_status'])
+@Index('idx_send_at', ['send_at'])
 export class DebtLogs {
   @PrimaryGeneratedColumn()
   id: number;

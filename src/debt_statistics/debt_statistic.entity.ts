@@ -18,6 +18,9 @@ export enum DebtStatus {
 @Index('idx_statistic_date_status', ['statistic_date', 'status'])
 @Index('idx_customer_code', ['customer_code'])
 @Index('idx_statistic_date_customer', ['statistic_date', 'customer_code'])
+@Index('idx_status', ['status'])
+@Index('idx_employee_code_raw', ['employee_code_raw'])
+@Index('idx_due_date', ['due_date'])
 export class DebtStatistic {
   @PrimaryGeneratedColumn()
   id: number;
