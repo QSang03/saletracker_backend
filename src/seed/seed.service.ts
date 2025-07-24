@@ -73,7 +73,7 @@ export class SeedService implements OnModuleInit {
         { name: 'system_aiTemperature', display_name: 'Temperature Model AI', value: '0.0', type: 'number', section: 'system', status: 1 },
         { name: 'system_aiTimeout', display_name: 'Thời gian timeout xử lý AI', value: '30', type: 'number', section: 'system', status: 1 },
         { name: 'system_aiRetry', display_name: 'Số lần thử lại xử lý AI', value: '3', type: 'number', section: 'system', status: 1 },
-        { name: 'system_processCampaign', display_name: 'Xử lý chiến dịch', value: '1', type: 'number', section: 'system', status: 1 },
+        { name: 'system_processCampaign', display_name: 'Xử lý chiến dịch', value: '1', type: 'toggle', section: 'system', status: 1 },
 
         // transaction
         { name: 'transaction_threads', display_name: 'Tổng luồng chạy Giao dịch', value: '3', type: 'number', section: 'transaction', status: 1 },
