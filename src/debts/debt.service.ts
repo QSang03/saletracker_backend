@@ -63,7 +63,6 @@ export class DebtService {
       typeof query.statuses === 'string' &&
       query.statuses.trim()
     ) {
-      // Hỗ trợ truyền vào dạng "paid,pay_later,no_information_available"
       let statuses: string[] = [];
       if (typeof query.statuses === 'string') {
         statuses = query.statuses
@@ -73,11 +72,29 @@ export class DebtService {
       } else {
         statuses = query.statuses.map((s: string) => s.trim()).filter(Boolean);
       }
-      if (statuses.length > 0) {
-        qb.andWhere('debt.status IN (:...statuses)', { statuses });
+
+      // Nếu có "overdue" thì lọc theo điều kiện quá hạn
+      const hasOverdue = statuses.includes('overdue');
+      const otherStatuses = statuses.filter((s) => s !== 'overdue');
+
+      if (hasOverdue) {
+        // Lấy ngày hiện tại (theo múi giờ VN)
+        const today = new Date();
+        const vnDate = new Date(today.getTime() + 7 * 60 * 60 * 1000);
+        const todayStr = vnDate.toISOString().slice(0, 10);
+
+        // Lọc các phiếu chưa thanh toán, ngày đến hạn < hôm nay
+        qb.andWhere(
+          `(debt.status != 'paid' AND debt.due_date IS NOT NULL AND DATE(debt.due_date) < :todayStr)`,
+          { todayStr },
+        );
+        // Nếu có thêm các trạng thái khác, lọc OR
+        if (otherStatuses.length > 0) {
+          qb.orWhere('debt.status IN (:...otherStatuses)', { otherStatuses });
+        }
+      } else if (otherStatuses.length > 0) {
+        qb.andWhere('debt.status IN (:...otherStatuses)', { otherStatuses });
       }
-    } else if (query.status) {
-      qb.andWhere('debt.status = :status', { status: query.status });
     }
     // Filter mã đối tác
     if (query.customerCode) {
@@ -103,7 +120,7 @@ export class DebtService {
           .map((s: string) => s.split('-')[0].trim())
           .filter(Boolean);
       }
-      
+
       if (employeeCodes.length > 0) {
         qb.andWhere(
           `TRIM(SUBSTRING(debt.employee_code_raw, LOCATE('-', debt.employee_code_raw) + 1)) IN (:...employeeCodes)`,
