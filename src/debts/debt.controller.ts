@@ -27,39 +27,39 @@ export class DebtController {
   constructor(private readonly debtService: DebtService) {}
 
   @Get()
-@Permission('cong-no', 'read')
-async findAll(@Query() query: any, @Req() req) {
-  const page = Number(query.page) > 0 ? Number(query.page) : 1;
-  const pageSize = Number(query.pageSize) > 0 ? Number(query.pageSize) : 10;
-  
-  try {
-    const result = await this.debtService.findAll(
-      query,
-      req.user,
-      page,
-      pageSize,
-    );
-    
-    // QUAN TRỌNG: Luôn đảm bảo return object, không bao giờ undefined
-    return {
-      data: result?.data || [],
-      total: result?.total || 0,
-      page,
-      pageSize,
-    };
-  } catch (error) {
-    // Log error
-    console.error('Error in findAll controller:', error);
-    
-    // Vẫn return empty data
-    return {
-      data: [],
-      total: 0,
-      page,
-      pageSize,
-    };
+  @Permission('cong-no', 'read')
+  async findAll(@Query() query: any, @Req() req) {
+    const page = Number(query.page) > 0 ? Number(query.page) : 1;
+    const pageSize = Number(query.pageSize) > 0 ? Number(query.pageSize) : 10;
+
+    try {
+      const result = await this.debtService.findAll(
+        query,
+        req.user,
+        page,
+        pageSize,
+      );
+
+      // QUAN TRỌNG: Luôn đảm bảo return object, không bao giờ undefined
+      return {
+        data: result?.data || [],
+        total: result?.total || 0,
+        page,
+        pageSize,
+      };
+    } catch (error) {
+      // Log error
+      console.error('Error in findAll controller:', error);
+
+      // Vẫn return empty data
+      return {
+        data: [],
+        total: 0,
+        page,
+        pageSize,
+      };
+    }
   }
-}
 
   @Get('customers')
   @Permission('cong-no', 'read')
@@ -96,22 +96,21 @@ async findAll(@Query() query: any, @Req() req) {
     );
 
     const totalRemaining = debts.reduce(
-      (sum, d) =>
-        sum + (Number(d.remaining) || 0),
+      (sum, d) => sum + (Number(d.remaining) || 0),
       0,
     );
 
     // Số phiếu đã thanh toán
     const totalPaidBills = debts.filter((d) => d.status === 'paid').length;
 
-  return {
-    totalAmount: totalAmount || 0,
-    totalBills: totalBills || 0,
-    totalCollected: totalCollected || 0,
-    totalPaidAmount: totalPaidAmount || 0,
-    totalPaidBills: totalPaidBills || 0,
-    totalRemaining: totalRemaining || 0,
-  };
+    return {
+      totalAmount: totalAmount || 0,
+      totalBills: totalBills || 0,
+      totalCollected: totalCollected || 0,
+      totalPaidAmount: totalPaidAmount || 0,
+      totalPaidBills: totalPaidBills || 0,
+      totalRemaining: totalRemaining || 0,
+    };
   }
 
   @Get('stats/overview')
@@ -198,7 +197,10 @@ async findAll(@Query() query: any, @Req() req) {
   @Post('import-excel')
   @Permission('cong-no', 'import')
   @UseInterceptors(FileInterceptor('file'))
-  async importExcel(@UploadedFile() file: Express.Multer.File, @Req() req: any) {
+  async importExcel(
+    @UploadedFile() file: Express.Multer.File,
+    @Req() req: any,
+  ) {
     if (!file) throw new BadRequestException('No file uploaded');
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(file.buffer);
@@ -237,10 +239,10 @@ async findAll(@Query() query: any, @Req() req) {
   @Permission('cong-no', 'delete')
   async deleteAllTodayDebts() {
     const deleted = await this.debtService.deleteAllTodayDebts();
-    return { 
-      success: true, 
+    return {
+      success: true,
       deleted,
-      message: `Đã xóa ${deleted} phiếu công nợ có ngày cập nhật hôm nay`
+      message: `Đã xóa ${deleted} phiếu công nợ có ngày cập nhật hôm nay`,
     };
   }
 

@@ -113,19 +113,18 @@ export class DebtService {
       if (typeof query.employeeCodes === 'string') {
         employeeCodes = query.employeeCodes
           .split(',')
-          .map((s: string) => s.split('-')[0].trim())
+          .map((s: string) => s.trim())
           .filter(Boolean);
       } else {
         employeeCodes = query.employeeCodes
-          .map((s: string) => s.split('-')[0].trim())
+          .map((s: string) => s.trim())
           .filter(Boolean);
       }
 
       if (employeeCodes.length > 0) {
-        qb.andWhere(
-          `TRIM(SUBSTRING(debt.employee_code_raw, LOCATE('-', debt.employee_code_raw) + 1)) IN (:...employeeCodes)`,
-          { employeeCodes },
-        );
+        qb.andWhere(`debt.employee_code_raw IN (:...employeeCodes)`, {
+          employeeCodes,
+        });
       }
     }
     // Filter NVKD (saleCode)

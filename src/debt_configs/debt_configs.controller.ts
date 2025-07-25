@@ -18,7 +18,6 @@ import { DebtConfigService } from './debt_configs.service';
 import { DebtConfig } from './debt_configs.entity';
 import { Permission } from '../common/guards/permission.decorator';
 import { PermissionGuard } from '../common/guards/permission.guard';
-import { Request } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
 
 @Controller('debt-configs')
@@ -62,6 +61,13 @@ export class DebtConfigController {
     };
 
     return this.debtConfigService.findAllWithRole(req.user, filters);
+  }
+
+  @Get('employees')
+  @Permission('cong-no', 'read')
+  async getDebtConfigEmployees(): Promise<{ data: { id: number; fullName: string }[] }> {
+    const employees = await this.debtConfigService.getEmployeeList();
+    return { data: employees };
   }
 
   @Get(':id')

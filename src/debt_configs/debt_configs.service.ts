@@ -6,6 +6,8 @@ import { instanceToPlain } from 'class-transformer';
 import { DebtLogsService } from '../debt_logs/debt_logs.service';
 import { ReminderStatus } from '../debt_logs/debt_logs.entity';
 import { WebsocketGateway } from 'src/websocket/websocket.gateway';
+import { User } from 'src/users/user.entity';
+import { log } from 'console';
 
 interface DebtConfigFilters {
   search?: string;
@@ -22,6 +24,8 @@ export class DebtConfigService {
   constructor(
     @InjectRepository(DebtConfig)
     private readonly repo: Repository<DebtConfig>,
+    @InjectRepository(User)
+    private readonly userRepository: Repository<User>,
     private readonly debtLogsService: DebtLogsService,
     private readonly websocketGateway: WebsocketGateway,
   ) {}
@@ -170,7 +174,11 @@ export class DebtConfigService {
     await this.repo.save(savedConfig);
 
     // Emit websocket event to department:cong-no room
-    this.websocketGateway.emitToRoom('department:cong-no', 'debt_config_created', savedConfig);
+    this.websocketGateway.emitToRoom(
+      'department:cong-no',
+      'debt_config_created',
+      savedConfig,
+    );
 
     return savedConfig;
   }
@@ -469,10 +477,7 @@ export class DebtConfigService {
     const total = await queryBuilder.getCount();
 
     // Get data with pagination
-    const configs = await queryBuilder
-      .skip(skip)
-      .take(limit)
-      .getMany();
+    const configs = await queryBuilder.skip(skip).take(limit).getMany();
 
     const data = configs.map((cfg) => {
       const total_bills = Array.isArray(cfg.debts) ? cfg.debts.length : 0;
@@ -758,5 +763,28 @@ export class DebtConfigService {
           }
         : null,
     };
+  }
+
+  async getEmployeeList(): Promise<{ id: number; fullName: string }[]> {
+    const employeeIds = await this.repo
+      .createQueryBuilder('debt_config')
+      .select('debt_config.employee_id')
+      .where('debt_config.employee_id IS NOT NULL')
+      .groupBy('debt_config.employee_id')
+      .getRawMany();
+
+    const ids = employeeIds.map((row) => row.employee_id).filter(Boolean);
+
+    if (ids.length === 0) return [];
+
+    const users = await this.userRepository.find({
+      where: { id: In(ids) },
+      select: ['id', 'fullName'],
+    });
+
+    return users.map((u) => ({
+      id: u.id,
+      fullName: u.fullName || '',
+    }));
   }
 }
