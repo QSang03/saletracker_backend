@@ -20,6 +20,15 @@ export class RealTimeDebtObserver implements OnModuleInit, OnModuleDestroy {
   private processingInterval: NodeJS.Timeout;
   private lastProcessedId = 0;
 
+  // Separate debounce queues for each ws_type
+  private wsEventQueueDebt: any[] = [];
+  private wsDebounceTimerDebt: NodeJS.Timeout | null = null;
+  private wsEventQueueDebtLog: any[] = [];
+  private wsDebounceTimerDebtLog: NodeJS.Timeout | null = null;
+  private wsEventQueueDebtConfig: any[] = [];
+  private wsDebounceTimerDebtConfig: NodeJS.Timeout | null = null;
+  private readonly WS_DEBOUNCE_MS = 2000;
+
   constructor(
     private readonly eventEmitter: EventEmitter2,
     private readonly websocketGateway: WebsocketGateway,
@@ -88,10 +97,6 @@ export class RealTimeDebtObserver implements OnModuleInit, OnModuleDestroy {
 
     if (newChanges.length === 0) return;
 
-    this.logger.log(
-      `📝 [RealTimeDebtObserver] Processing ${newChanges.length} new changes`,
-    );
-
     for (const change of newChanges) {
       try {
         await this.processIndividualChange(change);
@@ -121,13 +126,11 @@ export class RealTimeDebtObserver implements OnModuleInit, OnModuleDestroy {
       changed_fields,
     } = change;
 
-    // Không xử lý action insert
-    if (action === ChangeAction.INSERT) {
-      this.logger.log(`[RealTimeDebtObserver] Skip insert for table: ${table_name}`);
-      return;
-    }
-
-    this.logger.log(`[RealTimeDebtObserver] Processing table: ${table_name}`);
+    // // Không xử lý action insert
+    // if (action === ChangeAction.INSERT) {
+    //   this.logger.log(`[RealTimeDebtObserver] Skip insert for table: ${table_name}`);
+    //   return;
+    // }
 
     if (table_name === 'debt_logs') {
       await this.handleDebtLogChange(
@@ -163,9 +166,6 @@ export class RealTimeDebtObserver implements OnModuleInit, OnModuleDestroy {
     newValues: any,
     changedFields: string[],
   ) {
-    this.logger.log(
-      `📝 [RealTimeDebtObserver] DebtLog ${recordId} ${action}: ${changedFields?.join(', ')}`,
-    );
 
     // Get full entity với relations
     const debtLog = await this.debtLogRepo.findOne({
@@ -174,7 +174,6 @@ export class RealTimeDebtObserver implements OnModuleInit, OnModuleDestroy {
     });
 
     if (!debtLog) {
-      this.logger.warn(`DebtLog ${recordId} not found`);
       return;
     }
 
@@ -200,21 +199,18 @@ export class RealTimeDebtObserver implements OnModuleInit, OnModuleDestroy {
     // Auto-sync logic
     await this.syncDebtLogToConfig(debtLog, changes);
 
-    // Broadcast to WebSocket
-    this.websocketGateway.emitToRoom(
-      'department:cong-no',
-      'debt_log_realtime_updated',
-      {
-        type: 'debt_log_updated',
-        entity_id: recordId,
-        debt_config_id: debtLog.debt_config_id,
-        customer_code: debtLog.debt_config?.customer_code,
-        changes,
-        timestamp: new Date(),
-        triggered_by: 'database',
-        refresh_request: true,
-      },
-    );
+    // Push event to ws queue (debounce)
+    this.pushWsEvent({
+      ws_type: 'debt_log_realtime_updated',
+      type: action === ChangeAction.INSERT ? 'insert' : 'debt_log_updated',
+      entity_id: recordId,
+      debt_config_id: debtLog.debt_config_id,
+      customer_code: debtLog.debt_config?.customer_code,
+      changes,
+      timestamp: new Date(),
+      triggered_by: 'database',
+      refresh_request: true,
+    });
   }
 
   private async handleDebtConfigChange(
@@ -224,10 +220,6 @@ export class RealTimeDebtObserver implements OnModuleInit, OnModuleDestroy {
     newValues: any,
     changedFields: string[],
   ) {
-    this.logger.log(
-      `⚙️ [RealTimeDebtObserver] DebtConfig ${recordId} ${action}: ${changedFields?.join(', ')}`,
-    );
-
     // Get full entity với relations
     const debtConfig = await this.debtConfigRepo.findOne({
       where: { id: recordId },
@@ -235,7 +227,6 @@ export class RealTimeDebtObserver implements OnModuleInit, OnModuleDestroy {
     });
 
     if (!debtConfig) {
-      this.logger.warn(`DebtConfig ${recordId} not found`);
       return;
     }
 
@@ -261,15 +252,15 @@ export class RealTimeDebtObserver implements OnModuleInit, OnModuleDestroy {
     // Auto-sync logic
     await this.syncDebtConfigToLog(debtConfig, changes);
 
-    // Broadcast to WebSocket
-    this.websocketGateway.emitToRoom(
-      'department:cong-no',
-      'debt_config_realtime_updated',
-      {
-        type: 'debt_config_updated',
-        refresh_request: true,
-      },
-    );
+    // Push event to ws queue (debounce)
+    this.pushWsEvent({
+      ws_type: 'debt_config_realtime_updated',
+      type: action === ChangeAction.INSERT ? 'insert' : 'debt_config_updated',
+      entity_id: recordId,
+      refresh_request: true,
+      timestamp: new Date(),
+      triggered_by: 'database',
+    });
   }
 
   private async handleDebtChange(
@@ -279,17 +270,12 @@ export class RealTimeDebtObserver implements OnModuleInit, OnModuleDestroy {
     newValues: any,
     changedFields: string[],
   ) {
-    this.logger.log(
-      `💰 [RealTimeDebtObserver] Debt ${recordId} ${action}: ${changedFields?.join(', ')}`,
-    );
-
     // Get full entity với relations
     const debt = await this.debtRepo.findOne({
       where: { id: recordId },
     });
 
     if (!debt) {
-      this.logger.warn(`Debt ${recordId} not found`);
       return;
     }
 
@@ -312,15 +298,105 @@ export class RealTimeDebtObserver implements OnModuleInit, OnModuleDestroy {
 
     this.eventEmitter.emit('database.change', dbEvent);
 
-    // Broadcast to WebSocket
-    this.websocketGateway.emitToRoom(
-      'department:cong-no',
-      'debt_realtime_updated',
-      {
-        type: 'debt_updated',
-        refresh_request: true,
-      },
-    );
+    // Push event to ws queue (debounce)
+    this.pushWsEvent({
+      ws_type: 'debt_realtime_updated',
+      type: action === ChangeAction.INSERT ? 'insert' : 'debt_updated',
+      entity_id: recordId,
+      refresh_request: true,
+      timestamp: new Date(),
+      triggered_by: 'database',
+    });
+  }
+
+  /**
+   * Push event to the correct ws queue and debounce send
+   */
+  private pushWsEvent(event: any) {
+    if (event.ws_type === 'debt_log_realtime_updated') {
+      this.wsEventQueueDebtLog.push(event);
+      if (this.wsDebounceTimerDebtLog) {
+        clearTimeout(this.wsDebounceTimerDebtLog);
+      }
+      this.wsDebounceTimerDebtLog = setTimeout(() => this.flushWsEventsDebtLog(), this.WS_DEBOUNCE_MS);
+    } else if (event.ws_type === 'debt_config_realtime_updated') {
+      this.wsEventQueueDebtConfig.push(event);
+      if (this.wsDebounceTimerDebtConfig) {
+        clearTimeout(this.wsDebounceTimerDebtConfig);
+      }
+      this.wsDebounceTimerDebtConfig = setTimeout(() => this.flushWsEventsDebtConfig(), this.WS_DEBOUNCE_MS);
+    } else if (event.ws_type === 'debt_realtime_updated') {
+      this.wsEventQueueDebt.push(event);
+      if (this.wsDebounceTimerDebt) {
+        clearTimeout(this.wsDebounceTimerDebt);
+      }
+      this.wsDebounceTimerDebt = setTimeout(() => this.flushWsEventsDebt(), this.WS_DEBOUNCE_MS);
+    } else {
+      // fallback: push to debt queue
+      this.wsEventQueueDebt.push(event);
+      if (this.wsDebounceTimerDebt) {
+        clearTimeout(this.wsDebounceTimerDebt);
+      }
+      this.wsDebounceTimerDebt = setTimeout(() => this.flushWsEventsDebt(), this.WS_DEBOUNCE_MS);
+    }
+  }
+
+
+  /**
+   * Flush debt events
+   */
+  private flushWsEventsDebt() {
+    if (this.wsEventQueueDebt.length > 0) {
+      const wsType = this.wsEventQueueDebt[0].ws_type || 'debt_batch_realtime_updated';
+      this.websocketGateway.emitToRoom(
+        'department:cong-no',
+        wsType,
+        { events: this.wsEventQueueDebt, refresh_request: true }
+      );
+      this.wsEventQueueDebt = [];
+    }
+    if (this.wsDebounceTimerDebt) {
+      clearTimeout(this.wsDebounceTimerDebt);
+      this.wsDebounceTimerDebt = null;
+    }
+  }
+
+  /**
+   * Flush debtLog events
+   */
+  private flushWsEventsDebtLog() {
+    if (this.wsEventQueueDebtLog.length > 0) {
+      const wsType = this.wsEventQueueDebtLog[0].ws_type || 'debt_log_realtime_updated';
+      this.websocketGateway.emitToRoom(
+        'department:cong-no',
+        wsType,
+        { events: this.wsEventQueueDebtLog, refresh_request: true }
+      );
+      this.wsEventQueueDebtLog = [];
+    }
+    if (this.wsDebounceTimerDebtLog) {
+      clearTimeout(this.wsDebounceTimerDebtLog);
+      this.wsDebounceTimerDebtLog = null;
+    }
+  }
+
+  /**
+   * Flush debtConfig events
+   */
+  private flushWsEventsDebtConfig() {
+    if (this.wsEventQueueDebtConfig.length > 0) {
+      const wsType = this.wsEventQueueDebtConfig[0].ws_type || 'debt_config_realtime_updated';
+      this.websocketGateway.emitToRoom(
+        'department:cong-no',
+        wsType,
+        { events: this.wsEventQueueDebtConfig, refresh_request: true }
+      );
+      this.wsEventQueueDebtConfig = [];
+    }
+    if (this.wsDebounceTimerDebtConfig) {
+      clearTimeout(this.wsDebounceTimerDebtConfig);
+      this.wsDebounceTimerDebtConfig = null;
+    }
   }
 
   private createChangeObject(

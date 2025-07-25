@@ -5,6 +5,7 @@ import { DebtConfig } from './debt_configs.entity';
 import { instanceToPlain } from 'class-transformer';
 import { DebtLogsService } from '../debt_logs/debt_logs.service';
 import { ReminderStatus } from '../debt_logs/debt_logs.entity';
+import { WebsocketGateway } from 'src/websocket/websocket.gateway';
 
 interface DebtConfigFilters {
   search?: string;
@@ -22,6 +23,7 @@ export class DebtConfigService {
     @InjectRepository(DebtConfig)
     private readonly repo: Repository<DebtConfig>,
     private readonly debtLogsService: DebtLogsService,
+    private readonly websocketGateway: WebsocketGateway,
   ) {}
 
   async findAll(filters: DebtConfigFilters = {}): Promise<{
@@ -166,6 +168,9 @@ export class DebtConfigService {
     // Gán debt_log vào debt_config
     savedConfig.debt_log = debtLog;
     await this.repo.save(savedConfig);
+
+    // Emit websocket event to department:cong-no room
+    this.websocketGateway.emitToRoom('department:cong-no', 'debt_config_created', savedConfig);
 
     return savedConfig;
   }

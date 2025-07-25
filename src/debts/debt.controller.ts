@@ -11,6 +11,7 @@ import {
   BadRequestException,
   Query,
   Req,
+  HttpCode,
 } from '@nestjs/common';
 import { DebtService } from './debt.service';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -26,19 +27,39 @@ export class DebtController {
   constructor(private readonly debtService: DebtService) {}
 
   @Get()
-  @Permission('cong-no', 'read')
-  async findAll(@Query() query: any, @Req() req) {
-    // Lấy page và pageSize từ query, mặc định page=1, pageSize=10
-    const page = Number(query.page) > 0 ? Number(query.page) : 1;
-    const pageSize = Number(query.pageSize) > 0 ? Number(query.pageSize) : 10;
+@Permission('cong-no', 'read')
+async findAll(@Query() query: any, @Req() req) {
+  const page = Number(query.page) > 0 ? Number(query.page) : 1;
+  const pageSize = Number(query.pageSize) > 0 ? Number(query.pageSize) : 10;
+  
+  try {
     const result = await this.debtService.findAll(
       query,
       req.user,
       page,
       pageSize,
     );
-    return result;
+    
+    // QUAN TRỌNG: Luôn đảm bảo return object, không bao giờ undefined
+    return {
+      data: result?.data || [],
+      total: result?.total || 0,
+      page,
+      pageSize,
+    };
+  } catch (error) {
+    // Log error
+    console.error('Error in findAll controller:', error);
+    
+    // Vẫn return empty data
+    return {
+      data: [],
+      total: 0,
+      page,
+      pageSize,
+    };
   }
+}
 
   @Get('customers')
   @Permission('cong-no', 'read')
@@ -83,14 +104,14 @@ export class DebtController {
     // Số phiếu đã thanh toán
     const totalPaidBills = debts.filter((d) => d.status === 'paid').length;
 
-    return {
-      totalAmount,
-      totalBills,
-      totalCollected, // Tổng tiền thực tế đã thu (65tr trong ví dụ)
-      totalPaidAmount, // Tổng tiền các phiếu đã thanh toán (60tr trong ví dụ)
-      totalPaidBills,
-      totalRemaining, // Tổng tiền còn lại (5tr trong ví dụ)
-    };
+  return {
+    totalAmount: totalAmount || 0,
+    totalBills: totalBills || 0,
+    totalCollected: totalCollected || 0,
+    totalPaidAmount: totalPaidAmount || 0,
+    totalPaidBills: totalPaidBills || 0,
+    totalRemaining: totalRemaining || 0,
+  };
   }
 
   @Get('stats/overview')
@@ -177,7 +198,7 @@ export class DebtController {
   @Post('import-excel')
   @Permission('cong-no', 'import')
   @UseInterceptors(FileInterceptor('file'))
-  async importExcel(@UploadedFile() file: Express.Multer.File) {
+  async importExcel(@UploadedFile() file: Express.Multer.File, @Req() req: any) {
     if (!file) throw new BadRequestException('No file uploaded');
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(file.buffer);
@@ -191,7 +212,9 @@ export class DebtController {
       });
       rows.push(rowData);
     });
-    return this.debtService.importExcelRows(rows);
+
+    const userId = req.user?.id;
+    return this.debtService.importExcelRows(rows, userId);
   }
 
   @Post('update-pay-later')

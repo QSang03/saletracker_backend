@@ -12,12 +12,32 @@ const timezone = require('dayjs/plugin/timezone');
 dayjs.extend(utc);
 dayjs.extend(timezone);
 
-const FIELDS = ['createdAt', 'updatedAt', 'lastLogin', 'lastOnlineAt', 'deletedAt'];
+const FIELDS = [
+  'createdAt',
+  'updatedAt',
+  'lastLogin',
+  'lastOnlineAt',
+  'deletedAt',
+  'statistic_date',
+  'issue_date',
+  'due_date',
+  'pay_later',
+  'original_created_at',
+  'original_updated_at',
+  'created_at',
+  'updated_at',
+];
 
 function convertDates(obj: any): any {
+  // Handle undefined/null case
+  if (obj === undefined || obj === null) {
+    return obj === undefined ? {} : null;
+  }
+  
   if (Array.isArray(obj)) {
     return obj.map(convertDates);
   }
+  
   if (obj && typeof obj === 'object') {
     const result: any = {};
     for (const key of Object.keys(obj)) {
@@ -44,6 +64,22 @@ function convertDates(obj: any): any {
 @Injectable()
 export class DatetimeInterceptor implements NestInterceptor {
   intercept(context: ExecutionContext, next: CallHandler): Observable<any> {
-    return next.handle().pipe(map((data) => convertDates(data)));
+    const request = context.switchToHttp().getRequest();
+    
+    return next.handle().pipe(
+      map((data) => {
+        // Log để debug
+        if (data === undefined || data === null) {
+          console.warn(`[DatetimeInterceptor] Undefined/null response for ${request.method} ${request.url}`);
+        }
+        
+        // Fix: ensure không bao giờ return undefined
+        if (data === undefined) {
+          return {};
+        }
+        
+        return convertDates(data);
+      })
+    );
   }
 }

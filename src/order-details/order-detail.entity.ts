@@ -63,6 +63,9 @@ export class OrderDetail {
   })
   zaloMessageId: string;
 
+  @Column('json', { nullable: true })
+  metadata: Record<string, any>;
+
   @CreateDateColumn({ type: 'timestamp' })
   created_at: Date;
 
