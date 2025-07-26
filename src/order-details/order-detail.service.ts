@@ -30,6 +30,15 @@ export class OrderDetailService {
     });
   }
 
+  async findByZaloMessageId(zaloMessageId: string): Promise<OrderDetail | null> {
+    return this.orderDetailRepository.findOne({ where: { zaloMessageId } });
+  }
+
+  async getCustomerNameByZaloMessageId(zaloMessageId: string): Promise<string | null> {
+    const detail = await this.orderDetailRepository.findOne({ where: { zaloMessageId } });
+    return detail?.customer_name || null;
+  }
+
   async create(orderDetailData: Partial<OrderDetail>): Promise<OrderDetail> {
     const orderDetail = this.orderDetailRepository.create(orderDetailData);
     return this.orderDetailRepository.save(orderDetail);

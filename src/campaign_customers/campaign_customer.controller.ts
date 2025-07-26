@@ -12,7 +12,7 @@ export class CampaignCustomerController {
 
   @Get()
   @Permission('campaign_customer', 'read')
-  async findAll(@Query() query: any): Promise<CampaignCustomer[]> {
+  async findAll(@Query() query: any): Promise<{ data: CampaignCustomer[]; total: number }> {
     return this.campaignCustomerService.findAll(query);
   }
 

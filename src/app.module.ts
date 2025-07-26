@@ -29,6 +29,12 @@ import { OrderDetailModule } from './order-details/order-detail.module';
 import { WebhookModule } from './webhook/webhook.module';
 import { DebtStatisticModule } from './debt_statistics/debt_statistic.module';
 import { ObserversModule } from './observers/observers.module';
+import { CampaignModule } from './campaigns/campaign.module';
+import { CampaignCustomerModule } from './campaign_customers/campaign_customer.module';
+import { CampaignInteractionLogModule } from './campaign_interaction_logs/campaign_interaction_log.module';
+import { CampaignEmailReportModule } from './campaign_email_reports/campaign_email_report.module';
+import { CampaignScheduleModule } from './campaign_schedules/campaign_schedule.module';
+import { CampaignContentModule } from './campaign_contents/campaign_content.module';
 
 @Module({
   imports: [
@@ -62,6 +68,13 @@ import { ObserversModule } from './observers/observers.module';
     DebtStatisticModule,
     WebsocketModule,
     ObserversModule,
+    // Campaign modules
+    CampaignModule,
+    CampaignCustomerModule,
+    CampaignInteractionLogModule,
+    CampaignEmailReportModule,
+    CampaignScheduleModule,
+    CampaignContentModule,
   ],
   controllers: [AppController],
   providers: [AppService],

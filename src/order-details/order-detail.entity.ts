@@ -46,6 +46,9 @@ export class OrderDetail {
   @Column('int', { default: 1 })
   quantity: number;
 
+  @Column('int', { default: 4 })
+  extended: number;
+
   @Column('bigint', { unsigned: true, default: 0 })
   unit_price: number;
 
@@ -54,6 +57,9 @@ export class OrderDetail {
 
   @Column('longtext', { nullable: true })
   raw_item: string;
+
+  @Column('varchar', { nullable: true })
+  customer_name: string;
 
   @Column('varchar', {
     name: 'zaloMessageId',

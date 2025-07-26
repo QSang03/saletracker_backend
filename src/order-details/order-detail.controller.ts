@@ -10,10 +10,14 @@ import {
 } from '@nestjs/common';
 import { OrderDetailService } from './order-detail.service';
 import { OrderDetail } from './order-detail.entity';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 
 @Controller('order-details')
 export class OrderDetailController {
-  constructor(private readonly orderDetailService: OrderDetailService) {}
+  constructor(
+    private readonly orderDetailService: OrderDetailService,
+  ) {}
 
   @Get()
   async findAll(): Promise<OrderDetail[]> {
@@ -60,4 +64,5 @@ export class OrderDetailController {
   ): Promise<void> {
     return this.orderDetailService.deleteByOrderId(orderId);
   }
+
 }

@@ -447,7 +447,10 @@ export class DebtConfigService {
           (filters.statuses ?? []).forEach((status) => {
             if (status === 'normal') {
               qb.orWhere(
-                'debt_config.employee IS NOT NULL AND debt_config.id = debt_log.debt_config_id AND (debt_log.remind_status IS NULL OR debt_log.remind_status != :errorSend)',
+                `(debt_config.employee IS NOT NULL AND (
+                debt_log.id IS NULL
+                OR (debt_config.id = debt_log.debt_config_id AND (debt_log.remind_status IS NULL OR debt_log.remind_status != :errorSend))
+            ))`,
                 { errorSend: 'Error Send' },
               );
             }

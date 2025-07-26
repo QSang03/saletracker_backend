@@ -19,6 +19,7 @@ export enum ReminderStatus {
   CustomerResponded = 'Customer Responded',
   NotSent = 'Not Sent',
   ERROR_SEND = 'Error Send',
+  SentButNotVerified = 'Sent But Not Verified',
 }
 
 @Entity({ name: 'debt_logs' })

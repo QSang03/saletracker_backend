@@ -1,5 +1,5 @@
 import { Controller, Get, Post, Body, Param, Patch, Delete, Query, UseGuards } from '@nestjs/common';
-import { CampaignInteractionLogService } from './campaign_interaction_log.service';
+import { CampaignInteractionLogService, InteractionStats } from './campaign_interaction_log.service';
 import { CampaignInteractionLog } from './campaign_interaction_log.entity';
 import { Permission } from '../common/guards/permission.decorator';
 import { PermissionGuard } from '../common/guards/permission.guard';
@@ -12,8 +12,13 @@ export class CampaignInteractionLogController {
 
   @Get()
   @Permission('campaign_interaction_log', 'read')
-  async findAll(@Query() query: any): Promise<CampaignInteractionLog[]> {
-    return this.campaignInteractionLogService.findAll(query);
+  async findAll(@Query() query: any): Promise<{
+    data: CampaignInteractionLog[];
+    total: number;
+    stats: InteractionStats;
+  }> {
+    const { page, pageSize, ...filter } = query;
+    return this.campaignInteractionLogService.findAll(filter, page, pageSize);
   }
 
   @Get(':id')
