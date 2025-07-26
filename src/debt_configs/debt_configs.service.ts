@@ -480,13 +480,24 @@ export class DebtConfigService {
     const configs = await queryBuilder.skip(skip).take(limit).getMany();
 
     const data = configs.map((cfg) => {
-      const total_bills = Array.isArray(cfg.debts) ? cfg.debts.length : 0;
-      const total_debt = Array.isArray(cfg.debts)
-        ? cfg.debts.reduce(
-            (sum: number, d: any) => sum + (Number(d.remaining) || 0),
-            0,
+      const now = new Date();
+      const utc7 = new Date(now.getTime() + 7 * 60 * 60 * 1000);
+      utc7.setHours(0, 0, 0, 0);
+      const startOfTodayUtc = new Date(utc7.getTime() - 7 * 60 * 60 * 1000);
+
+      const filteredDebts = Array.isArray(cfg.debts)
+        ? cfg.debts.filter(
+            (d: any) =>
+              d.updated_at &&
+              new Date(d.updated_at).getTime() >= startOfTodayUtc.getTime(),
           )
-        : 0;
+        : [];
+
+      const total_bills = filteredDebts.length;
+      const total_debt = filteredDebts.reduce(
+        (sum: number, d: any) => sum + (Number(d.remaining) || 0),
+        0,
+      );
 
       return {
         id: cfg.id,
