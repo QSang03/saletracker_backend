@@ -8,12 +8,13 @@ import { Category } from '../categories/category.entity';
 import { DebtStatistic } from '../debt_statistics/debt_statistic.entity';
 import { Debt } from '../debts/debt.entity';
 import { DebtHistory } from 'src/debt_histories/debt_histories.entity';
+import { DatabaseChangeLog } from 'src/observers/change_log.entity';
 
 @Module({
   imports: [
     ScheduleModule.forRoot(),
     HttpModule,
-    TypeOrmModule.forFeature([NKCProduct, Category, DebtStatistic, Debt, DebtHistory]),
+    TypeOrmModule.forFeature([NKCProduct, Category, DebtStatistic, Debt, DebtHistory, DatabaseChangeLog]),
   ],
   providers: [CronjobService],
   exports: [CronjobService],

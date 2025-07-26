@@ -384,4 +384,5 @@ export class CronjobService {
       this.logger.error('[CRON] Lỗi khi xóa bảng database_change_log:', error);
     }
   }
+  
 }
