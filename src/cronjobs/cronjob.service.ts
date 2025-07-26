@@ -10,6 +10,7 @@ import { Category } from '../categories/category.entity';
 import { DebtStatistic } from '../debt_statistics/debt_statistic.entity';
 import { Debt } from '../debts/debt.entity';
 import { DebtHistory } from 'src/debt_histories/debt_histories.entity';
+import { DatabaseChangeLog } from 'src/observers/change_log.entity';
 
 @Injectable()
 export class CronjobService {
@@ -28,6 +29,8 @@ export class CronjobService {
     private debtRepo: Repository<Debt>,
     @InjectRepository(DebtHistory)
     private debtHistoryRepo: Repository<DebtHistory>,
+    @InjectRepository(DatabaseChangeLog)
+    private changeLogRepo: Repository<DatabaseChangeLog>,
   ) {
     this.logger.log(
       '🎯 [CronjobService] Service đã được khởi tạo - Cronjob debt statistics sẽ chạy lúc 11h trưa hàng ngày',
@@ -365,5 +368,20 @@ export class CronjobService {
       `[CRON] Đã clone xong debt_logs sang debt_histories cho ngày ${todayStr}`,
     );
     this.logger.debug(`[CRON] Query result: ${JSON.stringify(result)}`);
+  }
+
+  @Cron(process.env.CRON_DEL_DB_CHANGELOGS_TIME || '0 23 * * *')
+  async clearDatabaseChangeLog() {
+    const now = new Date();
+    const vietnamHour = now.getUTCHours() + 7;
+    if (vietnamHour !== 11) return;
+
+    this.logger.log('[CRON] Bắt đầu xóa toàn bộ bảng database_change_log');
+    try {
+      await this.changeLogRepo.clear();
+      this.logger.log('[CRON] Đã xóa toàn bộ bảng database_change_log thành công');
+    } catch (error) {
+      this.logger.error('[CRON] Lỗi khi xóa bảng database_change_log:', error);
+    }
   }
 }
