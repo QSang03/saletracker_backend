@@ -426,13 +426,10 @@ export class DebtService {
         const invoice_code = row['Số chứng từ'];
         const oldDebt = existingDebtsMap.get(invoice_code);
 
-        // Kiểm tra phiếu đã thanh toán
+        // Nếu phiếu đã thanh toán (status === PAID), ghi đè lại thành no_information và lấy dữ liệu mới, không cập nhật debt_statistic
+        let isPaidOverwrite = false;
         if (oldDebt && oldDebt.status === DebtStatus.PAID) {
-          errorResults.push({
-            row: i + 2,
-            error: `Phiếu ${invoice_code} đã được thanh toán, không thể cập nhật`,
-          });
-          continue;
+          isPaidOverwrite = true;
         }
 
         const parseDate = (val: any): Date | null => {
@@ -477,7 +474,11 @@ export class DebtService {
               action_type: 'UPDATE',
             });
 
-            // Update debt
+            // Nếu là phiếu paid thì chuyển thành no_information và lấy dữ liệu mới, không update debt_statistic
+            if (isPaidOverwrite) {
+              oldDebt.status = 'no_information_available' as any;
+            }
+
             oldDebt.customer_raw_code = row['Mã đối tác'] || '';
             oldDebt.invoice_code = invoice_code;
             oldDebt.issue_date =
@@ -507,6 +508,7 @@ export class DebtService {
                   }),
                 ),
             );
+            // Nếu là paid overwrite thì KHÔNG update debt_statistic
           } else {
             const debt = debtRepo.create({
               customer_raw_code: row['Mã đối tác'] || '',
