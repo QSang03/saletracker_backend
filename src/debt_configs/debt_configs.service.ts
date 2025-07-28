@@ -16,7 +16,7 @@ interface DebtConfigFilters {
   page?: number;
   limit?: number;
   statuses?: string[];
-  sort?: 'asc' | 'desc';
+  sort?: { field: string; direction: 'asc' | 'desc' };
 }
 
 @Injectable()
@@ -354,8 +354,6 @@ export class DebtConfigService {
     page: number;
     limit: number;
     totalPages: number;
-    statuses?: string[];
-    sort?: 'asc' | 'desc';
   }> {
     const roleNames = (currentUser?.roles || []).map((r: any) =>
       typeof r === 'string'
@@ -369,32 +367,27 @@ export class DebtConfigService {
     const limit = filters.limit || 10;
     const skip = (page - 1) * limit;
 
+    const isAggregateSort =
+      filters.sort &&
+      (filters.sort.field === 'total_bills' ||
+        filters.sort.field === 'total_debt');
+
     const queryBuilder = this.repo
       .createQueryBuilder('debt_config')
       .leftJoinAndSelect('debt_config.debt_log', 'debt_log')
       .leftJoinAndSelect('debt_config.actor', 'actor')
-      .leftJoinAndSelect('debt_config.debts', 'debts')
-      .leftJoinAndSelect('debt_config.employee', 'employee')
-      .select([
-        'debt_config.id',
-        'debt_config.customer_code',
-        'debt_config.customer_name',
-        'debt_config.customer_type',
-        'debt_config.day_of_week',
-        'debt_config.gap_day',
-        'debt_config.is_send',
-        'debt_config.is_repeat',
-        'debt_config.send_last_at',
-        'debt_config.last_update_at',
-        'debt_log',
-        'actor',
-        'debts',
-        'employee.id',
-        'employee.fullName',
-        'employee.username',
-      ]);
+      .leftJoinAndSelect('debt_config.employee', 'employee');
 
-    // Role-based filtering
+    if (isAggregateSort) {
+      queryBuilder
+        .leftJoin('debt_config.debts', 'debts')
+        .addSelect('COUNT(debts.id)', 'total_bills')
+        .addSelect('COALESCE(SUM(debts.remaining), 0)', 'total_debt')
+        .groupBy('debt_config.id');
+    } else {
+      queryBuilder.leftJoinAndSelect('debt_config.debts', 'debts');
+    }
+
     if (!isAdminOrManager && roleNames.includes('user-cong-no')) {
       queryBuilder.andWhere('employee.id = :userId', {
         userId: currentUser?.id,
@@ -409,80 +402,91 @@ export class DebtConfigService {
       };
     }
 
-    // Search filter
-    if (filters.search && filters.search.trim()) {
+    if (filters.search?.trim()) {
       queryBuilder.andWhere(
         '(debt_config.customer_code LIKE :search OR debt_config.customer_name LIKE :search)',
         { search: `%${filters.search.trim()}%` },
       );
     }
 
-    // Employee filter
-    if (filters.employees && filters.employees.length > 0) {
+    if (Array.isArray(filters.employees) && filters.employees.length > 0) {
       queryBuilder.andWhere('employee.id IN (:...employeeIds)', {
         employeeIds: filters.employees,
       });
     }
 
-    // Single date filter
     if (filters.singleDate) {
-      const filterDate = new Date(filters.singleDate);
-      const startOfDay = new Date(filterDate);
-      startOfDay.setHours(0, 0, 0, 0);
-      const endOfDay = new Date(filterDate);
-      endOfDay.setHours(23, 59, 59, 999);
-
+      const date = new Date(filters.singleDate);
+      const start = new Date(date.setHours(0, 0, 0, 0));
+      const end = new Date(date.setHours(23, 59, 59, 999));
       queryBuilder.andWhere(
-        'debt_config.send_last_at BETWEEN :startOfDay AND :endOfDay',
+        'debt_config.send_last_at BETWEEN :start AND :end',
         {
-          startOfDay,
-          endOfDay,
+          start,
+          end,
         },
       );
     }
 
-    if (filters.statuses && filters.statuses.length > 0) {
+    if (Array.isArray(filters.statuses) && filters.statuses.length > 0) {
       queryBuilder.andWhere(
         new Brackets((qb) => {
-          (filters.statuses ?? []).forEach((status) => {
-            if (status === 'normal') {
-              qb.orWhere(
-                `(debt_config.employee IS NOT NULL AND (
-                debt_log.id IS NULL
-                OR (debt_config.id = debt_log.debt_config_id AND (debt_log.remind_status IS NULL OR debt_log.remind_status != :errorSend))
-            ))`,
-                { errorSend: 'Error Send' },
-              );
+          if (Array.isArray(filters.statuses)) {
+            for (const status of filters.statuses) {
+              if (status === 'normal') {
+                qb.orWhere(
+                  `(debt_config.employee IS NOT NULL AND (
+                    debt_log.id IS NULL
+                    OR (debt_config.id = debt_log.debt_config_id AND (debt_log.remind_status IS NULL OR debt_log.remind_status != :errorSend))
+                ))`,
+                  { errorSend: 'Error Send' },
+                );
+              }
+              if (status === 'not_matched_debt') {
+                qb.orWhere('debt_config.employee IS NULL');
+              }
+              if (status === 'wrong_customer_name') {
+                qb.orWhere(
+                  'debt_config.id = debt_log.debt_config_id AND debt_log.remind_status = :errorSend',
+                  { errorSend: 'Error Send' },
+                );
+              }
             }
-            if (status === 'not_matched_debt') {
-              qb.orWhere('debt_config.employee IS NULL');
-            }
-            if (status === 'wrong_customer_name') {
-              qb.orWhere(
-                'debt_config.id = debt_log.debt_config_id AND debt_log.remind_status = :errorSend',
-                { errorSend: 'Error Send' },
-              );
-            }
-          });
+          }
         }),
       );
     }
 
-    if (filters.sort === 'asc') {
-      queryBuilder.orderBy('debt_config.send_last_at', 'ASC');
-    } else if (filters.sort === 'desc') {
-      queryBuilder.orderBy('debt_config.send_last_at', 'DESC');
+    if (isAggregateSort && filters.sort) {
+      queryBuilder.orderBy(
+        filters.sort.field,
+        filters.sort.direction.toUpperCase() as 'ASC' | 'DESC',
+      );
+    } else if (filters.sort?.field && filters.sort?.direction) {
+      queryBuilder.orderBy(
+        `debt_config.${filters.sort.field}`,
+        filters.sort.direction.toUpperCase() as 'ASC' | 'DESC',
+      );
     } else {
       queryBuilder.orderBy('debt_config.id', 'DESC');
     }
 
-    // Count total
     const total = await queryBuilder.getCount();
+    const raw = isAggregateSort ? await queryBuilder.getRawMany() : [];
+    const entities = await queryBuilder.skip(skip).take(limit).getMany();
 
-    // Get data with pagination
-    const configs = await queryBuilder.skip(skip).take(limit).getMany();
+    const rawMap = new Map();
+    if (isAggregateSort) {
+      for (const r of raw) {
+        rawMap.set(r.debt_config_id, {
+          total_bills: +r.total_bills || 0,
+          total_debt: +r.total_debt || 0,
+        });
+      }
+    }
 
-    const data = configs.map((cfg) => {
+    const data = entities.map((cfg) => {
+      const rawTotals = rawMap.get(cfg.id);
       const now = new Date();
       const utc7 = new Date(now.getTime() + 7 * 60 * 60 * 1000);
       utc7.setHours(0, 0, 0, 0);
@@ -496,11 +500,13 @@ export class DebtConfigService {
           )
         : [];
 
-      const total_bills = filteredDebts.length;
-      const total_debt = filteredDebts.reduce(
-        (sum: number, d: any) => sum + (Number(d.remaining) || 0),
-        0,
-      );
+      const total_bills = rawTotals?.total_bills ?? filteredDebts.length;
+      const total_debt =
+        rawTotals?.total_debt ??
+        filteredDebts.reduce(
+          (sum: number, d: any) => sum + (Number(d.remaining) || 0),
+          0,
+        );
 
       return {
         id: cfg.id,
@@ -511,10 +517,8 @@ export class DebtConfigService {
         gap_day: cfg.gap_day,
         is_send: cfg.is_send,
         is_repeat: cfg.is_repeat,
-        send_last_at: cfg.send_last_at ? cfg.send_last_at.toISOString() : null,
-        last_update_at: cfg.last_update_at
-          ? cfg.last_update_at.toISOString()
-          : null,
+        send_last_at: cfg.send_last_at?.toISOString() ?? null,
+        last_update_at: cfg.last_update_at?.toISOString() ?? null,
         actor: cfg.actor
           ? { fullName: cfg.actor.fullName, username: cfg.actor.username }
           : null,
@@ -524,18 +528,12 @@ export class DebtConfigService {
         debt_log: cfg.debt_log
           ? {
               remind_status: cfg.debt_log.remind_status,
-              created_at: cfg.debt_log.created_at
-                ? cfg.debt_log.created_at.toISOString()
-                : null,
-              send_at: cfg.debt_log.send_at
-                ? cfg.debt_log.send_at.toISOString()
-                : null,
-              first_remind_at: cfg.debt_log.first_remind_at
-                ? cfg.debt_log.first_remind_at.toISOString()
-                : null,
-              second_remind_at: cfg.debt_log.second_remind_at
-                ? cfg.debt_log.second_remind_at.toISOString()
-                : null,
+              created_at: cfg.debt_log.created_at?.toISOString() ?? null,
+              send_at: cfg.debt_log.send_at?.toISOString() ?? null,
+              first_remind_at:
+                cfg.debt_log.first_remind_at?.toISOString() ?? null,
+              second_remind_at:
+                cfg.debt_log.second_remind_at?.toISOString() ?? null,
             }
           : null,
         total_bills,

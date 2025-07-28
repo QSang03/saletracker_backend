@@ -37,11 +37,25 @@ export class DebtConfigController {
     limit: number;
     totalPages: number;
   }> {
-    // Parse query parameters
-    const sortValues = ['asc', 'desc'];
-    const sort: 'asc' | 'desc' | undefined = sortValues.includes(query.sort)
-      ? query.sort
-      : undefined;
+    // Parse sort object từ query
+    let sort: { field: string; direction: 'asc' | 'desc' } | undefined =
+      undefined;
+    if (query.sort && typeof query.sort === 'object') {
+      // Nếu FE gửi dạng object
+      sort = {
+        field: query.sort.field || 'send_last_at',
+        direction: ['asc', 'desc'].includes(query.sort.direction)
+          ? query.sort.direction
+          : 'desc',
+      };
+    } else if (typeof query.sort === 'string' && query.sort_field) {
+      // Nếu FE gửi dạng string và có sort_field
+      sort = {
+        field: query.sort_field,
+        direction: ['asc', 'desc'].includes(query.sort) ? query.sort : 'desc',
+      };
+    }
+
     const filters = {
       search: query.search,
       employees: query.employees
@@ -52,7 +66,7 @@ export class DebtConfigController {
       singleDate: query.singleDate,
       page: query.page ? Number(query.page) : 1,
       limit: query.limit ? Number(query.limit) : 10,
-      sort,
+      sort, // Đúng kiểu object
       statuses: query.statuses
         ? Array.isArray(query.statuses)
           ? query.statuses
@@ -65,7 +79,9 @@ export class DebtConfigController {
 
   @Get('employees')
   @Permission('cong-no', 'read')
-  async getDebtConfigEmployees(): Promise<{ data: { id: number; fullName: string }[] }> {
+  async getDebtConfigEmployees(): Promise<{
+    data: { id: number; fullName: string }[];
+  }> {
     const employees = await this.debtConfigService.getEmployeeList();
     return { data: employees };
   }
