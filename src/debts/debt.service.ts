@@ -108,23 +108,36 @@ export class DebtService {
       typeof query.employeeCodes === 'string' &&
       query.employeeCodes.trim()
     ) {
-      // Hỗ trợ truyền vào dạng "NKTO01-TRẦN THỊ THÙY QUYÊN,NKTO05-TRẦN THỊ NGỌC HÂN"
       let employeeCodes: string[] = [];
+      let employeeNames: string[] = [];
       if (typeof query.employeeCodes === 'string') {
-        employeeCodes = query.employeeCodes
+        query.employeeCodes
           .split(',')
           .map((s: string) => s.trim())
-          .filter(Boolean);
-      } else {
-        employeeCodes = query.employeeCodes
-          .map((s: string) => s.trim())
-          .filter(Boolean);
+          .filter(Boolean)
+          .forEach((code) => {
+            const idx = code.indexOf('-');
+            if (idx > 0) {
+              employeeCodes.push(code.substring(0, idx).trim());
+              employeeNames.push(code.substring(idx + 1).trim());
+            } else {
+              employeeNames.push(code);
+            }
+          });
       }
 
-      if (employeeCodes.length > 0) {
-        qb.andWhere(`debt.employee_code_raw IN (:...employeeCodes)`, {
-          employeeCodes,
-        });
+      if (employeeCodes.length > 0 || employeeNames.length > 0) {
+        qb.andWhere(
+          `(
+            (${employeeCodes.length > 0 ? 'debt.employee_code_raw IN (:...employeeCodes)' : '1=0'})
+            OR
+            (${employeeNames.length > 0 ? 'employee.fullName IN (:...employeeNames)' : '1=0'})
+          )`,
+          {
+            ...(employeeCodes.length > 0 ? { employeeCodes } : {}),
+            ...(employeeNames.length > 0 ? { employeeNames } : {}),
+          },
+        );
       }
     }
     // Filter NVKD (saleCode)
