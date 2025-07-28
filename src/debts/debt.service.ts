@@ -886,15 +886,29 @@ export class DebtService {
     if (!id || (!data.note && !data.status)) {
       throw new BadRequestException('Thiếu dữ liệu cập nhật');
     }
+
     // Lấy updated_at cũ
     const debt = await this.findOne(Number(id));
     if (!debt) throw new BadRequestException('Không tìm thấy công nợ');
+
     const updateData: any = {};
     if (data.note !== undefined) updateData.note = data.note;
-    if (data.status !== undefined) updateData.status = data.status;
-    await this.update(id, updateData);
-    // Khôi phục updated_at cũ
-    await this.update(id, { updated_at: debt.updated_at });
+    if (data.status !== undefined) {
+      updateData.status = data.status;
+      if (data.status === 'paid') updateData.remaining = 0;
+    }
+
+    // Dùng QueryBuilder để cập nhật và giữ nguyên updated_at
+    await this.debtRepository
+      .createQueryBuilder()
+      .update()
+      .set({
+        ...updateData,
+        updated_at: debt.updated_at,
+      })
+      .where('id = :id', { id })
+      .execute();
+
     return { success: true };
   }
 
