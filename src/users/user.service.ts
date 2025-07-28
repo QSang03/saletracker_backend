@@ -35,6 +35,7 @@ export class UserService {
     private readonly wsGateway: WebsocketGateway,
     private readonly rolesPermissionsService: RolesPermissionsService, // Inject service
     private readonly userStatusObserver: UserStatusObserver,
+    
   ) {}
 
   async findAll(
@@ -830,6 +831,15 @@ export class UserService {
       // Inject RolesPermissionsService vào service này hoặc gọi qua controller
       await this.rolesPermissionsService.bulkUpdate(rolePermissions);
     }
+    this.wsGateway.emitToRoom(
+      `user_${userId}`,
+      'force_token_refresh',
+      {
+        userId,
+        reason: 'permission_changed',
+        message: 'Quyền của bạn đã thay đổi, vui lòng làm mới phiên đăng nhập.',
+      },
+    );
     return { success: true };
   }
 
