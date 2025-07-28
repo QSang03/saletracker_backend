@@ -749,6 +749,7 @@ export class DebtConfigService {
       business_remind_message: debtLog?.sale_msg || '',
       remind_status: debtLog?.remind_status || 'Not Sent',
       customer_gender: debtLog?.gender || '',
+      error_msg: debtLog?.error_msg || '',
       send_time: debtLog?.send_at ? debtLog.send_at.toISOString() : null,
       remind_time_1: debtLog?.first_remind_at
         ? debtLog.first_remind_at.toISOString()
