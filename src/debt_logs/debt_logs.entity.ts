@@ -40,7 +40,7 @@ export class DebtLogs {
   @JoinColumn({ name: 'debt_config_id' })
   debt_config: DebtConfig;
 
-  @Column({ type: 'longtext' })
+  @Column({ type: 'longtext', nullable: true })
   debt_msg: string;
 
   @Column({ type: 'datetime', nullable: true })

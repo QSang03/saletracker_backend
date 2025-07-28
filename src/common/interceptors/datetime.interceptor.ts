@@ -26,6 +26,9 @@ const FIELDS = [
   'original_updated_at',
   'created_at',
   'updated_at',
+  'send_at',
+  'first_remind_at',
+  'second_remind_at'
 ];
 
 function convertDates(obj: any): any {

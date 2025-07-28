@@ -379,10 +379,57 @@ export class CronjobService {
     this.logger.log('[CRON] Bắt đầu xóa toàn bộ bảng database_change_log');
     try {
       await this.changeLogRepo.clear();
-      this.logger.log('[CRON] Đã xóa toàn bộ bảng database_change_log thành công');
+      this.logger.log(
+        '[CRON] Đã xóa toàn bộ bảng database_change_log thành công',
+      );
     } catch (error) {
       this.logger.error('[CRON] Lỗi khi xóa bảng database_change_log:', error);
     }
   }
-  
+
+  @Cron(process.env.CRON_DEBT_LOGS_TIME || '0 23 * * *')
+  async snapshotAndResetDebtLogs() {
+    const today = new Date();
+    const vietnamTime = new Date(today.getTime() + 7 * 60 * 60 * 1000);
+    const todayStr = vietnamTime.toISOString().split('T')[0];
+
+    // 1. Snapshot các bản ghi debt_logs có send_at >= ngày hiện tại
+    const insertQuery = `
+    INSERT INTO debt_histories (
+      created_at, remind_status, gender, debt_log_id, send_at, first_remind_at, second_remind_at,
+      conv_id, debt_img, sale_msg, second_remind, debt_msg, first_remind, error_msg, user_name, full_name
+    )
+    SELECT
+      NOW(), dl.remind_status, dl.gender, dl.id, dl.send_at, dl.first_remind_at, dl.second_remind_at,
+      dl.conv_id, dl.debt_img, dl.sale_msg, dl.second_remind,
+      IFNULL(dl.debt_msg, ''), dl.first_remind, dl.error_msg, u.username, u.full_name
+    FROM debt_logs dl
+    LEFT JOIN debt_configs dc ON dl.debt_config_id = dc.id
+    LEFT JOIN users u ON dc.employee_id = u.id
+    WHERE dl.send_at >= ?
+      AND dl.id NOT IN (SELECT debt_log_id FROM debt_histories WHERE DATE(created_at) = ?)
+  `;
+    await this.debtHistoryRepo.query(insertQuery, [todayStr, todayStr]);
+
+    // 2. Reset toàn bộ debt_logs (không điều kiện WHERE)
+    const updateQuery = `
+    UPDATE debt_logs
+    SET
+      debt_msg = NULL,
+      send_at = NULL,
+      error_msg = NULL,
+      first_remind = NULL,
+      first_remind_at = NULL,
+      second_remind = NULL,
+      second_remind_at = NULL,
+      sale_msg = NULL,
+      debt_img = NULL,
+      remind_status = 'Not Sent'
+  `;
+    await this.debtHistoryRepo.query(updateQuery);
+
+    this.logger.log(
+      `[CRON] Đã snapshot debt_logs (send_at >= ${todayStr}) và reset toàn bộ debt_logs.`,
+    );
+  }
 }

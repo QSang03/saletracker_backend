@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Delete,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
@@ -50,5 +51,33 @@ export class DebtHistoryController {
   @Permission('cong-no', 'delete')
   remove(@Param('id') id: number): Promise<void> {
     return this.debtHistoryService.remove(id);
+  }
+
+  @Get('by-debt-config/:debtConfigId')
+  @Permission('cong-no', 'read')
+  findByDebtConfigId(
+    @Param('debtConfigId') debtConfigId: number,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ): Promise<{
+    data: DebtHistory[];
+    total: number;
+    page: number;
+    limit: number;
+    totalPages: number;
+  }> {
+    const pageNum = page ? Number(page) : 1;
+    const limitNum = limit ? Number(limit) : 10;
+    return this.debtHistoryService.findByDebtConfigId(
+      debtConfigId,
+      pageNum,
+      limitNum,
+    );
+  }
+
+  @Get(':id/detail')
+  @Permission('cong-no', 'read')
+  async getDebtHistoryDetail(@Param('id') id: number) {
+    return this.debtHistoryService.getDebtHistoryDetail(id);
   }
 }
