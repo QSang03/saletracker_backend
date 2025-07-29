@@ -28,7 +28,8 @@ const FIELDS = [
   'updated_at',
   'send_at',
   'first_remind_at',
-  'second_remind_at'
+  'second_remind_at',
+  'added_at'
 ];
 
 function convertDates(obj: any): any {

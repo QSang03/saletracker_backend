@@ -22,6 +22,8 @@ async function bootstrap() {
     new ValidationPipe({
       transform: true,
       whitelist: true,
+      forbidNonWhitelisted: false, // Cho phép các thuộc tính không được định nghĩa để debug
+      enableDebugMessages: true,
     }),
   );
 

@@ -1,7 +1,9 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Between } from 'typeorm';
-import { CampaignInteractionLog } from './campaign_interaction_log.entity';
+import { CampaignInteractionLog, LogStatus } from './campaign_interaction_log.entity';
+import { Campaign } from '../campaigns/campaign.entity';
+import { User } from '../users/user.entity';
 
 export interface InteractionStats {
   total_sent: number;
@@ -24,9 +26,11 @@ export class CampaignInteractionLogService {
   constructor(
     @InjectRepository(CampaignInteractionLog)
     private readonly campaignInteractionLogRepository: Repository<CampaignInteractionLog>,
+    @InjectRepository(Campaign)
+    private readonly campaignRepository: Repository<Campaign>,
   ) {}
 
-  async findAll(filter: LogFilter, page = 1, pageSize = 10): Promise<{
+  async findAll(filter: LogFilter, page = 1, pageSize = 10, user: User): Promise<{
     data: CampaignInteractionLog[];
     total: number;
     stats: InteractionStats;
@@ -34,7 +38,14 @@ export class CampaignInteractionLogService {
     const qb = this.campaignInteractionLogRepository.createQueryBuilder('log')
       .leftJoinAndSelect('log.campaign', 'campaign')
       .leftJoinAndSelect('log.customer', 'customer')
-      .leftJoinAndSelect('log.staff_handler', 'staff');
+      .leftJoinAndSelect('log.staff_handler', 'staff')
+      .leftJoinAndSelect('campaign.department', 'department');
+
+    // Filter by user's department
+    const userDepartment = user.departments?.[0];
+    if (userDepartment) {
+      qb.andWhere('department.id = :deptId', { deptId: userDepartment.id });
+    }
 
     // Apply filters
     if (filter.campaign_id) {
@@ -59,7 +70,7 @@ export class CampaignInteractionLogService {
     }
 
     // Get stats
-    const stats = await this.getStats(filter);
+    const stats = await this.getStats(filter, user);
 
     // Apply pagination
     const skip = (page - 1) * pageSize;
@@ -71,9 +82,16 @@ export class CampaignInteractionLogService {
     return { data, total, stats };
   }
 
-  async getStats(filter: LogFilter): Promise<InteractionStats> {
+  async getStats(filter: LogFilter, user: User): Promise<InteractionStats> {
     const qb = this.campaignInteractionLogRepository.createQueryBuilder('log')
-      .leftJoin('log.campaign', 'campaign');
+      .leftJoin('log.campaign', 'campaign')
+      .leftJoin('campaign.department', 'department');
+
+    // Filter by user's department
+    const userDepartment = user.departments?.[0];
+    if (userDepartment) {
+      qb.andWhere('department.id = :deptId', { deptId: userDepartment.id });
+    }
 
     if (filter.campaign_id) {
       qb.andWhere('campaign.id = :campaignId', { campaignId: filter.campaign_id });
@@ -108,8 +126,42 @@ export class CampaignInteractionLogService {
     };
   }
 
-  async create(data: Partial<CampaignInteractionLog>): Promise<CampaignInteractionLog> {
+  async create(data: Partial<CampaignInteractionLog>, user: User): Promise<CampaignInteractionLog> {
     const log = this.campaignInteractionLogRepository.create(data);
+    return this.campaignInteractionLogRepository.save(log);
+  }
+
+  async updateLogStatus(id: string, newStatus: LogStatus, extra: any, userId: string): Promise<CampaignInteractionLog> {
+    const log = await this.campaignInteractionLogRepository.findOneByOrFail({ id });
+    
+    // Validate status transitions
+    const validTransitions = {
+      [LogStatus.PENDING]: [LogStatus.SENT, LogStatus.FAILED],
+      [LogStatus.SENT]: [LogStatus.CUSTOMER_REPLIED, LogStatus.FAILED],
+      [LogStatus.CUSTOMER_REPLIED]: [LogStatus.STAFF_HANDLED],
+      [LogStatus.STAFF_HANDLED]: [LogStatus.REMINDER_SENT],
+      [LogStatus.REMINDER_SENT]: [LogStatus.CUSTOMER_REPLIED, LogStatus.FAILED],
+      [LogStatus.FAILED]: [LogStatus.PENDING],
+    };
+
+    if (!validTransitions[log.status]?.includes(newStatus)) {
+      throw new BadRequestException('Invalid status transition');
+    }
+
+    // Update log with additional data
+    Object.assign(log, extra);
+    log.status = newStatus;
+
+    // Set timestamps based on status
+    if (newStatus === LogStatus.SENT) {
+      log.sent_at = new Date();
+    } else if (newStatus === LogStatus.CUSTOMER_REPLIED) {
+      log.customer_replied_at = new Date();
+    } else if (newStatus === LogStatus.STAFF_HANDLED) {
+      log.staff_handled_at = new Date();
+      log.staff_handler = { id: userId } as any;
+    }
+
     return this.campaignInteractionLogRepository.save(log);
   }
 
@@ -135,23 +187,50 @@ export class CampaignInteractionLogService {
     }
 
     await this.campaignInteractionLogRepository.update(id, updateData);
-    return this.findOne(id);
+    return this.findOne(id); // Keep without user for compatibility
   }
 
-  async findOne(id: string): Promise<CampaignInteractionLog> {
-    const log = await this.campaignInteractionLogRepository.findOne({
-      where: { id },
-      relations: ['campaign', 'customer', 'staff_handler'],
-    });
+  async findOne(id: string, user?: User): Promise<CampaignInteractionLog> {
+    const qb = this.campaignInteractionLogRepository.createQueryBuilder('log')
+      .leftJoinAndSelect('log.campaign', 'campaign')
+      .leftJoinAndSelect('log.customer', 'customer')
+      .leftJoinAndSelect('log.staff_handler', 'staff_handler')
+      .leftJoinAndSelect('campaign.department', 'department')
+      .where('log.id = :id', { id });
+
+    // Filter by user's department if user is provided
+    if (user) {
+      const userDepartment = user.departments?.[0];
+      if (userDepartment) {
+        qb.andWhere('department.id = :deptId', { deptId: userDepartment.id });
+      }
+    }
+
+    const log = await qb.getOne();
     
     if (!log) {
-      throw new BadRequestException('Không tìm thấy log');
+      throw new NotFoundException('Không tìm thấy log');
     }
     
     return log;
   }
 
-  async getByCampaign(campaignId: string): Promise<CampaignInteractionLog[]> {
+  async getByCampaign(campaignId: string, user: User): Promise<CampaignInteractionLog[]> {
+    // Verify campaign access
+    const campaign = await this.campaignRepository.findOne({
+      where: { id: campaignId },
+      relations: ['department']
+    });
+
+    if (!campaign) {
+      throw new NotFoundException('Không tìm thấy chiến dịch');
+    }
+
+    const userDepartment = user.departments?.[0];
+    if (userDepartment && campaign.department.id !== userDepartment.id) {
+      throw new BadRequestException('Không có quyền truy cập chiến dịch này');
+    }
+
     return this.campaignInteractionLogRepository.find({
       where: { campaign: { id: campaignId } },
       relations: ['customer', 'staff_handler'],
@@ -167,12 +246,14 @@ export class CampaignInteractionLogService {
     });
   }
 
-  async update(id: string, data: Partial<CampaignInteractionLog>): Promise<CampaignInteractionLog> {
+  async update(id: string, data: Partial<CampaignInteractionLog>, user: User): Promise<CampaignInteractionLog> {
+    await this.findOne(id, user); // Verify access
     await this.campaignInteractionLogRepository.update(id, data);
-    return this.findOne(id);
+    return this.findOne(id, user);
   }
 
-  async remove(id: string): Promise<void> {
-    await this.campaignInteractionLogRepository.delete(id);
+  async remove(id: string, user: User): Promise<void> {
+    const log = await this.findOne(id, user); // Verify access
+    await this.campaignInteractionLogRepository.remove(log);
   }
 }

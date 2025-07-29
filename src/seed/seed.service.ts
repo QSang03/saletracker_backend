@@ -97,6 +97,7 @@ export class SeedService implements OnModuleInit {
         { name: 'debt_timeout', display_name: 'Thời gian timeout công nợ', value: '30', type: 'number', section: 'debt', status: 1 },
         { name: 'debt_max_workers', display_name: 'Số lượng worker tối đa cho công nợ', value: '5', type: 'number', section: 'debt', status: 1 },
         { name: 'debt_batch', display_name: 'Tổng xử lý số lượng hội thoại 1 lần Công nợ', value: '300', type: 'number', section: 'debt', status: 1 },
+        { name: 'debt_report', display_name: 'Cấu hình gửi mail báo cáo công nợ', value: '{"time_start":"15:00","time_end":"17:00","mail":["mail1@gmail.com","mail2@gmail.com","mail3@gmail.com"]}', type: 'json', section: 'debt', status: 1 },
 
         // campaign
         { name: 'campaign_runTime', display_name: 'Thời gian chạy chiến dịch', value: '08:00', type: 'time', section: 'campaign', status: 1 },

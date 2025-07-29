@@ -367,6 +367,12 @@ export class DebtConfigService {
     const limit = filters.limit || 10;
     const skip = (page - 1) * limit;
 
+    // Tính toán thời gian bắt đầu ngày hôm nay (UTC+7) để thống nhất logic
+    const now = new Date();
+    const utc7 = new Date(now.getTime() + 7 * 60 * 60 * 1000);
+    utc7.setHours(0, 0, 0, 0);
+    const startOfTodayUtc = new Date(utc7.getTime() - 7 * 60 * 60 * 1000);
+
     const isAggregateSort =
       filters.sort &&
       (filters.sort.field === 'total_bills' ||
@@ -379,12 +385,17 @@ export class DebtConfigService {
       .leftJoinAndSelect('debt_config.employee', 'employee');
 
     if (isAggregateSort) {
+      // ✅ FIX: Áp dụng filter ngày cho SQL aggregation để thống nhất
       queryBuilder
         .leftJoin('debt_config.debts', 'debts')
         .addSelect('COUNT(debts.id)', 'total_bills')
         .addSelect('COALESCE(SUM(debts.remaining), 0)', 'total_debt')
+        .andWhere('(debts.id IS NULL OR debts.updated_at >= :startOfToday)', {
+          startOfToday: startOfTodayUtc,
+        })
         .groupBy('debt_config.id');
     } else {
+      // ✅ Giữ join bình thường khi không cần aggregate
       queryBuilder.leftJoinAndSelect('debt_config.debts', 'debts');
     }
 
@@ -436,9 +447,9 @@ export class DebtConfigService {
               if (status === 'normal') {
                 qb.orWhere(
                   `(debt_config.employee IS NOT NULL AND (
-                    debt_log.id IS NULL
-                    OR (debt_config.id = debt_log.debt_config_id AND (debt_log.remind_status IS NULL OR debt_log.remind_status != :errorSend))
-                ))`,
+                  debt_log.id IS NULL
+                  OR (debt_config.id = debt_log.debt_config_id AND (debt_log.remind_status IS NULL OR debt_log.remind_status != :errorSend))
+              ))`,
                   { errorSend: 'Error Send' },
                 );
               }
@@ -486,27 +497,30 @@ export class DebtConfigService {
     }
 
     const data = entities.map((cfg) => {
-      const rawTotals = rawMap.get(cfg.id);
-      const now = new Date();
-      const utc7 = new Date(now.getTime() + 7 * 60 * 60 * 1000);
-      utc7.setHours(0, 0, 0, 0);
-      const startOfTodayUtc = new Date(utc7.getTime() - 7 * 60 * 60 * 1000);
+      let total_bills: number;
+      let total_debt: number;
 
-      const filteredDebts = Array.isArray(cfg.debts)
-        ? cfg.debts.filter(
-            (d: any) =>
-              d.updated_at &&
-              new Date(d.updated_at).getTime() >= startOfTodayUtc.getTime(),
-          )
-        : [];
+      if (isAggregateSort) {
+        // ✅ Sử dụng kết quả từ SQL aggregation (đã có filter ngày)
+        const rawTotals = rawMap.get(cfg.id);
+        total_bills = rawTotals?.total_bills || 0;
+        total_debt = rawTotals?.total_debt || 0;
+      } else {
+        // ✅ Sử dụng JavaScript calculation với filter ngày
+        const filteredDebts = Array.isArray(cfg.debts)
+          ? cfg.debts.filter(
+              (d: any) =>
+                d.updated_at &&
+                new Date(d.updated_at).getTime() >= startOfTodayUtc.getTime(),
+            )
+          : [];
 
-      const total_bills = rawTotals?.total_bills ?? filteredDebts.length;
-      const total_debt =
-        rawTotals?.total_debt ??
-        filteredDebts.reduce(
+        total_bills = filteredDebts.length;
+        total_debt = filteredDebts.reduce(
           (sum: number, d: any) => sum + (Number(d.remaining) || 0),
           0,
         );
+      }
 
       return {
         id: cfg.id,
@@ -549,6 +563,211 @@ export class DebtConfigService {
       totalPages: Math.ceil(total / limit),
     };
   }
+
+  // async findAllWithRole(
+  //   currentUser: any,
+  //   filters: DebtConfigFilters = {},
+  // ): Promise<{
+  //   data: any[];
+  //   total: number;
+  //   page: number;
+  //   limit: number;
+  //   totalPages: number;
+  // }> {
+  //   const roleNames = (currentUser?.roles || []).map((r: any) =>
+  //     typeof r === 'string'
+  //       ? r.toLowerCase()
+  //       : (r.code || r.name || '').toLowerCase(),
+  //   );
+  //   const isAdminOrManager =
+  //     roleNames.includes('admin') || roleNames.includes('manager-cong-no');
+
+  //   const page = filters.page || 1;
+  //   const limit = filters.limit || 10;
+  //   const skip = (page - 1) * limit;
+
+  //   const isAggregateSort =
+  //     filters.sort &&
+  //     (filters.sort.field === 'total_bills' ||
+  //       filters.sort.field === 'total_debt');
+
+  //   const queryBuilder = this.repo
+  //     .createQueryBuilder('debt_config')
+  //     .leftJoinAndSelect('debt_config.debt_log', 'debt_log')
+  //     .leftJoinAndSelect('debt_config.actor', 'actor')
+  //     .leftJoinAndSelect('debt_config.employee', 'employee');
+
+  //   if (isAggregateSort) {
+  //     queryBuilder
+  //       .leftJoin('debt_config.debts', 'debts')
+  //       .addSelect('COUNT(debts.id)', 'total_bills')
+  //       .addSelect('COALESCE(SUM(debts.remaining), 0)', 'total_debt')
+  //       .groupBy('debt_config.id');
+  //   } else {
+  //     queryBuilder.leftJoinAndSelect('debt_config.debts', 'debts');
+  //   }
+
+  //   if (!isAdminOrManager && roleNames.includes('user-cong-no')) {
+  //     queryBuilder.andWhere('employee.id = :userId', {
+  //       userId: currentUser?.id,
+  //     });
+  //   } else if (!isAdminOrManager) {
+  //     return {
+  //       data: [],
+  //       total: 0,
+  //       page,
+  //       limit,
+  //       totalPages: 0,
+  //     };
+  //   }
+
+  //   if (filters.search?.trim()) {
+  //     queryBuilder.andWhere(
+  //       '(debt_config.customer_code LIKE :search OR debt_config.customer_name LIKE :search)',
+  //       { search: `%${filters.search.trim()}%` },
+  //     );
+  //   }
+
+  //   if (Array.isArray(filters.employees) && filters.employees.length > 0) {
+  //     queryBuilder.andWhere('employee.id IN (:...employeeIds)', {
+  //       employeeIds: filters.employees,
+  //     });
+  //   }
+
+  //   if (filters.singleDate) {
+  //     const date = new Date(filters.singleDate);
+  //     const start = new Date(date.setHours(0, 0, 0, 0));
+  //     const end = new Date(date.setHours(23, 59, 59, 999));
+  //     queryBuilder.andWhere(
+  //       'debt_config.send_last_at BETWEEN :start AND :end',
+  //       {
+  //         start,
+  //         end,
+  //       },
+  //     );
+  //   }
+
+  //   if (Array.isArray(filters.statuses) && filters.statuses.length > 0) {
+  //     queryBuilder.andWhere(
+  //       new Brackets((qb) => {
+  //         if (Array.isArray(filters.statuses)) {
+  //           for (const status of filters.statuses) {
+  //             if (status === 'normal') {
+  //               qb.orWhere(
+  //                 `(debt_config.employee IS NOT NULL AND (
+  //                   debt_log.id IS NULL
+  //                   OR (debt_config.id = debt_log.debt_config_id AND (debt_log.remind_status IS NULL OR debt_log.remind_status != :errorSend))
+  //               ))`,
+  //                 { errorSend: 'Error Send' },
+  //               );
+  //             }
+  //             if (status === 'not_matched_debt') {
+  //               qb.orWhere('debt_config.employee IS NULL');
+  //             }
+  //             if (status === 'wrong_customer_name') {
+  //               qb.orWhere(
+  //                 'debt_config.id = debt_log.debt_config_id AND debt_log.remind_status = :errorSend',
+  //                 { errorSend: 'Error Send' },
+  //               );
+  //             }
+  //           }
+  //         }
+  //       }),
+  //     );
+  //   }
+
+  //   if (isAggregateSort && filters.sort) {
+  //     queryBuilder.orderBy(
+  //       filters.sort.field,
+  //       filters.sort.direction.toUpperCase() as 'ASC' | 'DESC',
+  //     );
+  //   } else if (filters.sort?.field && filters.sort?.direction) {
+  //     queryBuilder.orderBy(
+  //       `debt_config.${filters.sort.field}`,
+  //       filters.sort.direction.toUpperCase() as 'ASC' | 'DESC',
+  //     );
+  //   } else {
+  //     queryBuilder.orderBy('debt_config.id', 'DESC');
+  //   }
+
+  //   const total = await queryBuilder.getCount();
+  //   const raw = isAggregateSort ? await queryBuilder.getRawMany() : [];
+  //   const entities = await queryBuilder.skip(skip).take(limit).getMany();
+
+  //   const rawMap = new Map();
+  //   if (isAggregateSort) {
+  //     for (const r of raw) {
+  //       rawMap.set(r.debt_config_id, {
+  //         total_bills: +r.total_bills || 0,
+  //         total_debt: +r.total_debt || 0,
+  //       });
+  //     }
+  //   }
+
+  //   const data = entities.map((cfg) => {
+  //     const rawTotals = rawMap.get(cfg.id);
+  //     const now = new Date();
+  //     const utc7 = new Date(now.getTime() + 7 * 60 * 60 * 1000);
+  //     utc7.setHours(0, 0, 0, 0);
+  //     const startOfTodayUtc = new Date(utc7.getTime() - 7 * 60 * 60 * 1000);
+
+  //     const filteredDebts = Array.isArray(cfg.debts)
+  //       ? cfg.debts.filter(
+  //           (d: any) =>
+  //             d.updated_at &&
+  //             new Date(d.updated_at).getTime() >= startOfTodayUtc.getTime(),
+  //         )
+  //       : [];
+
+  //     const total_bills = rawTotals?.total_bills ?? filteredDebts.length;
+  //     const total_debt =
+  //       rawTotals?.total_debt ??
+  //       filteredDebts.reduce(
+  //         (sum: number, d: any) => sum + (Number(d.remaining) || 0),
+  //         0,
+  //       );
+
+  //     return {
+  //       id: cfg.id,
+  //       customer_code: cfg.customer_code,
+  //       customer_name: cfg.customer_name,
+  //       customer_type: cfg.customer_type,
+  //       day_of_week: cfg.day_of_week,
+  //       gap_day: cfg.gap_day,
+  //       is_send: cfg.is_send,
+  //       is_repeat: cfg.is_repeat,
+  //       send_last_at: cfg.send_last_at?.toISOString() ?? null,
+  //       last_update_at: cfg.last_update_at?.toISOString() ?? null,
+  //       actor: cfg.actor
+  //         ? { fullName: cfg.actor.fullName, username: cfg.actor.username }
+  //         : null,
+  //       employee: cfg.employee
+  //         ? { id: cfg.employee.id, fullName: cfg.employee.fullName }
+  //         : null,
+  //       debt_log: cfg.debt_log
+  //         ? {
+  //             remind_status: cfg.debt_log.remind_status,
+  //             created_at: cfg.debt_log.created_at?.toISOString() ?? null,
+  //             send_at: cfg.debt_log.send_at?.toISOString() ?? null,
+  //             first_remind_at:
+  //               cfg.debt_log.first_remind_at?.toISOString() ?? null,
+  //             second_remind_at:
+  //               cfg.debt_log.second_remind_at?.toISOString() ?? null,
+  //           }
+  //         : null,
+  //       total_bills,
+  //       total_debt,
+  //     };
+  //   });
+
+  //   return {
+  //     data,
+  //     total,
+  //     page,
+  //     limit,
+  //     totalPages: Math.ceil(total / limit),
+  //   };
+  // }
 
   // Sửa lại toggleSend
   async toggleSend(

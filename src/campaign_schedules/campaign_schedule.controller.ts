@@ -1,4 +1,14 @@
-import { Controller, Get, Post, Body, Param, Patch, Delete, UseGuards } from '@nestjs/common';
+import { 
+  Controller, 
+  Get, 
+  Post, 
+  Body, 
+  Param, 
+  Patch, 
+  Delete, 
+  UseGuards, 
+  Req 
+} from '@nestjs/common';
 import { CampaignScheduleService } from './campaign_schedule.service';
 import { CampaignSchedule } from './campaign_schedule.entity';
 import { Permission } from '../common/guards/permission.decorator';
@@ -10,27 +20,31 @@ import { AuthGuard } from '@nestjs/passport';
 export class CampaignScheduleController {
   constructor(private readonly campaignScheduleService: CampaignScheduleService) {}
 
-  @Get(':campaign_id')
-  @Permission('campaign_schedule', 'read')
-  async getByCampaign(@Param('campaign_id') campaign_id: string): Promise<CampaignSchedule> {
-    return this.campaignScheduleService.getByCampaign(campaign_id);
+  @Get(':campaignId')
+  @Permission('chien-dich', 'read')
+  async getByCampaign(@Param('campaignId') campaignId: string, @Req() req): Promise<CampaignSchedule> {
+    return this.campaignScheduleService.getByCampaign(campaignId, req.user);
   }
 
   @Post()
-  @Permission('campaign_schedule', 'create')
-  async create(@Body() data: Partial<CampaignSchedule>): Promise<CampaignSchedule> {
-    return this.campaignScheduleService.create(data);
+  @Permission('chien-dich', 'create')
+  async create(@Body() data: Partial<CampaignSchedule>, @Req() req): Promise<CampaignSchedule> {
+    return this.campaignScheduleService.create(data, req.user);
   }
 
   @Patch(':id')
-  @Permission('campaign_schedule', 'update')
-  async update(@Param('id') id: string, @Body() data: Partial<CampaignSchedule>): Promise<CampaignSchedule> {
-    return this.campaignScheduleService.update(id, data);
+  @Permission('chien-dich', 'update')
+  async update(
+    @Param('id') id: string, 
+    @Body() data: Partial<CampaignSchedule>,
+    @Req() req
+  ): Promise<CampaignSchedule> {
+    return this.campaignScheduleService.update(id, data, req.user);
   }
 
   @Delete(':id')
-  @Permission('campaign_schedule', 'delete')
-  async remove(@Param('id') id: string): Promise<void> {
-    return this.campaignScheduleService.remove(id);
+  @Permission('chien-dich', 'delete')
+  async remove(@Param('id') id: string, @Req() req): Promise<void> {
+    return this.campaignScheduleService.remove(id, req.user);
   }
 }

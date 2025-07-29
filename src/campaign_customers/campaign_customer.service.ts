@@ -1,7 +1,10 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { CampaignCustomer } from './campaign_customer.entity';
+import { CampaignCustomerMap } from '../campaign_customer_map/campaign_customer_map.entity';
+import { Campaign } from '../campaigns/campaign.entity';
+import { User } from '../users/user.entity';
 import * as ExcelJS from 'exceljs';
 
 export interface CustomerImportData {
@@ -16,9 +19,13 @@ export class CampaignCustomerService {
   constructor(
     @InjectRepository(CampaignCustomer)
     private readonly campaignCustomerRepository: Repository<CampaignCustomer>,
+    @InjectRepository(CampaignCustomerMap)
+    private readonly campaignCustomerMapRepository: Repository<CampaignCustomerMap>,
+    @InjectRepository(Campaign)
+    private readonly campaignRepository: Repository<Campaign>,
   ) {}
 
-  async findAll(query: any): Promise<{ data: CampaignCustomer[]; total: number }> {
+  async findAll(query: any, user: User): Promise<{ data: CampaignCustomer[]; total: number }> {
     const qb = this.campaignCustomerRepository.createQueryBuilder('customer');
 
     // Filter by search (phone or name)
@@ -41,15 +48,15 @@ export class CampaignCustomerService {
     return { data, total };
   }
 
-  async findOne(id: string): Promise<CampaignCustomer> {
+  async findOne(id: string, user: User): Promise<CampaignCustomer> {
     const customer = await this.campaignCustomerRepository.findOne({ where: { id } });
     if (!customer) {
-      throw new BadRequestException('Không tìm thấy khách hàng');
+      throw new NotFoundException('Không tìm thấy khách hàng');
     }
     return customer;
   }
 
-  async create(data: Partial<CampaignCustomer>): Promise<CampaignCustomer> {
+  async create(data: Partial<CampaignCustomer>, user: User): Promise<CampaignCustomer> {
     // Validate phone number format
     if (data.phone_number && !this.isValidPhoneNumber(data.phone_number)) {
       throw new BadRequestException('Số điện thoại không hợp lệ');
@@ -95,14 +102,30 @@ export class CampaignCustomerService {
     return this.campaignCustomerRepository.save(customers);
   }
 
-  async importFromExcel(buffer: Buffer): Promise<{ 
+  async importFromExcel(file: Express.Multer.File, campaignId: string, user: User): Promise<{ 
     success: boolean; 
     imported: number; 
     errors: string[] 
   }> {
     try {
+      // Verify campaign exists and user has access
+      const campaign = await this.campaignRepository.findOne({
+        where: { id: campaignId },
+        relations: ['department']
+      });
+
+      if (!campaign) {
+        throw new NotFoundException('Không tìm thấy chiến dịch');
+      }
+
+      // Check if user has access to this campaign's department
+      const userDepartment = user.departments?.[0];
+      if (userDepartment && campaign.department.id !== userDepartment.id) {
+        throw new BadRequestException('Không có quyền truy cập chiến dịch này');
+      }
+
       const workbook = new ExcelJS.Workbook();
-      await workbook.xlsx.load(buffer);
+      await workbook.xlsx.load(file.buffer);
       
       const worksheet = workbook.getWorksheet(1);
       if (!worksheet) {
@@ -166,7 +189,8 @@ export class CampaignCustomerService {
           salutation,
           metadata: {
             importedAt: new Date().toISOString(),
-            rowNumber: rowNum
+            rowNumber: rowNum,
+            campaignId: campaignId
           }
         });
       });
@@ -175,27 +199,61 @@ export class CampaignCustomerService {
         return { success: false, imported: 0, errors };
       }
 
-      const savedCustomers = await this.bulkCreate(customers);
+      // Create or get existing customers, then map to campaign
+      let imported = 0;
+      for (const customerData of customers) {
+        // Try to find existing customer
+        let customer = await this.campaignCustomerRepository.findOne({
+          where: { phone_number: customerData.phone_number }
+        });
+
+        // Create customer if not exists
+        if (!customer) {
+          customer = this.campaignCustomerRepository.create(customerData);
+          customer = await this.campaignCustomerRepository.save(customer);
+        }
+
+        // Check if customer is already mapped to this campaign
+        const existingMap = await this.campaignCustomerMapRepository.findOne({
+          where: {
+            campaign_id: parseInt(campaignId),
+            customer_id: parseInt(customer.id)
+          }
+        });
+
+        // Create mapping if not exists
+        if (!existingMap) {
+          const map = this.campaignCustomerMapRepository.create({
+            campaign_id: parseInt(campaignId),
+            customer_id: parseInt(customer.id),
+            campaign: campaign,
+            campaign_customer: customer
+          });
+          await this.campaignCustomerMapRepository.save(map);
+          imported++;
+        }
+      }
+
       return { 
         success: true, 
-        imported: savedCustomers.length, 
+        imported, 
         errors: [] 
       };
 
     } catch (error) {
-      if (error instanceof BadRequestException) {
+      if (error instanceof BadRequestException || error instanceof NotFoundException) {
         throw error;
       }
       throw new BadRequestException('Không thể đọc file Excel: ' + error.message);
     }
   }
 
-  async update(id: string, data: Partial<CampaignCustomer>): Promise<CampaignCustomer> {
+  async update(id: string, data: Partial<CampaignCustomer>, user: User): Promise<CampaignCustomer> {
     await this.campaignCustomerRepository.update(id, data);
-    return this.findOne(id);
+    return this.findOne(id, user);
   }
 
-  async remove(id: string): Promise<void> {
+  async remove(id: string, user: User): Promise<void> {
     await this.campaignCustomerRepository.delete(id);
   }
 

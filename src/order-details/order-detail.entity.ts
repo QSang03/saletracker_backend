@@ -15,7 +15,6 @@ export enum OrderDetailStatus {
   COMPLETED = 'completed',
   DEMAND = 'demand',
   QUOTED = 'quoted',
-  CONFIRMED = 'confirmed',
 }
 @Entity('order_details')
 export class OrderDetail {
@@ -57,6 +56,12 @@ export class OrderDetail {
 
   @Column('longtext', { nullable: true })
   raw_item: string;
+
+  @Column('longtext', { nullable: true })
+  notes: string;
+
+  @Column('longtext', { nullable: true })
+  reason: string;
 
   @Column('varchar', { nullable: true })
   customer_name: string;

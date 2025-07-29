@@ -1,6 +1,17 @@
-import { Controller, Get, Post, Body, Param, Patch, Delete, Query, UseGuards } from '@nestjs/common';
+import { 
+  Controller, 
+  Get, 
+  Post, 
+  Body, 
+  Param, 
+  Patch, 
+  Delete, 
+  Query, 
+  UseGuards,
+  Req 
+} from '@nestjs/common';
 import { CampaignInteractionLogService, InteractionStats } from './campaign_interaction_log.service';
-import { CampaignInteractionLog } from './campaign_interaction_log.entity';
+import { CampaignInteractionLog, LogStatus } from './campaign_interaction_log.entity';
 import { Permission } from '../common/guards/permission.decorator';
 import { PermissionGuard } from '../common/guards/permission.guard';
 import { AuthGuard } from '@nestjs/passport';
@@ -11,37 +22,57 @@ export class CampaignInteractionLogController {
   constructor(private readonly campaignInteractionLogService: CampaignInteractionLogService) {}
 
   @Get()
-  @Permission('campaign_interaction_log', 'read')
-  async findAll(@Query() query: any): Promise<{
+  @Permission('chien-dich', 'read')
+  async findAll(@Query() query: any, @Req() req): Promise<{
     data: CampaignInteractionLog[];
     total: number;
     stats: InteractionStats;
   }> {
     const { page, pageSize, ...filter } = query;
-    return this.campaignInteractionLogService.findAll(filter, page, pageSize);
+    return this.campaignInteractionLogService.findAll(filter, page, pageSize, req.user);
   }
 
   @Get(':id')
-  @Permission('campaign_interaction_log', 'read')
-  async findOne(@Param('id') id: string): Promise<CampaignInteractionLog> {
-    return this.campaignInteractionLogService.findOne(id);
+  @Permission('chien-dich', 'read')
+  async findOne(@Param('id') id: string, @Req() req): Promise<CampaignInteractionLog> {
+    return this.campaignInteractionLogService.findOne(id, req.user);
+  }
+
+  @Get('campaign/:campaignId')
+  @Permission('chien-dich', 'read')
+  async getByCampaign(@Param('campaignId') campaignId: string, @Req() req) {
+    return this.campaignInteractionLogService.getByCampaign(campaignId, req.user);
+  }
+
+  @Patch(':id/status')
+  @Permission('chien-dich', 'update')
+  async updateStatus(
+    @Param('id') id: string, 
+    @Body() data: { status: LogStatus; [key: string]: any },
+    @Req() req
+  ): Promise<CampaignInteractionLog> {
+    return this.campaignInteractionLogService.updateLogStatus(id, data.status, data, req.user.id);
   }
 
   @Post()
-  @Permission('campaign_interaction_log', 'create')
-  async create(@Body() data: Partial<CampaignInteractionLog>): Promise<CampaignInteractionLog> {
-    return this.campaignInteractionLogService.create(data);
+  @Permission('chien-dich', 'create')
+  async create(@Body() data: Partial<CampaignInteractionLog>, @Req() req): Promise<CampaignInteractionLog> {
+    return this.campaignInteractionLogService.create(data, req.user);
   }
 
   @Patch(':id')
-  @Permission('campaign_interaction_log', 'update')
-  async update(@Param('id') id: string, @Body() data: Partial<CampaignInteractionLog>): Promise<CampaignInteractionLog> {
-    return this.campaignInteractionLogService.update(id, data);
+  @Permission('chien-dich', 'update')
+  async update(
+    @Param('id') id: string, 
+    @Body() data: Partial<CampaignInteractionLog>,
+    @Req() req
+  ): Promise<CampaignInteractionLog> {
+    return this.campaignInteractionLogService.update(id, data, req.user);
   }
 
   @Delete(':id')
-  @Permission('campaign_interaction_log', 'delete')
-  async remove(@Param('id') id: string): Promise<void> {
-    return this.campaignInteractionLogService.remove(id);
+  @Permission('chien-dich', 'delete')
+  async remove(@Param('id') id: string, @Req() req): Promise<void> {
+    return this.campaignInteractionLogService.remove(id, req.user);
   }
 }
