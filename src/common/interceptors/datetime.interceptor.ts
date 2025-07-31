@@ -29,7 +29,16 @@ const FIELDS = [
   'send_at',
   'first_remind_at',
   'second_remind_at',
-  'added_at'
+  'added_at',
+  'sent_at',
+  'customer_replied_at',
+  'staff_handled_at',
+  'schedule_start_date',
+  'schedule_end_date',
+  'start_date',
+  'end_date',
+  'start_time',
+  'end_time',
 ];
 
 function convertDates(obj: any): any {

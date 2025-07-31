@@ -15,6 +15,7 @@ export enum OrderDetailStatus {
   COMPLETED = 'completed',
   DEMAND = 'demand',
   QUOTED = 'quoted',
+  CONFIRMED = 'confirmed',
 }
 @Entity('order_details')
 export class OrderDetail {

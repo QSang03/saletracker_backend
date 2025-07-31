@@ -1,4 +1,12 @@
-import { Entity, PrimaryGeneratedColumn, Column, OneToOne, JoinColumn } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  OneToOne,
+  JoinColumn,
+  CreateDateColumn,
+  UpdateDateColumn,
+} from 'typeorm';
 import { Campaign } from '../campaigns/campaign.entity';
 import { PromoMessageFlow } from 'src/campaign_config/promo_message';
 
@@ -13,4 +21,10 @@ export class CampaignContent {
 
   @Column({ type: 'json', nullable: false })
   messages: PromoMessageFlow;
+
+  @CreateDateColumn()
+  created_at: Date;
+
+  @UpdateDateColumn()
+  updated_at: Date;
 }

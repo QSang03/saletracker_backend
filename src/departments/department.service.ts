@@ -15,6 +15,7 @@ import { RolePermission } from '../roles_permissions/roles-permissions.entity';
 import slugify from 'slugify';
 import { Permission } from '../permissions/permission.entity';
 import { getRoleNames } from '../common/utils/user-permission.helper';
+import { User } from 'src/users/user.entity';
 
 @Injectable()
 export class DepartmentService {
@@ -180,7 +181,15 @@ export class DepartmentService {
     await this.departmentRepo.manager.save([managerRole, userRole]);
 
     // Tạo permissions cho phòng ban
-    const actions = ['create', 'read', 'update', 'delete', 'import', 'export', 'allow_analysis'];
+    const actions = [
+      'create',
+      'read',
+      'update',
+      'delete',
+      'import',
+      'export',
+      'allow_analysis',
+    ];
     const permissions: Permission[] = [];
     for (const action of actions) {
       const permission = await this.permissionService.createPermission({
@@ -355,5 +364,46 @@ export class DepartmentService {
       where: { deletedAt: IsNull() },
       order: { id: 'ASC' },
     });
+  }
+
+  // Lấy tất cả phòng ban active và có server_ip (không null, không rỗng)
+  async findAllActiveWithServerIp(): Promise<Department[]> {
+    return this.departmentRepo.find({
+      where: {
+        deletedAt: IsNull(),
+        server_ip: Not(IsNull()),
+      },
+      order: { id: 'ASC' },
+    }).then(departments => departments.filter(dep => dep.server_ip && dep.server_ip.trim() !== ''));
+  }
+
+  async getDepartmentsForFilter(user: User) {
+    const roleNames = (user?.roles || []).map((r: any) =>
+      typeof r === 'string'
+        ? r.toLowerCase()
+        : (r.code || r.name || '').toLowerCase(),
+    );
+
+    const isAdmin = roleNames.includes('admin');
+
+    if (!isAdmin) {
+      // Manager và User không được lấy danh sách departments để filter
+      return [];
+    }
+
+    // Admin lấy tất cả departments có server_ip
+    const departments = await this.departmentRepo.find({
+      where: {
+        server_ip: Not(IsNull()),
+      },
+      select: ['id', 'name'],
+      order: { name: 'ASC' },
+    });
+
+    // FIX: Return đúng format {value: number, label: string} thay vì {value: string, label: string}
+    return departments.map((dept) => ({
+      value: dept.id, // Giữ nguyên number
+      label: dept.name,
+    }));
   }
 }

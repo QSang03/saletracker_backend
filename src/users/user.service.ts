@@ -35,7 +35,6 @@ export class UserService {
     private readonly wsGateway: WebsocketGateway,
     private readonly rolesPermissionsService: RolesPermissionsService, // Inject service
     private readonly userStatusObserver: UserStatusObserver,
-    
   ) {}
 
   async findAll(
@@ -111,7 +110,7 @@ export class UserService {
       .take(limit);
 
     const [data, total] = await qb.getManyAndCount();
-    const mappedData = data.map(user => ({
+    const mappedData = data.map((user) => ({
       ...user,
       lastOnlineAt: user.lastOnlineAt ? user.lastOnlineAt.toISOString() : null,
     }));
@@ -175,6 +174,7 @@ export class UserService {
           id: true,
           name: true,
           slug: true,
+          server_ip: true,
         },
       },
     });
@@ -649,6 +649,7 @@ export class UserService {
       'department.id',
       'department.name',
       'department.slug',
+      'department.server_ip',
       'role.id',
       'role.name',
     ])
@@ -831,15 +832,11 @@ export class UserService {
       // Inject RolesPermissionsService vào service này hoặc gọi qua controller
       await this.rolesPermissionsService.bulkUpdate(rolePermissions);
     }
-    this.wsGateway.emitToRoom(
-      `user_${userId}`,
-      'force_token_refresh',
-      {
-        userId,
-        reason: 'permission_changed',
-        message: 'Quyền của bạn đã thay đổi, vui lòng làm mới phiên đăng nhập.',
-      },
-    );
+    this.wsGateway.emitToRoom(`user_${userId}`, 'force_token_refresh', {
+      userId,
+      reason: 'permission_changed',
+      message: 'Quyền của bạn đã thay đổi, vui lòng làm mới phiên đăng nhập.',
+    });
     return { success: true };
   }
 
@@ -913,6 +910,7 @@ export class UserService {
           id: true,
           name: true,
           slug: true,
+          server_ip: true,
         },
       },
     });
@@ -931,5 +929,146 @@ export class UserService {
 
   async updateLastOnline(userId: number) {
     await this.userRepo.update(userId, { lastOnlineAt: new Date() });
+  }
+
+  async getUsersForFilter(user: User, departmentId?: string) {
+    const roleNames = (user?.roles || []).map((r: any) =>
+      typeof r === 'string'
+        ? r.toLowerCase()
+        : (r.code || r.name || '').toLowerCase(),
+    );
+
+    const isAdmin = roleNames.includes('admin');
+    const isManager = roleNames.includes('manager-chien-dich');
+
+    const qb = this.userRepo
+      .createQueryBuilder('user')
+      .leftJoin('user.departments', 'department')
+      .select(['user.id', 'user.fullName', 'user.employeeCode'])
+      .where('user.status = :status', { status: 'active' })
+      .andWhere('user.deletedAt IS NULL') // FIX: Thêm điều kiện không bị xóa mềm
+      .orderBy('user.fullName', 'ASC');
+
+    if (isAdmin) {
+      // Admin: lấy tất cả users, có thể filter theo department
+      if (departmentId) {
+        // FIX: Convert departmentId thành number nếu cần
+        const deptId = parseInt(departmentId, 10);
+        if (!isNaN(deptId)) {
+          qb.andWhere('department.id = :deptId', { deptId });
+        }
+      } else {
+        // Chỉ lấy users thuộc departments có server_ip
+        qb.andWhere(
+          'department.server_ip IS NOT NULL AND department.server_ip != :empty',
+          { empty: '' },
+        );
+      }
+    } else if (isManager) {
+      // Manager: chỉ lấy users trong phòng ban của họ
+      const userDepartment = user.departments?.find(
+        (dept: any) =>
+          dept.server_ip !== null &&
+          dept.server_ip !== undefined &&
+          String(dept.server_ip).trim() !== '',
+      );
+
+      if (userDepartment) {
+        qb.andWhere('department.id = :deptId', { deptId: userDepartment.id });
+      } else {
+        // Manager không có department với server_ip thì không lấy ai
+        qb.andWhere('1 = 0');
+      }
+    } else {
+      // User thường: không được lấy danh sách users để filter
+      return [];
+    }
+
+    const users = await qb.getMany();
+
+    return users.map((u) => ({
+      value: u.id, // FIX: Giữ nguyên number thay vì convert thành string
+      label: `${u.fullName}${u.employeeCode ? ` (${u.employeeCode})` : ''}`,
+    }));
+  }
+
+  async getAllUsersForFilter(user: User) {
+    const roleNames = (user?.roles || []).map((r: any) =>
+      typeof r === 'string'
+        ? r.toLowerCase()
+        : (r.code || r.name || '').toLowerCase(),
+    );
+
+    const isAdmin = roleNames.includes('admin');
+    const isManager = roleNames.includes('manager-chien-dich');
+
+    if (!isAdmin && !isManager) {
+      return [];
+    }
+
+    const qb = this.userRepo
+      .createQueryBuilder('user')
+      .leftJoinAndSelect('user.departments', 'department')
+      .select([
+        'user.id',
+        'user.fullName',
+        'user.employeeCode',
+        'department.id',
+        'department.name',
+      ])
+      .andWhere('user.deletedAt IS NULL')
+      .orderBy('user.fullName', 'ASC');
+
+    if (isAdmin) {
+      // qb.andWhere('department.id IS NOT NULL');
+    } else if (isManager) {
+      const userDepartmentIds =
+        user.departments?.map((dept: any) => dept.id) || [];
+
+      if (userDepartmentIds.length > 0) {
+        qb.andWhere('department.id IN (:...deptIds)', {
+          deptIds: userDepartmentIds,
+        });
+      } else {
+        qb.andWhere('1 = 0');
+      }
+    }
+    const users = await qb.getMany();
+    const transformedResult = users.map((u) => {
+      const result = {
+        value: u.id,
+        label: `${u.fullName}${u.employeeCode ? ` (${u.employeeCode})` : ''}`,
+        departmentIds: u.departments?.map((d) => d.id) || [],
+      };
+
+      return result;
+    });
+    return transformedResult;
+  }
+
+  async getUsersWithEmail(): Promise<
+    Array<{
+      id: number;
+      fullName: string;
+      email: string;
+      employeeCode?: string;
+    }>
+  > {
+    const users = await this.userRepo
+      .createQueryBuilder('user')
+      .select(['user.id', 'user.fullName', 'user.email', 'user.employeeCode'])
+      .where('user.email IS NOT NULL')
+      .andWhere('user.email != :empty', { empty: '' })
+      .andWhere('user.deletedAt IS NULL')
+      .andWhere('user.status = :status', { status: 'active' })
+      .orderBy('user.fullName', 'ASC')
+      .getMany();
+
+    return users.map((user) => ({
+      id: user.id,
+      fullName: user.fullName || `User ${user.id}`,
+      email: user.email!,
+      employeeCode: user.employeeCode ?? undefined,
+    }));
   }
 }

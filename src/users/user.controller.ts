@@ -21,6 +21,7 @@ import { JwtUserPayload } from 'src/auth/interfaces/jwt-payload.interface';
 import { AdminAuthGuard } from '../common/guards/admin-auth.guard';
 import { getRoleNames } from '../common/utils/user-permission.helper';
 import { RolesPermissionsService } from '../roles_permissions/roles-permissions.service';
+import { Permission } from 'src/common/guards/permission.decorator';
 
 interface CustomRequest extends Request {
   user: JwtUserPayload;
@@ -58,7 +59,9 @@ export class UserController {
       departments: departments ? departments.split(',') : [],
       roles: roles ? roles.split(',') : [],
       statuses: statuses ? statuses.split(',') : [],
-      zaloLinkStatuses: zaloLinkStatus ? zaloLinkStatus.split(',').map(s => parseInt(s, 10)) : [],
+      zaloLinkStatuses: zaloLinkStatus
+        ? zaloLinkStatus.split(',').map((s) => parseInt(s, 10))
+        : [],
     };
 
     if (getRoleNames(user).includes('admin')) {
@@ -90,6 +93,29 @@ export class UserController {
       })),
       roles: (user.roles ?? []).map((r) => ({ id: r.id, name: r.name })),
     }));
+  }
+
+  @Get('with-email')
+  @Permission('chien-dich', 'read')
+  async getUsersWithEmail(): Promise<
+    Array<{ id: number; fullName: string; email: string }>
+  > {
+    return this.userService.getUsersWithEmail();
+  }
+
+  @Get('all-for-filter')
+  @Permission('chien-dich', 'read')
+  async getAllUsersForFilter(@Req() req) {
+    return this.userService.getAllUsersForFilter(req.user);
+  }
+
+  @Get('for-filter')
+  @Permission('chien-dich', 'read')
+  async getUsersForFilter(
+    @Req() req,
+    @Query('department_id') departmentId?: string,
+  ) {
+    return this.userService.getUsersForFilter(req.user, departmentId);
   }
 
   @Get('change-logs')
@@ -214,14 +240,14 @@ export class UserController {
         if (id === currentUser.id) {
           throw new ForbiddenException('Bạn không thể khóa chính mình');
         }
-        
+
         // Prevent blocking admin users
         const targetUser = await this.userService.findOneWithDetails(id);
         if (targetUser && getRoleNames(targetUser).includes('admin')) {
           throw new ForbiddenException('Không thể khóa tài khoản admin');
         }
       }
-      
+
       // Admin đổi cho ai cũng truyền changerId là chính họ
       return this.userService.updateUser(id, updateUserDto, currentUser.id);
     }
@@ -242,12 +268,16 @@ export class UserController {
           'Bạn chỉ được sửa user trong nhóm của mình',
         );
       }
-      
+
       // Check if trying to block admin user
-      if (updateUserDto.isBlock !== undefined && targetUser && getRoleNames(targetUser).includes('admin')) {
+      if (
+        updateUserDto.isBlock !== undefined &&
+        targetUser &&
+        getRoleNames(targetUser).includes('admin')
+      ) {
         throw new ForbiddenException('Không thể khóa tài khoản admin');
       }
-      
+
       // Manager đổi cho user trong nhóm
       return this.userService.updateUser(
         id,
@@ -325,7 +355,9 @@ export class UserController {
     const user = await this.userService.findOneWithDetails(currentUser.id);
 
     if (!user || !getRoleNames(user).includes('admin')) {
-      throw new ForbiddenException('Bạn không có quyền reset mật khẩu user này');
+      throw new ForbiddenException(
+        'Bạn không có quyền reset mật khẩu user này',
+      );
     }
 
     return this.userService.resetPasswordToDefault(id);

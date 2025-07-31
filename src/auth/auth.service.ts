@@ -86,6 +86,7 @@ export class AuthService {
         id: d.id,
         name: d.name,
         slug: d.slug,
+        server_ip: d.server_ip,
       }));
     } else {
       departments =
@@ -93,6 +94,7 @@ export class AuthService {
           id: d.id,
           name: d.name,
           slug: d.slug,
+          server_ip: d.server_ip,
         })) || [];
     }
 
@@ -213,6 +215,7 @@ export class AuthService {
           id: d.id,
           name: d.name,
           slug: d.slug,
+          server_ip: d.server_ip,
         }));
       } else {
         departments =
@@ -220,6 +223,7 @@ export class AuthService {
             id: d.id,
             name: d.name,
             slug: d.slug,
+            server_ip: d.server_ip,
           })) || [];
       }
       let server_ip: string | null = null;
@@ -324,6 +328,7 @@ export class AuthService {
         id: d.id,
         name: d.name,
         slug: d.slug,
+        server_ip: d.server_ip,
       }));
     } else {
       departments =
@@ -331,6 +336,7 @@ export class AuthService {
           id: d.id,
           name: d.name,
           slug: d.slug,
+          server_ip: d.server_ip,
         })) || [];
     }
     let server_ip: string | null = null;
@@ -413,6 +419,7 @@ export class AuthService {
         id: d.id,
         name: d.name,
         slug: d.slug,
+        server_ip: d.server_ip,
       }));
     } else {
       departments =
@@ -420,6 +427,7 @@ export class AuthService {
           id: d.id,
           name: d.name,
           slug: d.slug,
+          server_ip: d.server_ip,
         })) || [];
     }
     let server_ip: string | null = null;

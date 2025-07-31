@@ -15,6 +15,7 @@ import { CreateDepartmentDto } from './dto/create-department.dto';
 import { UpdateDepartmentDto } from './dto/update-department.dto';
 import { AuthGuard } from '../common/guards/auth.guard';
 import { Request } from 'express';
+import { Permission } from 'src/common/guards/permission.decorator';
 
 @Controller('departments')
 @UseGuards(AuthGuard)
@@ -26,6 +27,12 @@ export class DepartmentController {
     // Lấy user từ request (đã qua AuthGuard)
     const user = req.user;
     return this.departmentService.findAll(user);
+  }
+
+  @Get('for-filter')
+  @Permission('chien-dich', 'read')
+  async getDepartmentsForFilter(@Req() req) {
+    return this.departmentService.getDepartmentsForFilter(req.user);
   }
 
   @Post()
@@ -75,5 +82,11 @@ export class DepartmentController {
       page ? parseInt(page, 10) : 1,
       pageSize ? parseInt(pageSize, 10) : 20,
     );
+  }
+
+  // Endpoint lấy tất cả phòng ban không giới hạn quyền
+  @Get('all-unrestricted')
+  async getAllDepartmentsUnrestricted() {
+    return this.departmentService.findAllActiveWithServerIp();
   }
 }

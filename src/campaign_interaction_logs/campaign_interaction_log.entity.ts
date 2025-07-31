@@ -1,4 +1,12 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, Index } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  ManyToOne,
+  Index,
+  CreateDateColumn,
+  UpdateDateColumn,
+} from 'typeorm';
 import { Campaign } from '../campaigns/campaign.entity';
 import { CampaignCustomer } from '../campaign_customers/campaign_customer.entity';
 import { User } from '../users/user.entity';
@@ -63,4 +71,10 @@ export class CampaignInteractionLog {
   // Nội dung và thời gian gửi nhắc lại, lưu dưới dạng metadata
   @Column({ type: 'json', nullable: true })
   reminder_metadata?: ReminderMetadata;
+
+  @CreateDateColumn()
+  created_at: Date;
+
+  @UpdateDateColumn()
+  updated_at: Date;
 }

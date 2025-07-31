@@ -10,6 +10,12 @@ export class CampaignCustomerMap {
   @PrimaryColumn('bigint')
   customer_id: number;
 
+  @Column({ type: 'varchar', length: 255 })
+  full_name: string;
+
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  salutation?: string;
+
   @CreateDateColumn({ name: 'added_at' })
   added_at: Date;
 

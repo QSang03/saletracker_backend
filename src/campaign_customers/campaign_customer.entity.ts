@@ -15,15 +15,6 @@ export class CampaignCustomer {
   @Column({ type: 'varchar', length: 20, unique: true })
   phone_number: string;
 
-  @Column({ type: 'varchar', length: 255 })
-  full_name: string;
-
-  @Column({ type: 'varchar', length: 20, nullable: true })
-  salutation?: string;
-
-  @Column({ type: 'json', nullable: true })
-  metadata?: Record<string, any>;
-
   @CreateDateColumn()
   created_at: Date;
 

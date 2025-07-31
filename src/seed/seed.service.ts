@@ -105,6 +105,7 @@ export class SeedService implements OnModuleInit {
         { name: 'campaign_timeout', display_name: 'Thời gian timeout chiến dịch', value: '30', type: 'number', section: 'campaign', status: 1 },
         { name: 'campaign_max_workers', display_name: 'Số lượng worker tối đa cho chiến dịch', value: '5', type: 'number', section: 'campaign', status: 1 },
         { name: 'campaign_batch', display_name: 'Tổng xử lý số lượng hội thoại 1 lần Chiến dịch', value: '300', type: 'number', section: 'campaign', status: 1 },
+        { name: 'campaign_minimum_reminder_delay', display_name: 'Thời gian trì hoãn nhắc nhở tối thiểu cho chiến dịch', value: '2', type: 'number', section: 'campaign', status: 1 },
       ];
       for (const config of configs) {
         await this.systemConfigRepo.save(this.systemConfigRepo.create(config));
