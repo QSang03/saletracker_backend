@@ -1273,28 +1273,73 @@ export class CampaignService {
   }
 
   async getCampaignCustomers(campaignId: string, query: any = {}, user: User) {
-    // Kiểm tra quyền truy cập campaign - thay thế việc gọi findOne để verify
+    // Kiểm tra quyền truy cập campaign
     await this.checkCampaignAccess(campaignId, user);
 
     const qb = this.campaignCustomerMapRepository
       .createQueryBuilder('map')
-      .leftJoinAndSelect('map.campaign_customer', 'customer')
-      .leftJoinAndSelect('map.campaign', 'campaign')
+      .leftJoin('map.campaign_customer', 'customer')
+      .leftJoin('map.campaign', 'campaign')
+      .leftJoin(
+        'campaign_interaction_logs',
+        'log',
+        'log.customer_id = customer.id AND log.campaign_id = map.campaign_id AND log.sent_at = (SELECT MAX(l2.sent_at) FROM campaign_interaction_logs l2 WHERE l2.customer_id = customer.id AND l2.campaign_id = map.campaign_id)',
+      )
+      .select([
+        'map.campaign_id as campaign_id',
+        'map.customer_id as customer_id',
+        'map.full_name as full_name',
+        'map.salutation as salutation',
+        'map.added_at as added_at',
+        'customer.id as customer_id',
+        'customer.phone_number as phone_number',
+        'customer.created_at as customer_created_at',
+        'customer.updated_at as customer_updated_at',
+        'log.status as interaction_status',
+        'log.conversation_metadata as conversation_metadata',
+      ])
       .where('map.campaign_id = :campaignId', { campaignId });
 
-    // Filter by search (customer name or phone)
+    // Filter by search
     if (query.search) {
       qb.andWhere(
-        '(customer.full_name LIKE :search OR customer.phone_number LIKE :search)',
+        '(map.full_name LIKE :search OR customer.phone_number LIKE :search)',
         {
           search: `%${query.search}%`,
         },
       );
     }
 
-    // Filter by status would require joining with interaction logs
+    // Filter by status
     if (query.status) {
-      qb.leftJoin('customer.logs', 'log').andWhere('log.status = :status', {
+      qb.andWhere('log.status = :status', {
+        status: query.status,
+      });
+    }
+
+    // Count query for pagination
+    const countQb = this.campaignCustomerMapRepository
+      .createQueryBuilder('map')
+      .leftJoin('map.campaign_customer', 'customer')
+      .leftJoin(
+        'campaign_interaction_logs',
+        'log',
+        'log.customer_id = customer.id AND log.campaign_id = map.campaign_id AND log.sent_at = (SELECT MAX(l2.sent_at) FROM campaign_interaction_logs l2 WHERE l2.customer_id = customer.id AND l2.campaign_id = map.campaign_id)',
+      )
+      .where('map.campaign_id = :campaignId', { campaignId });
+
+    // Apply same filters to count query
+    if (query.search) {
+      countQb.andWhere(
+        '(map.full_name LIKE :search OR customer.phone_number LIKE :search)',
+        {
+          search: `%${query.search}%`,
+        },
+      );
+    }
+
+    if (query.status) {
+      countQb.andWhere('log.status = :status', {
         status: query.status,
       });
     }
@@ -1307,17 +1352,22 @@ export class CampaignService {
     qb.skip(skip).take(limit);
     qb.orderBy('map.added_at', 'DESC');
 
-    const [data, total] = await qb.getManyAndCount();
+    const [rawResults, total] = await Promise.all([
+      qb.getRawMany(),
+      countQb.getCount(),
+    ]);
 
     return {
-      data: data.map((map) => ({
-        id: map.campaign_customer.id,
-        phone_number: map.campaign_customer.phone_number,
-        full_name: map.full_name, // Từ map
-        salutation: map.salutation, // Từ map
-        created_at: map.campaign_customer.created_at,
-        updated_at: map.campaign_customer.updated_at,
-        added_at: map.added_at,
+      data: rawResults.map((row: any) => ({
+        id: row.customer_id,
+        phone_number: row.phone_number,
+        full_name: row.full_name,
+        salutation: row.salutation,
+        created_at: row.customer_created_at,
+        updated_at: row.customer_updated_at,
+        added_at: row.added_at,
+        status: row.interaction_status || null,
+        conversation_metadata: row.conversation_metadata || null,
       })),
       total,
       page,
