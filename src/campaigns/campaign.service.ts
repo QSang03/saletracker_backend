@@ -1283,7 +1283,7 @@ export class CampaignService {
       .leftJoin(
         'campaign_interaction_logs',
         'log',
-        'log.customer_id = customer.id AND log.campaign_id = map.campaign_id AND log.sent_at = (SELECT MAX(l2.sent_at) FROM campaign_interaction_logs l2 WHERE l2.customer_id = customer.id AND l2.campaign_id = map.campaign_id)',
+        'log.customer_id = customer.id AND log.campaign_id = map.campaign_id',
       )
       .select([
         'map.campaign_id as campaign_id',
@@ -1297,6 +1297,7 @@ export class CampaignService {
         'customer.updated_at as customer_updated_at',
         'log.status as interaction_status',
         'log.conversation_metadata as conversation_metadata',
+        'log.sent_at as sent_at',
       ])
       .where('map.campaign_id = :campaignId', { campaignId });
 
@@ -1317,15 +1318,14 @@ export class CampaignService {
       });
     }
 
-    // Count query for pagination
+    // Sắp xếp theo sent_at để đảm bảo thứ tự đúng
+    qb.orderBy('map.added_at', 'DESC').addOrderBy('log.sent_at', 'ASC');
+
+    // Count query for pagination - đếm số customer unique, không phải số log
     const countQb = this.campaignCustomerMapRepository
       .createQueryBuilder('map')
       .leftJoin('map.campaign_customer', 'customer')
-      .leftJoin(
-        'campaign_interaction_logs',
-        'log',
-        'log.customer_id = customer.id AND log.campaign_id = map.campaign_id AND log.sent_at = (SELECT MAX(l2.sent_at) FROM campaign_interaction_logs l2 WHERE l2.customer_id = customer.id AND l2.campaign_id = map.campaign_id)',
-      )
+      .select('COUNT(DISTINCT map.customer_id)', 'count')
       .where('map.campaign_id = :campaignId', { campaignId });
 
     // Apply same filters to count query
@@ -1339,37 +1339,120 @@ export class CampaignService {
     }
 
     if (query.status) {
+      countQb.leftJoin(
+        'campaign_interaction_logs',
+        'log',
+        'log.customer_id = customer.id AND log.campaign_id = map.campaign_id',
+      );
       countQb.andWhere('log.status = :status', {
         status: query.status,
       });
     }
 
-    // Pagination
+    // Lấy tất cả raw results trước
+    const rawResults = await qb.getRawMany();
+
+    // Define interface for grouped data
+    interface GroupedCustomer {
+      id: string;
+      phone_number: string;
+      full_name: string;
+      salutation: string;
+      created_at: Date;
+      updated_at: Date;
+      added_at: Date;
+      logs: Array<{
+        status: string;
+        conversation_metadata: any;
+        sent_at: Date;
+      }>;
+    }
+
+    // Group theo customer_id và sắp xếp logs theo sent_at
+    const groupedData: Record<string, GroupedCustomer> = rawResults.reduce(
+      (acc, row) => {
+        const customerId = row.customer_id;
+
+        if (!acc[customerId]) {
+          acc[customerId] = {
+            id: row.customer_id,
+            phone_number: row.phone_number,
+            full_name: row.full_name,
+            salutation: row.salutation,
+            created_at: row.customer_created_at,
+            updated_at: row.customer_updated_at,
+            added_at: row.added_at,
+            logs: [],
+          };
+        }
+
+        // Chỉ thêm log nếu có dữ liệu log
+        if (row.sent_at) {
+          acc[customerId].logs.push({
+            status: row.interaction_status,
+            conversation_metadata: row.conversation_metadata,
+            sent_at: new Date(row.sent_at),
+          });
+        }
+
+        return acc;
+      },
+      {},
+    );
+
+    // Convert thành array và tạo một entry cho mỗi log
+    const expandedResults: any[] = [];
+    Object.values(groupedData).forEach((customer: GroupedCustomer) => {
+      if (customer.logs.length > 0) {
+        // Sắp xếp logs theo sent_at
+        customer.logs.sort((a, b) => a.sent_at.getTime() - b.sent_at.getTime());
+
+        // Tạo một entry cho mỗi log
+        customer.logs.forEach((log) => {
+          expandedResults.push({
+            id: customer.id,
+            phone_number: customer.phone_number,
+            full_name: customer.full_name,
+            salutation: customer.salutation,
+            created_at: customer.created_at,
+            updated_at: customer.updated_at,
+            added_at: customer.added_at,
+            status: log.status,
+            conversation_metadata: log.conversation_metadata,
+            sent_at: log.sent_at,
+          });
+        });
+      } else {
+        // Customer không có log
+        expandedResults.push({
+          id: customer.id,
+          phone_number: customer.phone_number,
+          full_name: customer.full_name,
+          salutation: customer.salutation,
+          created_at: customer.created_at,
+          updated_at: customer.updated_at,
+          added_at: customer.added_at,
+          status: null,
+          conversation_metadata: null,
+          sent_at: null,
+        });
+      }
+    });
+
+    // Pagination trên kết quả đã expand
     const page = Math.max(1, parseInt(query.page) || 1);
     const limit = Math.max(1, parseInt(query.limit) || 10);
     const skip = (page - 1) * limit;
 
-    qb.skip(skip).take(limit);
-    qb.orderBy('map.added_at', 'DESC');
+    const paginatedResults = expandedResults.slice(skip, skip + limit);
 
-    const [rawResults, total] = await Promise.all([
-      qb.getRawMany(),
-      countQb.getCount(),
-    ]);
+    // Lấy total count
+    const countResult = await countQb.getRawOne();
+    const total = parseInt(countResult.count) || 0;
 
     return {
-      data: rawResults.map((row: any) => ({
-        id: row.customer_id,
-        phone_number: row.phone_number,
-        full_name: row.full_name,
-        salutation: row.salutation,
-        created_at: row.customer_created_at,
-        updated_at: row.customer_updated_at,
-        added_at: row.added_at,
-        status: row.interaction_status || null,
-        conversation_metadata: row.conversation_metadata || null,
-      })),
-      total,
+      data: paginatedResults,
+      total: expandedResults.length, // Total số entries (bao gồm cả multiple logs)
       page,
       limit,
     };
@@ -1431,19 +1514,65 @@ export class CampaignService {
     return Readable.from(buffer);
   }
 
-  async getCustomerLogs(campaignId: string, customerId: string, user: User) {
-    // Kiểm tra quyền truy cập campaign - thay thế việc gọi findOne
+  // async getCustomerLogs(campaignId: string, customerId: string, user: User) {
+  //   // Kiểm tra quyền truy cập campaign
+  //   await this.checkCampaignAccess(campaignId, user);
+
+  //   const rawLogs = await this.campaignLogRepository
+  //     .createQueryBuilder('log')
+  //     .leftJoinAndSelect('log.campaign', 'campaign')
+  //     .leftJoinAndSelect('log.customer', 'customer')
+  //     .leftJoinAndSelect('log.staff_handler', 'staff_handler')
+  //     .addSelect('staff_handler.avatar_zalo', 'staff_avatar_zalo')
+  //     .where('log.campaign_id = :campaignId', { campaignId })
+  //     .andWhere('log.customer_id = :customerId', { customerId })
+  //     .orderBy('log.sent_at', 'DESC')
+  //     .getRawAndEntities();
+
+  //   // Map để thêm avatar_zalo vào response
+  //   return rawLogs.entities.map((log, index) => ({
+  //     ...log,
+  //     staff_handler_avatar_zalo: rawLogs.raw[index]?.staff_avatar_zalo || null,
+  //   }));
+  // }
+
+  async getCustomerLogs(
+    campaignId: string,
+    customerId: string,
+    user: User,
+    sentDate?: string, // Thêm parameter này
+  ) {
+    // Kiểm tra quyền truy cập campaign
     await this.checkCampaignAccess(campaignId, user);
 
-    const logs = await this.campaignLogRepository.find({
-      where: {
-        campaign: { id: campaignId },
-        customer: { id: customerId },
-      },
-      relations: ['campaign', 'customer', 'staff_handler'],
-      order: { sent_at: 'DESC' },
-    });
+    let query = this.campaignLogRepository
+      .createQueryBuilder('log')
+      .leftJoinAndSelect('log.campaign', 'campaign')
+      .leftJoinAndSelect('log.customer', 'customer')
+      .leftJoinAndSelect('log.staff_handler', 'staff_handler')
+      .addSelect('staff_handler.avatar_zalo', 'staff_avatar_zalo')
+      .where('log.campaign_id = :campaignId', { campaignId })
+      .andWhere('log.customer_id = :customerId', { customerId });
 
-    return logs;
+    // 🔥 THÊM ĐIỀU KIỆN SENT_AT
+    if (sentDate) {
+      // Chuyển sent_date thành range của ngày đó
+      const startOfDay = `${sentDate} 00:00:00`;
+      const endOfDay = `${sentDate} 23:59:59`;
+
+      query = query
+        .andWhere('log.sent_at >= :startOfDay', { startOfDay })
+        .andWhere('log.sent_at <= :endOfDay', { endOfDay });
+    }
+
+    const rawLogs = await query
+      .orderBy('log.sent_at', 'DESC')
+      .getRawAndEntities();
+
+    // Map để thêm avatar_zalo vào response
+    return rawLogs.entities.map((log, index) => ({
+      ...log,
+      staff_handler_avatar_zalo: rawLogs.raw[index]?.staff_avatar_zalo || null,
+    }));
   }
 }
