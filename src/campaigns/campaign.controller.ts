@@ -14,7 +14,11 @@ import {
 } from '@nestjs/common';
 import { CampaignService, CampaignWithDetails } from './campaign.service';
 import { Campaign, CampaignStatus } from './campaign.entity';
-import { CreateCampaignDto, UpdateCampaignDto } from './campaign.dto';
+import {
+  CreateCampaignDto,
+  CustomerDto,
+  UpdateCampaignDto,
+} from './campaign.dto';
 import { Permission } from '../common/guards/permission.decorator';
 import { PermissionGuard } from '../common/guards/permission.guard';
 import { AuthGuard } from '@nestjs/passport';
@@ -37,6 +41,67 @@ export class CampaignController {
     return this.campaignService.getStats(req.user);
   }
 
+  @Get('archived')
+  @Permission('chien-dich', 'read')
+  async findAllArchived(@Query() query: any, @Req() req) {
+    return this.campaignService.findAllArchived(query, req.user);
+  }
+
+  @Get(':id/copy-data')
+  @Permission('chien-dich', 'read')
+  async getCopyData(
+    @Param('id') id: string,
+    @Req() req,
+  ): Promise<CreateCampaignDto> {
+    return this.campaignService.getCopyData(id, req.user);
+  }
+
+  @Get(':id/export-summary')
+  @Permission('chien-dich', 'read')
+  async exportCampaignSummary(
+    @Param('id') id: string,
+    @Res() res: Response,
+    @Req() req,
+  ) {
+    try {
+      const stream = await this.campaignService.exportCampaignSummary(
+        id,
+        req.user,
+      );
+
+      // Lấy campaign để đặt tên file
+      const campaign = await this.campaignService.findOne(id, req.user);
+
+      // ✅ SỬA: Sanitize tên campaign và encode đúng cách
+      const safeCampaignName = campaign.name
+        .replace(/[^a-zA-Z0-9\s]/g, '') // Loại bỏ ký tự đặc biệt
+        .replace(/\s+/g, '_') // Thay space bằng underscore
+        .substring(0, 50); // Giới hạn độ dài
+
+      const timestamp = new Date().getTime();
+      const fileName = `campaign_summary_${safeCampaignName}_${timestamp}.xlsx`;
+
+      // ✅ SỬA: Encode filename đúng cách cho HTTP header
+      const encodedFileName = encodeURIComponent(fileName);
+
+      res.header(
+        'Content-Type',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      );
+
+      // ✅ SỬA: Sử dụng cả filename và filename* để support đa browser
+      res.header(
+        'Content-Disposition',
+        `attachment; filename="${fileName.replace(/[^\x00-\x7F]/g, '_')}"; filename*=UTF-8''${encodedFileName}`,
+      );
+
+      stream.pipe(res);
+    } catch (error) {
+      console.error('Error exporting campaign summary:', error);
+      throw new BadRequestException('Không thể xuất báo cáo chiến dịch');
+    }
+  }
+
   @Get(':id')
   @Permission('chien-dich', 'read')
   async findOne(
@@ -44,6 +109,22 @@ export class CampaignController {
     @Req() req,
   ): Promise<CampaignWithDetails> {
     return this.campaignService.findOne(id, req.user);
+  }
+
+  @Patch(':campaignId/customers/:customerId')
+  @Permission('chien-dich', 'update')
+  async updateCampaignCustomer(
+    @Param('campaignId') campaignId: string,
+    @Param('customerId') customerId: string,
+    @Body() data: CustomerDto,
+    @Req() req,
+  ): Promise<{ success: boolean; message: string }> {
+    return this.campaignService.updateCampaignCustomer(
+      campaignId,
+      customerId,
+      data,
+      req.user,
+    );
   }
 
   @Post()

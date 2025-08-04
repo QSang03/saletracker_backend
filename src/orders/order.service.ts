@@ -11,6 +11,7 @@ interface OrderFilters {
   status?: string;
   date?: string;
   employee?: string;
+  user?: any; // truyền cả user object
 }
 
 @Injectable()
@@ -34,15 +35,31 @@ export class OrderService {
     page: number;
     pageSize: number;
   }> {
-    const { page, pageSize, search, status, date, employee } = filters;
+    const { page, pageSize, search, status, date, employee, user } = filters;
     const skip = (page - 1) * pageSize;
 
-    // Query từ order_details thay vì orders
-    const queryBuilder = this.orderDetailRepository // Cần inject orderDetailRepository
+    const queryBuilder = this.orderDetailRepository
       .createQueryBuilder('details')
       .leftJoinAndSelect('details.order', 'order')
       .leftJoinAndSelect('details.product', 'product')
-      .leftJoinAndSelect('order.sale_by', 'sale_by')
+      .leftJoinAndSelect('order.sale_by', 'sale_by');
+
+    // Phân quyền: admin xem tất cả, manager xem theo phòng, user thường chỉ xem đơn của mình
+    if (user) {
+      const roleNames = (user.roles || []).map((r: any) => r.name);
+      if (!roleNames.includes('admin')) {
+        if (roleNames.some((r: string) => r.startsWith('manager-'))) {
+          // Manager: xem tất cả đơn của phòng mình
+          const deptIds = (user.departments || []).map((d: any) => d.id);
+          if (deptIds.length > 0) {
+            queryBuilder.andWhere('sale_by.departmentId IN (:...deptIds)', { deptIds });
+          }
+        } else {
+          // User thường: chỉ xem đơn của mình
+          queryBuilder.andWhere('order.sale_by = :userId', { userId: user.id });
+        }
+      }
+    }
 
     // Filter by search (search in order details customer_name or order id)
     if (search) {
@@ -72,6 +89,11 @@ export class OrderService {
     // Filter by employee (sale_by)
     if (employee) {
       queryBuilder.andWhere('sale_by.id = :employee', { employee });
+    }
+
+    // Filter by userId (người dùng tạo đơn hàng)
+    if (user) {
+      queryBuilder.andWhere('order.user_id = :userId', { userId: user.id });
     }
 
     // Order by order created_at desc

@@ -5,6 +5,7 @@ import {
   ManyToOne,
   CreateDateColumn,
   UpdateDateColumn,
+  DeleteDateColumn,
 } from 'typeorm';
 import { User } from '../users/user.entity';
 import { Department } from '../departments/department.entity';
@@ -59,4 +60,7 @@ export class Campaign {
 
   @UpdateDateColumn()
   updated_at: Date;
+
+  @DeleteDateColumn({ nullable: true })
+  deleted_at: Date | null;
 }

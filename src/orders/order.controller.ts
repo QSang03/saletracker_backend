@@ -8,12 +8,16 @@ import {
   Body,
   ParseIntPipe,
   Query,
+  UseGuards,
+  Req,
 } from '@nestjs/common';
+import { AuthGuard } from '@nestjs/passport';
 import { OrderService } from './order.service';
 import { Order } from './order.entity';
 import { OrderDetail } from 'src/order-details/order-detail.entity';
 
 @Controller('orders')
+@UseGuards(AuthGuard('jwt'))
 export class OrderController {
   constructor(private readonly orderService: OrderService) {}
 
@@ -25,19 +29,19 @@ export class OrderController {
     @Query('status') status?: string,
     @Query('date') date?: string,
     @Query('employee') employee?: string,
+    @Req() req?: any,
   ): Promise<{
     data: OrderDetail[];
     total: number;
     page: number;
     pageSize: number;
   }> {
-    // Thay đổi từ Order[] thành OrderDetail[]
     const pageNum = Math.max(1, parseInt(page, 10) || 1);
     const pageSizeNum = Math.min(
       100,
       Math.max(1, parseInt(pageSize, 10) || 10),
     );
-
+    // Truyền cả user xuống service để phân quyền
     return this.orderService.findAllPaginated({
       page: pageNum,
       pageSize: pageSizeNum,
@@ -45,6 +49,7 @@ export class OrderController {
       status,
       date,
       employee,
+      user: req.user,
     });
   }
 

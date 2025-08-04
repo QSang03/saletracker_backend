@@ -9,7 +9,8 @@ import {
   IsArray, 
   ValidateNested, 
   IsBoolean,
-  IsNumber
+  IsNumber,
+  Matches
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { CampaignType, CampaignStatus, SendMethod } from './campaign.entity';
@@ -110,11 +111,14 @@ export class EmailReportsDto {
 
 export class CustomerDto {
   @IsString()
-  @IsNotEmpty()
+  @IsNotEmpty({ message: 'Số điện thoại không được để trống' })
+  @Matches(/^(0[3|5|7|8|9])+([0-9]{8})$/, {
+    message: 'Số điện thoại không đúng định dạng (VD: 0987654321)',
+  })
   phone_number: string;
 
   @IsString()
-  @IsNotEmpty()
+  @IsNotEmpty({ message: 'Họ tên không được để trống' })
   full_name: string;
 
   @IsString()
@@ -150,6 +154,14 @@ export class CreateCampaignDto {
   @ValidateNested()
   @Type(() => MessageDto)
   messages?: MessageDto;
+
+  @IsString()
+  @IsOptional()
+  start_date?: string;
+
+  @IsString()
+  @IsOptional()
+  end_date?: string;
 
   @IsOptional()
   @ValidateNested()

@@ -35,6 +35,7 @@ import { CampaignInteractionLogModule } from './campaign_interaction_logs/campai
 import { CampaignEmailReportModule } from './campaign_email_reports/campaign_email_report.module';
 import { CampaignScheduleModule } from './campaign_schedules/campaign_schedule.module';
 import { CampaignContentModule } from './campaign_contents/campaign_content.module';
+import { CampaignDepartmentsSchedulesModule } from './campaign_departments_schedules/campaign_departments_schedules.module';
 
 @Module({
   imports: [
@@ -75,6 +76,7 @@ import { CampaignContentModule } from './campaign_contents/campaign_content.modu
     CampaignEmailReportModule,
     CampaignScheduleModule,
     CampaignContentModule,
+    CampaignDepartmentsSchedulesModule,
   ],
   controllers: [AppController],
   providers: [AppService],
