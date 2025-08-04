@@ -367,11 +367,9 @@ export class DebtConfigService {
     const limit = filters.limit || 10;
     const skip = (page - 1) * limit;
 
-    // Tính toán thời gian bắt đầu ngày hôm nay (UTC+7) để thống nhất logic
-    const now = new Date();
-    const utc7 = new Date(now.getTime() + 7 * 60 * 60 * 1000);
-    utc7.setHours(0, 0, 0, 0);
-    const startOfTodayUtc = new Date(utc7.getTime() - 7 * 60 * 60 * 1000);
+    // ✅ Đơn giản hóa logic thời gian - chỉ dùng start of day local time
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
 
     const isAggregateSort =
       filters.sort &&
@@ -385,20 +383,29 @@ export class DebtConfigService {
       .leftJoinAndSelect('debt_config.employee', 'employee');
 
     if (isAggregateSort) {
-      // ✅ FIX: Áp dụng filter ngày cho SQL aggregation để thống nhất
+      // ✅ Sử dụng subquery thay vì LEFT JOIN với GROUP BY để tránh lỗi
       queryBuilder
-        .leftJoin('debt_config.debts', 'debts')
-        .addSelect('COUNT(debts.id)', 'total_bills')
-        .addSelect('COALESCE(SUM(debts.remaining), 0)', 'total_debt')
-        .andWhere('(debts.id IS NULL OR debts.updated_at >= :startOfToday)', {
-          startOfToday: startOfTodayUtc,
-        })
-        .groupBy('debt_config.id');
+        .addSelect((subQuery) => {
+          return subQuery
+            .select('COUNT(d.id)')
+            .from('Debt', 'd')
+            .where('d.debt_config_id = debt_config.id')
+            .andWhere('d.updated_at >= :startOfToday');
+        }, 'total_bills')
+        .addSelect((subQuery) => {
+          return subQuery
+            .select('COALESCE(SUM(d.remaining), 0)')
+            .from('Debt', 'd')
+            .where('d.debt_config_id = debt_config.id')
+            .andWhere('d.updated_at >= :startOfToday');
+        }, 'total_debt')
+        .setParameter('startOfToday', startOfToday);
     } else {
-      // ✅ Giữ join bình thường khi không cần aggregate
+      // Load đầy đủ debts để JavaScript calculation
       queryBuilder.leftJoinAndSelect('debt_config.debts', 'debts');
     }
 
+    // Role-based filtering
     if (!isAdminOrManager && roleNames.includes('user-cong-no')) {
       queryBuilder.andWhere('employee.id = :userId', {
         userId: currentUser?.id,
@@ -413,6 +420,7 @@ export class DebtConfigService {
       };
     }
 
+    // Search filter
     if (filters.search?.trim()) {
       queryBuilder.andWhere(
         '(debt_config.customer_code LIKE :search OR debt_config.customer_name LIKE :search)',
@@ -420,25 +428,25 @@ export class DebtConfigService {
       );
     }
 
+    // Employee filter
     if (Array.isArray(filters.employees) && filters.employees.length > 0) {
       queryBuilder.andWhere('employee.id IN (:...employeeIds)', {
         employeeIds: filters.employees,
       });
     }
 
+    // Single date filter
     if (filters.singleDate) {
       const date = new Date(filters.singleDate);
       const start = new Date(date.setHours(0, 0, 0, 0));
       const end = new Date(date.setHours(23, 59, 59, 999));
       queryBuilder.andWhere(
         'debt_config.send_last_at BETWEEN :start AND :end',
-        {
-          start,
-          end,
-        },
+        { start, end },
       );
     }
 
+    // Status filter
     if (Array.isArray(filters.statuses) && filters.statuses.length > 0) {
       queryBuilder.andWhere(
         new Brackets((qb) => {
@@ -449,7 +457,7 @@ export class DebtConfigService {
                   `(debt_config.employee IS NOT NULL AND (
                   debt_log.id IS NULL
                   OR (debt_config.id = debt_log.debt_config_id AND (debt_log.remind_status IS NULL OR debt_log.remind_status != :errorSend))
-              ))`,
+                ))`,
                   { errorSend: 'Error Send' },
                 );
               }
@@ -468,6 +476,7 @@ export class DebtConfigService {
       );
     }
 
+    // Sorting
     if (isAggregateSort && filters.sort) {
       queryBuilder.orderBy(
         filters.sort.field,
@@ -482,36 +491,59 @@ export class DebtConfigService {
       queryBuilder.orderBy('debt_config.id', 'DESC');
     }
 
-    const total = await queryBuilder.getCount();
-    const raw = isAggregateSort ? await queryBuilder.getRawMany() : [];
-    const entities = await queryBuilder.skip(skip).take(limit).getMany();
-
-    const rawMap = new Map();
+    // ✅ Tính total trước khi apply pagination
+    const totalQueryBuilder = queryBuilder.clone();
+    // Remove SELECT additions for counting
     if (isAggregateSort) {
-      for (const r of raw) {
-        rawMap.set(r.debt_config_id, {
-          total_bills: +r.total_bills || 0,
-          total_debt: +r.total_debt || 0,
-        });
-      }
+      const baseQueryBuilder = this.repo
+        .createQueryBuilder('debt_config')
+        .leftJoinAndSelect('debt_config.debt_log', 'debt_log')
+        .leftJoinAndSelect('debt_config.actor', 'actor')
+        .leftJoinAndSelect('debt_config.employee', 'employee');
+
+      // Copy all WHERE conditions từ original query
+      baseQueryBuilder.where(queryBuilder.expressionMap.wheres);
+      baseQueryBuilder.setParameters(queryBuilder.getParameters());
+
+      const total = await baseQueryBuilder.getCount();
+      var totalCount = total;
+    } else {
+      const total = await totalQueryBuilder.getCount();
+      var totalCount = total;
     }
 
-    const data = entities.map((cfg) => {
+    // ✅ Get paginated data
+    let entities: any[];
+    let rawData: any[] = [];
+
+    if (isAggregateSort) {
+      const result = await queryBuilder
+        .skip(skip)
+        .take(limit)
+        .getRawAndEntities();
+      entities = result.entities;
+      rawData = result.raw;
+    } else {
+      entities = await queryBuilder.skip(skip).take(limit).getMany();
+    }
+
+    // ✅ Process results
+    const data = entities.map((cfg, index) => {
       let total_bills: number;
       let total_debt: number;
 
       if (isAggregateSort) {
-        // ✅ Sử dụng kết quả từ SQL aggregation (đã có filter ngày)
-        const rawTotals = rawMap.get(cfg.id);
-        total_bills = rawTotals?.total_bills || 0;
-        total_debt = rawTotals?.total_debt || 0;
+        // Sử dụng kết quả từ subquery
+        const raw = rawData[index];
+        total_bills = parseInt(raw.total_bills) || 0;
+        total_debt = parseFloat(raw.total_debt) || 0;
       } else {
-        // ✅ Sử dụng JavaScript calculation với filter ngày
+        // JavaScript calculation với filter ngày đồng nhất
         const filteredDebts = Array.isArray(cfg.debts)
           ? cfg.debts.filter(
               (d: any) =>
                 d.updated_at &&
-                new Date(d.updated_at).getTime() >= startOfTodayUtc.getTime(),
+                new Date(d.updated_at).getTime() >= startOfToday.getTime(),
             )
           : [];
 
@@ -557,10 +589,10 @@ export class DebtConfigService {
 
     return {
       data,
-      total,
+      total: totalCount,
       page,
       limit,
-      totalPages: Math.ceil(total / limit),
+      totalPages: Math.ceil(totalCount / limit),
     };
   }
 
