@@ -25,10 +25,6 @@ export class CampaignDepartmentsSchedulesService {
     userId: number,
   ): Promise<DepartmentSchedule> {
     try {
-      console.log('=== DEBUG CREATE SCHEDULE ===');
-      console.log('CreateDto:', JSON.stringify(createDto, null, 2));
-      console.log('UserId:', userId);
-
       if (!userId) {
         throw new BadRequestException('User ID is required');
       }
@@ -40,14 +36,8 @@ export class CampaignDepartmentsSchedulesService {
         status: createDto.status || ScheduleStatus.ACTIVE,
       });
 
-      console.log(
-        'Schedule entity before save:',
-        JSON.stringify(schedule, null, 2),
-      );
-
       const savedSchedule =
         await this.departmentScheduleRepository.save(schedule);
-      console.log('Schedule saved successfully:', savedSchedule.id);
       return savedSchedule;
     } catch (error) {
       console.error('=== CREATE SCHEDULE ERROR ===');

@@ -2250,7 +2250,6 @@ export class CampaignService {
     // Kiểm tra quyền truy cập campaign
     const campaign = await this.checkCampaignAccess(campaignId, user);
 
-    // ✅ SỬA: Lấy campaign với join User entity đúng cách
     const campaignWithCreator = await this.campaignRepository
       .createQueryBuilder('campaign')
       .leftJoinAndSelect('campaign.created_by', 'creator')
@@ -2267,7 +2266,7 @@ export class CampaignService {
 
     // Lấy chi tiết tất cả khách hàng và logs
     const customersWithLogs =
-      await this.getCampaignCustomersWithLogs(campaignId);
+      await this.getCampaignCustomersWithLogsDetailed(campaignId);
 
     // Tạo Excel workbook với metadata
     const workbook = new ExcelJS.Workbook();
@@ -2275,111 +2274,157 @@ export class CampaignService {
     workbook.created = new Date();
     workbook.company = 'NKC Auto Zalo';
 
-    // ===== ĐỊNH NGHĨA COLOR PALETTE HỢP LÝ =====
-
-    // 🎨 Minimalist Professional Colors
+    // ===== ĐỊNH NGHĨA COLOR PALETTE =====
     const colors = {
-      primary: '2563EB', // Clean Blue
-      secondary: '64748B', // Slate Gray
-      success: '059669', // Emerald
-      warning: 'D97706', // Amber
-      danger: 'DC2626', // Red
-      info: '0891B2', // Cyan
-      light: 'F8FAFC', // Very Light Gray
-      lighter: 'F1F5F9', // Light Gray
-      dark: '334155', // Dark Slate
-      white: 'FFFFFF',
+      primary: 'FF4A90E2',
+      secondary: 'FF7ED321',
+      success: 'FF50E3C2',
+      warning: 'FFFFC107',
+      danger: 'FFFF6B6B',
+      info: 'FF42A5F5',
+      light: 'FFFAFAFA',
+      lighter: 'FFF5F5F5',
+      dark: 'FF333333',
+      white: 'FFFFFFFF',
+      border: 'FFDDDDDD',
     };
 
-    // 📝 Clean Typography
+    // 📝 Font Styles
     const fontStyles = {
       title: {
-        name: 'Segoe UI',
-        size: 16,
+        name: 'Calibri',
+        size: 18,
         bold: true,
         color: { argb: colors.white },
       },
       heading: {
-        name: 'Segoe UI',
-        size: 13,
+        name: 'Calibri',
+        size: 14,
         bold: true,
         color: { argb: colors.dark },
       },
       subheading: {
-        name: 'Segoe UI',
-        size: 11,
+        name: 'Calibri',
+        size: 12,
         bold: true,
-        color: { argb: colors.primary },
+        color: { argb: colors.dark },
       },
-      body: { name: 'Segoe UI', size: 10, color: { argb: colors.dark } },
-      small: { name: 'Segoe UI', size: 9, color: { argb: colors.secondary } },
+      body: {
+        name: 'Calibri',
+        size: 11,
+        color: { argb: colors.dark },
+      },
+      small: {
+        name: 'Calibri',
+        size: 10,
+        color: { argb: 'FF666666' },
+      },
     };
 
-    // 🎯 Clean Styles
+    // Border Styles
+    const borderStyles = {
+      medium: 'medium' as ExcelJS.BorderStyle,
+      thin: 'thin' as ExcelJS.BorderStyle,
+    };
+
+    // Cell Styles
     const styles = {
       titleBox: {
         font: fontStyles.title,
         fill: {
-          type: 'pattern',
-          pattern: 'solid',
+          type: 'pattern' as const,
+          pattern: 'solid' as const,
           fgColor: { argb: colors.primary },
         },
-        alignment: { horizontal: 'center', vertical: 'middle' },
+        alignment: {
+          horizontal: 'center' as const,
+          vertical: 'middle' as const,
+          wrapText: true,
+        },
         border: {
-          top: { style: 'thin', color: { argb: colors.primary } },
-          bottom: { style: 'thin', color: { argb: colors.primary } },
-          left: { style: 'thin', color: { argb: colors.primary } },
-          right: { style: 'thin', color: { argb: colors.primary } },
+          top: { style: borderStyles.medium, color: { argb: colors.border } },
+          bottom: {
+            style: borderStyles.medium,
+            color: { argb: colors.border },
+          },
+          left: { style: borderStyles.medium, color: { argb: colors.border } },
+          right: { style: borderStyles.medium, color: { argb: colors.border } },
         },
       },
       infoLabel: {
         font: fontStyles.subheading,
         fill: {
-          type: 'pattern',
-          pattern: 'solid',
+          type: 'pattern' as const,
+          pattern: 'solid' as const,
           fgColor: { argb: colors.lighter },
         },
-        alignment: { horizontal: 'right', vertical: 'middle' },
+        alignment: {
+          horizontal: 'right' as const,
+          vertical: 'middle' as const,
+        },
         border: {
-          top: { style: 'thin' },
-          bottom: { style: 'thin' },
-          left: { style: 'thin' },
-          right: { style: 'thin' },
+          top: { style: borderStyles.thin, color: { argb: colors.border } },
+          bottom: { style: borderStyles.thin, color: { argb: colors.border } },
+          left: { style: borderStyles.thin, color: { argb: colors.border } },
+          right: { style: borderStyles.thin, color: { argb: colors.border } },
         },
       },
       infoValue: {
         font: fontStyles.body,
-        alignment: { horizontal: 'left', vertical: 'middle' },
+        fill: {
+          type: 'pattern' as const,
+          pattern: 'solid' as const,
+          fgColor: { argb: colors.white },
+        },
+        alignment: {
+          horizontal: 'left' as const,
+          vertical: 'middle' as const,
+        },
         border: {
-          top: { style: 'thin' },
-          bottom: { style: 'thin' },
-          left: { style: 'thin' },
-          right: { style: 'thin' },
+          top: { style: borderStyles.thin, color: { argb: colors.border } },
+          bottom: { style: borderStyles.thin, color: { argb: colors.border } },
+          left: { style: borderStyles.thin, color: { argb: colors.border } },
+          right: { style: borderStyles.thin, color: { argb: colors.border } },
         },
       },
       tableHeader: {
         font: fontStyles.subheading,
         fill: {
-          type: 'pattern',
-          pattern: 'solid',
+          type: 'pattern' as const,
+          pattern: 'solid' as const,
           fgColor: { argb: colors.secondary },
         },
-        alignment: { horizontal: 'center', vertical: 'middle' },
+        alignment: {
+          horizontal: 'center' as const,
+          vertical: 'middle' as const,
+          wrapText: true,
+        },
         border: {
-          top: { style: 'medium' },
-          bottom: { style: 'medium' },
-          left: { style: 'thin' },
-          right: { style: 'thin' },
+          top: { style: borderStyles.medium, color: { argb: colors.border } },
+          bottom: {
+            style: borderStyles.medium,
+            color: { argb: colors.border },
+          },
+          left: { style: borderStyles.thin, color: { argb: colors.border } },
+          right: { style: borderStyles.thin, color: { argb: colors.border } },
         },
       },
       tableCell: {
         font: fontStyles.body,
-        alignment: { horizontal: 'center', vertical: 'middle' },
+        fill: {
+          type: 'pattern' as const,
+          pattern: 'solid' as const,
+          fgColor: { argb: colors.white },
+        },
+        alignment: {
+          horizontal: 'center' as const,
+          vertical: 'middle' as const,
+        },
         border: {
-          top: { style: 'thin' },
-          bottom: { style: 'thin' },
-          left: { style: 'thin' },
-          right: { style: 'thin' },
+          top: { style: borderStyles.thin, color: { argb: colors.border } },
+          bottom: { style: borderStyles.thin, color: { argb: colors.border } },
+          left: { style: borderStyles.thin, color: { argb: colors.border } },
+          right: { style: borderStyles.thin, color: { argb: colors.border } },
         },
       },
     };
@@ -2389,16 +2434,17 @@ export class CampaignService {
       properties: { tabColor: { argb: colors.primary } },
     });
 
-    // 🏆 TITLE SECTION
-    summarySheet.mergeCells('A1:E2');
+    // Title Section
+    summarySheet.mergeCells('A1:F2');
     const titleCell = summarySheet.getCell('A1');
-    titleCell.value = `📊 BÁO CÁO CHIẾN DỊCH\n${campaignWithCreator.name}`;
+    titleCell.value = `📊 BÁO CÁO CHIẾN DỊCH: ${campaignWithCreator.name}`;
     Object.assign(titleCell, styles.titleBox);
+    summarySheet.getRow(1).height = 35;
 
-    // 📅 Timestamp
-    summarySheet.mergeCells('F1:F2');
-    const timestampCell = summarySheet.getCell('F1');
-    timestampCell.value = `📅 ${this.formatDateTime(new Date())}`;
+    // Timestamp
+    summarySheet.mergeCells('A3:F3');
+    const timestampCell = summarySheet.getCell('A3');
+    timestampCell.value = `📅 Xuất lúc: ${this.formatDateTime(new Date())}`;
     timestampCell.font = fontStyles.small;
     timestampCell.alignment = { horizontal: 'center', vertical: 'middle' };
     timestampCell.fill = {
@@ -2407,12 +2453,12 @@ export class CampaignService {
       fgColor: { argb: colors.light },
     };
 
-    summarySheet.addRow([]); // Spacing
+    summarySheet.addRow([]);
 
-    // 🎯 THÔNG TIN CHIẾN DỊCH
-    const infoStartRow = 4;
+    // Thông tin chiến dịch
+    const infoStartRow = 5;
     const infoData = [
-      ['🏷️ Tên Chiến Dịch', campaignWithCreator.name],
+      ['🏷️ Tên Chiến Dịch', campaignWithCreator.name || '--'],
       [
         '📂 Loại Chiến Dịch',
         this.getCampaignTypeLabel(campaignWithCreator.campaign_type),
@@ -2422,8 +2468,8 @@ export class CampaignService {
         this.getCampaignStatusLabel(campaignWithCreator.status),
       ],
       ['📅 Ngày Tạo', this.formatDateTime(campaignWithCreator.created_at)],
-      ['👤 Người Tạo', campaignWithCreator.created_by?.fullName || 'N/A'],
-      ['🏢 Phòng Ban', campaignWithCreator.department?.name || 'N/A'],
+      ['👤 Người Tạo', campaignWithCreator.created_by?.fullName || '--'],
+      ['🏢 Phòng Ban', campaignWithCreator.department?.name || '--'],
       [
         '👥 Tổng Khách Hàng',
         (await this.getTotalCustomerCount(campaignId)).toLocaleString(),
@@ -2441,15 +2487,15 @@ export class CampaignService {
       valueCell.value = row[1];
       Object.assign(valueCell, styles.infoValue);
 
-      summarySheet.mergeCells(`B${rowNum}:D${rowNum}`);
+      summarySheet.mergeCells(`B${rowNum}:F${rowNum}`);
     });
 
-    summarySheet.addRow([]); // Spacing
+    summarySheet.addRow([]);
 
-    // 📊 THỐNG KÊ SECTION
+    // Thống kê section
     const statsStartRow = infoStartRow + infoData.length + 2;
 
-    summarySheet.mergeCells(`A${statsStartRow}:D${statsStartRow}`);
+    summarySheet.mergeCells(`A${statsStartRow}:F${statsStartRow}`);
     const statsTitle = summarySheet.getCell(`A${statsStartRow}`);
     statsTitle.value = '📊 THỐNG KÊ THEO TRẠNG THÁI';
     statsTitle.font = fontStyles.heading;
@@ -2460,7 +2506,7 @@ export class CampaignService {
       fgColor: { argb: colors.success },
     };
 
-    summarySheet.addRow([]); // Spacing
+    summarySheet.addRow([]);
 
     // Stats table headers
     const statsHeaderRow = statsStartRow + 2;
@@ -2478,19 +2524,19 @@ export class CampaignService {
       Object.assign(cell, styles.tableHeader);
     });
 
-    // ✅ SỬA: Status colors theo logic UI thực tế
+    // Status colors
     const totalCustomers = Math.max(
       await this.getTotalCustomerCount(campaignId),
       1,
     );
     const statusColors = {
-      pending: colors.warning, // Chờ gửi - Amber
-      sent: colors.info, // Đã gửi - Cyan
-      failed: colors.danger, // Gửi lỗi - Red
-      customer_replied: colors.success, // KH phản hồi - Green
-      staff_handled: colors.primary, // Đã xử lý - Blue
-      reminder_sent: colors.secondary, // Đã nhắc lại - Gray
-      no_log: 'E2E8F0', // Chưa gửi - Light Gray
+      pending: 'FFFFF3CD',
+      sent: 'FFD1ECF1',
+      failed: 'FFFADBD8',
+      customer_replied: 'FFD5EDDA',
+      staff_handled: 'FFDAECF0',
+      reminder_sent: 'FFE8DAEF',
+      no_log: 'FFF8F9FA',
     };
 
     const statusIcons = {
@@ -2512,12 +2558,14 @@ export class CampaignService {
       // Status column
       const statusCell = summarySheet.getCell(`A${rowNum}`);
       statusCell.value = `${statusIcons[status]} ${this.getLogStatusLabel(status)}`;
-      Object.assign(statusCell, styles.tableCell);
+      statusCell.font = fontStyles.body;
       statusCell.fill = {
         type: 'pattern',
         pattern: 'solid',
-        fgColor: { argb: statusColors[status] + '30' },
+        fgColor: { argb: statusColors[status] },
       };
+      statusCell.alignment = { horizontal: 'left', vertical: 'middle' };
+      statusCell.border = styles.tableCell.border;
 
       // Count column
       const countCell = summarySheet.getCell(`B${rowNum}`);
@@ -2541,59 +2589,61 @@ export class CampaignService {
         reminder_sent: 'Đã gửi nhắc nhở',
         no_log: 'Chưa có tương tác',
       };
-      noteCell.value = notes[status] || '';
+      noteCell.value = notes[status] || '--';
       Object.assign(noteCell, styles.tableCell);
       noteCell.font = fontStyles.small;
     });
 
-    // Column widths
-    summarySheet.getColumn('A').width = 25;
-    summarySheet.getColumn('B').width = 20;
+    // Column widths for summary sheet
+    summarySheet.getColumn('A').width = 30;
+    summarySheet.getColumn('B').width = 15;
     summarySheet.getColumn('C').width = 15;
-    summarySheet.getColumn('D').width = 30;
-    summarySheet.getColumn('E').width = 15;
-    summarySheet.getColumn('F').width = 20;
+    summarySheet.getColumn('D').width = 35;
 
     summarySheet.views = [{ state: 'frozen', ySplit: 3 }];
 
     // ===== SHEET 2: CHI TIẾT KHÁCH HÀNG =====
-    const detailSheet = workbook.addWorksheet('👥 Chi Tiết Khách Hàng', {
-      properties: { tabColor: { argb: colors.secondary } },
-    });
+    const detailSheet = workbook.addWorksheet(
+      '👥 Danh Sách Khách Hàng Chi Tiết',
+      {
+        properties: { tabColor: { argb: colors.secondary } },
+      },
+    );
 
     // Title cho sheet 2
-    detailSheet.mergeCells('A1:I2');
+    detailSheet.mergeCells('A1:N2');
     const detailTitle = detailSheet.getCell('A1');
     detailTitle.value = '👥 DANH SÁCH KHÁCH HÀNG CHI TIẾT';
     Object.assign(detailTitle, styles.titleBox);
+    detailSheet.getRow(1).height = 35;
 
-    detailSheet.addRow([]); // Spacing
+    detailSheet.addRow([]);
 
-    // ✅ SỬA: Headers theo đúng logic CampaignCustomersModal
+    // Headers với thứ tự: Trạng thái gửi → Nội dung tin nhắn gửi → Ngày gửi
     const detailHeaders = [
       '#',
       'Khách hàng',
       'Số điện thoại',
       'Ngày tạo DSKH',
-      'Ngày Gửi',
       'Trạng thái gửi',
+      'Nội dung tin nhắn gửi',
+      'Ngày Gửi',
       'Tương tác',
-      'Lần cuối',
-      'Ghi chú',
+      'Nội dung khách phản hồi',
+      'Thời gian khách phản hồi',
+      'Nội dung nhân viên phản hồi',
+      'Thời gian nhân viên phản hồi',
+      'Chi tiết cuộc hội thoại',
+      'Thời gian tương tác cuối cùng',
     ];
 
     const detailHeaderRow = detailSheet.addRow(detailHeaders);
     detailHeaderRow.eachCell((cell, colNumber) => {
       Object.assign(cell, styles.tableHeader);
-      cell.fill = {
-        type: 'pattern',
-        pattern: 'solid',
-        fgColor: { argb: colors.secondary },
-      };
-      cell.font = { ...fontStyles.subheading, color: { argb: colors.white } };
     });
+    detailHeaderRow.height = 25;
 
-    // ✅ SỬA: Data rows theo đúng logic UI
+    // Data rows với căn chỉnh CENTER cho nội dung tin nhắn
     customersWithLogs.forEach((customer, index) => {
       const isEvenRow = index % 2 === 0;
 
@@ -2601,58 +2651,131 @@ export class CampaignService {
         index + 1,
         customer.salutation
           ? `${customer.salutation} ${customer.full_name}`
-          : customer.full_name,
-        customer.phone_number,
-        customer.added_at ? this.formatDateTime(customer.added_at) : 'N/A',
-        customer.sent_at ? this.formatDateTime(customer.sent_at) : 'Chưa Gửi',
+          : customer.full_name || '--',
+        customer.phone_number || '--',
+        customer.added_at ? this.formatDateTime(customer.added_at) : '--',
         customer.latestLog
           ? this.getLogStatusLabel(customer.latestLog.status)
-          : 'Chưa gửi',
-        `${customer.interactionCount} lần`,
+          : '--',
+        this.truncateText(customer.lastMessageSent || '', 150) || '--',
+        customer.sent_at ? this.formatDateTime(customer.sent_at) : '--',
+        customer.interactionCount ? `${customer.interactionCount} lần` : '--',
+        this.truncateText(customer.lastCustomerReply || '', 150) || '--',
+        customer.lastCustomerReplyAt
+          ? this.formatDateTime(customer.lastCustomerReplyAt)
+          : '--',
+        this.truncateText(customer.lastStaffReply || '', 150) || '--',
+        customer.lastStaffHandledAt
+          ? this.formatDateTime(customer.lastStaffHandledAt)
+          : '--',
+        customer.latestLog
+          ? this.getFullConversationMetadata(
+              customer.latestLog.conversation_metadata,
+            )
+          : '--',
         customer.lastInteractionTime
           ? this.formatDateTime(customer.lastInteractionTime)
-          : 'Chưa có',
-        customer.latestLog?.error_details ? 'Có lỗi xảy ra' : 'Bình thường',
+          : '--',
       ]);
 
-      // ✅ SỬA: Clean styling
+      // ✅ Căn chỉnh CENTER cho tất cả các cột nội dung tin nhắn
       row.eachCell((cell, colNumber) => {
-        Object.assign(cell, styles.tableCell);
+        cell.font = fontStyles.body;
+        cell.border = styles.tableCell.border;
 
-        // Alternating row colors - subtle
+        // Căn chỉnh theo từng cột - ✅ CẬP NHẬT: Tất cả đều center
+        switch (colNumber) {
+          case 1: // STT
+            cell.alignment = { horizontal: 'center', vertical: 'middle' };
+            break;
+
+          case 2: // Khách hàng - vẫn căn trái cho tên
+            cell.alignment = { horizontal: 'left', vertical: 'middle' };
+            break;
+
+          case 3: // Số điện thoại
+          case 4: // Ngày tạo DSKH
+          case 5: // Trạng thái gửi
+          case 7: // Ngày Gửi
+          case 8: // Tương tác
+          case 10: // Thời gian khách phản hồi
+          case 12: // Thời gian nhân viên phản hồi
+          case 14: // Thời gian tương tác cuối cùng
+            cell.alignment = { horizontal: 'center', vertical: 'middle' };
+            break;
+
+          // ✅ CẬP NHẬT: Căn CENTER cho nội dung tin nhắn với wrap text
+          case 6: // Nội dung tin nhắn gửi
+          case 9: // Nội dung khách phản hồi
+          case 11: // Nội dung nhân viên phản hồi
+            cell.alignment = {
+              horizontal: 'center',
+              vertical: 'middle',
+              wrapText: true,
+            };
+            break;
+
+          case 13: // Chi tiết cuộc hội thoại - vẫn căn trái vì nội dung JSON dài
+            cell.alignment = {
+              horizontal: 'left',
+              vertical: 'top',
+              wrapText: true,
+            };
+            break;
+
+          default:
+            cell.alignment = { horizontal: 'center', vertical: 'middle' };
+            break;
+        }
+
+        // Alternating row colors
         if (isEvenRow) {
           cell.fill = {
             type: 'pattern',
             pattern: 'solid',
-            fgColor: { argb: colors.light },
+            fgColor: { argb: 'FFFAFAFA' },
+          };
+        } else {
+          cell.fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: colors.white },
           };
         }
 
-        // Status column color coding - subtle
-        if (colNumber === 6 && customer.latestLog) {
+        // Status column color coding
+        if (colNumber === 5 && customer.latestLog) {
           const statusColor =
-            statusColors[customer.latestLog.status] || 'E2E8F0';
+            statusColors[customer.latestLog.status] || 'FFF8F9FA';
           cell.fill = {
             type: 'pattern',
             pattern: 'solid',
-            fgColor: { argb: statusColor + '20' },
+            fgColor: { argb: statusColor },
           };
-        }
-
-        // Error highlighting - subtle
-        if (colNumber === 9 && customer.latestLog?.error_details) {
-          cell.fill = {
-            type: 'pattern',
-            pattern: 'solid',
-            fgColor: { argb: colors.danger + '20' },
-          };
-          cell.font = { ...fontStyles.body, color: { argb: colors.danger } };
         }
       });
+
+      row.height = 100;
     });
 
-    // ✅ SỬA: Column widths tối ưu cho headers mới
-    const columnWidths = [8, 25, 18, 20, 20, 18, 12, 20, 15];
+    // Column widths
+    const columnWidths = [
+      6, // STT
+      25, // Khách hàng
+      18, // Số điện thoại
+      20, // Ngày tạo DSKH
+      18, // Trạng thái gửi
+      40, // Nội dung tin nhắn gửi
+      20, // Ngày Gửi
+      12, // Tương tác
+      40, // Nội dung khách phản hồi
+      22, // Thời gian khách phản hồi
+      40, // Nội dung nhân viên phản hồi
+      22, // Thời gian nhân viên phản hồi
+      80, // Chi tiết cuộc hội thoại
+      22, // Thời gian tương tác cuối cùng
+    ];
+
     columnWidths.forEach((width, index) => {
       detailSheet.getColumn(index + 1).width = width;
     });
@@ -2664,21 +2787,19 @@ export class CampaignService {
       to: { row: customersWithLogs.length + 3, column: detailHeaders.length },
     };
 
-    // ===== FINISHING TOUCHES =====
-
     // Print settings
     [summarySheet, detailSheet].forEach((sheet) => {
       sheet.pageSetup = {
         fitToPage: true,
         fitToWidth: 1,
         fitToHeight: 0,
-        paperSize: 9, // A4
+        paperSize: 9,
         orientation: 'landscape',
         margins: {
-          left: 0.5,
-          right: 0.5,
-          top: 0.5,
-          bottom: 0.5,
+          left: 0.7,
+          right: 0.7,
+          top: 0.7,
+          bottom: 0.7,
           header: 0.3,
           footer: 0.3,
         },
@@ -2691,14 +2812,410 @@ export class CampaignService {
     return Readable.from(buffer);
   }
 
+  private getFullConversationMetadata(conversationMetadata: any): string {
+    if (!conversationMetadata) {
+      return '--';
+    }
+
+    try {
+      let metadata = conversationMetadata;
+      if (typeof conversationMetadata === 'string') {
+        metadata = JSON.parse(conversationMetadata);
+      }
+
+      if (!metadata.history || !Array.isArray(metadata.history)) {
+        return '--';
+      }
+
+      const convId = metadata.conv_id || 'N/A';
+      const messages = metadata.history;
+
+      const formattedMessages = messages.map((msg: any, index: number) => {
+        const sender = this.getSenderLabel(msg.sender);
+        const time = this.formatDateTime(msg.timestamp);
+        const contentType = msg.contentType || 'TEXT';
+        let content = msg.content || '';
+
+        if (contentType === 'FILE') {
+          try {
+            const fileInfo = JSON.parse(content);
+            content = `[FILE] ${fileInfo.fileName || 'Unknown'} (${fileInfo.fileExtension || ''}) - Size: ${this.formatFileSize(fileInfo.fileSize || 0)}`;
+          } catch (error) {
+            content = '[FILE] - Không thể đọc thông tin file';
+          }
+        }
+
+        const truncatedContent = this.truncateText(content, 100);
+        return `${index + 1}. ${sender} (${time}): ${truncatedContent}`;
+      });
+
+      const totalMessages = messages.length;
+      const customerMsgs = messages.filter(
+        (msg) => msg.sender === 'customer',
+      ).length;
+      const staffMsgs = messages.filter((msg) => msg.sender === 'staff').length;
+      const fileMsgs = messages.filter(
+        (msg) => msg.contentType === 'FILE',
+      ).length;
+
+      const summary = `📞 Cuộc hội thoại ID: ${convId}\n📊 Tổng: ${totalMessages} tin | 👤 KH: ${customerMsgs} | 👨‍💼 NV: ${staffMsgs} | 📎 File: ${fileMsgs}\n\n`;
+
+      return summary + formattedMessages.join('\n');
+    } catch (error) {
+      return JSON.stringify(conversationMetadata, null, 2);
+    }
+  }
+
+  private getSenderLabel(sender: string): string {
+    switch (sender) {
+      case 'customer':
+        return '👤 KH';
+      case 'staff':
+        return '👨‍💼 NV';
+      case 'bot':
+        return '🤖 Bot';
+      default:
+        return `❓ ${sender}`;
+    }
+  }
+
+  private formatFileSize(bytes: number): string {
+    if (bytes === 0) return '0 B';
+
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+  }
+
   private truncateText(text: string, maxLength: number): string {
-    if (!text) return '';
+    if (!text || text === null || text === undefined || text === '') return '';
     return text.length > maxLength
       ? `${text.substring(0, maxLength)}...`
       : text;
   }
 
-  // Helper methods remain the same...
+  private formatDateTime(date: string | Date): string {
+    try {
+      if (!date) return '--';
+
+      let dateObj: Date;
+      if (typeof date === 'string') {
+        if (date.includes('T') && !date.includes('Z') && !date.includes('+')) {
+          dateObj = new Date(date + 'Z');
+        } else {
+          dateObj = new Date(date);
+        }
+      } else {
+        dateObj = date;
+      }
+
+      return new Intl.DateTimeFormat('vi-VN', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      }).format(dateObj);
+    } catch {
+      return '--';
+    }
+  }
+
+  private async getCampaignCustomersWithLogsDetailed(campaignId: string) {
+    const qb = this.campaignCustomerMapRepository
+      .createQueryBuilder('map')
+      .leftJoin('map.campaign_customer', 'customer')
+      .leftJoin('map.campaign', 'campaign')
+      .leftJoin(
+        'campaign_interaction_logs',
+        'log',
+        'log.customer_id = customer.id AND log.campaign_id = map.campaign_id',
+      )
+      .select([
+        'map.campaign_id as campaign_id',
+        'map.customer_id as customer_id',
+        'map.full_name as full_name',
+        'map.salutation as salutation',
+        'map.added_at as added_at',
+        'customer.id as customer_id',
+        'customer.phone_number as phone_number',
+        'customer.created_at as customer_created_at',
+        'log.id as log_id',
+        'log.message_content_sent as message_content_sent',
+        'log.customer_reply_content as customer_reply_content',
+        'log.staff_reply_content as staff_reply_content',
+        'log.status as interaction_status',
+        'log.sent_at as sent_at',
+        'log.customer_replied_at as customer_replied_at',
+        'log.staff_handled_at as staff_handled_at',
+        'log.reminder_metadata as reminder_metadata',
+        'log.conversation_metadata as conversation_metadata',
+        'log.error_details as error_details',
+        'log.attachment_sent as attachment_sent',
+      ])
+      .where('map.campaign_id = :campaignId', { campaignId })
+      .orderBy('map.added_at', 'DESC')
+      .addOrderBy('log.sent_at', 'ASC');
+
+    const rawResults = await qb.getRawMany();
+
+    interface DetailedCustomerLog {
+      log_id: string;
+      message_content_sent: string;
+      customer_reply_content: string;
+      staff_reply_content: string;
+      status: string;
+      sent_at: Date;
+      customer_replied_at: Date;
+      staff_handled_at: Date;
+      reminder_metadata: any;
+      conversation_metadata: any;
+      error_details: any;
+      attachment_sent: any;
+    }
+
+    interface DetailedCustomer {
+      id: string;
+      phone_number: string;
+      full_name: string;
+      salutation: string;
+      created_at: Date;
+      added_at: Date;
+      logs: DetailedCustomerLog[];
+    }
+
+    const groupedData: Record<string, DetailedCustomer> = rawResults.reduce(
+      (acc, row) => {
+        const customerId = row.customer_id;
+        if (!acc[customerId]) {
+          acc[customerId] = {
+            id: row.customer_id,
+            phone_number: row.phone_number,
+            full_name: row.full_name,
+            salutation: row.salutation,
+            created_at: row.customer_created_at,
+            added_at: row.added_at,
+            logs: [],
+          };
+        }
+
+        if (row.log_id) {
+          acc[customerId].logs.push({
+            log_id: row.log_id,
+            message_content_sent: row.message_content_sent,
+            customer_reply_content: row.customer_reply_content,
+            staff_reply_content: row.staff_reply_content,
+            status: row.interaction_status,
+            sent_at: row.sent_at,
+            customer_replied_at: row.customer_replied_at,
+            staff_handled_at: row.staff_handled_at,
+            reminder_metadata: row.reminder_metadata,
+            conversation_metadata: row.conversation_metadata,
+            error_details: row.error_details,
+            attachment_sent: row.attachment_sent,
+          });
+        }
+
+        return acc;
+      },
+      {},
+    );
+
+    const results: any[] = [];
+    for (const customer of Object.values(groupedData)) {
+      if (customer.logs.length > 0) {
+        customer.logs.sort(
+          (a, b) =>
+            new Date(a.sent_at).getTime() - new Date(b.sent_at).getTime(),
+        );
+      }
+
+      const latestLog = customer.logs[customer.logs.length - 1] || null;
+      const interactionCount = this.getInteractionCountFromLogs(customer.logs);
+      const lastInteractionTime = this.getLastInteractionTimeFromLogs(
+        customer.logs,
+      );
+      const messageStats = this.calculateMessageStats(customer.logs);
+
+      results.push({
+        id: customer.id,
+        phone_number: customer.phone_number,
+        full_name: customer.full_name,
+        salutation: customer.salutation,
+        added_at: customer.added_at,
+        created_at: customer.created_at,
+        logs: customer.logs,
+        latestLog: latestLog,
+        totalLogs: customer.logs.length,
+        interactionCount: interactionCount,
+        lastInteractionTime: lastInteractionTime,
+        ...messageStats,
+        sent_at: latestLog?.sent_at || null,
+        lastSentAt: latestLog?.sent_at || null,
+        lastCustomerReplyAt: latestLog?.customer_replied_at || null,
+        lastStaffHandledAt: latestLog?.staff_handled_at || null,
+        lastMessageSent: this.truncateText(
+          latestLog?.message_content_sent || '',
+          100,
+        ),
+        lastCustomerReply: this.truncateText(
+          latestLog?.customer_reply_content || '',
+          100,
+        ),
+        lastStaffReply: this.truncateText(
+          latestLog?.staff_reply_content || '',
+          100,
+        ),
+      });
+    }
+
+    return results;
+  }
+
+  private getInteractionCountFromLogs(logs: any[]): number {
+    let totalInteractions = 0;
+
+    if (logs.length > 0) {
+      const latestLog = logs[logs.length - 1];
+      if (latestLog.conversation_metadata) {
+        try {
+          let metadata = latestLog.conversation_metadata;
+          if (typeof metadata === 'string') {
+            metadata = JSON.parse(metadata);
+          }
+
+          if (metadata.history && Array.isArray(metadata.history)) {
+            totalInteractions = metadata.history.filter(
+              (msg: any) => msg.sender === 'customer',
+            ).length;
+          }
+        } catch (error) {
+          totalInteractions = 0;
+        }
+      }
+    }
+
+    const directReplies = logs.filter(
+      (log) => log.customer_reply_content,
+    ).length;
+    return Math.max(totalInteractions, directReplies);
+  }
+
+  private getLastInteractionTimeFromLogs(logs: any[]): string | null {
+    let lastTime: string | null = null;
+
+    if (logs.length > 0) {
+      const latestLog = logs[logs.length - 1];
+      if (latestLog.conversation_metadata) {
+        try {
+          let metadata = latestLog.conversation_metadata;
+          if (typeof metadata === 'string') {
+            metadata = JSON.parse(metadata);
+          }
+
+          if (metadata.history && Array.isArray(metadata.history)) {
+            const customerMessages = metadata.history.filter(
+              (msg: any) => msg.sender === 'customer',
+            );
+
+            if (customerMessages.length > 0) {
+              const sortedMessages = customerMessages.sort(
+                (a: any, b: any) =>
+                  new Date(b.timestamp).getTime() -
+                  new Date(a.timestamp).getTime(),
+              );
+              lastTime = sortedMessages[0].timestamp;
+            }
+          }
+        } catch (error) {
+          // ignore
+        }
+      }
+    }
+
+    const customerReplyTimes = logs
+      .filter((log) => log.customer_replied_at)
+      .map((log) => log.customer_replied_at)
+      .sort((a, b) => new Date(b).getTime() - new Date(a).getTime());
+
+    if (customerReplyTimes.length > 0) {
+      const latestReplyTime = customerReplyTimes[0];
+      if (
+        !lastTime ||
+        new Date(latestReplyTime).getTime() > new Date(lastTime).getTime()
+      ) {
+        lastTime = latestReplyTime;
+      }
+    }
+
+    return lastTime;
+  }
+
+  private calculateMessageStats(logs: any[]) {
+    let conversationStats = {
+      totalConversationMessages: 0,
+      customerConversationMessages: 0,
+      staffConversationMessages: 0,
+      fileMessages: 0,
+    };
+
+    if (logs.length > 0) {
+      const latestLog = logs[logs.length - 1];
+      if (latestLog.conversation_metadata) {
+        try {
+          let metadata = latestLog.conversation_metadata;
+          if (typeof metadata === 'string') {
+            metadata = JSON.parse(metadata);
+          }
+
+          if (metadata.history && Array.isArray(metadata.history)) {
+            conversationStats.totalConversationMessages =
+              metadata.history.length;
+            conversationStats.customerConversationMessages =
+              metadata.history.filter(
+                (msg: any) => msg.sender === 'customer',
+              ).length;
+            conversationStats.staffConversationMessages =
+              metadata.history.filter(
+                (msg: any) => msg.sender === 'staff',
+              ).length;
+            conversationStats.fileMessages = metadata.history.filter(
+              (msg: any) => msg.contentType === 'FILE',
+            ).length;
+          }
+        } catch (error) {
+          // ignore
+        }
+      }
+    }
+
+    return {
+      totalMessagesSent: logs.filter((log) => log.message_content_sent).length,
+      totalCustomerReplies: logs.filter((log) => log.customer_reply_content)
+        .length,
+      totalStaffReplies: logs.filter((log) => log.staff_reply_content).length,
+      totalReminders: logs.reduce((count, log) => {
+        if (log.reminder_metadata && Array.isArray(log.reminder_metadata)) {
+          return count + log.reminder_metadata.length;
+        }
+        return count;
+      }, 0),
+      hasErrors: logs.some((log) => log.error_details),
+      statusCounts: logs.reduce(
+        (counts, log) => {
+          if (log.status) {
+            counts[log.status] = (counts[log.status] || 0) + 1;
+          }
+          return counts;
+        },
+        {} as Record<string, number>,
+      ),
+      ...conversationStats,
+    };
+  }
+
   private getCampaignTypeLabel(type: string): string {
     const typeLabels = {
       hourly_km: '⏰ Khuyến mãi theo giờ',
@@ -2707,42 +3224,7 @@ export class CampaignService {
       weekly_sp: '🛍️ Sản phẩm hàng tuần',
       weekly_bbg: '💎 BBG hàng tuần',
     };
-    return typeLabels[type] || type;
-  }
-
-  private async getCustomerInteractionCount(
-    customerId: string,
-    campaignId: string,
-  ): Promise<number> {
-    const count = await this.campaignLogRepository
-      .createQueryBuilder('log')
-      .innerJoin('log.campaign', 'campaign')
-      .innerJoin('log.customer', 'customer')
-      .where('campaign.id = :campaignId', { campaignId })
-      .andWhere('customer.id = :customerId', { customerId })
-      .andWhere('log.status IN (:...statuses)', {
-        statuses: ['customer_replied', 'staff_handled'],
-      })
-      .getCount();
-
-    return count;
-  }
-
-  private async getLastCustomerInteractionTime(
-    customerId: string,
-    campaignId: string,
-  ): Promise<string | null> {
-    const lastLog = await this.campaignLogRepository
-      .createQueryBuilder('log')
-      .innerJoin('log.campaign', 'campaign')
-      .innerJoin('log.customer', 'customer')
-      .where('campaign.id = :campaignId', { campaignId })
-      .andWhere('customer.id = :customerId', { customerId })
-      .andWhere('log.customer_replied_at IS NOT NULL')
-      .orderBy('log.customer_replied_at', 'DESC')
-      .getOne();
-
-    return lastLog?.customer_replied_at?.toISOString() || null;
+    return typeLabels[type] || type || '--';
   }
 
   private async getTotalCustomerCount(campaignId: string): Promise<number> {
@@ -2764,7 +3246,7 @@ export class CampaignService {
       completed: '✅ Hoàn thành',
       archived: '📦 Đã lưu trữ',
     };
-    return statusLabels[status] || status;
+    return statusLabels[status] || status || '--';
   }
 
   private getLogStatusLabel(status: string): string {
@@ -2776,21 +3258,7 @@ export class CampaignService {
       staff_handled: '🎯 Đã xử lý',
       reminder_sent: '🔄 Đã nhắc lại',
     };
-    return statusLabels[status] || status;
-  }
-
-  private formatDateTime(date: string | Date): string {
-    try {
-      return new Intl.DateTimeFormat('vi-VN', {
-        day: '2-digit',
-        month: '2-digit',
-        year: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-      }).format(new Date(date));
-    } catch {
-      return 'N/A';
-    }
+    return statusLabels[status] || status || '--';
   }
 
   private async getCampaignCustomerStats(
@@ -2818,7 +3286,6 @@ export class CampaignService {
       result[stat.status] = parseInt(stat.count);
     });
 
-    // Đếm số khách hàng chưa có log (chưa gửi)
     const totalCustomers = await this.getTotalCustomerCount(campaignId);
     const customersWithLogs = Object.values(result).reduce(
       (sum, count) => sum + count,
@@ -2827,90 +3294,5 @@ export class CampaignService {
     result['no_log'] = Math.max(0, totalCustomers - customersWithLogs);
 
     return result;
-  }
-
-  private async getCampaignCustomersWithLogs(campaignId: string) {
-    // Lấy customer maps với proper joins
-    const customerMaps = await this.campaignCustomerMapRepository
-      .createQueryBuilder('map')
-      .leftJoinAndSelect('map.campaign_customer', 'customer')
-      .where('map.campaign_id = :campaignId', { campaignId })
-      .orderBy('map.added_at', 'DESC')
-      .getMany();
-
-    // Lấy logs riêng biệt với proper joins
-    const logs = await this.campaignLogRepository
-      .createQueryBuilder('log')
-      .leftJoinAndSelect('log.staff_handler', 'staff')
-      .leftJoinAndSelect('log.customer', 'customer')
-      .innerJoin('log.campaign', 'campaign')
-      .where('campaign.id = :campaignId', { campaignId })
-      .orderBy('log.sent_at', 'DESC')
-      .getMany();
-
-    // Group logs by customer_id
-    const logsByCustomer: Record<string, any[]> = {};
-    logs.forEach((log) => {
-      const customerId = log.customer.id.toString();
-      if (!logsByCustomer[customerId]) {
-        logsByCustomer[customerId] = [];
-      }
-      logsByCustomer[customerId].push({
-        id: log.id,
-        status: log.status,
-        sent_at: log.sent_at,
-        message_content_sent: log.message_content_sent,
-        customer_reply_content: log.customer_reply_content,
-        customer_replied_at: log.customer_replied_at,
-        staff_reply_content: log.staff_reply_content,
-        staff_handled_at: log.staff_handled_at,
-        error_details: log.error_details,
-        staff_handler: log.staff_handler
-          ? {
-              fullName: log.staff_handler.fullName,
-            }
-          : null,
-      });
-    });
-
-    // ✅ SỬA: Khai báo type explicit để tránh lỗi TypeScript
-    const results: any[] = [];
-
-    for (const map of customerMaps) {
-      const customerId = map.customer_id.toString();
-      const customerLogs = logsByCustomer[customerId] || [];
-
-      // Sắp xếp logs theo thời gian và lấy latest
-      customerLogs.sort(
-        (a, b) =>
-          new Date(b.sent_at || 0).getTime() -
-          new Date(a.sent_at || 0).getTime(),
-      );
-
-      // Lấy interaction count và last interaction time từ database
-      const interactionCount = await this.getCustomerInteractionCount(
-        customerId,
-        campaignId,
-      );
-      const lastInteractionTime = await this.getLastCustomerInteractionTime(
-        customerId,
-        campaignId,
-      );
-
-      results.push({
-        id: customerId,
-        phone_number: map.campaign_customer.phone_number,
-        full_name: map.full_name,
-        salutation: map.salutation,
-        added_at: map.added_at,
-        sent_at: customerLogs[0]?.sent_at || null,
-        latestLog: customerLogs[0] || null,
-        totalInteractions: customerLogs.length,
-        interactionCount: interactionCount,
-        lastInteractionTime: lastInteractionTime,
-      });
-    }
-
-    return results;
   }
 }

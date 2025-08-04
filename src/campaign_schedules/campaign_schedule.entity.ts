@@ -31,10 +31,10 @@ export class CampaignSchedule {
   @Column({ type: 'boolean', default: true })
   is_active: boolean;
 
-  @Column({ type: 'date', nullable: true })
+  @Column({ type: 'datetime', nullable: true })
   start_date?: string;
 
-  @Column({ type: 'date', nullable: true })
+  @Column({ type: 'datetime', nullable: true })
   end_date?: string;
 
   @CreateDateColumn()
