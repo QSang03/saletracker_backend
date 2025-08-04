@@ -25,7 +25,7 @@ export class OrderService {
 
   async findAll(): Promise<Order[]> {
     return this.orderRepository.find({
-      relations: ['details', 'sale_by'],
+      relations: ['details', 'sale_by', 'sale_by.departments'],
     });
   }
 
@@ -42,17 +42,30 @@ export class OrderService {
       .createQueryBuilder('details')
       .leftJoinAndSelect('details.order', 'order')
       .leftJoinAndSelect('details.product', 'product')
-      .leftJoinAndSelect('order.sale_by', 'sale_by');
+      .leftJoinAndSelect('order.sale_by', 'sale_by')
+      .leftJoinAndSelect('sale_by.departments', 'sale_by_departments');
 
     // Phân quyền: admin xem tất cả, manager xem theo phòng, user thường chỉ xem đơn của mình
     if (user) {
-      const roleNames = (user.roles || []).map((r: any) => r.name);
-      if (!roleNames.includes('admin')) {
-        if (roleNames.some((r: string) => r.startsWith('manager-'))) {
+      const roleNames = (user.roles || []).map((r: any) => 
+        typeof r === 'string' 
+          ? r.toLowerCase() 
+          : (r.code || r.name || '').toLowerCase()
+      );
+      const isAdmin = roleNames.includes('admin');
+      
+      if (!isAdmin) {
+        // Kiểm tra role manager với format "manager-{slug-phong-ban}"
+        const isAnyManager = roleNames.some((r: string) => r.startsWith('manager-'));
+        
+        if (isAnyManager) {
           // Manager: xem tất cả đơn của phòng mình
           const deptIds = (user.departments || []).map((d: any) => d.id);
           if (deptIds.length > 0) {
-            queryBuilder.andWhere('sale_by.departmentId IN (:...deptIds)', { deptIds });
+            queryBuilder.andWhere('sale_by_departments.id IN (:...deptIds)', { deptIds });
+          } else {
+            // Manager không có department thì không xem được gì
+            queryBuilder.andWhere('1 = 0');
           }
         } else {
           // User thường: chỉ xem đơn do họ tạo (sale_by)
@@ -113,7 +126,7 @@ export class OrderService {
   async findById(id: number): Promise<Order | null> {
     return this.orderRepository.findOne({
       where: { id },
-      relations: ['details', 'details.product', 'sale_by'],
+      relations: ['details', 'details.product', 'sale_by', 'sale_by.departments'],
     });
   }
 
