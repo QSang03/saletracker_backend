@@ -2,6 +2,7 @@ import {
   Injectable,
   BadRequestException,
   NotFoundException,
+  Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Like, In } from 'typeorm';
@@ -20,10 +21,16 @@ import { CampaignSchedule } from '../campaign_schedules/campaign_schedule.entity
 import { CampaignEmailReport } from '../campaign_email_reports/campaign_email_report.entity';
 import { CampaignCustomer } from '../campaign_customers/campaign_customer.entity';
 import {
+  DepartmentSchedule,
+  ScheduleType,
+  ScheduleStatus,
+} from '../campaign_departments_schedules/campaign_departments_schedules.entity';
+import {
   PromoMessageFlow,
   InitialMessage,
   ReminderMessage,
 } from '../campaign_config/promo_message';
+import { ScheduleCalculatorHelper } from './helpers/schedule-calculator.helper';
 import * as ExcelJS from 'exceljs';
 
 export interface CampaignWithDetails extends Campaign {
@@ -101,6 +108,8 @@ export interface CampaignFilters {
 
 @Injectable()
 export class CampaignService {
+  private readonly logger = new Logger(CampaignService.name);
+
   constructor(
     @InjectRepository(Campaign)
     private readonly campaignRepository: Repository<Campaign>,
@@ -116,7 +125,788 @@ export class CampaignService {
     private readonly campaignEmailReportRepository: Repository<CampaignEmailReport>,
     @InjectRepository(CampaignCustomer)
     private readonly campaignCustomerRepository: Repository<CampaignCustomer>,
+    @InjectRepository(DepartmentSchedule)
+    private readonly departmentScheduleRepository: Repository<DepartmentSchedule>,
   ) {}
+
+  /**
+   * Lấy schedule active của department cho campaign type cụ thể
+   * @param departmentId - ID của department
+   * @param campaignType - Loại campaign
+   * @returns DepartmentSchedule active hoặc null
+   */
+  private async getDepartmentActiveSchedule(
+    departmentId: number,
+    campaignType: CampaignType,
+  ): Promise<DepartmentSchedule | null> {
+    const requiredScheduleType =
+      ScheduleCalculatorHelper.getScheduleTypeByCampaignType(campaignType);
+    this.logger.log(
+      `🔍 [getDepartmentActiveSchedule] Looking for schedule - Department ID: ${departmentId}, Campaign Type: ${campaignType}, Required Schedule Type: ${requiredScheduleType}`,
+    );
+
+    const schedule = await this.departmentScheduleRepository.findOne({
+      where: {
+        department: { id: departmentId },
+        schedule_type: requiredScheduleType,
+        status: ScheduleStatus.ACTIVE,
+      },
+      relations: ['department'],
+    });
+
+    if (schedule) {
+      this.logger.log(
+        `✅ [getDepartmentActiveSchedule] Found active schedule: ${schedule.name} (ID: ${schedule.id})`,
+      );
+    } else {
+      this.logger.warn(
+        `❌ [getDepartmentActiveSchedule] No active schedule found for department ${departmentId} with type ${requiredScheduleType}`,
+      );
+
+      // Let's also check what schedules exist for this department
+      const allSchedules = await this.departmentScheduleRepository.find({
+        where: { department: { id: departmentId } },
+        relations: ['department'],
+      });
+      this.logger.debug(
+        `🔍 [getDepartmentActiveSchedule] All schedules for department ${departmentId}:`,
+        allSchedules.map((s) => ({
+          id: s.id,
+          name: s.name,
+          type: s.schedule_type,
+          status: s.status,
+        })),
+      );
+    }
+
+    return schedule;
+  }
+
+  /**
+   * Validate campaign schedule config nằm trong department schedule
+   * @param campaignScheduleConfig - Cấu hình schedule của campaign
+   * @param departmentScheduleConfig - Cấu hình schedule của department
+   * @param scheduleType - Loại schedule
+   * @returns true nếu campaign schedule nằm trong department schedule
+   */
+  private validateCampaignScheduleAgainstDepartment(
+    campaignScheduleConfig: any,
+    departmentScheduleConfig: any,
+    scheduleType: ScheduleType,
+  ): boolean {
+    try {
+      if (scheduleType === ScheduleType.DAILY_DATES) {
+        return this.validateDailyDatesConfig(
+          campaignScheduleConfig,
+          departmentScheduleConfig,
+        );
+      } else {
+        // For hourly_slots department schedule, check campaign config type
+        if (campaignScheduleConfig.type === 'weekly') {
+          return this.validateWeeklyScheduleConfig(
+            campaignScheduleConfig,
+            departmentScheduleConfig,
+          );
+        } else if (campaignScheduleConfig.type === 'hourly') {
+          return this.validateHourlyScheduleConfig(
+            campaignScheduleConfig,
+            departmentScheduleConfig,
+          );
+        } else if (campaignScheduleConfig.type === '3_day') {
+          return this.validate3DayScheduleConfig(
+            campaignScheduleConfig,
+            departmentScheduleConfig,
+          );
+        } else {
+          return this.validateHourlySlotsConfig(
+            campaignScheduleConfig,
+            departmentScheduleConfig,
+          );
+        }
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Error validating campaign schedule config: ${error.message}`,
+      );
+      return false;
+    }
+  }
+
+  /**
+   * Validate daily dates config
+   * @param campaignConfig - Campaign schedule config
+   * @param departmentConfig - Department schedule config
+   * @returns true nếu hợp lệ
+   */
+  private validateDailyDatesConfig(
+    campaignConfig: any,
+    departmentConfig: any,
+  ): boolean {
+    // For daily_dates department schedule, campaign config format doesn't matter
+    // The campaign will run within the dates specified in department schedule
+    // We just need to make sure department has valid dates
+    if (!departmentConfig?.dates || !Array.isArray(departmentConfig.dates)) {
+      this.logger.warn(`Department schedule has no valid dates configuration`);
+      return false;
+    }
+
+    // Check if there are any valid dates for today or future
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const hasValidDates = departmentConfig.dates.some((deptDate: any) => {
+      const year = deptDate.year || today.getFullYear();
+      const month = deptDate.month || today.getMonth() + 1;
+      const dateObj = new Date(year, month - 1, deptDate.day_of_month);
+      return dateObj >= today;
+    });
+
+    if (!hasValidDates) {
+      this.logger.warn(`Department schedule has no valid future dates`);
+      return false;
+    }
+
+    this.logger.log(
+      `✅ Daily dates validation passed - campaign can run within department schedule dates`
+    );
+    return true;
+  }
+
+  /**
+   * Validate hourly slots config
+   * @param campaignConfig - Campaign schedule config
+   * @param departmentConfig - Department schedule config
+   * @returns true nếu hợp lệ
+   */
+  private validateHourlySlotsConfig(
+    campaignConfig: any,
+    departmentConfig: any,
+  ): boolean {
+    if (!campaignConfig?.slots || !departmentConfig?.slots) {
+      return false;
+    }
+
+    // Check mỗi slot trong campaign config có nằm trong department config không
+    for (const campaignSlot of campaignConfig.slots) {
+      const found = departmentConfig.slots.some((deptSlot: any) => {
+        // Check day_of_week trùng khớp
+        if (deptSlot.day_of_week !== campaignSlot.day_of_week) {
+          return false;
+        }
+
+        // Check time range của campaign có nằm trong department không
+        const deptStart = this.parseTime(deptSlot.start_time);
+        const deptEnd = this.parseTime(deptSlot.end_time);
+        const campaignStart = this.parseTime(campaignSlot.start_time);
+        const campaignEnd = this.parseTime(campaignSlot.end_time);
+
+        return campaignStart >= deptStart && campaignEnd <= deptEnd;
+      });
+
+      if (!found) {
+        this.logger.warn(
+          `Campaign slot day_of_week: ${campaignSlot.day_of_week}, ` +
+            `time: ${campaignSlot.start_time}-${campaignSlot.end_time} ` +
+            `not found within department schedule slots`,
+        );
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  /**
+   * Validate weekly schedule config against hourly slots
+   * @param campaignConfig - Campaign weekly schedule config
+   * @param departmentConfig - Department hourly slots config
+   * @returns true nếu hợp lệ
+   */
+  private validateWeeklyScheduleConfig(
+    campaignConfig: any,
+    departmentConfig: any,
+  ): boolean {
+    if (!campaignConfig?.day_of_week || !campaignConfig?.time_of_day || !departmentConfig?.slots) {
+      this.logger.warn(`Missing required fields in weekly schedule config`);
+      return false;
+    }
+
+    const campaignDay = campaignConfig.day_of_week;
+    const campaignTime = campaignConfig.time_of_day;
+
+    // Tìm slot trong department schedule có cùng day_of_week và time nằm trong range
+    const found = departmentConfig.slots.some((deptSlot: any) => {
+      // Check day_of_week trùng khớp
+      if (deptSlot.day_of_week !== campaignDay) {
+        return false;
+      }
+
+      // Check thời gian campaign có nằm trong slot range không
+      const deptStart = this.parseTime(deptSlot.start_time);
+      const deptEnd = this.parseTime(deptSlot.end_time);
+      const campaignTimeParsed = this.parseTime(campaignTime);
+
+      // Campaign time phải nằm trong khoảng [start_time, end_time)
+      const isTimeValid = campaignTimeParsed >= deptStart && campaignTimeParsed < deptEnd;
+      
+      if (isTimeValid) {
+        this.logger.log(
+          `✅ Weekly schedule valid: day_of_week=${campaignDay}, time=${campaignTime} ` +
+          `found in slot ${deptSlot.start_time}-${deptSlot.end_time}`
+        );
+      }
+      
+      return isTimeValid;
+    });
+
+    if (!found) {
+      this.logger.warn(
+        `❌ Weekly schedule invalid: day_of_week=${campaignDay}, time=${campaignTime} ` +
+        `not found within any department schedule slots`
+      );
+      return false;
+    }
+
+    return true;
+  }
+
+  /**
+   * Validate hourly schedule config against hourly slots
+   * @param campaignConfig - Campaign hourly schedule config
+   * @param departmentConfig - Department hourly slots config
+   * @returns true nếu hợp lệ
+   */
+  private validateHourlyScheduleConfig(
+    campaignConfig: any,
+    departmentConfig: any,
+  ): boolean {
+    if (!campaignConfig?.start_time || !campaignConfig?.end_time || !departmentConfig?.slots) {
+      this.logger.warn(`Missing required fields in hourly schedule config`);
+      return false;
+    }
+
+    const campaignStart = campaignConfig.start_time;
+    const campaignEnd = campaignConfig.end_time;
+    const campaignStartParsed = this.parseTime(campaignStart);
+    const campaignEndParsed = this.parseTime(campaignEnd);
+
+    // Tìm slots trong department schedule mà campaign time range có thể fit vào
+    const validSlots = departmentConfig.slots.filter((deptSlot: any) => {
+      const deptStart = this.parseTime(deptSlot.start_time);
+      const deptEnd = this.parseTime(deptSlot.end_time);
+
+      // Campaign time range phải nằm hoàn toàn trong department slot
+      return campaignStartParsed >= deptStart && campaignEndParsed <= deptEnd;
+    });
+
+    if (validSlots.length === 0) {
+      this.logger.warn(
+        `❌ Hourly schedule invalid: time range ${campaignStart}-${campaignEnd} ` +
+        `not found within any department schedule slots`
+      );
+      return false;
+    }
+
+    this.logger.log(
+      `✅ Hourly schedule valid: time range ${campaignStart}-${campaignEnd} ` +
+      `found in ${validSlots.length} department slot(s)`
+    );
+    return true;
+  }
+
+  /**
+   * Validate 3-day schedule config against hourly slots
+   * @param campaignConfig - Campaign 3-day schedule config
+   * @param departmentConfig - Department hourly slots config
+   * @returns true nếu hợp lệ
+   */
+  private validate3DayScheduleConfig(
+    campaignConfig: any,
+    departmentConfig: any,
+  ): boolean {
+    if (!campaignConfig?.days_of_week || !campaignConfig?.time_of_day || !departmentConfig?.slots) {
+      this.logger.warn(`Missing required fields in 3-day schedule config`);
+      return false;
+    }
+
+    const campaignDays = campaignConfig.days_of_week;
+    const campaignTime = campaignConfig.time_of_day;
+    const campaignTimeParsed = this.parseTime(campaignTime);
+
+    // Kiểm tra từng ngày trong days_of_week
+    for (const dayOfWeek of campaignDays) {
+      const found = departmentConfig.slots.some((deptSlot: any) => {
+        // Check day_of_week trùng khớp
+        if (deptSlot.day_of_week !== dayOfWeek) {
+          return false;
+        }
+
+        // Check thời gian campaign có nằm trong slot range không
+        const deptStart = this.parseTime(deptSlot.start_time);
+        const deptEnd = this.parseTime(deptSlot.end_time);
+
+        // Campaign time phải nằm trong khoảng [start_time, end_time)
+        return campaignTimeParsed >= deptStart && campaignTimeParsed < deptEnd;
+      });
+
+      if (!found) {
+        this.logger.warn(
+          `❌ 3-day schedule invalid: day_of_week=${dayOfWeek}, time=${campaignTime} ` +
+          `not found within any department schedule slots`
+        );
+        return false;
+      }
+    }
+
+    this.logger.log(
+      `✅ 3-day schedule valid: days=[${campaignDays.join(',')}], time=${campaignTime} ` +
+      `all days found in department schedule slots`
+    );
+    return true;
+  }
+
+  /**
+   * Parse time string to minutes for comparison
+   * @param timeStr - Time string in format "HH:MM"
+   * @returns Number of minutes since midnight
+   */
+  private parseTime(timeStr: string): number {
+    const [hours, minutes] = timeStr.split(':').map(Number);
+    return hours * 60 + minutes;
+  }
+
+  /**
+   * Setup campaign schedule dates (không validate thời gian hiện tại)
+   * Dùng khi chuyển DRAFT → SCHEDULED
+   * @param campaign - Campaign cần setup
+   */
+  private async setupCampaignScheduleDates(campaign: Campaign): Promise<void> {
+    this.logger.log(
+      `🔧 [setupCampaignScheduleDates] Setting up schedule for campaign ${campaign.id}`,
+    );
+    this.logger.log(
+      `🔧 [setupCampaignScheduleDates] Campaign Type: ${campaign.campaign_type}, Department ID: ${campaign.department.id}`,
+    );
+
+    // 1. Get department schedule
+    const departmentSchedule = await this.getDepartmentActiveSchedule(
+      campaign.department.id,
+      campaign.campaign_type,
+    );
+
+    if (!departmentSchedule) {
+      const requiredScheduleType =
+        ScheduleCalculatorHelper.getScheduleTypeByCampaignType(
+          campaign.campaign_type,
+        );
+      this.logger.error(
+        `❌ [setupCampaignScheduleDates] No active schedule found for department ${campaign.department.id}, required type: ${requiredScheduleType}`,
+      );
+      throw new Error('chưa có lịch hoạt động');
+    }
+
+    this.logger.log(
+      `✅ [setupCampaignScheduleDates] Found schedule: ${departmentSchedule.name} (ID: ${departmentSchedule.id})`,
+    );
+    this.logger.log(
+      `✅ [setupCampaignScheduleDates] Schedule Type: ${departmentSchedule.schedule_type}, Status: ${departmentSchedule.status}`,
+    );
+    this.logger.debug(
+      `🔧 [setupCampaignScheduleDates] Schedule Config: ${JSON.stringify(departmentSchedule.schedule_config, null, 2)}`,
+    );
+
+    // 2. Validate campaign schedule config nằm trong department schedule
+    const campaignSchedule = await this.campaignScheduleRepository.findOne({
+      where: { campaign: { id: campaign.id } },
+    });
+
+    let shouldSetNullDates = false; // Flag để xác định có set null dates không
+
+    if (campaignSchedule?.schedule_config) {
+      this.logger.log(
+        `🔍 [setupCampaignScheduleDates] Validating campaign schedule config against department schedule...`,
+      );
+
+      const isValidConfig = this.validateCampaignScheduleAgainstDepartment(
+        campaignSchedule.schedule_config,
+        departmentSchedule.schedule_config,
+        departmentSchedule.schedule_type,
+      );
+
+      if (!isValidConfig) {
+        this.logger.warn(
+          `⚠️ [setupCampaignScheduleDates] Campaign schedule config is not within department schedule limits - will set dates to null`,
+        );
+        shouldSetNullDates = true;
+      } else {
+        this.logger.log(
+          `✅ [setupCampaignScheduleDates] Campaign schedule config is valid within department schedule`,
+        );
+      }
+    } else {
+      this.logger.log(
+        `⚠️ [setupCampaignScheduleDates] No campaign schedule config found - using department schedule directly`,
+      );
+    }
+
+    // 3. Calculate date range hoặc set null dates
+    if (shouldSetNullDates) {
+      // Set dates thành null nếu campaign schedule không hợp lệ
+      this.logger.log(
+        `🚫 [setupCampaignScheduleDates] Setting dates to null due to invalid schedule config`,
+      );
+      await this.updateCampaignScheduleDates(campaign.id, null, null);
+      this.logger.log(
+        `✅ [setupCampaignScheduleDates] Campaign schedule dates set to null successfully`,
+      );
+    } else {
+      // Tính toán dates bình thường
+      let dateRange: { startDate: Date; endDate: Date };
+
+      try {
+        if (departmentSchedule.schedule_type === ScheduleType.DAILY_DATES) {
+          this.logger.log(
+            `📅 [setupCampaignScheduleDates] Calculating daily dates range...`,
+          );
+          dateRange = ScheduleCalculatorHelper.calculateDateRangeFromDailyDates(
+            departmentSchedule.schedule_config as any,
+          );
+        } else {
+          this.logger.log(
+            `⏰ [setupCampaignScheduleDates] Calculating hourly slots range...`,
+          );
+          dateRange =
+            ScheduleCalculatorHelper.calculateDateRangeFromHourlySlots(
+              departmentSchedule.schedule_config as any,
+            );
+        }
+        this.logger.log(
+          `✅ [setupCampaignScheduleDates] Date range calculated:`,
+        );
+        this.logger.log(`   Start: ${dateRange.startDate.toISOString()}`);
+        this.logger.log(`   End: ${dateRange.endDate.toISOString()}`);
+
+        // Update campaign schedule với calculated dates
+        this.logger.log(
+          `💾 [setupCampaignScheduleDates] Updating campaign schedule dates...`,
+        );
+        await this.updateCampaignScheduleDates(
+          campaign.id,
+          dateRange.startDate,
+          dateRange.endDate,
+        );
+        this.logger.log(
+          `✅ [setupCampaignScheduleDates] Campaign schedule dates updated successfully`,
+        );
+      } catch (error) {
+        this.logger.error(
+          `❌ [setupCampaignScheduleDates] Error calculating date range:`,
+          error,
+        );
+        throw new Error('Lỗi tính toán thời gian');
+      }
+    }
+  }
+
+  /**
+   * Validate thời gian hiện tại có trong schedule không
+   * Dùng khi chuyển SCHEDULED → RUNNING
+   * @param campaign - Campaign cần validate
+   */
+  private async validateCurrentTimeInSchedule(
+    campaign: Campaign,
+  ): Promise<void> {
+    this.logger.log(
+      `⏱️ [validateCurrentTimeInSchedule] Validating current time for campaign ${campaign.id}`,
+    );
+
+    // Get existing campaign schedule
+    const campaignSchedule = await this.campaignScheduleRepository.findOne({
+      where: { campaign: { id: campaign.id } },
+    });
+
+    if (
+      !campaignSchedule ||
+      !campaignSchedule.start_date ||
+      !campaignSchedule.end_date
+    ) {
+      throw new Error('chưa có lịch trình');
+    }
+
+    const startDate = new Date(campaignSchedule.start_date);
+    const endDate = new Date(campaignSchedule.end_date);
+    const now = new Date();
+
+    this.logger.log(
+      `⏱️ [validateCurrentTimeInSchedule] Time validation: ${now.toISOString()} should be between ${startDate.toISOString()} and ${endDate.toISOString()}`,
+    );
+
+    if (now < startDate || now > endDate) {
+      this.logger.error(
+        `❌ [validateCurrentTimeInSchedule] Time validation failed - outside allowed range`,
+      );
+      throw new Error('không trong khung thời gian');
+    }
+
+    this.logger.log(
+      `✅ [validateCurrentTimeInSchedule] Time validation passed`,
+    );
+
+    // Check concurrent campaigns
+    await this.validateNoConcurrentCampaigns(
+      campaign.department.id,
+      campaign.id,
+      {
+        startDate,
+        endDate,
+      },
+    );
+  }
+
+  /**
+   * Validate và setup campaign schedule khi chuyển sang RUNNING
+   * @param campaign - Campaign cần validate
+   */
+  private async validateAndSetupCampaignSchedule(
+    campaign: Campaign,
+  ): Promise<void> {
+
+    // 1. Get department schedule
+    const departmentSchedule = await this.getDepartmentActiveSchedule(
+      campaign.department.id,
+      campaign.campaign_type,
+    );
+
+    if (!departmentSchedule) {
+      const requiredScheduleType =
+        ScheduleCalculatorHelper.getScheduleTypeByCampaignType(
+          campaign.campaign_type,
+        );
+      throw new BadRequestException(
+        `Phòng ban "${campaign.department.name}" chưa có lịch hoạt động loại "${requiredScheduleType}" cho chiến dịch loại "${campaign.campaign_type}". ` +
+          `Vui lòng tạo lịch hoạt động trước khi chạy chiến dịch.`,
+      );
+    }
+
+    // 2. Calculate date range từ schedule config
+    let dateRange: { startDate: Date; endDate: Date };
+
+    try {
+      if (departmentSchedule.schedule_type === ScheduleType.DAILY_DATES) {
+        dateRange = ScheduleCalculatorHelper.calculateDateRangeFromDailyDates(
+          departmentSchedule.schedule_config as any,
+        );
+      } else {
+        dateRange = ScheduleCalculatorHelper.calculateDateRangeFromHourlySlots(
+          departmentSchedule.schedule_config as any,
+        );
+      }
+    } catch (error) {
+      throw new BadRequestException(
+        `Lỗi khi tính toán thời gian từ cấu hình lịch: ${error.message}`,
+      );
+    }
+
+    const now = new Date();
+
+    if (now < dateRange.startDate || now > dateRange.endDate) {
+      const formatOptions: Intl.DateTimeFormatOptions = {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        timeZone: 'Asia/Ho_Chi_Minh',
+      };
+
+      throw new BadRequestException(
+        `Chiến dịch chỉ có thể chạy trong khung thời gian từ ` +
+          `${dateRange.startDate.toLocaleString('vi-VN', formatOptions)} ` +
+          `đến ${dateRange.endDate.toLocaleString('vi-VN', formatOptions)}. ` +
+          `Thời gian hiện tại: ${now.toLocaleString('vi-VN', formatOptions)}`,
+      );
+    }
+
+    // 4. Check xem có campaign khác của cùng department đang chạy trong cùng time slot không
+    await this.validateNoConcurrentCampaigns(
+      campaign.department.id,
+      campaign.id,
+      dateRange,
+    );
+
+    await this.updateCampaignScheduleDates(
+      campaign.id,
+      dateRange.startDate,
+      dateRange.endDate,
+    );
+  }
+
+  /**
+   * Validate không có campaign khác chạy cùng lúc
+   * @param departmentId - ID department
+   * @param currentCampaignId - ID campaign hiện tại (để exclude)
+   * @param dateRange - Khung thời gian cần check
+   */
+  private async validateNoConcurrentCampaigns(
+    departmentId: number,
+    currentCampaignId: string,
+    dateRange: { startDate: Date; endDate: Date },
+  ): Promise<void> {
+    const concurrentCampaigns = await this.campaignRepository
+      .createQueryBuilder('campaign')
+      .leftJoin('campaign.department', 'department')
+      .leftJoin(
+        'campaign_schedules',
+        'schedule',
+        'schedule.campaign_id = campaign.id',
+      )
+      .where('campaign.id != :currentId', { currentId: currentCampaignId })
+      .andWhere('department.id = :departmentId', { departmentId })
+      .andWhere('campaign.status IN (:...statuses)', {
+        statuses: [CampaignStatus.RUNNING, CampaignStatus.SCHEDULED],
+      })
+      .andWhere(
+        '(schedule.start_date <= :endDate AND schedule.end_date >= :startDate)',
+        {
+          startDate: dateRange.startDate.toISOString(),
+          endDate: dateRange.endDate.toISOString(),
+        },
+      )
+      .getMany();
+
+    if (concurrentCampaigns.length > 0) {
+      throw new Error('conflicts');
+    }
+  }
+
+  /**
+   * Reset start_date và end_date cho campaign schedule về null
+   * Dùng khi chuyển SCHEDULED → DRAFT
+   * @param campaignId - ID campaign
+   */
+  private async resetCampaignScheduleDates(campaignId: string): Promise<void> {
+
+    await this.updateCampaignScheduleDates(campaignId, null, null);
+    
+  }
+
+  /**
+   * Cập nhật start_date và end_date cho campaign schedule
+   * @param campaignId - ID campaign
+   * @param startDate - Ngày bắt đầu
+   * @param endDate - Ngày kết thúc
+   */
+  private async updateCampaignScheduleDates(
+    campaignId: string,
+    startDate: Date | null,
+    endDate: Date | null,
+  ): Promise<void> {
+    const existingSchedule = await this.campaignScheduleRepository.findOne({
+      where: { campaign: { id: campaignId } },
+      relations: ['campaign'],
+    });
+
+    if (existingSchedule) {
+      await this.campaignScheduleRepository
+        .createQueryBuilder()
+        .update()
+        .set({
+          start_date: startDate ? startDate.toISOString() : () => 'NULL',
+          end_date: endDate ? endDate.toISOString() : () => 'NULL',
+        })
+        .where('campaign_id = :campaignId', { campaignId })
+        .execute();
+
+      // Verify the update
+      const verifySchedule = await this.campaignScheduleRepository.findOne({
+        where: { campaign: { id: campaignId } },
+      });
+    }
+  }
+
+  /**
+   * Debug method để kiểm tra campaign schedule info
+   */
+  async debugCampaignSchedule(campaignId: string, user: User): Promise<any> {
+    const campaign = await this.checkCampaignAccess(campaignId, user);
+    // 2. Get department schedule
+    const departmentSchedule = await this.getDepartmentActiveSchedule(
+      campaign.department.id,
+      campaign.campaign_type,
+    );
+
+    let scheduleInfo: any = null;
+    if (departmentSchedule) {
+      scheduleInfo = {
+        id: departmentSchedule.id,
+        name: departmentSchedule.name,
+        type: departmentSchedule.schedule_type,
+        status: departmentSchedule.status,
+        config: departmentSchedule.schedule_config,
+      };
+    }
+
+    // 3. Get campaign schedule
+    const campaignSchedule = await this.campaignScheduleRepository.findOne({
+      where: { campaign: { id: campaignId } },
+      relations: ['campaign'],
+    });
+
+    let campaignScheduleInfo: any = null;
+    if (campaignSchedule) {
+      campaignScheduleInfo = {
+        id: campaignSchedule.id,
+        start_date: campaignSchedule.start_date,
+        end_date: campaignSchedule.end_date,
+        is_active: campaignSchedule.is_active,
+        schedule_config: campaignSchedule.schedule_config,
+      };
+    }
+
+    // 4. Calculate what the dates should be
+    let calculatedDates: any = null;
+    if (departmentSchedule) {
+      try {
+        if (departmentSchedule.schedule_type === ScheduleType.DAILY_DATES) {
+          calculatedDates =
+            ScheduleCalculatorHelper.calculateDateRangeFromDailyDates(
+              departmentSchedule.schedule_config as any,
+            );
+        } else {
+          calculatedDates =
+            ScheduleCalculatorHelper.calculateDateRangeFromHourlySlots(
+              departmentSchedule.schedule_config as any,
+            );
+        }
+        calculatedDates = {
+          startDate: calculatedDates.startDate.toISOString(),
+          endDate: calculatedDates.endDate.toISOString(),
+        };
+      } catch (error) {
+        calculatedDates = { error: error.message };
+      }
+    }
+
+    return {
+      campaign: {
+        id: campaign.id,
+        name: campaign.name,
+        type: campaign.campaign_type,
+        status: campaign.status,
+        department: {
+          id: campaign.department?.id,
+          name: campaign.department?.name,
+        },
+      },
+      departmentSchedule: scheduleInfo,
+      campaignSchedule: campaignScheduleInfo,
+      calculatedDates: calculatedDates,
+      currentTime: new Date().toISOString(),
+      requiredScheduleType:
+        ScheduleCalculatorHelper.getScheduleTypeByCampaignType(
+          campaign.campaign_type,
+        ),
+    };
+  }
 
   private async checkCampaignAccess(
     campaignId: string,
@@ -1128,18 +1918,103 @@ export class CampaignService {
     id: string,
     status: CampaignStatus,
     user: User,
-  ): Promise<CampaignWithDetails> {
-    // Kiểm tra quyền truy cập và lấy campaign
-    const campaign = await this.checkCampaignAccess(id, user);
+  ): Promise<{ success: boolean; error?: string; data?: CampaignWithDetails }> {
+    this.logger.log(
+      `🔄 [updateStatus] Starting status update for campaign ${id}: ${status}`,
+    );
+    this.logger.log(
+      `🔄 [updateStatus] User: ${user.username}, Department IDs: ${user.departments?.map((d) => d.id).join(',')}`,
+    );
 
-    // Validate status transitions
-    this.validateStatusTransition(campaign.status, status);
+    try {
+      // Kiểm tra quyền truy cập và lấy campaign
+      const campaign = await this.checkCampaignAccess(id, user);
+      this.logger.log(
+        `✅ [updateStatus] Campaign found: ${campaign.name}, Type: ${campaign.campaign_type}, Current Status: ${campaign.status}`,
+      );
+      this.logger.log(
+        `✅ [updateStatus] Campaign Department: ${campaign.department?.name} (ID: ${campaign.department?.id})`,
+      );
 
-    // Update campaign status
-    await this.campaignRepository.update(id, { status });
+      // Validate status transitions
+      this.validateStatusTransition(campaign.status, status);
+      this.logger.log(
+        `✅ [updateStatus] Status transition validated: ${campaign.status} → ${status}`,
+      );
 
-    // Return updated campaign with full details
-    return await this.findOne(id, user);
+      // ✨ THÊM LOGIC SCHEDULE
+      if (
+        campaign.status === CampaignStatus.DRAFT &&
+        status === CampaignStatus.SCHEDULED
+      ) {
+        this.logger.log(
+          `🚀 [updateStatus] Triggering schedule setup for DRAFT → SCHEDULED`,
+        );
+        await this.setupCampaignScheduleDates(campaign);
+        this.logger.log(
+          `✅ [updateStatus] Schedule setup completed successfully`,
+        );
+      } else if (
+        campaign.status === CampaignStatus.SCHEDULED &&
+        status === CampaignStatus.RUNNING
+      ) {
+        this.logger.log(
+          `🚀 [updateStatus] Triggering schedule validation for SCHEDULED → RUNNING`,
+        );
+        await this.validateCurrentTimeInSchedule(campaign);
+        this.logger.log(
+          `✅ [updateStatus] Schedule validation completed successfully`,
+        );
+      } else if (
+        campaign.status === CampaignStatus.SCHEDULED &&
+        status === CampaignStatus.DRAFT
+      ) {
+        this.logger.log(
+          `🚀 [updateStatus] Triggering schedule reset for SCHEDULED → DRAFT`,
+        );
+        await this.resetCampaignScheduleDates(campaign.id);
+        this.logger.log(
+          `✅ [updateStatus] Schedule reset completed successfully`,
+        );
+      } else {
+        this.logger.log(
+          `ℹ️ [updateStatus] Skipping schedule operations for ${campaign.status} → ${status}`,
+        );
+      }
+
+      // Update campaign status
+      await this.campaignRepository.update(id, { status });
+      this.logger.log(`✅ [updateStatus] Campaign status updated to ${status}`);
+
+      // Return updated campaign with full details
+      const result = await this.findOne(id, user);
+      this.logger.log(`✅ [updateStatus] Returning updated campaign details`);
+
+      return { success: true, data: result };
+    } catch (error) {
+      this.logger.error(
+        `❌ [updateStatus] Error: ${error.message}`,
+        error.stack,
+      );
+
+      // Trả về error ngắn gọn cho frontend
+      let errorMessage = 'Không thể cập nhật trạng thái chiến dịch';
+
+      if (error.message.includes('không nằm trong quy định')) {
+        errorMessage =
+          'Thời gian hoạt động không nằm trong quy định lịch hoạt động của phòng ban';
+      } else if (error.message.includes('chưa có lịch hoạt động')) {
+        errorMessage = 'Phòng ban chưa có lịch hoạt động phù hợp';
+      } else if (error.message.includes('không trong khung thời gian')) {
+        errorMessage = 'Hiện tại không trong khung thời gian được phép';
+      } else if (error.message.includes('conflicts')) {
+        errorMessage = 'Có chiến dịch khác đang chạy cùng thời gian';
+      } else if (error.message.includes('Trạng thái không hợp lệ')) {
+        errorMessage = 'Không thể chuyển trạng thái này';
+      }
+
+      return { success: false, error: errorMessage };
+    }
   }
 
   async delete(id: string, user: User): Promise<void> {
@@ -1157,15 +2032,19 @@ export class CampaignService {
     await this.campaignRepository.softRemove(campaign);
   }
 
-  async archive(id: string, user: User): Promise<CampaignWithDetails> {
+  async archive(
+    id: string,
+    user: User,
+  ): Promise<{ success: boolean; error?: string; data?: CampaignWithDetails }> {
     // Kiểm tra quyền truy cập trước khi archive
     const campaign = await this.checkCampaignAccess(id, user);
 
     // ✅ CHỈ CHO PHÉP ARCHIVE CAMPAIGN Ở TRẠNG THÁI COMPLETED
     if (campaign.status !== CampaignStatus.COMPLETED) {
-      throw new BadRequestException(
-        `Không thể lưu trữ chiến dịch ở trạng thái ${campaign.status}. Chỉ có thể lưu trữ chiến dịch đã hoàn thành.`,
-      );
+      return {
+        success: false,
+        error: 'Chỉ có thể lưu trữ chiến dịch đã hoàn thành',
+      };
     }
 
     return this.updateStatus(id, CampaignStatus.ARCHIVED, user);
@@ -1186,10 +2065,7 @@ export class CampaignService {
     };
 
     if (!validTransitions[currentStatus]?.includes(newStatus)) {
-      throw new BadRequestException(
-        `Không thể chuyển từ trạng thái ${currentStatus} sang ${newStatus}. ` +
-          `Bot Python sẽ tự động xử lý một số chuyển đổi trạng thái.`,
-      );
+      throw new Error('Trạng thái không hợp lệ');
     }
   }
 

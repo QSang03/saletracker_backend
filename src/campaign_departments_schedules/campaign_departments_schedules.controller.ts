@@ -19,12 +19,14 @@ import { QueryDepartmentScheduleDto } from './dto/query-department-schedule.dto'
 import { ScheduleStatus } from './campaign_departments_schedules.entity';
 import { AuthGuard } from '@nestjs/passport';
 import { PermissionGuard } from 'src/common/guards/permission.guard';
+import { ScheduleStatusUpdaterService } from '../cronjobs/schedule-status-updater.service';
 
 @Controller('campaign-departments-schedules')
 @UseGuards(AuthGuard('jwt'), PermissionGuard)
 export class CampaignDepartmentsSchedulesController {
   constructor(
     private readonly campaignDepartmentsSchedulesService: CampaignDepartmentsSchedulesService,
+    private readonly scheduleStatusUpdaterService: ScheduleStatusUpdaterService,
   ) {}
 
   @Post()
@@ -101,5 +103,19 @@ export class CampaignDepartmentsSchedulesController {
   async remove(@Param('id') id: string) {
     await this.campaignDepartmentsSchedulesService.remove(id);
     return { message: 'Department schedule deleted successfully' };
+  }
+
+  @Post('update-statuses')
+  async manualUpdateStatuses() {
+    const result = await this.scheduleStatusUpdaterService.manualUpdateScheduleStatuses();
+    return {
+      message: 'Schedule statuses updated successfully',
+      ...result
+    };
+  }
+
+  @Get('status-stats')
+  async getStatusStats() {
+    return this.scheduleStatusUpdaterService.getScheduleStatusStats();
   }
 }

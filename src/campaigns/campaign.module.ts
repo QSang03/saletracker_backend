@@ -9,6 +9,7 @@ import { CampaignContent } from 'src/campaign_contents/campaign_content.entity';
 import { CampaignSchedule } from 'src/campaign_schedules/campaign_schedule.entity';
 import { CampaignEmailReport } from 'src/campaign_email_reports/campaign_email_report.entity';
 import { CampaignCustomer } from 'src/campaign_customers/campaign_customer.entity';
+import { DepartmentSchedule } from '../campaign_departments_schedules/campaign_departments_schedules.entity';
 
 @Module({
   imports: [TypeOrmModule.forFeature([
@@ -18,7 +19,8 @@ import { CampaignCustomer } from 'src/campaign_customers/campaign_customer.entit
     CampaignEmailReport,
     CampaignCustomerMap, 
     CampaignCustomer,
-    CampaignInteractionLog
+    CampaignInteractionLog,
+    DepartmentSchedule
   ])],
   providers: [CampaignService],
   controllers: [CampaignController],

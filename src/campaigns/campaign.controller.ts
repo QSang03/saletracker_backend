@@ -152,9 +152,9 @@ export class CampaignController {
     @Param('id') id: string,
     @Body('status') status: CampaignStatus,
     @Req() req,
-  ): Promise<CampaignWithDetails> {
+  ): Promise<{ success: boolean; error?: string; data?: CampaignWithDetails }> {
     if (!Object.values(CampaignStatus).includes(status)) {
-      throw new BadRequestException('Trạng thái không hợp lệ');
+      return { success: false, error: 'Trạng thái không hợp lệ' };
     }
     return this.campaignService.updateStatus(id, status, req.user);
   }
@@ -164,7 +164,7 @@ export class CampaignController {
   async archive(
     @Param('id') id: string,
     @Req() req,
-  ): Promise<CampaignWithDetails> {
+  ): Promise<{ success: boolean; error?: string; data?: CampaignWithDetails }> {
     return this.campaignService.archive(id, req.user);
   }
 
@@ -232,5 +232,11 @@ export class CampaignController {
       req.user,
       sentDate,
     );
+  }
+
+  @Get(':id/debug-schedule')
+  @Permission('chien-dich', 'read')
+  async debugSchedule(@Param('id') id: string, @Req() req: any) {
+    return this.campaignService.debugCampaignSchedule(id, req.user);
   }
 }
