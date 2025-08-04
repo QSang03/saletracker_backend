@@ -972,52 +972,11 @@ export class CampaignService {
     const isAdmin = roleNames.includes('admin');
     const isManager = roleNames.includes('manager-chien-dich');
 
+    // ✅ FIXED: Simplified query to avoid duplicate rows
     const qb = this.campaignRepository
       .createQueryBuilder('campaign')
       .leftJoinAndSelect('campaign.created_by', 'created_by')
       .leftJoinAndSelect('campaign.department', 'department')
-      .leftJoin(
-        'campaign_contents',
-        'content',
-        'content.campaign_id = campaign.id',
-      )
-      .leftJoin(
-        'campaign_schedules',
-        'schedule',
-        'schedule.campaign_id = campaign.id',
-      )
-      .leftJoin(
-        'campaign_email_reports',
-        'email_report',
-        'email_report.campaign_id = campaign.id',
-      )
-      .leftJoin(
-        'campaign_customer_map',
-        'customer_map',
-        'customer_map.campaign_id = campaign.id',
-      )
-      .addSelect('content.messages', 'content_messages')
-      .addSelect('schedule.schedule_config', 'schedule_config')
-      .addSelect('schedule.start_date', 'schedule_start_date')
-      .addSelect('schedule.end_date', 'schedule_end_date')
-      .addSelect('email_report.recipient_to', 'email_recipient_to')
-      .addSelect('email_report.recipients_cc', 'email_recipients_cc')
-      .addSelect(
-        'email_report.report_interval_minutes',
-        'email_report_interval_minutes',
-      )
-      .addSelect(
-        'email_report.stop_sending_at_time',
-        'email_stop_sending_at_time',
-      )
-      .addSelect('email_report.is_active', 'email_is_active')
-      .addSelect(
-        'email_report.send_when_campaign_completed',
-        'email_send_when_campaign_completed',
-      )
-      .addSelect('COUNT(DISTINCT customer_map.customer_id)', 'customer_count')
-      .groupBy('campaign.id, created_by.id, department.id')
-      // ✅ THÊM: Loại trừ campaign có status = "archived"
       .where('campaign.status != :archivedStatus', {
         archivedStatus: 'archived',
       });
@@ -1125,6 +1084,9 @@ export class CampaignService {
       }
     }
 
+    // ✅ FIXED: Get total count before pagination
+    const total = await qb.getCount();
+
     // Pagination
     const page = Math.max(1, parseInt(query.page) || 1);
     const pageSize = Math.max(1, parseInt(query.pageSize) || 10);
@@ -1133,136 +1095,61 @@ export class CampaignService {
     qb.skip(skip).take(pageSize);
     qb.orderBy('campaign.created_at', 'DESC');
 
-    // THÊM DEBUG: In ra SQL query
-    const sql = qb.getQuery();
-    const parameters = qb.getParameters();
+    // ✅ FIXED: Get campaigns without complex joins first
+    const campaigns = await qb.getMany();
+    const campaignIds = campaigns.map(c => c.id);
 
-    const rawResults = await qb.getRawMany();
-
-    // ✅ SỬA: Count query with same fixes
-    const countQb = this.campaignRepository
-      .createQueryBuilder('campaign')
-      .leftJoin('campaign.department', 'department')
-      .leftJoin('campaign.created_by', 'created_by')
-      // ✅ THÊM: Loại trừ campaign có status = "archived" cho count query
-      .where('campaign.status != :archivedStatus', {
-        archivedStatus: 'archived',
-      });
-
-    // Apply same user-based filtering for count
-    if (isAdmin) {
-      // Admin: lấy tất cả
-    } else if (isManager) {
-      const userDepartment = user.departments?.find(
-        (dept: any) => dept.server_ip && dept.server_ip.trim() !== '',
-      );
-
-      if (userDepartment) {
-        countQb.andWhere('campaign.department_id = :deptId', {
-          deptId: userDepartment.id,
-        });
-      } else {
-        countQb.andWhere('1 = 0');
-      }
-    } else {
-      countQb.andWhere('campaign.created_by_id = :userId', {
-        userId: user.id,
-      });
+    if (campaignIds.length === 0) {
+      const stats = await this.getStats(user);
+      return { data: [], total: 0, stats };
     }
 
-    // Apply same filters for count
-    if (query.search && query.search.trim()) {
-      countQb.andWhere('campaign.name LIKE :search', {
-        search: `%${query.search.trim()}%`,
-      });
-    }
+    // ✅ FIXED: Get related data separately to avoid duplicates
+    const [contents, schedules, emailReports, customerCounts] = await Promise.all([
+      // Get campaign contents
+      this.campaignContentRepository
+        .createQueryBuilder('content')
+        .leftJoinAndSelect('content.campaign', 'campaign')
+        .where('content.campaign_id IN (:...campaignIds)', { campaignIds })
+        .getMany(),
+      
+      // Get campaign schedules
+      this.campaignScheduleRepository
+        .createQueryBuilder('schedule')
+        .leftJoinAndSelect('schedule.campaign', 'campaign')
+        .where('schedule.campaign_id IN (:...campaignIds)', { campaignIds })
+        .getMany(),
+      
+      // Get email reports
+      this.campaignEmailReportRepository
+        .createQueryBuilder('email')
+        .leftJoinAndSelect('email.campaign', 'campaign')
+        .where('email.campaign_id IN (:...campaignIds)', { campaignIds })
+        .getMany(),
+      
+      // Get customer counts
+      this.campaignCustomerMapRepository
+        .createQueryBuilder('map')
+        .select('map.campaign_id', 'campaign_id')
+        .addSelect('COUNT(DISTINCT map.customer_id)', 'customer_count')
+        .where('map.campaign_id IN (:...campaignIds)', { campaignIds })
+        .groupBy('map.campaign_id')
+        .getRawMany()
+    ]);
 
-    // Campaign types filter for count - Handle string/array
-    if (query.campaign_types) {
-      const typeInput = Array.isArray(query.campaign_types)
-        ? query.campaign_types
-        : [query.campaign_types];
-      const validTypes = typeInput.filter((t) => t && String(t).trim());
+    // ✅ FIXED: Get customers for campaigns
+    const allCustomerMaps = await this.campaignCustomerMapRepository
+      .createQueryBuilder('map')
+      .leftJoinAndSelect('map.campaign_customer', 'customer')
+      .where('map.campaign_id IN (:...campaignIds)', { campaignIds })
+      .getMany();
 
-      if (validTypes.length > 0) {
-        countQb.andWhere('campaign.campaign_type IN (:...campaignTypes)', {
-          campaignTypes: validTypes,
-        });
-      }
-    }
-
-    // Status filter for count - Handle string/array
-    if (query.statuses) {
-      const statusInput = Array.isArray(query.statuses)
-        ? query.statuses
-        : [query.statuses];
-      const validStatuses = statusInput.filter((s) => s && String(s).trim());
-
-      if (validStatuses.length > 0) {
-        countQb.andWhere('campaign.status IN (:...statuses)', {
-          statuses: validStatuses,
-        });
-      }
-    }
-
-    if (query.singleDate) {
-      const date = new Date(query.singleDate);
-      const startOfDay = new Date(date.setHours(0, 0, 0, 0));
-      const endOfDay = new Date(date.setHours(23, 59, 59, 999));
-      countQb.andWhere('campaign.created_at BETWEEN :startDate AND :endDate', {
-        startDate: startOfDay,
-        endDate: endOfDay,
-      });
-    }
-
-    if (query.departments && isAdmin) {
-      const departmentInput = Array.isArray(query.departments)
-        ? query.departments
-        : [query.departments];
-
-      const departmentIds = departmentInput
-        .map((id) => parseInt(String(id), 10))
-        .filter((id) => !isNaN(id));
-
-      if (departmentIds.length > 0) {
-        countQb.andWhere('department.id IN (:...departments)', {
-          departments: departmentIds,
-        });
-      }
-    }
-
-    // Employee filter for count - Handle string/array
-    if (query.employees) {
-      if (isAdmin || isManager) {
-        const employeeInput = Array.isArray(query.employees)
-          ? query.employees
-          : [query.employees];
-        const employeeIds = employeeInput
-          .map((id) => parseInt(String(id), 10))
-          .filter((id) => !isNaN(id));
-
-        if (employeeIds.length > 0) {
-          countQb.andWhere('campaign.created_by_id IN (:...employees)', {
-            employees: employeeIds,
-          });
-        }
-      }
-    }
-
-    const total = await countQb.getCount();
-
-    // Rest of the method remains the same...
-    const campaignIds = rawResults.map((result) => result.campaign_id);
-
-    const allCustomerMaps =
-      campaignIds.length > 0
-        ? await this.campaignCustomerMapRepository
-            .createQueryBuilder('map')
-            .leftJoinAndSelect('map.campaign_customer', 'customer')
-            .where('map.campaign_id IN (:...campaignIds)', { campaignIds })
-            .getMany()
-        : [];
-
+    // ✅ FIXED: Create lookup maps using proper entity structure
+    const contentMap = new Map(contents.map(c => [c.campaign.id, c]));
+    const scheduleMap = new Map(schedules.map(s => [s.campaign.id, s]));
+    const emailMap = new Map(emailReports.map(e => [e.campaign.id, e]));
+    const countMap = new Map(customerCounts.map(c => [c.campaign_id, parseInt(c.customer_count)]));
+    
     const customersByCampaign = allCustomerMaps.reduce(
       (acc, map) => {
         if (!acc[map.campaign_id]) acc[map.campaign_id] = [];
@@ -1273,18 +1160,21 @@ export class CampaignService {
         });
         return acc;
       },
-      {} as Record<
-        string,
-        Array<{
-          phone_number: string;
-          full_name: string;
-          salutation?: string;
-        }>
-      >,
+      {} as Record<string, Array<{
+        phone_number: string;
+        full_name: string;
+        salutation?: string;
+      }>>,
     );
 
-    const data: CampaignWithDetails[] = rawResults.map((result: any) => {
-      const messages = result.content_messages || [];
+    // ✅ FIXED: Build response data
+    const data: CampaignWithDetails[] = campaigns.map((campaign: Campaign) => {
+      const content = contentMap.get(campaign.id);
+      const schedule = scheduleMap.get(campaign.id);
+      const emailReport = emailMap.get(campaign.id);
+      const customerCount = countMap.get(campaign.id) || 0;
+
+      const messages = content?.messages || [];
       const initialMessage = Array.isArray(messages)
         ? messages.find((msg) => msg.type === 'initial') || messages[0]
         : null;
@@ -1293,92 +1183,36 @@ export class CampaignService {
         ? messages.filter((msg) => msg.type === 'reminder')
         : [];
 
-      const scheduleConfig = result.schedule_config || {};
+      const scheduleConfig = schedule?.schedule_config || {};
 
       let start_date: string | undefined = undefined;
       let end_date: string | undefined = undefined;
 
-      if (result.schedule_start_date) {
-        start_date =
-          result.schedule_start_date instanceof Date
-            ? result.schedule_start_date.toISOString()
-            : result.schedule_start_date;
+      if (schedule?.start_date) {
+        start_date = new Date(schedule.start_date).toISOString();
       }
-
-      if (result.schedule_end_date) {
-        end_date =
-          result.schedule_end_date instanceof Date
-            ? result.schedule_end_date.toISOString()
-            : result.schedule_end_date;
+      if (schedule?.end_date) {
+        end_date = new Date(schedule.end_date).toISOString();
       }
 
       return {
-        id: result.campaign_id,
-        name: result.campaign_name,
-        campaign_type: result.campaign_campaign_type,
-        status: result.campaign_status,
-        send_method: result.campaign_send_method,
-        created_at: result.campaign_created_at,
-        updated_at: result.campaign_updated_at,
-        department: {
-          id: result.department_id,
-          name: result.department_name,
-          slug: result.department_slug,
-          server_ip: result.department_server_ip,
-          createdAt: result.department_createdAt,
-          updatedAt: result.department_updatedAt,
-          deletedAt: result.department_deletedAt,
-        },
-        created_by: {
-          id: result.created_by_id,
-          username: result.created_by_username,
-          fullName: result.created_by_fullName,
-          email: result.created_by_email,
-          isBlock: result.created_by_isBlock,
-          employeeCode: result.created_by_employeeCode,
-          status: result.created_by_status,
-          lastLogin: result.created_by_lastLogin,
-          nickName: result.created_by_nickName,
-          deletedAt: result.created_by_deletedAt,
-          createdAt: result.created_by_createdAt,
-          updatedAt: result.created_by_updatedAt,
-          zaloLinkStatus: result.created_by_zaloLinkStatus,
-          zaloName: result.created_by_zaloName,
-          avatarZalo: result.created_by_avatarZalo,
-          zaloGender: result.created_by_zaloGender,
-          lastOnlineAt: result.created_by_lastOnlineAt,
-        } as any,
-        customer_count: customersByCampaign[result.campaign_id]?.length || 0,
-        messages: {
-          type: 'initial' as const,
-          text: initialMessage?.text || '',
-          attachment: initialMessage?.attachment || null,
-        },
-        schedule_config: {
-          type: scheduleConfig.type || 'hourly',
-          start_time: scheduleConfig.start_time,
-          end_time: scheduleConfig.end_time,
-          remind_after_minutes: scheduleConfig.remind_after_minutes,
-          days_of_week: scheduleConfig.days_of_week,
-          day_of_week: scheduleConfig.day_of_week,
-          time_of_day: scheduleConfig.time_of_day,
-        },
-        reminders: reminderMessages.map((reminder: any) => ({
-          content: reminder.text,
-          minutes: reminder.offset_minutes,
+        ...campaign,
+        customer_count: customerCount,
+        messages: initialMessage || { type: 'initial', text: '', attachment: null },
+        schedule_config: scheduleConfig,
+        reminders: reminderMessages.map((msg: any) => ({
+          content: msg.text || '',
+          minutes: msg.remind_after_minutes || 0,
         })),
-        email_reports: result.email_recipient_to
-          ? {
-              recipients_to: result.email_recipient_to,
-              recipients_cc: result.email_recipients_cc,
-              report_interval_minutes: result.email_report_interval_minutes,
-              stop_sending_at_time: result.email_stop_sending_at_time,
-              is_active: result.email_is_active,
-              send_when_campaign_completed:
-                result.email_send_when_campaign_completed,
-            }
-          : undefined,
-        customers: customersByCampaign[result.campaign_id] || [],
+        email_reports: emailReport ? {
+          recipients_to: emailReport.recipient_to || '',
+          recipients_cc: emailReport.recipients_cc || [],
+          report_interval_minutes: emailReport.report_interval_minutes,
+          stop_sending_at_time: emailReport.stop_sending_at_time,
+          is_active: emailReport.is_active || false,
+          send_when_campaign_completed: emailReport.send_when_campaign_completed || false,
+        } : undefined,
+        customers: customersByCampaign[campaign.id] || [],
         start_date,
         end_date,
       } as CampaignWithDetails;
