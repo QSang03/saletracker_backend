@@ -55,7 +55,7 @@ export class OrderService {
             queryBuilder.andWhere('sale_by.departmentId IN (:...deptIds)', { deptIds });
           }
         } else {
-          // User thường: chỉ xem đơn của mình
+          // User thường: chỉ xem đơn do họ tạo (sale_by)
           queryBuilder.andWhere('order.sale_by = :userId', { userId: user.id });
         }
       }
@@ -89,11 +89,6 @@ export class OrderService {
     // Filter by employee (sale_by)
     if (employee) {
       queryBuilder.andWhere('sale_by.id = :employee', { employee });
-    }
-
-    // Filter by userId (người dùng tạo đơn hàng)
-    if (user) {
-      queryBuilder.andWhere('order.user_id = :userId', { userId: user.id });
     }
 
     // Order by order created_at desc
