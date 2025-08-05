@@ -28,7 +28,12 @@ export class OrderController {
     @Query('search') search?: string,
     @Query('status') status?: string,
     @Query('date') date?: string,
+    @Query('dateRange') dateRange?: string,
     @Query('employee') employee?: string,
+    @Query('employees') employees?: string,
+    @Query('departments') departments?: string,
+    @Query('products') products?: string,
+    @Query('warningLevel') warningLevel?: string,
     @Req() req?: any,
   ): Promise<{
     data: OrderDetail[];
@@ -41,6 +46,17 @@ export class OrderController {
       100,
       Math.max(1, parseInt(pageSize, 10) || 10),
     );
+    
+    // Parse dateRange if provided
+    let parsedDateRange;
+    if (dateRange) {
+      try {
+        parsedDateRange = JSON.parse(dateRange);
+      } catch (e) {
+        parsedDateRange = undefined;
+      }
+    }
+    
     // Truyền cả user xuống service để phân quyền
     return this.orderService.findAllPaginated({
       page: pageNum,
@@ -48,14 +64,35 @@ export class OrderController {
       search: search?.trim(),
       status,
       date,
+      dateRange: parsedDateRange,
       employee,
+      employees,
+      departments,
+      products,
+      warningLevel,
       user: req.user,
     });
   }
 
+  @Get('all')
+  async findAllWithPermission(@Req() req?: any): Promise<Order[]> {
+    return this.orderService.findAllWithPermission(req.user);
+  }
+
+  @Get('filter-options')
+  async getFilterOptions(@Req() req?: any): Promise<{
+    departments: Array<{ value: number; label: string; users: Array<{ value: number; label: string }> }>;
+    products: Array<{ value: number; label: string }>;
+  }> {
+    return this.orderService.getFilterOptions(req.user);
+  }
+
   @Get(':id')
-  async findById(@Param('id', ParseIntPipe) id: number): Promise<Order | null> {
-    return this.orderService.findById(id);
+  async findById(
+    @Param('id', ParseIntPipe) id: number,
+    @Req() req?: any,
+  ): Promise<Order | null> {
+    return this.orderService.findByIdWithPermission(id, req.user);
   }
 
   @Post()
