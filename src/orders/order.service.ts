@@ -324,7 +324,12 @@ export class OrderService {
     if (departments) {
       const departmentIds = departments.split(',').map(id => parseInt(id.trim(), 10)).filter(id => !isNaN(id));
       if (departmentIds.length > 0) {
-        queryBuilder.andWhere('sale_by_departments.id IN (:...departmentIds)', { departmentIds });
+      // Lọc theo phòng ban có server_ip hợp lệ (không null, không rỗng)
+      queryBuilder.andWhere(`
+        sale_by_departments.id IN (:...departmentIds)
+        AND sale_by_departments.server_ip IS NOT NULL
+        AND TRIM(sale_by_departments.server_ip) <> ''
+      `, { departmentIds });
       }
     }
 
