@@ -100,15 +100,8 @@ export class AuthController {
   @Post('refresh')
   async refresh(@Body() refreshTokenDto: RefreshTokenDto) {
     try {
-      console.log('🔍 [AuthController] Refresh token request received');
-      console.log('🔍 [AuthController] Request body keys:', Object.keys(refreshTokenDto));
       
       const result = await this.authService.refreshToken(refreshTokenDto);
-      
-      console.log('✅ [AuthController] Refresh token successful');
-      console.log('🔍 [AuthController] Response keys:', Object.keys(result || {}));
-      console.log('🔍 [AuthController] Has access_token:', !!result?.access_token);
-      console.log('🔍 [AuthController] Has refresh_token:', !!result?.refresh_token);
       
       return result;
     } catch (error) {

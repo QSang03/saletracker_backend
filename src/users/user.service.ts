@@ -918,18 +918,8 @@ export class UserService {
       });
 
       if (!user) {
-        console.log('🔍 [UserService] User not found or deleted:', id);
         return null;
       }
-
-      console.log('✅ [UserService] User found with details:', {
-        id: user.id,
-        username: user.username,
-        hasRefreshToken: !!user.refreshToken,
-        isBlocked: user.isBlock,
-        rolesCount: user.roles?.length || 0,
-        departmentsCount: user.departments?.length || 0,
-      });
 
       return user;
     } catch (error) {

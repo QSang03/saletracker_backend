@@ -142,13 +142,15 @@ export class AuthService {
         expiresIn: '30d',
       },
     );
-    // Lưu refresh token vào DB
+    
+    // Lưu refresh token vào DB (trim để tránh whitespace issues)
+    const cleanRefreshToken = refreshToken.trim();
+    console.log('🔍 [Login] Saving refresh token, length:', cleanRefreshToken.length);
+    
     await this.usersService.updateUser(updatedUser.id, {
       status: UserStatus.ACTIVE,
-      refreshToken,
+      refreshToken: cleanRefreshToken,
     });
-
-    console.log('✅ [Login] Successfully updated user with new refresh token');
 
     this.wsGateway.emitToAll('user_login', {
       userId: updatedUser.id,
@@ -186,26 +188,21 @@ export class AuthService {
     try {
       console.log('🔍 [RefreshToken] Starting refresh process...');
       
-      // Verify refresh token
-      const payload: any = this.jwtService.verify(refreshToken, {
+      // Clean the incoming token
+      const cleanRefreshToken = refreshToken.trim();
+      console.log('🔍 [RefreshToken] Cleaned token length:', cleanRefreshToken.length);
+      
+      const payload: any = this.jwtService.verify(cleanRefreshToken, {
         secret:
           this.configService.get<string>('JWT_REFRESH_SECRET') ||
           this.configService.get<string>('JWT_SECRET'),
       });
 
-      console.log('✅ [RefreshToken] Token verification successful for user:', payload.sub);
 
       // Load user with full details including roles, permissions AND refresh token
       const user = await this.usersService.findOneWithDetailsAndRefreshToken(
         payload.sub,
       );
-
-      console.log('🔍 [RefreshToken] User found:', user ? 'YES' : 'NO');
-      if (user) {
-        console.log('🔍 [RefreshToken] User refresh token exists:', user.refreshToken ? 'YES' : 'NO');
-        console.log('🔍 [RefreshToken] Tokens match:', user.refreshToken === refreshToken ? 'YES' : 'NO');
-        console.log('🔍 [RefreshToken] User blocked:', user.isBlock ? 'YES' : 'NO');
-      }
 
       if (!user) {
         console.error('❌ [RefreshToken] User not found with ID:', payload.sub);
@@ -217,10 +214,34 @@ export class AuthService {
         throw new ForbiddenException('Invalid refresh token - no token stored');
       }
 
-      if (user.refreshToken !== refreshToken) {
+      // Safe token comparison with trimming
+      const storedToken = user.refreshToken.trim();
+      const providedToken = cleanRefreshToken; // Already trimmed
+      
+      console.log('🔍 [RefreshToken] User found: YES');
+      console.log('🔍 [RefreshToken] User refresh token exists: YES');
+      console.log('🔍 [RefreshToken] Stored token length:', storedToken.length);
+      console.log('🔍 [RefreshToken] Provided token length:', providedToken.length);
+      console.log('🔍 [RefreshToken] Tokens match:', storedToken === providedToken ? 'YES' : 'NO');
+
+      if (storedToken !== providedToken) {
         console.error('❌ [RefreshToken] Token mismatch');
-        console.error('❌ [RefreshToken] Stored token (first 50 chars):', user.refreshToken.substring(0, 50));
-        console.error('❌ [RefreshToken] Provided token (first 50 chars):', refreshToken.substring(0, 50));
+        console.error('❌ [RefreshToken] Stored token (first 100 chars):', storedToken.substring(0, 100));
+        console.error('❌ [RefreshToken] Provided token (first 100 chars):', providedToken.substring(0, 100));
+        console.error('❌ [RefreshToken] Stored token (last 50 chars):', storedToken.substring(-50));
+        console.error('❌ [RefreshToken] Provided token (last 50 chars):', providedToken.substring(-50));
+        
+        // Character-by-character comparison for debugging
+        console.error('❌ [RefreshToken] Character-by-character comparison (first 20):');
+        for (let i = 0; i < Math.min(20, storedToken.length, providedToken.length); i++) {
+          const storedChar = storedToken.charCodeAt(i);
+          const providedChar = providedToken.charCodeAt(i);
+          if (storedChar !== providedChar) {
+            console.error(`❌ [RefreshToken] Diff at pos ${i}: stored='${storedToken[i]}' (${storedChar}) vs provided='${providedToken[i]}' (${providedChar})`);
+            break;
+          }
+        }
+        
         throw new ForbiddenException('Invalid refresh token - token mismatch');
       }
 
@@ -317,16 +338,10 @@ export class AuthService {
         refreshToken: newRefreshToken,
       });
 
-      console.log('✅ [RefreshToken] New tokens generated successfully');
-      console.log('🔍 [RefreshToken] Access token length:', accessToken.length);
-      console.log('🔍 [RefreshToken] Refresh token length:', newRefreshToken.length);
-
       const response = {
         access_token: accessToken,
         refresh_token: newRefreshToken,
       };
-
-      console.log('🔍 [RefreshToken] Returning response with keys:', Object.keys(response));
       return response;
     } catch (e) {
       console.error('❌ [RefreshToken] Refresh token error:', e);
@@ -363,14 +378,11 @@ export class AuthService {
 
   // Logout method - clear refresh token
   async logout(user: any) {
-    console.log('🔍 [Logout] Starting logout process for user:', user.id);
     
     const updatedUser = await this.usersService.updateUser(user.id, {
       status: UserStatus.INACTIVE,
       refreshToken: undefined,
     });
-
-    console.log('✅ [Logout] Successfully cleared refresh token for user:', user.id);
 
     this.wsGateway.emitToAll('user_logout', {
       userId: updatedUser.id,
@@ -382,12 +394,8 @@ export class AuthService {
 
   // Cleanup expired tokens - utility method
   async cleanupExpiredTokens() {
-    console.log('🔍 [Cleanup] Starting cleanup of expired refresh tokens...');
     
     try {
-      // This would require custom logic to identify expired tokens
-      // For now, we'll just log the attempt
-      console.log('✅ [Cleanup] Expired token cleanup completed');
     } catch (error) {
       console.error('❌ [Cleanup] Error during token cleanup:', error.message);
     }

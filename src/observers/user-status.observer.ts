@@ -25,15 +25,9 @@ export class UserStatusObserver {
   // Lắng nghe event user status thay đổi
   @OnEvent('user.status.changed')
   async handleUserStatusChange(event: UserStatusChangeEvent) {
-    console.log(
-      `👁️ [UserStatusObserver] User ${event.userId} status changed from ${event.oldStatus} to ${event.newStatus}`,
-    );
 
     // Nếu status được cập nhật thành 2 (lỗi liên kết Zalo)
     if (event.newStatus === 2) {
-      console.log(
-        `🔄 [UserStatusObserver] Requesting token refresh for user ${event.userId} due to Zalo link error`,
-      );
 
       // Gửi socket event đến frontend yêu cầu refresh token
       this.userGateway.server
