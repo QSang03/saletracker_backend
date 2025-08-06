@@ -23,10 +23,17 @@ export class DepartmentController {
   constructor(private readonly departmentService: DepartmentService) {}
 
   @Get()
-  async findAll(@Req() req: Request) {
-    // Lấy user từ request (đã qua AuthGuard)
+  async findAll(
+    @Req() req: Request,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+  ) {
     const user = req.user;
-    return this.departmentService.findAll(user);
+    return this.departmentService.findAll(
+      user,
+      page ? parseInt(page, 10) : 1,
+      pageSize ? parseInt(pageSize, 10) : 10,
+    );
   }
 
   @Get('for-filter')

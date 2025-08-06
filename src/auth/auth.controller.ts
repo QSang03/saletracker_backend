@@ -25,16 +25,6 @@ export class AuthController {
 
       const result = await this.authService.login(user);
 
-      // Debug: Log response trước khi trả về
-      console.log('✅ [Login] Response to be sent:', {
-        hasAccessToken: !!result.access_token,
-        hasRefreshToken: !!result.refresh_token,
-        accessTokenLength: result.access_token?.length,
-        refreshTokenLength: result.refresh_token?.length,
-        accessTokenStart: result.access_token?.substring(0, 100) + '...',
-        timestamp: new Date().toISOString(),
-      });
-
       return result;
     } catch (error) {
       console.error('❌ [Login] Login failed:', error.message);

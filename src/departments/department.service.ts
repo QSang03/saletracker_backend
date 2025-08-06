@@ -28,7 +28,7 @@ export class DepartmentService {
   async findAll(
     user: any,
     page = 1,
-    pageSize = 20,
+    pageSize = 10,
   ): Promise<{
     data: {
       id: number;
@@ -42,7 +42,9 @@ export class DepartmentService {
     page: number;
     pageSize: number;
   }> {
-    if (getRoleNames(user).includes('admin')) {
+    const roleNames = getRoleNames(user);
+
+    if (roleNames.includes('admin')) {
       const [departments, total] = await this.departmentRepo.findAndCount({
         relations: { users: { roles: true } },
         order: { id: 'ASC' },
@@ -80,18 +82,39 @@ export class DepartmentService {
       };
     }
 
-    if (getRoleNames(user).includes('manager')) {
+    if (roleNames.includes('manager')) {
       if (!user.departments || !Array.isArray(user.departments))
         return { data: [], total: 0, page, pageSize };
-      const [departments, total] = await this.departmentRepo.findAndCount({
-        where: { id: In(user.departments.map((d) => d.id)) },
+
+      // Lấy danh sách id phòng ban manager được xem, đảm bảo đã sort ASC
+      const departmentIds = user.departments
+        .map((d) => d.id)
+        .sort((a, b) => a - b);
+      const total = departmentIds.length;
+
+      // Phân trang trên mảng id
+      const pagedIds = departmentIds.slice(
+        (page - 1) * pageSize,
+        (page - 1) * pageSize + pageSize,
+      );
+
+      if (pagedIds.length === 0) {
+        return { data: [], total, page, pageSize };
+      }
+
+      // Query các phòng ban theo id đã phân trang
+      const departments = await this.departmentRepo.find({
+        where: { id: In(pagedIds) },
         relations: { users: { roles: true } },
-        order: { id: 'ASC' },
-        skip: (page - 1) * pageSize,
-        take: pageSize,
       });
+
+      // Đảm bảo thứ tự đúng như pagedIds và loại bỏ undefined
+      const departmentsSorted = pagedIds
+        .map((id) => departments.find((dep) => dep.id === id))
+        .filter((dep): dep is Department => !!dep);
+
       return {
-        data: departments.map((dep) => {
+        data: departmentsSorted.map((dep) => {
           const manager = dep.users?.find((u) =>
             getRoleNames(u).some((r) => r === `manager-${dep.slug}`),
           );
@@ -368,13 +391,19 @@ export class DepartmentService {
 
   // Lấy tất cả phòng ban active và có server_ip (không null, không rỗng)
   async findAllActiveWithServerIp(): Promise<Department[]> {
-    return this.departmentRepo.find({
-      where: {
-        deletedAt: IsNull(),
-        server_ip: Not(IsNull()),
-      },
-      order: { id: 'ASC' },
-    }).then(departments => departments.filter(dep => dep.server_ip && dep.server_ip.trim() !== ''));
+    return this.departmentRepo
+      .find({
+        where: {
+          deletedAt: IsNull(),
+          server_ip: Not(IsNull()),
+        },
+        order: { id: 'ASC' },
+      })
+      .then((departments) =>
+        departments.filter(
+          (dep) => dep.server_ip && dep.server_ip.trim() !== '',
+        ),
+      );
   }
 
   async getDepartmentsForFilter(user: User) {
