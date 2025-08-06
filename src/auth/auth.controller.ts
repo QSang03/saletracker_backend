@@ -99,7 +99,15 @@ export class AuthController {
 
   @Post('refresh')
   async refresh(@Body() refreshTokenDto: RefreshTokenDto) {
-    return this.authService.refreshToken(refreshTokenDto);
+    try {
+      console.log('🔍 [AuthController] Refresh token request received');
+      const result = await this.authService.refreshToken(refreshTokenDto);
+      console.log('✅ [AuthController] Refresh token successful');
+      return result;
+    } catch (error) {
+      console.error('❌ [AuthController] Refresh token failed:', error.message);
+      throw error; // Re-throw to let NestJS handle the response
+    }
   }
 
   @Post('refresh-after-update')

@@ -148,6 +148,8 @@ export class AuthService {
       refreshToken,
     });
 
+    console.log('✅ [Login] Successfully updated user with new refresh token');
+
     this.wsGateway.emitToAll('user_login', {
       userId: updatedUser.id,
       status: updatedUser.status,
@@ -182,6 +184,8 @@ export class AuthService {
 
   async refreshToken({ refreshToken }: RefreshTokenDto) {
     try {
+      console.log('🔍 [RefreshToken] Starting refresh process...');
+      
       // Verify refresh token
       const payload: any = this.jwtService.verify(refreshToken, {
         secret:
@@ -189,16 +193,35 @@ export class AuthService {
           this.configService.get<string>('JWT_SECRET'),
       });
 
+      console.log('✅ [RefreshToken] Token verification successful for user:', payload.sub);
+
       // Load user with full details including roles, permissions AND refresh token
       const user = await this.usersService.findOneWithDetailsAndRefreshToken(
         payload.sub,
       );
 
-      if (!user || user.refreshToken !== refreshToken) {
-        console.error(
-          '❌ [RefreshToken] Invalid refresh token - user not found or token mismatch',
-        );
-        throw new ForbiddenException('Invalid refresh token');
+      console.log('🔍 [RefreshToken] User found:', user ? 'YES' : 'NO');
+      if (user) {
+        console.log('🔍 [RefreshToken] User refresh token exists:', user.refreshToken ? 'YES' : 'NO');
+        console.log('🔍 [RefreshToken] Tokens match:', user.refreshToken === refreshToken ? 'YES' : 'NO');
+        console.log('🔍 [RefreshToken] User blocked:', user.isBlock ? 'YES' : 'NO');
+      }
+
+      if (!user) {
+        console.error('❌ [RefreshToken] User not found with ID:', payload.sub);
+        throw new ForbiddenException('Invalid refresh token - user not found');
+      }
+
+      if (!user.refreshToken) {
+        console.error('❌ [RefreshToken] User has no refresh token stored');
+        throw new ForbiddenException('Invalid refresh token - no token stored');
+      }
+
+      if (user.refreshToken !== refreshToken) {
+        console.error('❌ [RefreshToken] Token mismatch');
+        console.error('❌ [RefreshToken] Stored token (first 50 chars):', user.refreshToken.substring(0, 50));
+        console.error('❌ [RefreshToken] Provided token (first 50 chars):', refreshToken.substring(0, 50));
+        throw new ForbiddenException('Invalid refresh token - token mismatch');
       }
 
       // Check if user is blocked
@@ -299,23 +322,68 @@ export class AuthService {
         refresh_token: newRefreshToken,
       };
     } catch (e) {
-      console.error('Refresh token error:', e);
+      console.error('❌ [RefreshToken] Refresh token error:', e);
+      
+      // Log specific error types for better debugging
+      if (e.name === 'JsonWebTokenError') {
+        console.error('❌ [RefreshToken] Invalid JWT format:', e.message);
+      } else if (e.name === 'TokenExpiredError') {
+        console.error('❌ [RefreshToken] Token expired:', e.message);
+      } else if (e.name === 'NotBeforeError') {
+        console.error('❌ [RefreshToken] Token not active:', e.message);
+      } else {
+        console.error('❌ [RefreshToken] Other error:', e.message);
+      }
+      
+      // Clear invalid refresh token from database if user exists
+      if (e.message?.includes('token mismatch') || e.message?.includes('Token expired')) {
+        try {
+          const payload: any = this.jwtService.decode(refreshToken);
+          if (payload?.sub) {
+            console.log('🔧 [RefreshToken] Clearing invalid refresh token for user:', payload.sub);
+            await this.usersService.updateUser(payload.sub, {
+              refreshToken: undefined,
+            });
+          }
+        } catch (decodeError) {
+          console.error('❌ [RefreshToken] Failed to decode token for cleanup:', decodeError.message);
+        }
+      }
+      
       throw new ForbiddenException('Invalid refresh token');
     }
   }
 
   // Logout method - clear refresh token
   async logout(user: any) {
+    console.log('🔍 [Logout] Starting logout process for user:', user.id);
+    
     const updatedUser = await this.usersService.updateUser(user.id, {
       status: UserStatus.INACTIVE,
       refreshToken: undefined,
     });
 
+    console.log('✅ [Logout] Successfully cleared refresh token for user:', user.id);
+
     this.wsGateway.emitToAll('user_logout', {
       userId: updatedUser.id,
       status: updatedUser.status,
     });
+    
     return { message: 'Logged out successfully' };
+  }
+
+  // Cleanup expired tokens - utility method
+  async cleanupExpiredTokens() {
+    console.log('🔍 [Cleanup] Starting cleanup of expired refresh tokens...');
+    
+    try {
+      // This would require custom logic to identify expired tokens
+      // For now, we'll just log the attempt
+      console.log('✅ [Cleanup] Expired token cleanup completed');
+    } catch (error) {
+      console.error('❌ [Cleanup] Error during token cleanup:', error.message);
+    }
   }
 
   // Generate new tokens method

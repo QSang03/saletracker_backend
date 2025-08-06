@@ -94,7 +94,13 @@ export class User {
 
   @OneToMany(() => Notification, (notification) => notification.user)
   notifications: Notification[];
-  @Column({ nullable: true, name: 'refresh_token', select: false })
+  
+  @Column({ 
+    nullable: true, 
+    name: 'refresh_token', 
+    select: false,
+    type: 'text' // Changed from default varchar to text to handle longer tokens
+  })
   refreshToken?: string;
 
   @Column({ nullable: true, name: 'last_online_at' })

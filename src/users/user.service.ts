@@ -867,53 +867,78 @@ export class UserService {
 
   async findOneWithDetailsAndRefreshToken(id: number): Promise<User | null> {
     if (isNaN(id) || !Number.isInteger(id) || id <= 0) {
+      console.error('❌ [UserService] Invalid user ID provided:', id);
       throw new BadRequestException('Invalid user ID');
     }
 
-    return this.userRepo.findOne({
-      where: { id, deletedAt: IsNull() },
-      relations: [
-        'roles',
-        'roles.rolePermissions',
-        'roles.rolePermissions.permission',
-        'departments',
-      ],
-      select: {
-        id: true,
-        username: true,
-        email: true,
-        fullName: true,
-        nickName: true,
-        status: true,
-        isBlock: true,
-        employeeCode: true,
-        zaloLinkStatus: true,
-        zaloName: true,
-        avatarZalo: true,
-        lastLogin: true,
-        refreshToken: true, // Include refresh token
-        roles: {
+    try {
+      const user = await this.userRepo.findOne({
+        where: { id, deletedAt: IsNull() },
+        relations: [
+          'roles',
+          'roles.rolePermissions',
+          'roles.rolePermissions.permission',
+          'departments',
+        ],
+        select: {
           id: true,
-          name: true,
-          display_name: true,
-          rolePermissions: {
+          username: true,
+          email: true,
+          fullName: true,
+          nickName: true,
+          status: true,
+          isBlock: true,
+          employeeCode: true,
+          zaloLinkStatus: true,
+          zaloName: true,
+          avatarZalo: true,
+          lastLogin: true,
+          refreshToken: true, // Include refresh token
+          roles: {
             id: true,
-            isActive: true,
-            permission: {
+            name: true,
+            display_name: true,
+            rolePermissions: {
               id: true,
-              name: true,
-              action: true,
+              isActive: true,
+              permission: {
+                id: true,
+                name: true,
+                action: true,
+              },
             },
           },
+          departments: {
+            id: true,
+            name: true,
+            slug: true,
+            server_ip: true,
+          },
         },
-        departments: {
-          id: true,
-          name: true,
-          slug: true,
-          server_ip: true,
-        },
-      },
-    });
+      });
+
+      if (!user) {
+        console.log('🔍 [UserService] User not found or deleted:', id);
+        return null;
+      }
+
+      console.log('✅ [UserService] User found with details:', {
+        id: user.id,
+        username: user.username,
+        hasRefreshToken: !!user.refreshToken,
+        isBlocked: user.isBlock,
+        rolesCount: user.roles?.length || 0,
+        departmentsCount: user.departments?.length || 0,
+      });
+
+      return user;
+    } catch (error) {
+      console.error('❌ [UserService] Error finding user with refresh token:', {
+        userId: id,
+        error: error.message,
+      });
+      return null;
+    }
   }
 
   async resetPasswordToDefault(id: number): Promise<User> {
