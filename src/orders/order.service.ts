@@ -49,37 +49,50 @@ export class OrderService {
   private async getUserIdsByRole(user: any): Promise<number[] | null> {
     if (!user) return null;
 
-    const roleNames = (user.roles || []).map((r: any) => 
-      typeof r === 'string' 
-        ? r.toLowerCase() 
-        : (r.name || '').toLowerCase()
+    const roleNames = (user.roles || []).map((r: any) =>
+      typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
     );
-    
+
     const isAdmin = roleNames.includes('admin');
     if (isAdmin) return null; // Admin có thể xem tất cả
 
-    const managerRoles = roleNames.filter((r: string) => r.startsWith('manager-'));
-    
+    const managerRoles = roleNames.filter((r: string) =>
+      r.startsWith('manager-'),
+    );
     if (managerRoles.length > 0) {
-      // Manager: lấy tất cả user trong phòng ban
-      const departmentSlugs = managerRoles.map((r: string) => r.replace('manager-', ''));
-      
-      const departments = await this.departmentRepository.find({
-        where: departmentSlugs.map(slug => ({ slug }))
-      });
-      
+      // Manager: lấy tất cả user trong phòng ban CÓ SERVER_IP
+      const departmentSlugs = managerRoles.map((r: string) =>
+        r.replace('manager-', ''),
+      );
+
+      // Lọc departments có server_ip hợp lệ
+      const departments = await this.departmentRepository
+        .find({
+          where: departmentSlugs.map((slug) => ({
+            slug,
+            deletedAt: IsNull(),
+          })),
+        })
+        .then((departments) =>
+          departments.filter(
+            (dep) => dep.server_ip && dep.server_ip.trim() !== '',
+          ),
+        );
+
       if (departments.length > 0) {
-        const departmentIds = departments.map(d => d.id);
-        
+        const departmentIds = departments.map((d) => d.id);
+
+        // Lấy users thuộc các department có server_ip
         const usersInDepartments = await this.userRepository
           .createQueryBuilder('user')
           .leftJoin('user.departments', 'dept')
           .where('dept.id IN (:...departmentIds)', { departmentIds })
+          .andWhere('user.deletedAt IS NULL')
           .getMany();
-        
-        return usersInDepartments.map(u => u.id);
+
+        return usersInDepartments.map((u) => u.id);
       } else {
-        return []; // Manager không có department hợp lệ
+        return []; // Manager không có department hợp lệ (có server_ip)
       }
     } else {
       // User thường: chỉ xem của chính họ
@@ -95,12 +108,14 @@ export class OrderService {
       .leftJoinAndSelect('sale_by.departments', 'sale_by_departments');
 
     const allowedUserIds = await this.getUserIdsByRole(user);
-    
+
     if (allowedUserIds !== null) {
       if (allowedUserIds.length === 0) {
         queryBuilder.andWhere('1 = 0'); // Không có quyền xem gì
       } else {
-        queryBuilder.andWhere('order.sale_by IN (:...userIds)', { userIds: allowedUserIds });
+        queryBuilder.andWhere('order.sale_by IN (:...userIds)', {
+          userIds: allowedUserIds,
+        });
       }
     }
     // Admin (allowedUserIds === null) không có điều kiện gì
@@ -109,116 +124,134 @@ export class OrderService {
   }
 
   async getFilterOptions(user?: any): Promise<{
-    departments: Array<{ value: number; label: string; users: Array<{ value: number; label: string }> }>;
+    departments: Array<{
+      value: number;
+      label: string;
+      users: Array<{ value: number; label: string }>;
+    }>;
     products: Array<{ value: number; label: string }>;
   }> {
     const result: {
-      departments: Array<{ value: number; label: string; users: Array<{ value: number; label: string }> }>;
+      departments: Array<{
+        value: number;
+        label: string;
+        users: Array<{ value: number; label: string }>;
+      }>;
       products: Array<{ value: number; label: string }>;
     } = {
       departments: [],
-      products: []
+      products: [],
     };
 
     // Lấy danh sách sản phẩm
     const products = await this.productRepository.find({
       select: ['id', 'productName'],
-      order: { productName: 'ASC' }
+      order: { productName: 'ASC' },
     });
-    
-    result.products = products.map(p => ({
+
+    result.products = products.map((p) => ({
       value: p.id,
-      label: p.productName
+      label: p.productName,
     }));
 
     // Phân quyền cho departments và users
     if (!user) return result;
 
-    const roleNames = (user.roles || []).map((r: any) => 
-      typeof r === 'string' 
-        ? r.toLowerCase() 
-        : (r.name || '').toLowerCase()
+    const roleNames = (user.roles || []).map((r: any) =>
+      typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
     );
-    
+
     const isAdmin = roleNames.includes('admin');
-    
+
     if (isAdmin) {
       // Admin: lấy tất cả departments có server_ip khác null và khác rỗng
-      const departments = await this.departmentRepository.find({
-        where: {
-          deletedAt: IsNull(),
-          server_ip: Not(IsNull()),
-        },
-        relations: ['users'],
-        order: { name: 'ASC' }
-      }).then(departments =>
-        departments
-          .filter(dep => dep.server_ip && dep.server_ip.trim() !== '')
-          .map(dep => ({
-        ...dep,
-        users: (dep.users || []).filter(u => !u.deletedAt)
-          }))
-      );
-      result.departments = departments.map(dept => ({
+      const departments = await this.departmentRepository
+        .find({
+          where: {
+            deletedAt: IsNull(),
+            server_ip: Not(IsNull()),
+          },
+          relations: ['users'],
+          order: { name: 'ASC' },
+        })
+        .then((departments) =>
+          departments
+            .filter((dep) => dep.server_ip && dep.server_ip.trim() !== '')
+            .map((dep) => ({
+              ...dep,
+              users: (dep.users || []).filter((u) => !u.deletedAt),
+            })),
+        );
+      result.departments = departments.map((dept) => ({
         value: dept.id,
         label: dept.name,
-        users: (dept.users || []).map(u => ({
+        users: (dept.users || []).map((u) => ({
           value: u.id,
-          label: u.fullName || u.username
-        }))
+          label: u.fullName || u.username,
+        })),
       }));
     } else {
-      const managerRoles = roleNames.filter((r: string) => r.startsWith('manager-'));
-      
+      const managerRoles = roleNames.filter((r: string) =>
+        r.startsWith('manager-'),
+      );
+
       if (managerRoles.length > 0) {
         // Manager: chỉ lấy department của mình và users trong đó, chỉ lấy department có server_ip hợp lệ
-        const departmentSlugs = managerRoles.map((r: string) => r.replace('manager-', ''));
-        
-        const departments = await this.departmentRepository.find({
-          where: departmentSlugs.map(slug => ({
-            slug,
-            deletedAt: IsNull(),
-            server_ip: Not(IsNull())
-          })),
-          relations: ['users'],
-          order: { name: 'ASC' }
-        }).then(departments =>
-          departments
-            .filter(dep => dep.server_ip && dep.server_ip.trim() !== '')
-            .map(dep => ({
-              ...dep,
-              users: (dep.users || []).filter(u => !u.deletedAt)
-            }))
+        const departmentSlugs = managerRoles.map((r: string) =>
+          r.replace('manager-', ''),
         );
-        
-        result.departments = departments.map(dept => ({
+
+        const departments = await this.departmentRepository
+          .find({
+            where: departmentSlugs.map((slug) => ({
+              slug,
+              deletedAt: IsNull(),
+              server_ip: Not(IsNull()),
+            })),
+            relations: ['users'],
+            order: { name: 'ASC' },
+          })
+          .then((departments) =>
+            departments
+              .filter((dep) => dep.server_ip && dep.server_ip.trim() !== '')
+              .map((dep) => ({
+                ...dep,
+                users: (dep.users || []).filter((u) => !u.deletedAt),
+              })),
+          );
+
+        result.departments = departments.map((dept) => ({
           value: dept.id,
           label: dept.name,
-          users: (dept.users || []).map(u => ({
+          users: (dept.users || []).map((u) => ({
             value: u.id,
-            label: u.fullName || u.username
-          }))
+            label: u.fullName || u.username,
+          })),
         }));
       } else {
         // User thường: chỉ thấy chính mình và department của mình, chỉ lấy department có server_ip hợp lệ
         const currentUser = await this.userRepository.findOne({
-          where: { 
+          where: {
             id: user.id,
-            deletedAt: IsNull()
+            deletedAt: IsNull(),
           },
-          relations: ['departments']
+          relations: ['departments'],
         });
-        
+
         if (currentUser && currentUser.departments) {
           // Lọc lại departments có server_ip hợp lệ
-          const validDepartments = currentUser.departments.filter(dept => !!dept.server_ip);
-          result.departments = validDepartments.map(dept => ({
+          const validDepartments = currentUser.departments.filter(
+            (dept) => !!dept.server_ip,
+          );
+          result.departments = validDepartments.map((dept) => ({
             value: dept.id,
             label: dept.name,
-            users: [{
-              value: currentUser.id,
-              label: currentUser.fullName || currentUser.username
-            }]
+            users: [
+              {
+                value: currentUser.id,
+                label: currentUser.fullName || currentUser.username,
+              },
+            ],
           }));
         }
       }
@@ -233,21 +266,21 @@ export class OrderService {
     page: number;
     pageSize: number;
   }> {
-    const { 
-      page, 
-      pageSize, 
-      search, 
-      status, 
-      date, 
+    const {
+      page,
+      pageSize,
+      search,
+      status,
+      date,
       dateRange,
-      employee, 
+      employee,
       employees,
       departments,
       products,
       warningLevel,
       sortField,
       sortDirection,
-      user 
+      user,
     } = filters;
     const skip = (page - 1) * pageSize;
 
@@ -260,12 +293,14 @@ export class OrderService {
 
     // Phân quyền: admin xem tất cả, manager xem theo phòng, user thường chỉ xem đơn của mình
     const allowedUserIds = await this.getUserIdsByRole(user);
-    
+
     if (allowedUserIds !== null) {
       if (allowedUserIds.length === 0) {
         queryBuilder.andWhere('1 = 0'); // Không có quyền xem gì
       } else {
-        queryBuilder.andWhere('order.sale_by IN (:...userIds)', { userIds: allowedUserIds });
+        queryBuilder.andWhere('order.sale_by IN (:...userIds)', {
+          userIds: allowedUserIds,
+        });
       }
     }
     // Admin (allowedUserIds === null) không có điều kiện gì
@@ -274,7 +309,7 @@ export class OrderService {
     if (search) {
       queryBuilder.andWhere(
         '(CAST(details.id AS CHAR) LIKE :search OR details.customer_name LIKE :search OR details.raw_item LIKE :search)',
-        { search: `%${search}%` }
+        { search: `%${search}%` },
       );
     }
 
@@ -288,10 +323,10 @@ export class OrderService {
       const startDate = new Date(date);
       const endDate = new Date(date);
       endDate.setHours(23, 59, 59, 999);
-      
+
       queryBuilder.andWhere(
         'order.created_at BETWEEN :startDate AND :endDate',
-        { startDate, endDate }
+        { startDate, endDate },
       );
     }
 
@@ -300,10 +335,10 @@ export class OrderService {
       const startDate = new Date(dateRange.start);
       const endDate = new Date(dateRange.end);
       endDate.setHours(23, 59, 59, 999);
-      
+
       queryBuilder.andWhere(
         'order.created_at BETWEEN :rangeStart AND :rangeEnd',
-        { rangeStart: startDate, rangeEnd: endDate }
+        { rangeStart: startDate, rangeEnd: endDate },
       );
     }
 
@@ -314,36 +349,55 @@ export class OrderService {
 
     // Filter by multiple employees
     if (employees) {
-      const employeeIds = employees.split(',').map(id => parseInt(id.trim(), 10)).filter(id => !isNaN(id));
+      const employeeIds = employees
+        .split(',')
+        .map((id) => parseInt(id.trim(), 10))
+        .filter((id) => !isNaN(id));
       if (employeeIds.length > 0) {
-        queryBuilder.andWhere('sale_by.id IN (:...employeeIds)', { employeeIds });
+        queryBuilder.andWhere('sale_by.id IN (:...employeeIds)', {
+          employeeIds,
+        });
       }
     }
 
     // Filter by multiple departments
     if (departments) {
-      const departmentIds = departments.split(',').map(id => parseInt(id.trim(), 10)).filter(id => !isNaN(id));
+      const departmentIds = departments
+        .split(',')
+        .map((id) => parseInt(id.trim(), 10))
+        .filter((id) => !isNaN(id));
       if (departmentIds.length > 0) {
-      // Lọc theo phòng ban có server_ip hợp lệ (không null, không rỗng)
-      queryBuilder.andWhere(`
+        // Lọc theo phòng ban có server_ip hợp lệ (không null, không rỗng)
+        queryBuilder.andWhere(
+          `
         sale_by_departments.id IN (:...departmentIds)
         AND sale_by_departments.server_ip IS NOT NULL
         AND TRIM(sale_by_departments.server_ip) <> ''
-      `, { departmentIds });
+      `,
+          { departmentIds },
+        );
       }
     }
 
     // Filter by multiple products
     if (products) {
-      const productIds = products.split(',').map(id => parseInt(id.trim(), 10)).filter(id => !isNaN(id));
+      const productIds = products
+        .split(',')
+        .map((id) => parseInt(id.trim(), 10))
+        .filter((id) => !isNaN(id));
       if (productIds.length > 0) {
-        queryBuilder.andWhere('details.product_id IN (:...productIds)', { productIds });
+        queryBuilder.andWhere('details.product_id IN (:...productIds)', {
+          productIds,
+        });
       }
     }
 
     // Filter by warning level (extended)
     if (warningLevel) {
-      const levels = warningLevel.split(',').map(level => parseInt(level.trim(), 10)).filter(level => !isNaN(level));
+      const levels = warningLevel
+        .split(',')
+        .map((level) => parseInt(level.trim(), 10))
+        .filter((level) => !isNaN(level));
       if (levels.length > 0) {
         queryBuilder.andWhere('details.extended IN (:...levels)', { levels });
       }
@@ -352,9 +406,15 @@ export class OrderService {
     // ✅ Apply sorting based on sortField and sortDirection
     if (sortField && sortDirection) {
       if (sortField === 'quantity') {
-        queryBuilder.orderBy('details.quantity', sortDirection.toUpperCase() as 'ASC' | 'DESC');
+        queryBuilder.orderBy(
+          'details.quantity',
+          sortDirection.toUpperCase() as 'ASC' | 'DESC',
+        );
       } else if (sortField === 'unit_price') {
-        queryBuilder.orderBy('details.unit_price', sortDirection.toUpperCase() as 'ASC' | 'DESC');
+        queryBuilder.orderBy(
+          'details.unit_price',
+          sortDirection.toUpperCase() as 'ASC' | 'DESC',
+        );
       }
       // Add secondary sort by ID to ensure consistent ordering
       queryBuilder.addOrderBy('details.id', 'DESC');
@@ -382,25 +442,33 @@ export class OrderService {
   async findById(id: number): Promise<Order | null> {
     return this.orderRepository.findOne({
       where: { id },
-      relations: ['details', 'details.product', 'sale_by', 'sale_by.departments'],
+      relations: [
+        'details',
+        'details.product',
+        'sale_by',
+        'sale_by.departments',
+      ],
     });
   }
 
   async findByIdWithPermission(id: number, user?: any): Promise<Order | null> {
     const order = await this.findById(id);
-    
+
     // Kiểm tra quyền xem order này
     if (order && user) {
       const allowedUserIds = await this.getUserIdsByRole(user);
-      
+
       if (allowedUserIds !== null) {
-        if (allowedUserIds.length === 0 || !allowedUserIds.includes(order.sale_by?.id)) {
+        if (
+          allowedUserIds.length === 0 ||
+          !allowedUserIds.includes(order.sale_by?.id)
+        ) {
           return null; // Không có quyền xem
         }
       }
       // Admin (allowedUserIds === null) có thể xem tất cả
     }
-    
+
     return order;
   }
 
