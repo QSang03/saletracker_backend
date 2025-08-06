@@ -16,12 +16,30 @@ export class AuthController {
   ) {}
 
   @Post('login')
-  async login(@Body() loginDto: LoginDto) {
-    const user = await this.authService.validateUser(
-      loginDto.username,
-      loginDto.password,
-    );
-    return this.authService.login(user);
+  async login(@Body() loginDto: LoginDto, @Req() req) {
+    try {
+      const user = await this.authService.validateUser(
+        loginDto.username,
+        loginDto.password,
+      );
+
+      const result = await this.authService.login(user);
+
+      // Debug: Log response trước khi trả về
+      console.log('✅ [Login] Response to be sent:', {
+        hasAccessToken: !!result.access_token,
+        hasRefreshToken: !!result.refresh_token,
+        accessTokenLength: result.access_token?.length,
+        refreshTokenLength: result.refresh_token?.length,
+        accessTokenStart: result.access_token?.substring(0, 100) + '...',
+        timestamp: new Date().toISOString(),
+      });
+
+      return result;
+    } catch (error) {
+      console.error('❌ [Login] Login failed:', error.message);
+      throw error;
+    }
   }
 
   @Post('logout')
@@ -100,12 +118,14 @@ export class AuthController {
   @Post('refresh')
   async refresh(@Body() refreshTokenDto: RefreshTokenDto) {
     try {
-      
       const result = await this.authService.refreshToken(refreshTokenDto);
       return result;
     } catch (error) {
       console.error('❌ [AuthController] Refresh token failed:', error.message);
-      console.error('❌ [AuthController] Error stack:', error.stack?.substring(0, 200));
+      console.error(
+        '❌ [AuthController] Error stack:',
+        error.stack?.substring(0, 200),
+      );
       throw error; // Re-throw to let NestJS handle the response
     }
   }
