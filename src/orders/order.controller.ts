@@ -34,6 +34,8 @@ export class OrderController {
     @Query('departments') departments?: string,
     @Query('products') products?: string,
     @Query('warningLevel') warningLevel?: string,
+    @Query('sortField') sortField?: 'quantity' | 'unit_price',
+    @Query('sortDirection') sortDirection?: 'asc' | 'desc',
     @Req() req?: any,
   ): Promise<{
     data: OrderDetail[];
@@ -70,6 +72,8 @@ export class OrderController {
       departments,
       products,
       warningLevel,
+      sortField: sortField || null,
+      sortDirection: sortDirection || null,
       user: req.user,
     });
   }

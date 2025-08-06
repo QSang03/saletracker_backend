@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Like, Between } from 'typeorm';
+import { Repository, Like, Between, Not, IsNull } from 'typeorm';
 import { Order } from './order.entity';
 import { OrderDetail } from 'src/order-details/order-detail.entity';
 import { Department } from 'src/departments/department.entity';
@@ -19,6 +19,8 @@ interface OrderFilters {
   departments?: string;
   products?: string;
   warningLevel?: string;
+  sortField?: 'quantity' | 'unit_price' | null;
+  sortDirection?: 'asc' | 'desc' | null;
   user?: any; // truyền cả user object
 }
 
@@ -141,12 +143,22 @@ export class OrderService {
     const isAdmin = roleNames.includes('admin');
     
     if (isAdmin) {
-      // Admin: lấy tất cả departments và users
+      // Admin: lấy tất cả departments có server_ip khác null và khác rỗng
       const departments = await this.departmentRepository.find({
+        where: {
+          deletedAt: IsNull(),
+          server_ip: Not(IsNull()),
+        },
         relations: ['users'],
         order: { name: 'ASC' }
-      });
-      
+      }).then(departments =>
+        departments
+          .filter(dep => dep.server_ip && dep.server_ip.trim() !== '')
+          .map(dep => ({
+        ...dep,
+        users: (dep.users || []).filter(u => !u.deletedAt)
+          }))
+      );
       result.departments = departments.map(dept => ({
         value: dept.id,
         label: dept.name,
@@ -159,14 +171,25 @@ export class OrderService {
       const managerRoles = roleNames.filter((r: string) => r.startsWith('manager-'));
       
       if (managerRoles.length > 0) {
-        // Manager: chỉ lấy department của mình và users trong đó
+        // Manager: chỉ lấy department của mình và users trong đó, chỉ lấy department có server_ip hợp lệ
         const departmentSlugs = managerRoles.map((r: string) => r.replace('manager-', ''));
         
         const departments = await this.departmentRepository.find({
-          where: departmentSlugs.map(slug => ({ slug })),
+          where: departmentSlugs.map(slug => ({
+            slug,
+            deletedAt: IsNull(),
+            server_ip: Not(IsNull())
+          })),
           relations: ['users'],
           order: { name: 'ASC' }
-        });
+        }).then(departments =>
+          departments
+            .filter(dep => dep.server_ip && dep.server_ip.trim() !== '')
+            .map(dep => ({
+              ...dep,
+              users: (dep.users || []).filter(u => !u.deletedAt)
+            }))
+        );
         
         result.departments = departments.map(dept => ({
           value: dept.id,
@@ -177,14 +200,19 @@ export class OrderService {
           }))
         }));
       } else {
-        // User thường: chỉ thấy chính mình và department của mình
+        // User thường: chỉ thấy chính mình và department của mình, chỉ lấy department có server_ip hợp lệ
         const currentUser = await this.userRepository.findOne({
-          where: { id: user.id },
+          where: { 
+            id: user.id,
+            deletedAt: IsNull()
+          },
           relations: ['departments']
         });
         
         if (currentUser && currentUser.departments) {
-          result.departments = currentUser.departments.map(dept => ({
+          // Lọc lại departments có server_ip hợp lệ
+          const validDepartments = currentUser.departments.filter(dept => !!dept.server_ip);
+          result.departments = validDepartments.map(dept => ({
             value: dept.id,
             label: dept.name,
             users: [{
@@ -217,6 +245,8 @@ export class OrderService {
       departments,
       products,
       warningLevel,
+      sortField,
+      sortDirection,
       user 
     } = filters;
     const skip = (page - 1) * pageSize;
@@ -314,8 +344,19 @@ export class OrderService {
       }
     }
 
-    // Order by order created_at desc
-    queryBuilder.orderBy('details.id', 'DESC');
+    // ✅ Apply sorting based on sortField and sortDirection
+    if (sortField && sortDirection) {
+      if (sortField === 'quantity') {
+        queryBuilder.orderBy('details.quantity', sortDirection.toUpperCase() as 'ASC' | 'DESC');
+      } else if (sortField === 'unit_price') {
+        queryBuilder.orderBy('details.unit_price', sortDirection.toUpperCase() as 'ASC' | 'DESC');
+      }
+      // Add secondary sort by ID to ensure consistent ordering
+      queryBuilder.addOrderBy('details.id', 'DESC');
+    } else {
+      // Default order by details.id desc when no sort is applied
+      queryBuilder.orderBy('details.id', 'DESC');
+    }
 
     // Get total count of ORDER_DETAILS before pagination
     const total = await queryBuilder.getCount();
