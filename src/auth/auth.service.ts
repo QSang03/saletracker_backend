@@ -317,10 +317,17 @@ export class AuthService {
         refreshToken: newRefreshToken,
       });
 
-      return {
+      console.log('✅ [RefreshToken] New tokens generated successfully');
+      console.log('🔍 [RefreshToken] Access token length:', accessToken.length);
+      console.log('🔍 [RefreshToken] Refresh token length:', newRefreshToken.length);
+
+      const response = {
         access_token: accessToken,
         refresh_token: newRefreshToken,
       };
+
+      console.log('🔍 [RefreshToken] Returning response with keys:', Object.keys(response));
+      return response;
     } catch (e) {
       console.error('❌ [RefreshToken] Refresh token error:', e);
       
