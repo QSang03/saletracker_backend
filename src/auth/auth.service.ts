@@ -15,6 +15,9 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { WebsocketGateway } from 'src/websocket/websocket.gateway';
 import { DepartmentService } from 'src/departments/department.service';
 
+// Map để track đang refresh token cho user nào để tránh double refresh
+const refreshingUsers = new Map<number, Promise<any>>();
+
 @Injectable()
 export class AuthService {
   constructor(
@@ -192,188 +195,175 @@ export class AuthService {
       const cleanRefreshToken = refreshToken.trim();
       console.log('🔍 [RefreshToken] Cleaned token length:', cleanRefreshToken.length);
       
-      const payload: any = this.jwtService.verify(cleanRefreshToken, {
-        secret:
-          this.configService.get<string>('JWT_REFRESH_SECRET') ||
-          this.configService.get<string>('JWT_SECRET'),
-      });
-
-
-      // Load user with full details including roles, permissions AND refresh token
-      const user = await this.usersService.findOneWithDetailsAndRefreshToken(
-        payload.sub,
-      );
-
-      if (!user) {
-        console.error('❌ [RefreshToken] User not found with ID:', payload.sub);
-        throw new ForbiddenException('Invalid refresh token - user not found');
+      // Verify JWT format và decode để lấy user ID ngay từ đầu
+      let payload: any;
+      try {
+        payload = this.jwtService.verify(cleanRefreshToken, {
+          secret:
+            this.configService.get<string>('JWT_REFRESH_SECRET') ||
+            this.configService.get<string>('JWT_SECRET'),
+        });
+      } catch (jwtError) {
+        console.error('❌ [RefreshToken] Invalid JWT:', jwtError.message);
+        throw new ForbiddenException('Invalid refresh token format');
       }
 
-      if (!user.refreshToken) {
-        console.error('❌ [RefreshToken] User has no refresh token stored');
-        throw new ForbiddenException('Invalid refresh token - no token stored');
+      const userId = payload.sub;
+      console.log('🔍 [RefreshToken] User ID from token:', userId);
+
+      // Kiểm tra xem có đang refresh cho user này không
+      if (refreshingUsers.has(userId)) {
+        console.log('🔄 [RefreshToken] Already refreshing for user:', userId, '- waiting for existing process');
+        return await refreshingUsers.get(userId);
       }
 
-      // Safe token comparison with trimming
-      const storedToken = user.refreshToken.trim();
-      const providedToken = cleanRefreshToken; // Already trimmed
-      
-      console.log('🔍 [RefreshToken] User found: YES');
-      console.log('🔍 [RefreshToken] User refresh token exists: YES');
-      console.log('🔍 [RefreshToken] Stored token length:', storedToken.length);
-      console.log('🔍 [RefreshToken] Provided token length:', providedToken.length);
-      console.log('🔍 [RefreshToken] Tokens match:', storedToken === providedToken ? 'YES' : 'NO');
+      // Tạo promise cho refresh process
+      const refreshPromise = this.performRefreshForUser(userId, cleanRefreshToken);
+      refreshingUsers.set(userId, refreshPromise);
 
-      if (storedToken !== providedToken) {
-        console.error('❌ [RefreshToken] Token mismatch');
-        console.error('❌ [RefreshToken] Stored token (first 100 chars):', storedToken.substring(0, 100));
-        console.error('❌ [RefreshToken] Provided token (first 100 chars):', providedToken.substring(0, 100));
-        console.error('❌ [RefreshToken] Stored token (last 50 chars):', storedToken.substring(-50));
-        console.error('❌ [RefreshToken] Provided token (last 50 chars):', providedToken.substring(-50));
-        
-        // Character-by-character comparison for debugging
-        console.error('❌ [RefreshToken] Character-by-character comparison (first 20):');
-        for (let i = 0; i < Math.min(20, storedToken.length, providedToken.length); i++) {
-          const storedChar = storedToken.charCodeAt(i);
-          const providedChar = providedToken.charCodeAt(i);
-          if (storedChar !== providedChar) {
-            console.error(`❌ [RefreshToken] Diff at pos ${i}: stored='${storedToken[i]}' (${storedChar}) vs provided='${providedToken[i]}' (${providedChar})`);
-            break;
-          }
-        }
-        
-        throw new ForbiddenException('Invalid refresh token - token mismatch');
+      try {
+        const result = await refreshPromise;
+        return result;
+      } finally {
+        // Cleanup
+        refreshingUsers.delete(userId);
       }
+    } catch (e) {
+      console.error('❌ [RefreshToken] Refresh token error:', e);
+      throw new ForbiddenException('Invalid refresh token');
+    }
+  }
 
-      // Check if user is blocked
-      if (user.isBlock) {
-        console.error('❌ [RefreshToken] User is blocked');
-        throw new ForbiddenException('User is blocked');
-      }
+  private async performRefreshForUser(userId: number, cleanRefreshToken: string) {
+    console.log('🔧 [RefreshToken] Performing refresh for user:', userId);
 
-      let departments: any;
-      const isAdmin = user.roles?.some((role) => role.name === 'admin');
-      if (isAdmin) {
-        const allDepartments = await this.departmentService.findAllActive();
-        departments = allDepartments.map((d) => ({
+    // Load user with full details including roles, permissions AND refresh token
+    const user = await this.usersService.findOneWithDetailsAndRefreshToken(userId);
+
+    if (!user) {
+      console.error('❌ [RefreshToken] User not found with ID:', userId);
+      throw new ForbiddenException('Invalid refresh token - user not found');
+    }
+
+    if (!user.refreshToken) {
+      console.error('❌ [RefreshToken] User has no refresh token stored');
+      throw new ForbiddenException('Invalid refresh token - no token stored');
+    }
+
+    // Safe token comparison with trimming
+    const storedToken = user.refreshToken.trim();
+    const providedToken = cleanRefreshToken; // Already trimmed
+    
+    console.log('🔍 [RefreshToken] User found: YES');
+    console.log('🔍 [RefreshToken] User refresh token exists: YES');
+    console.log('🔍 [RefreshToken] Stored token length:', storedToken.length);
+    console.log('🔍 [RefreshToken] Provided token length:', providedToken.length);
+    console.log('🔍 [RefreshToken] Tokens match:', storedToken === providedToken ? 'YES' : 'NO');
+
+    if (storedToken !== providedToken) {
+      console.error('❌ [RefreshToken] Token mismatch');
+      throw new ForbiddenException('Invalid refresh token - token mismatch');
+    }
+
+    // Check if user is blocked
+    if (user.isBlock) {
+      console.error('❌ [RefreshToken] User is blocked');
+      throw new ForbiddenException('User is blocked');
+    }
+
+    let departments: any;
+    const isAdmin = user.roles?.some((role) => role.name === 'admin');
+    if (isAdmin) {
+      const allDepartments = await this.departmentService.findAllActive();
+      departments = allDepartments.map((d) => ({
+        id: d.id,
+        name: d.name,
+        slug: d.slug,
+        server_ip: d.server_ip,
+      }));
+    } else {
+      departments =
+        user.departments?.map((d) => ({
           id: d.id,
           name: d.name,
           slug: d.slug,
           server_ip: d.server_ip,
-        }));
-      } else {
-        departments =
-          user.departments?.map((d) => ({
-            id: d.id,
-            name: d.name,
-            slug: d.slug,
-            server_ip: d.server_ip,
-          })) || [];
-      }
-      let server_ip: string | null = null;
-      if (isAdmin) {
-        // Admin lấy server_ip của bất kỳ phòng ban nào (ưu tiên phòng ban đầu tiên có server_ip)
-        const allDepartments = await this.departmentService.findAllActive();
-        const found = allDepartments.find((d) => !!d.server_ip);
-        if (found) server_ip = found.server_ip;
-      } else {
-        // User thường chỉ lấy server_ip của phòng ban mình thuộc về
-        const found = user.departments?.find((d) => !!d.server_ip);
-        if (found) server_ip = found.server_ip;
-      }
-      // Tạo access token mới với đầy đủ thông tin
-      const accessPayload = {
-        sub: user.id,
-        id: user.id,
-        username: user.username,
-        fullName: user.fullName,
-        email: user.email,
-        status: user.status,
-        isBlock: user.isBlock,
-        employeeCode: user.employeeCode,
-        nickName: user.nickName,
-        zaloLinkStatus: user.zaloLinkStatus,
-        zaloName: user.zaloName,
-        avatarZalo: user.avatarZalo,
-        roles:
-          user.roles?.map((role) => ({
-            id: role.id,
-            name: role.name,
-            display_name: role.display_name,
-          })) || [],
-        departments,
-        server_ip,
-        permissions: [
-          ...user.roles?.flatMap(
-            (role: Role) =>
-              role.rolePermissions
-                ?.filter((rp: RolePermission) => rp.isActive)
-                .map((rp: RolePermission) => ({
-                  name: rp.permission.name,
-                  action: rp.permission.action,
-                })) || [],
-          ),
-        ],
-        lastLogin: user.lastLogin,
-      };
-
-      const accessToken = this.jwtService.sign(accessPayload, {
-        secret: this.configService.get<string>('JWT_SECRET'),
-        expiresIn: '30d',
-      });
-
-      // Tạo refresh token mới để tăng bảo mật
-      const newRefreshToken = this.jwtService.sign(
-        { sub: user.id },
-        {
-          secret:
-            this.configService.get<string>('JWT_REFRESH_SECRET') ||
-            this.configService.get<string>('JWT_SECRET'),
-          expiresIn: '30d',
-        },
-      );
-
-      // Cập nhật refresh token mới vào DB
-      await this.usersService.updateUser(user.id, {
-        refreshToken: newRefreshToken,
-      });
-
-      const response = {
-        access_token: accessToken,
-        refresh_token: newRefreshToken,
-      };
-      return response;
-    } catch (e) {
-      console.error('❌ [RefreshToken] Refresh token error:', e);
-      
-      // Log specific error types for better debugging
-      if (e.name === 'JsonWebTokenError') {
-        console.error('❌ [RefreshToken] Invalid JWT format:', e.message);
-      } else if (e.name === 'TokenExpiredError') {
-        console.error('❌ [RefreshToken] Token expired:', e.message);
-      } else if (e.name === 'NotBeforeError') {
-        console.error('❌ [RefreshToken] Token not active:', e.message);
-      } else {
-        console.error('❌ [RefreshToken] Other error:', e.message);
-      }
-      
-      // Clear invalid refresh token from database if user exists
-      if (e.message?.includes('token mismatch') || e.message?.includes('Token expired')) {
-        try {
-          const payload: any = this.jwtService.decode(refreshToken);
-          if (payload?.sub) {
-            console.log('🔧 [RefreshToken] Clearing invalid refresh token for user:', payload.sub);
-            await this.usersService.updateUser(payload.sub, {
-              refreshToken: undefined,
-            });
-          }
-        } catch (decodeError) {
-          console.error('❌ [RefreshToken] Failed to decode token for cleanup:', decodeError.message);
-        }
-      }
-      
-      throw new ForbiddenException('Invalid refresh token');
+        })) || [];
     }
+    
+    let server_ip: string | null = null;
+    if (isAdmin) {
+      const allDepartments = await this.departmentService.findAllActive();
+      const found = allDepartments.find((d) => !!d.server_ip);
+      if (found) server_ip = found.server_ip;
+    } else {
+      const found = user.departments?.find((d) => !!d.server_ip);
+      if (found) server_ip = found.server_ip;
+    }
+    
+    // Tạo access token mới với đầy đủ thông tin
+    const accessPayload = {
+      sub: user.id,
+      id: user.id,
+      username: user.username,
+      fullName: user.fullName,
+      email: user.email,
+      status: user.status,
+      isBlock: user.isBlock,
+      employeeCode: user.employeeCode,
+      nickName: user.nickName,
+      zaloLinkStatus: user.zaloLinkStatus,
+      zaloName: user.zaloName,
+      avatarZalo: user.avatarZalo,
+      roles:
+        user.roles?.map((role) => ({
+          id: role.id,
+          name: role.name,
+          display_name: role.display_name,
+        })) || [],
+      departments,
+      server_ip,
+      permissions: [
+        ...user.roles?.flatMap(
+          (role: Role) =>
+            role.rolePermissions
+              ?.filter((rp: RolePermission) => rp.isActive)
+              .map((rp: RolePermission) => ({
+                name: rp.permission.name,
+                action: rp.permission.action,
+              })) || [],
+        ),
+      ],
+      lastLogin: user.lastLogin,
+    };
+
+    const accessToken = this.jwtService.sign(accessPayload, {
+      secret: this.configService.get<string>('JWT_SECRET'),
+      expiresIn: '30d',
+    });
+
+    // Tạo refresh token mới để tăng bảo mật
+    const newRefreshToken = this.jwtService.sign(
+      { sub: user.id },
+      {
+        secret:
+          this.configService.get<string>('JWT_REFRESH_SECRET') ||
+          this.configService.get<string>('JWT_SECRET'),
+        expiresIn: '30d',
+      },
+    );
+
+    // Cập nhật refresh token mới vào DB
+    await this.usersService.updateUser(user.id, {
+      refreshToken: newRefreshToken,
+    });
+
+    const response = {
+      access_token: accessToken,
+      refresh_token: newRefreshToken,
+    };
+    console.log('✅ [RefreshToken] Successfully generated new tokens for user:', userId);
+    return response;
   }
 
   // Logout method - clear refresh token

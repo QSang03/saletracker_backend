@@ -100,9 +100,12 @@ export class AuthController {
   @Post('refresh')
   async refresh(@Body() refreshTokenDto: RefreshTokenDto) {
     try {
+      console.log('🎯 [AuthController] Refresh request received');
+      console.log('🎯 [AuthController] Token length:', refreshTokenDto.refreshToken?.trim()?.length || 0);
       
       const result = await this.authService.refreshToken(refreshTokenDto);
       
+      console.log('✅ [AuthController] Refresh successful');
       return result;
     } catch (error) {
       console.error('❌ [AuthController] Refresh token failed:', error.message);
