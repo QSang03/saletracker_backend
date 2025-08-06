@@ -17,7 +17,7 @@ export class OrderCleanupCronjobService {
   ) {}
 
   // Chạy lúc 18:28 từ thứ 2 đến thứ 7 (không chạy chủ nhật)
-  @Cron('36 18 * * 1-6')
+  @Cron('00 01 * * 1-6')
   async cleanupExpiredOrderDetails() {
     const executionStartTime = new Date();
     try {
