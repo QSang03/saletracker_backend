@@ -611,7 +611,8 @@ export class UserService {
       .leftJoinAndSelect('user.departments', 'department')
       .leftJoinAndSelect('user.roles', 'role')
       .where('user.deletedAt IS NULL')
-      .andWhere('department.id IN (:...departmentIds)', { departmentIds });
+      .andWhere('department.id IN (:...departmentIds)', { departmentIds })
+      .andWhere('department.server_ip IS NOT NULL AND department.server_ip != :empty', { empty: '' });
 
     if (filter) {
       if (filter.search) {
