@@ -647,6 +647,8 @@ export class UserService {
       'user.lastLogin',
       'user.email',
       'user.isBlock',
+      'user.zaloLinkStatus',
+      'user.zaloName',
       'department.id',
       'department.name',
       'department.slug',

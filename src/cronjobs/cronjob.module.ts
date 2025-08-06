@@ -13,6 +13,9 @@ import { DepartmentSchedule } from '../campaign_departments_schedules/campaign_d
 import { Campaign } from '../campaigns/campaign.entity';
 import { CampaignSchedule } from '../campaign_schedules/campaign_schedule.entity';
 import { ScheduleStatusUpdaterService } from './schedule-status-updater.service';
+import { OrderDetail } from 'src/order-details/order-detail.entity';
+import { SystemConfig } from 'src/system_config/system_config.entity';
+import { OrderCleanupCronjobService } from './order-cleanup.cronjob.service';
 
 @Module({
   imports: [
@@ -27,10 +30,12 @@ import { ScheduleStatusUpdaterService } from './schedule-status-updater.service'
       DatabaseChangeLog,
       DepartmentSchedule,
       Campaign,
-      CampaignSchedule
+      CampaignSchedule,
+      OrderDetail, // Entity cho order details
+      SystemConfig,
     ]),
   ],
-  providers: [CronjobService, ScheduleStatusUpdaterService],
-  exports: [CronjobService, ScheduleStatusUpdaterService],
+  providers: [CronjobService, ScheduleStatusUpdaterService, OrderCleanupCronjobService],
+  exports: [CronjobService, ScheduleStatusUpdaterService, OrderCleanupCronjobService],
 })
 export class CronjobModule {}

@@ -50,9 +50,10 @@ export interface DailyDatesConfig {
 export interface HourlySlotsConfig {
   type: 'hourly_slots';
   slots: Array<{
-    day_of_week?: number;        // 2-7 (2=Thứ 2, ..., 7=Thứ 7), không bao gồm Chủ nhật, null = mọi ngày
-    start_time: string;          // "HH:mm:ss"
-    end_time: string;            // "HH:mm:ss"
+    day_of_week?: number;         // 2-7 (2=Thứ 2, ..., 7=Thứ 7), không bao gồm Chủ nhật, null = mọi ngày
+    applicable_date?: string;     // "YYYY-MM-DD", ngày áp dụng cụ thể, null = mọi ngày
+    start_time: string;           // "HH:mm:ss"
+    end_time: string;             // "HH:mm:ss"
     activity_description?: string;
     metadata?: {
       priority?: 'low' | 'medium' | 'high';
