@@ -148,7 +148,6 @@ export class AuthService {
     
     // Lưu refresh token vào DB (trim để tránh whitespace issues)
     const cleanRefreshToken = refreshToken.trim();
-    console.log('🔍 [Login] Saving refresh token, length:', cleanRefreshToken.length);
     
     await this.usersService.updateUser(updatedUser.id, {
       status: UserStatus.ACTIVE,
@@ -189,11 +188,8 @@ export class AuthService {
 
   async refreshToken({ refreshToken }: RefreshTokenDto) {
     try {
-      console.log('🔍 [RefreshToken] Starting refresh process...');
-      
       // Clean the incoming token
       const cleanRefreshToken = refreshToken.trim();
-      console.log('🔍 [RefreshToken] Cleaned token length:', cleanRefreshToken.length);
       
       // Verify JWT format và decode để lấy user ID ngay từ đầu
       let payload: any;
@@ -209,11 +205,9 @@ export class AuthService {
       }
 
       const userId = payload.sub;
-      console.log('🔍 [RefreshToken] User ID from token:', userId);
 
       // Kiểm tra xem có đang refresh cho user này không
       if (refreshingUsers.has(userId)) {
-        console.log('🔄 [RefreshToken] Already refreshing for user:', userId, '- waiting for existing process');
         return await refreshingUsers.get(userId);
       }
 
@@ -235,7 +229,6 @@ export class AuthService {
   }
 
   private async performRefreshForUser(userId: number, cleanRefreshToken: string) {
-    console.log('🔧 [RefreshToken] Performing refresh for user:', userId);
 
     // Load user with full details including roles, permissions AND refresh token
     const user = await this.usersService.findOneWithDetailsAndRefreshToken(userId);
@@ -252,14 +245,7 @@ export class AuthService {
 
     // Safe token comparison with trimming
     const storedToken = user.refreshToken.trim();
-    const providedToken = cleanRefreshToken; // Already trimmed
-    
-    console.log('🔍 [RefreshToken] User found: YES');
-    console.log('🔍 [RefreshToken] User refresh token exists: YES');
-    console.log('🔍 [RefreshToken] Stored token length:', storedToken.length);
-    console.log('🔍 [RefreshToken] Provided token length:', providedToken.length);
-    console.log('🔍 [RefreshToken] Tokens match:', storedToken === providedToken ? 'YES' : 'NO');
-
+    const providedToken = cleanRefreshToken;
     if (storedToken !== providedToken) {
       console.error('❌ [RefreshToken] Token mismatch');
       throw new ForbiddenException('Invalid refresh token - token mismatch');
@@ -362,7 +348,6 @@ export class AuthService {
       access_token: accessToken,
       refresh_token: newRefreshToken,
     };
-    console.log('✅ [RefreshToken] Successfully generated new tokens for user:', userId);
     return response;
   }
 
