@@ -16,43 +16,92 @@ export class OrderCleanupCronjobService {
     private systemConfigRepository: Repository<SystemConfig>,
   ) {}
 
-  // Chạy lúc 18:28 từ thứ 2 đến thứ 7 (không chạy chủ nhật)
-  @Cron('00 01 * * 1-6')
+  // ✅ SỬA: Chạy MỌI NGÀY để có thể check và xử lý (0 = Chủ nhật, 1-6 = Thứ 2-7)
+  @Cron('00 01 * * *')
   async cleanupExpiredOrderDetails() {
     const executionStartTime = new Date();
     try {
-      this.logger.log('=== Bắt đầu cronjob xóa mềm order details hết hạn ===');
+      this.logger.log('=== Bắt đầu cronjob kiểm tra order details ===');
       this.logger.log(`🕐 Thời gian thực hiện: ${this.formatDateTime(executionStartTime)}`);
       this.logger.log(`📅 Ngày hiện tại: ${this.formatDate(executionStartTime)}`);
 
-      // Kiểm tra điều kiện chạy (ngày nghỉ + chủ nhật)
+      // Kiểm tra điều kiện chạy
       const canRun = await this.canRunToday();
-      if (!canRun) {
-        this.logger.log('❌ Cronjob không được phép chạy hôm nay');
-        return;
-      }
-
-      // Lấy danh sách order_detail cần xử lý
-      const orderDetails = await this.getActiveOrderDetails();
-      this.logger.log(`📦 Tìm thấy ${orderDetails.length} order details cần kiểm tra`);
-
-      // Xử lý từng order detail với công thức mới
-      const expiredIds = this.calculateExpiredOrderDetails(orderDetails);
       
-      if (expiredIds.length > 0) {
-        await this.softDeleteOrderDetails(expiredIds);
-        this.logger.log(`✅ Đã xóa mềm ${expiredIds.length} order details`);
+      if (!canRun) {
+        // KHÔNG được phép chạy cleanup → Gia hạn extended
+        this.logger.log('❌ Không được phép chạy cleanup hôm nay → Gia hạn extended');
+        await this.extendAllActiveOrderDetails();
+        this.logger.log('✅ Đã hoàn thành gia hạn extended thay thế');
       } else {
-        this.logger.log('✅ Không có order detail nào cần xóa mềm');
+        // ĐƯỢC phép chạy cleanup → Xử lý bình thường
+        this.logger.log('✅ Được phép chạy cleanup hôm nay');
+        
+        const orderDetails = await this.getActiveOrderDetails();
+        this.logger.log(`📦 Tìm thấy ${orderDetails.length} order details cần kiểm tra`);
+
+        const expiredIds = this.calculateExpiredOrderDetails(orderDetails);
+        
+        if (expiredIds.length > 0) {
+          await this.softDeleteOrderDetails(expiredIds);
+          this.logger.log(`✅ Đã xóa mềm ${expiredIds.length} order details`);
+        } else {
+          this.logger.log('✅ Không có order detail nào cần xóa mềm');
+        }
       }
 
       const executionEndTime = new Date();
       const executionTime = executionEndTime.getTime() - executionStartTime.getTime();
       this.logger.log(`⏱️ Thời gian thực hiện: ${executionTime}ms`);
-      this.logger.log('=== Kết thúc cronjob xóa mềm order details ===');
+      this.logger.log('=== Kết thúc cronjob ===');
 
     } catch (error) {
       this.logger.error('❌ Lỗi trong quá trình thực hiện cronjob:', error.stack);
+      throw error;
+    }
+  }
+
+  /**
+   * ✅ THÊM MỚI: Gia hạn extended cho tất cả order details khi không chạy được
+   * Logic: Khi cronjob không chạy (ngày nghỉ/chủ nhật) thì gia hạn thêm 1 ngày
+   */
+  private async extendAllActiveOrderDetails(): Promise<void> {
+    try {
+      this.logger.log('🆙 === BẮT ĐẦU GIA HẠN EXTENDED CHO TẤT CẢ ĐƠN ===');
+      
+      // Lấy danh sách order details active
+      const orderDetails = await this.getActiveOrderDetails();
+      
+      if (orderDetails.length === 0) {
+        this.logger.log('📦 Không có order detail nào để gia hạn');
+        return;
+      }
+
+      this.logger.log(`📦 Tìm thấy ${orderDetails.length} order details cần gia hạn`);
+
+      // Log chi tiết trước khi update
+      for (const orderDetail of orderDetails) {
+        const currentExtended = orderDetail.extended || 4;
+        const newExtended = currentExtended + 1;
+        this.logger.log(`📋 Order Detail ID ${orderDetail.id}: ${currentExtended} → ${newExtended} ngày`);
+      }
+
+      // Cập nhật extended: Tăng lên 1 hoặc set = 5 nếu null
+      const updateResult = await this.orderDetailRepository
+        .createQueryBuilder()
+        .update(OrderDetail)
+        .set({ 
+          extended: () => 'COALESCE(extended, 4) + 1'  // Nếu null thì set = 4, rồi +1 = 5
+        })
+        .where('deleted_at IS NULL')
+        .execute();
+
+      this.logger.log(`✅ Đã gia hạn extended cho ${updateResult.affected} order details`);
+      this.logger.log(`🕐 Thời gian gia hạn: ${this.formatDateTime(new Date())}`);
+      this.logger.log('🆙 === KẾT THÚC GIA HẠN EXTENDED ===');
+
+    } catch (error) {
+      this.logger.error('❌ Lỗi khi gia hạn extended:', error.stack);
       throw error;
     }
   }
@@ -102,11 +151,11 @@ export class OrderCleanupCronjobService {
 
       // 1. Kiểm tra chủ nhật
       if (dayOfWeek === 0) {
-        this.logger.log('🚫 Hôm nay là chủ nhật - cronjob được cấu hình không chạy chủ nhật');
+        this.logger.log('🚫 Hôm nay là chủ nhật - kiểm tra cấu hình');
         
         const allowSundayRun = await this.isSundayRunAllowed();
         if (!allowSundayRun) {
-          this.logger.log('❌ Không được phép chạy vào chủ nhật');
+          this.logger.log('❌ Không được phép chạy vào chủ nhật - sẽ gia hạn thay thế');
           return false;
         }
         this.logger.log('✅ Được cấu hình cho phép chạy chủ nhật');
@@ -119,7 +168,7 @@ export class OrderCleanupCronjobService {
       
       if (!allowHolidayRun) {
         // system_scheduleHoliday = '0' → CHẶN HOÀN TOÀN
-        this.logger.log('❌ Không thể chạy: system_scheduleHoliday = 0 (chặn hoàn toàn ngày nghỉ)');
+        this.logger.log('❌ Không thể chạy: system_scheduleHoliday = 0 (chặn hoàn toàn ngày nghỉ) - sẽ gia hạn thay thế');
         return false;
       }
 
@@ -129,11 +178,11 @@ export class OrderCleanupCronjobService {
       this.logger.log(`🏖️ Hôm nay có phải ngày nghỉ cụ thể: ${isHoliday ? 'Có' : 'Không'}`);
 
       if (isHoliday) {
-        this.logger.log('❌ Không thể chạy: Hôm nay có trong danh sách lịch nghỉ cụ thể');
+        this.logger.log('❌ Không thể chạy: Hôm nay có trong danh sách lịch nghỉ cụ thể - sẽ gia hạn thay thế');
         return false;
       }
 
-      this.logger.log('✅ Được phép chạy cronjob');
+      this.logger.log('✅ Được phép chạy cronjob cleanup');
       return true;
     } catch (error) {
       this.logger.error('❌ Lỗi khi kiểm tra điều kiện chạy cronjob - MẶC ĐỊNH CHẶN để an toàn:', error.stack);
@@ -350,7 +399,7 @@ export class OrderCleanupCronjobService {
   }
 
   /**
-   * Manual trigger để test (có thể gọi từ controller)
+   * Manual trigger để test cleanup (có thể gọi từ controller)
    */
   async manualCleanup(): Promise<{ 
     success: boolean; 
@@ -407,6 +456,64 @@ export class OrderCleanupCronjobService {
       return {
         success: false,
         deletedCount: 0,
+        message: `❌ Lỗi: ${error.message}`,
+        executionLog: logs,
+        executionTime
+      };
+    }
+  }
+
+  /**
+   * ✅ THÊM MỚI: Manual extend để test gia hạn
+   */
+  async manualExtend(): Promise<{ 
+    success: boolean; 
+    extendedCount: number; 
+    message: string; 
+    executionLog: string[];
+    executionTime: number;
+  }> {
+    const logs: string[] = [];
+    const originalLog = this.logger.log.bind(this.logger);
+    const startTime = new Date();
+    
+    // Capture logs để trả về
+    this.logger.log = (message: string) => {
+      logs.push(`${new Date().toISOString()}: ${message}`);
+      originalLog(message);
+    };
+
+    try {
+      this.logger.log('🆙 Manual trigger extend được gọi');
+      this.logger.log(`🕐 Thời gian bắt đầu: ${this.formatDateTime(startTime)}`);
+      
+      const beforeExtend = await this.getActiveOrderDetails();
+      await this.extendAllActiveOrderDetails();
+
+      const endTime = new Date();
+      const executionTime = endTime.getTime() - startTime.getTime();
+
+      // Restore original log function
+      this.logger.log = originalLog;
+
+      return {
+        success: true,
+        extendedCount: beforeExtend.length,
+        message: `✅ Đã gia hạn ${beforeExtend.length} order details thêm 1 ngày`,
+        executionLog: logs,
+        executionTime
+      };
+    } catch (error) {
+      // Restore original log function
+      this.logger.log = originalLog;
+      
+      const endTime = new Date();
+      const executionTime = endTime.getTime() - startTime.getTime();
+      
+      this.logger.error('❌ Lỗi trong manual extend:', error.stack);
+      return {
+        success: false,
+        extendedCount: 0,
         message: `❌ Lỗi: ${error.message}`,
         executionLog: logs,
         executionTime
