@@ -152,7 +152,48 @@ export class OrderDetailService {
     id: number,
     customerName: string,
   ): Promise<OrderDetail | null> {
-    await this.orderDetailRepository.update(id, { customer_name: customerName });
+    // Lấy thông tin order detail hiện tại để extract customer_id từ metadata
+    const currentOrderDetail = await this.findById(id);
+    if (!currentOrderDetail) {
+      throw new Error('Order detail not found');
+    }
+
+    // Parse metadata để lấy customer_id
+    let customerId: string | null = null;
+    try {
+      if (currentOrderDetail.metadata) {
+        const metadata = typeof currentOrderDetail.metadata === 'string' 
+          ? JSON.parse(currentOrderDetail.metadata) 
+          : currentOrderDetail.metadata;
+        customerId = metadata.customer_id;
+      }
+    } catch (error) {
+      console.warn('Error parsing metadata:', error);
+    }
+
+    if (customerId) {
+      // Tìm tất cả order details có cùng customer_id trong metadata
+      // Sử dụng MySQL JSON syntax
+      const orderDetailsWithSameCustomer = await this.orderDetailRepository
+        .createQueryBuilder('orderDetail')
+        .where("JSON_UNQUOTE(JSON_EXTRACT(orderDetail.metadata, '$.customer_id')) = :customerId", { customerId })
+        .getMany();
+
+      // Cập nhật tên khách hàng cho tất cả order details có cùng customer_id
+      const idsToUpdate = orderDetailsWithSameCustomer.map(od => od.id);
+      if (idsToUpdate.length > 0) {
+        await this.orderDetailRepository
+          .createQueryBuilder()
+          .update(OrderDetail)
+          .set({ customer_name: customerName })
+          .where('id IN (:...ids)', { ids: idsToUpdate })
+          .execute();
+      }
+    } else {
+      // Fallback: chỉ cập nhật order detail hiện tại nếu không có customer_id
+      await this.orderDetailRepository.update(id, { customer_name: customerName });
+    }
+
     return this.findById(id);
   }
 
