@@ -135,7 +135,24 @@ export class OrderDetailService {
     id: number,
     orderDetailData: Partial<OrderDetail>,
   ): Promise<OrderDetail | null> {
+    // ✅ Xử lý đặc biệt cho trường extended - cộng thêm thay vì ghi đè
+    if (orderDetailData.extended !== undefined) {
+      const currentOrderDetail = await this.findById(id);
+      if (currentOrderDetail) {
+        const currentExtended = currentOrderDetail.extended || 4;
+        orderDetailData.extended = currentExtended + orderDetailData.extended;
+      }
+    }
+    
     await this.orderDetailRepository.update(id, orderDetailData);
+    return this.findById(id);
+  }
+
+  async updateCustomerName(
+    id: number,
+    customerName: string,
+  ): Promise<OrderDetail | null> {
+    await this.orderDetailRepository.update(id, { customer_name: customerName });
     return this.findById(id);
   }
 
@@ -145,5 +162,125 @@ export class OrderDetailService {
 
   async deleteByOrderId(orderId: number): Promise<void> {
     await this.orderDetailRepository.softDelete({ order_id: orderId });
+  }
+
+  // ✅ Bulk operations
+  async bulkDelete(ids: number[], reason: string, user: any): Promise<{ deleted: number }> {
+    // Kiểm tra quyền cho từng order detail
+    const allowedUserIds = await this.getUserIdsByRole(user);
+    
+    let queryBuilder = this.orderDetailRepository
+      .createQueryBuilder('orderDetail')
+      .leftJoinAndSelect('orderDetail.order', 'order')
+      .leftJoinAndSelect('order.sale_by', 'sale_by')
+      .where('orderDetail.id IN (:...ids)', { ids });
+
+    if (allowedUserIds !== null) {
+      queryBuilder = queryBuilder.andWhere('order.sale_by_id IN (:...allowedUserIds)', { allowedUserIds });
+    }
+
+    const orderDetails = await queryBuilder.getMany();
+    
+    if (orderDetails.length === 0) {
+      return { deleted: 0 };
+    }
+
+    // Cập nhật reason và soft delete
+    await this.orderDetailRepository.update(
+      orderDetails.map(od => od.id),
+      { reason }
+    );
+
+    await this.orderDetailRepository.softDelete(orderDetails.map(od => od.id));
+    
+    return { deleted: orderDetails.length };
+  }
+
+  async bulkUpdate(ids: number[], updates: Partial<OrderDetail>, user: any): Promise<{ updated: number }> {
+    // Kiểm tra quyền cho từng order detail
+    const allowedUserIds = await this.getUserIdsByRole(user);
+    
+    let queryBuilder = this.orderDetailRepository
+      .createQueryBuilder('orderDetail')
+      .leftJoinAndSelect('orderDetail.order', 'order')
+      .leftJoinAndSelect('order.sale_by', 'sale_by')
+      .where('orderDetail.id IN (:...ids)', { ids });
+
+    if (allowedUserIds !== null) {
+      queryBuilder = queryBuilder.andWhere('order.sale_by_id IN (:...allowedUserIds)', { allowedUserIds });
+    }
+
+    const orderDetails = await queryBuilder.getMany();
+    
+    if (orderDetails.length === 0) {
+      return { updated: 0 };
+    }
+
+    await this.orderDetailRepository.update(
+      orderDetails.map(od => od.id),
+      updates
+    );
+    
+    return { updated: orderDetails.length };
+  }
+
+  async bulkExtend(ids: number[], user: any): Promise<{ updated: number }> {
+    // Kiểm tra quyền cho từng order detail
+    const allowedUserIds = await this.getUserIdsByRole(user);
+    
+    let queryBuilder = this.orderDetailRepository
+      .createQueryBuilder('orderDetail')
+      .leftJoinAndSelect('orderDetail.order', 'order')
+      .leftJoinAndSelect('order.sale_by', 'sale_by')
+      .where('orderDetail.id IN (:...ids)', { ids });
+
+    if (allowedUserIds !== null) {
+      queryBuilder = queryBuilder.andWhere('order.sale_by_id IN (:...allowedUserIds)', { allowedUserIds });
+    }
+
+    const orderDetails = await queryBuilder.getMany();
+    
+    if (orderDetails.length === 0) {
+      return { updated: 0 };
+    }
+
+    // Gia hạn thêm 4 ngày cho mỗi order detail
+    for (const orderDetail of orderDetails) {
+      const currentExtended = orderDetail.extended || 4;
+      await this.orderDetailRepository.update(orderDetail.id, {
+        extended: currentExtended + 4
+      });
+    }
+    
+    return { updated: orderDetails.length };
+  }
+
+  async bulkAddNotes(ids: number[], notes: string, user: any): Promise<{ updated: number }> {
+    // Kiểm tra quyền cho từng order detail
+    const allowedUserIds = await this.getUserIdsByRole(user);
+    
+    let queryBuilder = this.orderDetailRepository
+      .createQueryBuilder('orderDetail')
+      .leftJoinAndSelect('orderDetail.order', 'order')
+      .leftJoinAndSelect('order.sale_by', 'sale_by')
+      .where('orderDetail.id IN (:...ids)', { ids });
+
+    if (allowedUserIds !== null) {
+      queryBuilder = queryBuilder.andWhere('order.sale_by_id IN (:...allowedUserIds)', { allowedUserIds });
+    }
+
+    const orderDetails = await queryBuilder.getMany();
+    
+    if (orderDetails.length === 0) {
+      return { updated: 0 };
+    }
+
+    // ✅ Ghi đè ghi chú thay vì append
+    await this.orderDetailRepository.update(
+      orderDetails.map(od => od.id),
+      { notes }
+    );
+    
+    return { updated: orderDetails.length };
   }
 }
