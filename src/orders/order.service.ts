@@ -21,7 +21,7 @@ interface OrderFilters {
   departments?: string;
   products?: string;
   warningLevel?: string;
-  sortField?: 'quantity' | 'unit_price' | null;
+  sortField?: 'quantity' | 'unit_price' | 'extended' | 'dynamicExtended' | null;
   sortDirection?: 'asc' | 'desc' | null;
   user?: any; // truyền cả user object
 }
@@ -70,13 +70,9 @@ export class OrderService {
         r.replace('manager-', ''),
       );
 
-      // Lọc departments có server_ip hợp lệ
       const departments = await this.departmentRepository
         .find({
-          where: departmentSlugs.map((slug) => ({
-            slug,
-            deletedAt: IsNull(),
-          })),
+          where: departmentSlugs.map((slug) => ({ slug, deletedAt: IsNull() })),
         })
         .then((departments) =>
           departments.filter(
@@ -96,13 +92,12 @@ export class OrderService {
           .getMany();
 
         return usersInDepartments.map((u) => u.id);
-      } else {
-        return []; // Manager không có department hợp lệ (có server_ip)
       }
-    } else {
-      // User thường: chỉ xem của chính họ
-      return [user.id];
+      return []; // Manager không có department hợp lệ (có server_ip)
     }
+
+    // User thường: chỉ xem của chính họ
+    return [user.id];
   }
 
   // Helper method để parse customer_id từ metadata JSON
@@ -111,17 +106,16 @@ export class OrderService {
       if (typeof metadata === 'string') {
         const parsed = JSON.parse(metadata);
         const customerId = parsed.customer_id || null;
-        this.logger.debug(`Extracted customer_id from string metadata: ${customerId}`);
         return customerId;
       } else if (typeof metadata === 'object' && metadata !== null) {
         const customerId = metadata.customer_id || null;
-        this.logger.debug(`Extracted customer_id from object metadata: ${customerId}`);
         return customerId;
       }
-      this.logger.debug(`No customer_id found in metadata: ${JSON.stringify(metadata)}`);
       return null;
     } catch (error) {
-      this.logger.warn(`Error parsing metadata: ${error.message}, metadata: ${JSON.stringify(metadata)}`);
+      this.logger.warn(
+        `Error parsing metadata: ${error.message}, metadata: ${JSON.stringify(metadata)}`,
+      );
       return null;
     }
   }
@@ -286,8 +280,37 @@ export class OrderService {
     return result;
   }
 
+  // Thêm method helper để tính toán dynamic extended
+  private calcDynamicExtended(
+    createdAt: Date | null,
+    originalExtended: number | null,
+  ): number | null {
+    try {
+      if (!createdAt || originalExtended === null) {
+        return typeof originalExtended === 'number' ? originalExtended : null;
+      }
+
+      const createdDate = new Date(createdAt);
+      createdDate.setHours(0, 0, 0, 0); // Reset time to start of day
+
+      const expiredDate = new Date(createdDate);
+      expiredDate.setDate(expiredDate.getDate() + originalExtended);
+
+      const today = new Date();
+      today.setHours(0, 0, 0, 0); // Reset time to start of day
+
+      const diffTime = expiredDate.getTime() - today.getTime();
+      const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+
+      return diffDays;
+    } catch (error) {
+      return typeof originalExtended === 'number' ? originalExtended : null;
+    }
+  }
+
+  // Updated findAllPaginated method với dynamic extended calculation và sorting
   async findAllPaginated(filters: OrderFilters): Promise<{
-    data: OrderDetail[]; // Thay đổi return type
+    data: OrderDetail[];
     total: number;
     page: number;
     pageSize: number;
@@ -317,42 +340,19 @@ export class OrderService {
       .leftJoinAndSelect('order.sale_by', 'sale_by')
       .leftJoinAndSelect('sale_by.departments', 'sale_by_departments');
 
-    // Phân quyền: admin xem tất cả, manager xem theo phòng, user thường chỉ xem đơn của mình
+    // Phân quyền xem
     const allowedUserIds = await this.getUserIdsByRole(user);
-
     if (allowedUserIds !== null) {
       if (allowedUserIds.length === 0) {
-        queryBuilder.andWhere('1 = 0'); // Không có quyền xem gì
+        queryBuilder.andWhere('1 = 0');
       } else {
-        queryBuilder.andWhere('order.sale_by IN (:...userIds)', {
+        queryBuilder.andWhere('sale_by.id IN (:...userIds)', {
           userIds: allowedUserIds,
         });
       }
     }
-    // Admin (allowedUserIds === null) không có điều kiện gì
 
-    // ✅ Apply blacklist filtering for regular users using SQL
-    if (user && user.roles && user.roles.length > 0) {
-      const roleNames = (user.roles || []).map((r: any) => 
-        typeof r === 'string' 
-          ? r.toLowerCase() 
-          : (r.name || '').toLowerCase()
-      );
-      
-      const isAdmin = roleNames.includes('admin');
-      const isManager = roleNames.some((r: string) => r.startsWith('manager-'));
-      
-      // Chỉ filter blacklist cho user thường (không phải admin/manager)
-      if (!isAdmin && !isManager) {
-        const blacklistedContacts = await this.orderBlacklistService.getBlacklistedContactsForUser(user.id);
-        
-        // Store blacklisted contacts to filter later at application level
-        // because SQL JSON functions may not work consistently across different databases
-        queryBuilder.setParameter('blacklistedContacts', blacklistedContacts);
-      }
-    }
-
-    // Filter by search (tìm kiếm theo order_details.id, customer_name, raw_item)
+    // Apply filters as before
     if (search) {
       queryBuilder.andWhere(
         '(CAST(details.id AS CHAR) LIKE :search OR details.customer_name LIKE :search OR details.raw_item LIKE :search)',
@@ -360,41 +360,34 @@ export class OrderService {
       );
     }
 
-    // Filter by status (order detail status)
     if (status) {
       queryBuilder.andWhere('details.status = :status', { status });
     }
 
-    // Filter by single date
     if (date) {
       const startDate = new Date(date);
       const endDate = new Date(date);
       endDate.setHours(23, 59, 59, 999);
-
       queryBuilder.andWhere(
         'order.created_at BETWEEN :startDate AND :endDate',
         { startDate, endDate },
       );
     }
 
-    // Filter by date range
     if (dateRange && dateRange.start && dateRange.end) {
       const startDate = new Date(dateRange.start);
       const endDate = new Date(dateRange.end);
       endDate.setHours(23, 59, 59, 999);
-
       queryBuilder.andWhere(
         'order.created_at BETWEEN :rangeStart AND :rangeEnd',
         { rangeStart: startDate, rangeEnd: endDate },
       );
     }
 
-    // Filter by single employee (backward compatibility)
     if (employee) {
       queryBuilder.andWhere('sale_by.id = :employee', { employee });
     }
 
-    // Filter by multiple employees
     if (employees) {
       const employeeIds = employees
         .split(',')
@@ -407,14 +400,12 @@ export class OrderService {
       }
     }
 
-    // Filter by multiple departments
     if (departments) {
       const departmentIds = departments
         .split(',')
         .map((id) => parseInt(id.trim(), 10))
         .filter((id) => !isNaN(id));
       if (departmentIds.length > 0) {
-        // Lọc theo phòng ban có server_ip hợp lệ (không null, không rỗng)
         queryBuilder.andWhere(
           `
         sale_by_departments.id IN (:...departmentIds)
@@ -426,7 +417,6 @@ export class OrderService {
       }
     }
 
-    // Filter by multiple products
     if (products) {
       const productIds = products
         .split(',')
@@ -439,7 +429,6 @@ export class OrderService {
       }
     }
 
-    // Filter by warning level (extended)
     if (warningLevel) {
       const levels = warningLevel
         .split(',')
@@ -450,188 +439,110 @@ export class OrderService {
       }
     }
 
-    // ✅ Apply sorting based on sortField and sortDirection
-    if (sortField && sortDirection) {
-      if (sortField === 'quantity') {
-        queryBuilder.orderBy(
-          'details.quantity',
-          sortDirection.toUpperCase() as 'ASC' | 'DESC',
-        );
-      } else if (sortField === 'unit_price') {
-        queryBuilder.orderBy(
-          'details.unit_price',
-          sortDirection.toUpperCase() as 'ASC' | 'DESC',
-        );
-      }
-      // Add secondary sort by ID to ensure consistent ordering
-      queryBuilder.addOrderBy('details.id', 'DESC');
-    } else {
-      // Default order by details.id desc when no sort is applied
-      queryBuilder.orderBy('details.id', 'DESC');
-    }
+    // Chuẩn bị data blacklist theo role
+    let managerBlacklistMap: Map<number, Set<string>> | undefined;
+    let userBlacklisted: string[] | undefined;
 
-    // ✅ Get total count before pagination
-    const totalBeforeFilter = await queryBuilder.getCount();
-
-    // Apply pagination on ORDER_DETAILS
-    queryBuilder.skip(skip).take(pageSize);
-
-    let data = await queryBuilder.getMany();
-
-    // ✅ Apply blacklist filtering at application level
-    let actualTotal = totalBeforeFilter;
-    if (user && user.roles && user.roles.length > 0) {
-      const roleNames = (user.roles || []).map((r: any) => 
-        typeof r === 'string' 
-          ? r.toLowerCase() 
-          : (r.name || '').toLowerCase()
+    if (user && user.roles) {
+      const roleNames = (user.roles || []).map((r: any) =>
+        typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
       );
-      
-      
       const isAdmin = roleNames.includes('admin');
       const isManager = roleNames.some((r: string) => r.startsWith('manager-'));
-      
-      // Chỉ filter blacklist cho user thường (không phải admin/manager)
-      if (!isAdmin && !isManager) {
-        const blacklistedContacts = await this.orderBlacklistService.getBlacklistedContactsForUser(user.id);
-        
-        if (blacklistedContacts.length > 0) {
-          
-          // Filter current page data
-          const beforeFilterCount = data.length;
-          data = data.filter(orderDetail => {
-            const customerId = this.extractCustomerIdFromMetadata(orderDetail.metadata);
-            const isBlacklisted = customerId && blacklistedContacts.includes(customerId);
-            return !customerId || !blacklistedContacts.includes(customerId);
-          });
-          
-          
-          // Calculate actual total by filtering all data
-          const allDataQuery = this.orderDetailRepository
-            .createQueryBuilder('details')
-            .leftJoinAndSelect('details.order', 'order')
-            .leftJoinAndSelect('order.sale_by', 'sale_by')
-            .leftJoinAndSelect('sale_by.departments', 'sale_by_departments');
 
-          // Apply same base filters
-          if (allowedUserIds !== null) {
-            if (allowedUserIds.length === 0) {
-              allDataQuery.andWhere('1 = 0');
-            } else {
-              allDataQuery.andWhere('order.sale_by IN (:...userIds)', { userIds: allowedUserIds });
-            }
-          }
-
-          // Apply all other filters
-          if (search) {
-            allDataQuery.andWhere(
-              '(CAST(details.id AS CHAR) LIKE :search OR details.customer_name LIKE :search OR details.raw_item LIKE :search)',
-              { search: `%${search}%` },
+      if (!isAdmin) {
+        if (isManager) {
+          // Manager: không được thấy các đơn của khách bị blacklist bởi bất kỳ user nào trong phạm vi họ có thể xem (allowedUserIds)
+          managerBlacklistMap =
+            await this.orderBlacklistService.getBlacklistedContactsForUsers(
+              allowedUserIds || [],
             );
-          }
-          if (status) {
-            allDataQuery.andWhere('details.status = :status', { status });
-          }
-          if (date) {
-            const startDate = new Date(date);
-            const endDate = new Date(date);
-            endDate.setHours(23, 59, 59, 999);
-            allDataQuery.andWhere('order.created_at BETWEEN :startDate AND :endDate', { startDate, endDate });
-          }
-          if (dateRange && dateRange.start && dateRange.end) {
-            const startDate = new Date(dateRange.start);
-            const endDate = new Date(dateRange.end);
-            endDate.setHours(23, 59, 59, 999);
-            allDataQuery.andWhere('order.created_at BETWEEN :rangeStart AND :rangeEnd', { rangeStart: startDate, rangeEnd: endDate });
-          }
-          if (employee) {
-            allDataQuery.andWhere('sale_by.id = :employee', { employee });
-          }
-          if (employees) {
-            const employeeIds = employees.split(',').map((id) => parseInt(id.trim(), 10)).filter((id) => !isNaN(id));
-            if (employeeIds.length > 0) {
-              allDataQuery.andWhere('sale_by.id IN (:...employeeIds)', { employeeIds });
-            }
-          }
-          if (departments) {
-            const departmentIds = departments.split(',').map((id) => parseInt(id.trim(), 10)).filter((id) => !isNaN(id));
-            if (departmentIds.length > 0) {
-              allDataQuery.andWhere(
-                `sale_by_departments.id IN (:...departmentIds) AND sale_by_departments.server_ip IS NOT NULL AND TRIM(sale_by_departments.server_ip) <> ''`,
-                { departmentIds },
-              );
-            }
-          }
-          if (products) {
-            const productIds = products.split(',').map((id) => parseInt(id.trim(), 10)).filter((id) => !isNaN(id));
-            if (productIds.length > 0) {
-              allDataQuery.andWhere('details.product_id IN (:...productIds)', { productIds });
-            }
-          }
-          if (warningLevel) {
-            const levels = warningLevel.split(',').map((level) => parseInt(level.trim(), 10)).filter((level) => !isNaN(level));
-            if (levels.length > 0) {
-              allDataQuery.andWhere('details.extended IN (:...levels)', { levels });
-            }
-          }
-
-          const allData = await allDataQuery.getMany();
-          const filteredAllData = allData.filter(orderDetail => {
-            const customerId = this.extractCustomerIdFromMetadata(orderDetail.metadata);
-            return !customerId || !blacklistedContacts.includes(customerId);
-          });
-          actualTotal = filteredAllData.length;
-          
+        } else {
+          // User: ẩn các đơn của khách nằm trong blacklist của chính họ
+          userBlacklisted =
+            await this.orderBlacklistService.getBlacklistedContactsForUser(
+              user.id,
+            );
         }
       }
     }
 
-    // Debug: Log metadata của vài records đầu để kiểm tra format
-    if (user && data.length > 0) {
-      data.slice(0, 3).forEach((orderDetail, index) => {
-        const customerId = this.extractCustomerIdFromMetadata(orderDetail.metadata);
-      });
+    // LUÔN lấy tất cả data để áp dụng unified sorting
+    const allData = await queryBuilder.getMany();
+
+    // Tính calcDynamicExtended cho tất cả data
+    const dataWithDynamicExtended = allData.map((orderDetail) => ({
+      ...orderDetail,
+      dynamicExtended: this.calcDynamicExtended(
+        orderDetail.created_at || null,
+        orderDetail.extended,
+      ),
+    }));
+
+    // LUÔN sort theo calcDynamicExtended
+    const actualSortDirection =
+      sortDirection?.toLowerCase() === 'asc' ? 'asc' : 'desc';
+    dataWithDynamicExtended.sort((a, b) => {
+      const aExtended =
+        a.dynamicExtended !== null ? a.dynamicExtended : -999999;
+      const bExtended =
+        b.dynamicExtended !== null ? b.dynamicExtended : -999999;
+      return actualSortDirection === 'asc'
+        ? aExtended - bExtended
+        : bExtended - aExtended;
+    });
+
+    // Áp dụng blacklist filter theo role
+    let filteredData = dataWithDynamicExtended;
+
+    if (user && !roleNamesIncludes(user, 'admin')) {
+      if (roleNamesSome(user, (r) => r.startsWith('manager-'))) {
+        if (managerBlacklistMap && (allowedUserIds?.length || 0) > 0) {
+          const blacklistedSet = new Set<string>();
+          for (const uid of allowedUserIds!) {
+            const set = managerBlacklistMap.get(uid);
+            if (set) for (const cid of set) blacklistedSet.add(cid);
+          }
+          const filterFn = (od: OrderDetail) => {
+            const cid = this.extractCustomerIdFromMetadata(od.metadata);
+            return !cid || !blacklistedSet.has(cid);
+          };
+          filteredData = filteredData.filter(filterFn);
+        }
+      } else {
+        if (userBlacklisted && userBlacklisted.length > 0) {
+          const set = new Set(userBlacklisted);
+          const filterFn = (od: OrderDetail) => {
+            const cid = this.extractCustomerIdFromMetadata(od.metadata);
+            return !cid || !set.has(cid);
+          };
+          filteredData = filteredData.filter(filterFn);
+        }
+      }
     }
 
-    return {
-      data, // Trả về array of OrderDetail đã được filter blacklist
-      total: actualTotal, // Tổng số order_details sau khi đã filter blacklist
-      page,
-      pageSize,
-    };
-  }
+    // Áp dụng pagination sau khi sort và filter
+    const data = filteredData.slice(skip, skip + pageSize);
+    const actualTotal = filteredData.length;
 
-  async findById(id: number): Promise<Order | null> {
-    return this.orderRepository.findOne({
-      where: { id },
-      relations: [
-        'details',
-        'details.product',
-        'sale_by',
-        'sale_by.departments',
-      ],
-    });
+    return { data, total: actualTotal, page, pageSize };
   }
 
   async findByIdWithPermission(id: number, user?: any): Promise<Order | null> {
-    const order = await this.findById(id);
+    const qb = this.orderRepository
+      .createQueryBuilder('order')
+      .leftJoinAndSelect('order.details', 'details')
+      .leftJoinAndSelect('order.sale_by', 'sale_by')
+      .leftJoinAndSelect('sale_by.departments', 'sale_by_departments')
+      .where('order.id = :id', { id });
 
-    // Kiểm tra quyền xem order này
-    if (order && user) {
-      const allowedUserIds = await this.getUserIdsByRole(user);
-
-      if (allowedUserIds !== null) {
-        if (
-          allowedUserIds.length === 0 ||
-          !allowedUserIds.includes(order.sale_by?.id)
-        ) {
-          return null; // Không có quyền xem
-        }
-      }
-      // Admin (allowedUserIds === null) có thể xem tất cả
+    const allowedUserIds = await this.getUserIdsByRole(user);
+    if (allowedUserIds !== null) {
+      if (allowedUserIds.length === 0) return null;
+      qb.andWhere('sale_by.id IN (:...userIds)', { userIds: allowedUserIds });
     }
 
-    return order;
+    return qb.getOne();
   }
 
   async create(orderData: Partial<Order>): Promise<Order> {
@@ -641,10 +552,26 @@ export class OrderService {
 
   async update(id: number, orderData: Partial<Order>): Promise<Order | null> {
     await this.orderRepository.update(id, orderData);
-    return this.findById(id);
+    return this.orderRepository.findOne({
+      where: { id },
+      relations: ['details', 'sale_by', 'sale_by.departments'],
+    });
   }
 
   async delete(id: number): Promise<void> {
-    await this.orderRepository.softDelete(id);
+    await this.orderRepository.delete(id);
   }
+}
+
+function roleNamesIncludes(user: any, roleName: string): boolean {
+  const roleNames = (user?.roles || []).map((r: any) =>
+    typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
+  );
+  return roleNames.includes(roleName.toLowerCase());
+}
+function roleNamesSome(user: any, predicate: (r: string) => boolean): boolean {
+  const roleNames = (user?.roles || []).map((r: any) =>
+    typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
+  );
+  return roleNames.some(predicate);
 }

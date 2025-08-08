@@ -291,16 +291,6 @@ export class OrderBlacklistService {
         (role) => role && role.includes('manager'),
       );
 
-      this.logger.debug('=== findAllWithPermissions START ===');
-      this.logger.debug(`Input filters:`, {
-        page,
-        pageSize,
-        search,
-        departments,
-        users,
-      });
-      this.logger.debug(`User permissions:`, { userRoles, isAdmin, isManager });
-
       // Nếu có search customer name, lấy trước các zaloContactId matching
       let matchingZaloContactIds: string[] = [];
       if (search && search.trim()) {
@@ -544,5 +534,32 @@ export class OrderBlacklistService {
       value: user.id,
       label: `${user.fullName}${user.employeeCode ? ` (${user.employeeCode})` : ''}`,
     }));
+  }
+
+  // ✅ New: Get blacklisted contacts for multiple users at once
+  async getBlacklistedContactsForUsers(
+    userIds: number[],
+  ): Promise<Map<number, Set<string>>> {
+    try {
+      if (!userIds || userIds.length === 0) return new Map();
+
+      const rows = await this.orderBlacklistRepository
+        .createQueryBuilder('blacklist')
+        .select(['blacklist.userId AS userId', 'blacklist.zaloContactId AS zaloContactId'])
+        .where('blacklist.userId IN (:...userIds)', { userIds })
+        .getRawMany<{ userId: number; zaloContactId: string }>();
+
+      const map = new Map<number, Set<string>>();
+      for (const row of rows) {
+        const uid = Number(row.userId);
+        const cid = row.zaloContactId;
+        if (!map.has(uid)) map.set(uid, new Set());
+        map.get(uid)!.add(cid);
+      }
+      return map;
+    } catch (error) {
+      this.logger.error('Error getting blacklisted contacts for users:', error);
+      throw error;
+    }
   }
 }

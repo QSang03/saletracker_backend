@@ -13,6 +13,7 @@ import {
   ForbiddenException,
   HttpCode,
   HttpStatus,
+  Query,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { OrderDetailService } from './order-detail.service';
@@ -32,6 +33,46 @@ export class OrderDetailController {
   @Get()
   async findAll(@Req() req?: any): Promise<OrderDetail[]> {
     return this.orderDetailService.findAllWithPermission(req.user);
+  }
+
+  @Get('trashed')
+  async findAllTrashed(
+    @Query('page') page: string = '1',
+    @Query('pageSize') pageSize: string = '10',
+    @Query('search') search?: string,
+    @Query('employees') employees?: string,
+    @Query('departments') departments?: string,
+    @Query('products') products?: string,
+    @Query('sortField') sortField?: 'quantity' | 'unit_price',
+    @Query('sortDirection') sortDirection?: 'asc' | 'desc',
+    @Req() req?: any,
+  ): Promise<{
+    data: OrderDetail[];
+    total: number;
+    page: number;
+    pageSize: number;
+  }> {
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const pageSizeNum = Math.max(1, Math.min(parseInt(pageSize, 10) || 10, 200));
+
+    return this.orderDetailService.findAllTrashedPaginated(req.user, {
+      page: pageNum,
+      pageSize: pageSizeNum,
+      search: search?.trim(),
+      employees,
+      departments,
+      products,
+      sortField: sortField || null,
+      sortDirection: sortDirection || null,
+    });
+  }
+
+  @Post('bulk-restore')
+  async bulkRestore(
+    @Body() data: { ids: number[] },
+    @Req() req?: any,
+  ): Promise<{ restored: number }> {
+    return this.orderDetailService.bulkRestore(data.ids, req.user);
   }
 
   @Get(':id')
@@ -62,12 +103,13 @@ export class OrderDetailController {
     @Body() orderDetailData: Partial<OrderDetail>,
     @Req() req?: any,
   ): Promise<OrderDetail | null> {
-    // Kiểm tra quyền trước khi update
-    const existingOrderDetail = await this.orderDetailService.findByIdWithPermission(id, req.user);
-    if (!existingOrderDetail) {
-      return null; // Không có quyền hoặc không tồn tại
+    // Chỉ chủ sở hữu mới được sửa
+    const existing = await this.orderDetailService.findById(id);
+    if (!existing) throw new NotFoundException('Order detail not found');
+    if (existing.order?.sale_by?.id !== req.user?.id) {
+      throw new ForbiddenException('Bạn không có quyền sửa order này');
     }
-    
+
     return this.orderDetailService.update(id, orderDetailData);
   }
 
@@ -76,12 +118,13 @@ export class OrderDetailController {
     @Param('id', ParseIntPipe) id: number,
     @Req() req?: any,
   ): Promise<void> {
-    // Kiểm tra quyền trước khi delete
-    const existingOrderDetail = await this.orderDetailService.findByIdWithPermission(id, req.user);
-    if (!existingOrderDetail) {
-      throw new ForbiddenException('Không có quyền xóa hoặc order detail không tồn tại');
+    // Chỉ chủ sở hữu mới được xóa
+    const existing = await this.orderDetailService.findById(id);
+    if (!existing) throw new NotFoundException('Order detail not found');
+    if (existing.order?.sale_by?.id !== req.user?.id) {
+      throw new ForbiddenException('Bạn không có quyền xóa order này');
     }
-    
+
     return this.orderDetailService.delete(id);
   }
 
@@ -95,7 +138,7 @@ export class OrderDetailController {
   // ✅ Bulk operations
   @Post('bulk-delete')
   async bulkDelete(
-    @Body() data: { ids: number[], reason: string },
+    @Body() data: { ids: number[]; reason: string },
     @Req() req?: any,
   ): Promise<{ deleted: number }> {
     return this.orderDetailService.bulkDelete(data.ids, data.reason, req.user);
@@ -103,7 +146,7 @@ export class OrderDetailController {
 
   @Post('bulk-update')
   async bulkUpdate(
-    @Body() data: { ids: number[], updates: Partial<OrderDetail> },
+    @Body() data: { ids: number[]; updates: Partial<OrderDetail> },
     @Req() req?: any,
   ): Promise<{ updated: number }> {
     return this.orderDetailService.bulkUpdate(data.ids, data.updates, req.user);
@@ -119,7 +162,7 @@ export class OrderDetailController {
 
   @Post('bulk-notes')
   async bulkAddNotes(
-    @Body() data: { ids: number[], notes: string },
+    @Body() data: { ids: number[]; notes: string },
     @Req() req?: any,
   ): Promise<{ updated: number }> {
     return this.orderDetailService.bulkAddNotes(data.ids, data.notes, req.user);
@@ -131,13 +174,14 @@ export class OrderDetailController {
     @Body() data: { customer_name: string },
     @Req() req?: any,
   ): Promise<OrderDetail | null> {
-    // Kiểm tra quyền trước khi update
-    const existingOrderDetail = await this.orderDetailService.findByIdWithPermission(id, req.user);
-    if (!existingOrderDetail) {
-      return null; // Không có quyền hoặc không tồn tại
+    // Chỉ chủ sở hữu mới được sửa tên khách hàng
+    const existing = await this.orderDetailService.findById(id);
+    if (!existing) throw new NotFoundException('Order detail not found');
+    if (existing.order?.sale_by?.id !== req.user?.id) {
+      throw new ForbiddenException('Bạn không có quyền sửa tên khách hàng');
     }
-    
-    return this.orderDetailService.updateCustomerName(id, data.customer_name);
+
+    return this.orderDetailService.updateCustomerName(id, data.customer_name, req.user);
   }
 
   @Post(':id/add-to-blacklist')
@@ -147,10 +191,13 @@ export class OrderDetailController {
     @Body() data: { reason?: string },
     @Req() req?: any,
   ): Promise<{ message: string; blacklistEntry?: any }> {
-    // Lấy order detail và kiểm tra quyền
-    const orderDetail = await this.orderDetailService.findByIdWithPermission(id, req.user);
+    // Lấy order detail và kiểm tra quyền (chỉ chủ sở hữu được thêm blacklist)
+    const orderDetail = await this.orderDetailService.findById(id);
     if (!orderDetail) {
-      throw new NotFoundException('Order detail not found or no permission');
+      throw new NotFoundException('Order detail not found');
+    }
+    if (orderDetail.order?.sale_by?.id !== req.user?.id) {
+      throw new ForbiddenException('Bạn không có quyền thêm blacklist cho order này');
     }
 
     // Parse customer_id từ metadata
@@ -171,7 +218,10 @@ export class OrderDetailController {
     }
 
     // Kiểm tra xem đã có trong blacklist chưa
-    const isAlreadyBlacklisted = await this.orderBlacklistService.isBlacklisted(req.user.id, customerId);
+    const isAlreadyBlacklisted = await this.orderBlacklistService.isBlacklisted(
+      req.user.id,
+      customerId,
+    );
     if (isAlreadyBlacklisted) {
       return { message: 'Contact is already in blacklist' };
     }
@@ -183,10 +233,9 @@ export class OrderDetailController {
       reason: data.reason || `Added from order detail #${id}`,
     });
 
-    return { 
+    return {
       message: 'Contact added to blacklist successfully',
-      blacklistEntry 
+      blacklistEntry,
     };
   }
-
 }
