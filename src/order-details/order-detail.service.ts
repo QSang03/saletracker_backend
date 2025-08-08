@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { OrderDetail } from './order-detail.entity';
 import { Department } from 'src/departments/department.entity';
 import { User } from 'src/users/user.entity';
+import { OrderBlacklistService } from '../order-blacklist/order-blacklist.service';
 
 @Injectable()
 export class OrderDetailService {
@@ -14,6 +15,7 @@ export class OrderDetailService {
     private departmentRepository: Repository<Department>,
     @InjectRepository(User)
     private userRepository: Repository<User>,
+    private orderBlacklistService: OrderBlacklistService,
   ) {}
 
   async findAll(): Promise<OrderDetail[]> {
@@ -64,6 +66,21 @@ export class OrderDetailService {
     }
   }
 
+  // Helper method để parse customer_id từ metadata JSON
+  private extractCustomerIdFromMetadata(metadata: any): string | null {
+    try {
+      if (typeof metadata === 'string') {
+        const parsed = JSON.parse(metadata);
+        return parsed.customer_id || null;
+      } else if (typeof metadata === 'object' && metadata !== null) {
+        return metadata.customer_id || null;
+      }
+      return null;
+    } catch (error) {
+      return null;
+    }
+  }
+
   async findAllWithPermission(user?: any): Promise<OrderDetail[]> {
     const queryBuilder = this.orderDetailRepository
       .createQueryBuilder('details')
@@ -82,7 +99,33 @@ export class OrderDetailService {
     }
     // Admin (allowedUserIds === null) không có điều kiện gì
 
-    return queryBuilder.getMany();
+    const orderDetails = await queryBuilder.getMany();
+
+    // ✅ Apply blacklist filtering at application level for regular users
+    if (user && user.roles && user.roles.length > 0) {
+      const roleNames = (user.roles || []).map((r: any) => 
+        typeof r === 'string' 
+          ? r.toLowerCase() 
+          : (r.name || '').toLowerCase()
+      );
+      
+      const isAdmin = roleNames.includes('admin');
+      const isManager = roleNames.some((r: string) => r.startsWith('manager-'));
+      
+      // Chỉ filter blacklist cho user thường (không phải admin/manager)
+      if (!isAdmin && !isManager) {
+        const blacklistedContacts = await this.orderBlacklistService.getBlacklistedContactsForUser(user.id);
+        
+        if (blacklistedContacts.length > 0) {
+          return orderDetails.filter(orderDetail => {
+            const customerId = this.extractCustomerIdFromMetadata(orderDetail.metadata);
+            return !customerId || !blacklistedContacts.includes(customerId);
+          });
+        }
+      }
+    }
+
+    return orderDetails;
   }
 
   async findById(id: number): Promise<OrderDetail | null> {
@@ -102,6 +145,27 @@ export class OrderDetailService {
       if (allowedUserIds !== null) {
         if (allowedUserIds.length === 0 || !allowedUserIds.includes(orderDetail.order.sale_by?.id)) {
           return null; // Không có quyền xem
+        }
+        
+        // Kiểm tra blacklist cho user thường
+        const roleNames = (user.roles || []).map((r: any) => 
+          typeof r === 'string' 
+            ? r.toLowerCase() 
+            : (r.name || '').toLowerCase()
+        );
+        
+        const isAdmin = roleNames.includes('admin');
+        const isManager = roleNames.some((r: string) => r.startsWith('manager-'));
+        
+        // Chỉ filter blacklist cho user thường (không phải admin/manager)
+        if (!isAdmin && !isManager) {
+          const customerId = this.extractCustomerIdFromMetadata(orderDetail.metadata);
+          if (customerId) {
+            const isBlacklisted = await this.orderBlacklistService.isBlacklisted(user.id, customerId);
+            if (isBlacklisted) {
+              return null; // Bị blacklist, không được xem
+            }
+          }
         }
       }
       // Admin (allowedUserIds === null) có thể xem tất cả

@@ -5,9 +5,13 @@ import { OrderDetailService } from './order-detail.service';
 import { OrderDetailController } from './order-detail.controller';
 import { Department } from 'src/departments/department.entity';
 import { User } from 'src/users/user.entity';
+import { OrderBlacklistModule } from '../order-blacklist/order-blacklist.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([OrderDetail, Department, User])],
+  imports: [
+    TypeOrmModule.forFeature([OrderDetail, Department, User]),
+    OrderBlacklistModule,
+  ],
   providers: [OrderDetailService],
   controllers: [OrderDetailController],
   exports: [OrderDetailService],

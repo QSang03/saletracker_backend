@@ -6,6 +6,8 @@ import { OrderDetail } from 'src/order-details/order-detail.entity';
 import { Department } from 'src/departments/department.entity';
 import { User } from 'src/users/user.entity';
 import { Product } from 'src/products/product.entity';
+import { OrderBlacklistService } from '../order-blacklist/order-blacklist.service';
+import { Logger } from '@nestjs/common';
 
 interface OrderFilters {
   page: number;
@@ -26,6 +28,8 @@ interface OrderFilters {
 
 @Injectable()
 export class OrderService {
+  private readonly logger = new Logger(OrderService.name);
+
   constructor(
     @InjectRepository(Order)
     private orderRepository: Repository<Order>,
@@ -37,6 +41,7 @@ export class OrderService {
     private userRepository: Repository<User>,
     @InjectRepository(Product)
     private productRepository: Repository<Product>,
+    private orderBlacklistService: OrderBlacklistService,
   ) {}
 
   async findAll(): Promise<Order[]> {
@@ -97,6 +102,27 @@ export class OrderService {
     } else {
       // User thường: chỉ xem của chính họ
       return [user.id];
+    }
+  }
+
+  // Helper method để parse customer_id từ metadata JSON
+  private extractCustomerIdFromMetadata(metadata: any): string | null {
+    try {
+      if (typeof metadata === 'string') {
+        const parsed = JSON.parse(metadata);
+        const customerId = parsed.customer_id || null;
+        this.logger.debug(`Extracted customer_id from string metadata: ${customerId}`);
+        return customerId;
+      } else if (typeof metadata === 'object' && metadata !== null) {
+        const customerId = metadata.customer_id || null;
+        this.logger.debug(`Extracted customer_id from object metadata: ${customerId}`);
+        return customerId;
+      }
+      this.logger.debug(`No customer_id found in metadata: ${JSON.stringify(metadata)}`);
+      return null;
+    } catch (error) {
+      this.logger.warn(`Error parsing metadata: ${error.message}, metadata: ${JSON.stringify(metadata)}`);
+      return null;
     }
   }
 
@@ -305,6 +331,27 @@ export class OrderService {
     }
     // Admin (allowedUserIds === null) không có điều kiện gì
 
+    // ✅ Apply blacklist filtering for regular users using SQL
+    if (user && user.roles && user.roles.length > 0) {
+      const roleNames = (user.roles || []).map((r: any) => 
+        typeof r === 'string' 
+          ? r.toLowerCase() 
+          : (r.name || '').toLowerCase()
+      );
+      
+      const isAdmin = roleNames.includes('admin');
+      const isManager = roleNames.some((r: string) => r.startsWith('manager-'));
+      
+      // Chỉ filter blacklist cho user thường (không phải admin/manager)
+      if (!isAdmin && !isManager) {
+        const blacklistedContacts = await this.orderBlacklistService.getBlacklistedContactsForUser(user.id);
+        
+        // Store blacklisted contacts to filter later at application level
+        // because SQL JSON functions may not work consistently across different databases
+        queryBuilder.setParameter('blacklistedContacts', blacklistedContacts);
+      }
+    }
+
     // Filter by search (tìm kiếm theo order_details.id, customer_name, raw_item)
     if (search) {
       queryBuilder.andWhere(
@@ -423,17 +470,132 @@ export class OrderService {
       queryBuilder.orderBy('details.id', 'DESC');
     }
 
-    // Get total count of ORDER_DETAILS before pagination
-    const total = await queryBuilder.getCount();
+    // ✅ Get total count before pagination
+    const totalBeforeFilter = await queryBuilder.getCount();
 
-    // Apply pagination on ORDER_DETAILS (10 order_details per page)
+    // Apply pagination on ORDER_DETAILS
     queryBuilder.skip(skip).take(pageSize);
 
-    const data = await queryBuilder.getMany();
+    let data = await queryBuilder.getMany();
+
+    // ✅ Apply blacklist filtering at application level
+    let actualTotal = totalBeforeFilter;
+    if (user && user.roles && user.roles.length > 0) {
+      const roleNames = (user.roles || []).map((r: any) => 
+        typeof r === 'string' 
+          ? r.toLowerCase() 
+          : (r.name || '').toLowerCase()
+      );
+      
+      
+      const isAdmin = roleNames.includes('admin');
+      const isManager = roleNames.some((r: string) => r.startsWith('manager-'));
+      
+      // Chỉ filter blacklist cho user thường (không phải admin/manager)
+      if (!isAdmin && !isManager) {
+        const blacklistedContacts = await this.orderBlacklistService.getBlacklistedContactsForUser(user.id);
+        
+        if (blacklistedContacts.length > 0) {
+          
+          // Filter current page data
+          const beforeFilterCount = data.length;
+          data = data.filter(orderDetail => {
+            const customerId = this.extractCustomerIdFromMetadata(orderDetail.metadata);
+            const isBlacklisted = customerId && blacklistedContacts.includes(customerId);
+            return !customerId || !blacklistedContacts.includes(customerId);
+          });
+          
+          
+          // Calculate actual total by filtering all data
+          const allDataQuery = this.orderDetailRepository
+            .createQueryBuilder('details')
+            .leftJoinAndSelect('details.order', 'order')
+            .leftJoinAndSelect('order.sale_by', 'sale_by')
+            .leftJoinAndSelect('sale_by.departments', 'sale_by_departments');
+
+          // Apply same base filters
+          if (allowedUserIds !== null) {
+            if (allowedUserIds.length === 0) {
+              allDataQuery.andWhere('1 = 0');
+            } else {
+              allDataQuery.andWhere('order.sale_by IN (:...userIds)', { userIds: allowedUserIds });
+            }
+          }
+
+          // Apply all other filters
+          if (search) {
+            allDataQuery.andWhere(
+              '(CAST(details.id AS CHAR) LIKE :search OR details.customer_name LIKE :search OR details.raw_item LIKE :search)',
+              { search: `%${search}%` },
+            );
+          }
+          if (status) {
+            allDataQuery.andWhere('details.status = :status', { status });
+          }
+          if (date) {
+            const startDate = new Date(date);
+            const endDate = new Date(date);
+            endDate.setHours(23, 59, 59, 999);
+            allDataQuery.andWhere('order.created_at BETWEEN :startDate AND :endDate', { startDate, endDate });
+          }
+          if (dateRange && dateRange.start && dateRange.end) {
+            const startDate = new Date(dateRange.start);
+            const endDate = new Date(dateRange.end);
+            endDate.setHours(23, 59, 59, 999);
+            allDataQuery.andWhere('order.created_at BETWEEN :rangeStart AND :rangeEnd', { rangeStart: startDate, rangeEnd: endDate });
+          }
+          if (employee) {
+            allDataQuery.andWhere('sale_by.id = :employee', { employee });
+          }
+          if (employees) {
+            const employeeIds = employees.split(',').map((id) => parseInt(id.trim(), 10)).filter((id) => !isNaN(id));
+            if (employeeIds.length > 0) {
+              allDataQuery.andWhere('sale_by.id IN (:...employeeIds)', { employeeIds });
+            }
+          }
+          if (departments) {
+            const departmentIds = departments.split(',').map((id) => parseInt(id.trim(), 10)).filter((id) => !isNaN(id));
+            if (departmentIds.length > 0) {
+              allDataQuery.andWhere(
+                `sale_by_departments.id IN (:...departmentIds) AND sale_by_departments.server_ip IS NOT NULL AND TRIM(sale_by_departments.server_ip) <> ''`,
+                { departmentIds },
+              );
+            }
+          }
+          if (products) {
+            const productIds = products.split(',').map((id) => parseInt(id.trim(), 10)).filter((id) => !isNaN(id));
+            if (productIds.length > 0) {
+              allDataQuery.andWhere('details.product_id IN (:...productIds)', { productIds });
+            }
+          }
+          if (warningLevel) {
+            const levels = warningLevel.split(',').map((level) => parseInt(level.trim(), 10)).filter((level) => !isNaN(level));
+            if (levels.length > 0) {
+              allDataQuery.andWhere('details.extended IN (:...levels)', { levels });
+            }
+          }
+
+          const allData = await allDataQuery.getMany();
+          const filteredAllData = allData.filter(orderDetail => {
+            const customerId = this.extractCustomerIdFromMetadata(orderDetail.metadata);
+            return !customerId || !blacklistedContacts.includes(customerId);
+          });
+          actualTotal = filteredAllData.length;
+          
+        }
+      }
+    }
+
+    // Debug: Log metadata của vài records đầu để kiểm tra format
+    if (user && data.length > 0) {
+      data.slice(0, 3).forEach((orderDetail, index) => {
+        const customerId = this.extractCustomerIdFromMetadata(orderDetail.metadata);
+      });
+    }
 
     return {
-      data, // Trả về array of OrderDetail
-      total, // Tổng số order_details
+      data, // Trả về array of OrderDetail đã được filter blacklist
+      total: actualTotal, // Tổng số order_details sau khi đã filter blacklist
       page,
       pageSize,
     };

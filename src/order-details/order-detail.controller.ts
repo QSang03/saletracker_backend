@@ -11,18 +11,22 @@ import {
   Req,
   NotFoundException,
   ForbiddenException,
+  HttpCode,
+  HttpStatus,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { OrderDetailService } from './order-detail.service';
 import { OrderDetail } from './order-detail.entity';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { OrderBlacklistService } from '../order-blacklist/order-blacklist.service';
 
 @Controller('order-details')
 @UseGuards(AuthGuard('jwt'))
 export class OrderDetailController {
   constructor(
     private readonly orderDetailService: OrderDetailService,
+    private readonly orderBlacklistService: OrderBlacklistService,
   ) {}
 
   @Get()
@@ -134,6 +138,55 @@ export class OrderDetailController {
     }
     
     return this.orderDetailService.updateCustomerName(id, data.customer_name);
+  }
+
+  @Post(':id/add-to-blacklist')
+  @HttpCode(HttpStatus.CREATED)
+  async addToBlacklist(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() data: { reason?: string },
+    @Req() req?: any,
+  ): Promise<{ message: string; blacklistEntry?: any }> {
+    // Lấy order detail và kiểm tra quyền
+    const orderDetail = await this.orderDetailService.findByIdWithPermission(id, req.user);
+    if (!orderDetail) {
+      throw new NotFoundException('Order detail not found or no permission');
+    }
+
+    // Parse customer_id từ metadata
+    let customerId: string | null = null;
+    try {
+      if (typeof orderDetail.metadata === 'string') {
+        const parsed = JSON.parse(orderDetail.metadata);
+        customerId = parsed.customer_id || null;
+      } else if (typeof orderDetail.metadata === 'object' && orderDetail.metadata !== null) {
+        customerId = orderDetail.metadata.customer_id || null;
+      }
+    } catch (error) {
+      // Ignore parse errors
+    }
+
+    if (!customerId) {
+      throw new ForbiddenException('No customer_id found in order detail metadata');
+    }
+
+    // Kiểm tra xem đã có trong blacklist chưa
+    const isAlreadyBlacklisted = await this.orderBlacklistService.isBlacklisted(req.user.id, customerId);
+    if (isAlreadyBlacklisted) {
+      return { message: 'Contact is already in blacklist' };
+    }
+
+    // Thêm vào blacklist
+    const blacklistEntry = await this.orderBlacklistService.create({
+      userId: req.user.id,
+      zaloContactId: customerId,
+      reason: data.reason || `Added from order detail #${id}`,
+    });
+
+    return { 
+      message: 'Contact added to blacklist successfully',
+      blacklistEntry 
+    };
   }
 
 }

@@ -36,6 +36,7 @@ import { CampaignEmailReportModule } from './campaign_email_reports/campaign_ema
 import { CampaignScheduleModule } from './campaign_schedules/campaign_schedule.module';
 import { CampaignContentModule } from './campaign_contents/campaign_content.module';
 import { CampaignDepartmentsSchedulesModule } from './campaign_departments_schedules/campaign_departments_schedules.module';
+import { OrderBlacklistModule } from './order-blacklist/order-blacklist.module';
 
 @Module({
   imports: [
@@ -65,11 +66,11 @@ import { CampaignDepartmentsSchedulesModule } from './campaign_departments_sched
     NotificationModule,
     OrderModule,
     OrderDetailModule,
+    OrderBlacklistModule,
     WebhookModule,
     DebtStatisticModule,
     WebsocketModule,
     ObserversModule,
-    // Campaign modules
     CampaignModule,
     CampaignCustomerModule,
     CampaignInteractionLogModule,
