@@ -53,7 +53,10 @@ export class OrderDetailController {
     pageSize: number;
   }> {
     const pageNum = Math.max(1, parseInt(page, 10) || 1);
-    const pageSizeNum = Math.max(1, Math.min(parseInt(pageSize, 10) || 10, 200));
+    const pageSizeNum = Math.max(
+      1,
+      Math.min(parseInt(pageSize, 10) || 10, 10000),
+    );
 
     return this.orderDetailService.findAllTrashedPaginated(req.user, {
       page: pageNum,
@@ -116,6 +119,7 @@ export class OrderDetailController {
   @Delete(':id')
   async delete(
     @Param('id', ParseIntPipe) id: number,
+    @Body() body: { reason?: string } = {},
     @Req() req?: any,
   ): Promise<void> {
     // Chỉ chủ sở hữu mới được xóa
@@ -125,7 +129,7 @@ export class OrderDetailController {
       throw new ForbiddenException('Bạn không có quyền xóa order này');
     }
 
-    return this.orderDetailService.delete(id);
+    return this.orderDetailService.delete(id, body.reason);
   }
 
   @Delete('order/:orderId')
@@ -181,7 +185,11 @@ export class OrderDetailController {
       throw new ForbiddenException('Bạn không có quyền sửa tên khách hàng');
     }
 
-    return this.orderDetailService.updateCustomerName(id, data.customer_name, req.user);
+    return this.orderDetailService.updateCustomerName(
+      id,
+      data.customer_name,
+      req.user,
+    );
   }
 
   @Post(':id/add-to-blacklist')
@@ -197,7 +205,9 @@ export class OrderDetailController {
       throw new NotFoundException('Order detail not found');
     }
     if (orderDetail.order?.sale_by?.id !== req.user?.id) {
-      throw new ForbiddenException('Bạn không có quyền thêm blacklist cho order này');
+      throw new ForbiddenException(
+        'Bạn không có quyền thêm blacklist cho order này',
+      );
     }
 
     // Parse customer_id từ metadata
@@ -206,7 +216,10 @@ export class OrderDetailController {
       if (typeof orderDetail.metadata === 'string') {
         const parsed = JSON.parse(orderDetail.metadata);
         customerId = parsed.customer_id || null;
-      } else if (typeof orderDetail.metadata === 'object' && orderDetail.metadata !== null) {
+      } else if (
+        typeof orderDetail.metadata === 'object' &&
+        orderDetail.metadata !== null
+      ) {
         customerId = orderDetail.metadata.customer_id || null;
       }
     } catch (error) {
@@ -214,7 +227,9 @@ export class OrderDetailController {
     }
 
     if (!customerId) {
-      throw new ForbiddenException('No customer_id found in order detail metadata');
+      throw new ForbiddenException(
+        'No customer_id found in order detail metadata',
+      );
     }
 
     // Kiểm tra xem đã có trong blacklist chưa

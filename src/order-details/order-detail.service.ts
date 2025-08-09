@@ -35,11 +35,15 @@ export class OrderDetailService {
     const isAdmin = roleNames.includes('admin');
     if (isAdmin) return null; // Admin có thể xem tất cả
 
-    const managerRoles = roleNames.filter((r: string) => r.startsWith('manager-'));
+    const managerRoles = roleNames.filter((r: string) =>
+      r.startsWith('manager-'),
+    );
 
     if (managerRoles.length > 0) {
       // Manager: lấy tất cả user trong phòng ban có server_ip hợp lệ
-      const departmentSlugs = managerRoles.map((r: string) => r.replace('manager-', ''));
+      const departmentSlugs = managerRoles.map((r: string) =>
+        r.replace('manager-', ''),
+      );
 
       const departments = await this.departmentRepository
         .createQueryBuilder('dept')
@@ -95,7 +99,9 @@ export class OrderDetailService {
       if (allowedUserIds.length === 0) {
         queryBuilder.andWhere('1 = 0'); // Không có quyền xem gì
       } else {
-        queryBuilder.andWhere('sale_by.id IN (:...userIds)', { userIds: allowedUserIds });
+        queryBuilder.andWhere('sale_by.id IN (:...userIds)', {
+          userIds: allowedUserIds,
+        });
       }
     }
     // Admin (allowedUserIds === null) không có điều kiện gì
@@ -115,19 +121,29 @@ export class OrderDetailService {
         // Admin không filter blacklist
         let blacklistedSet = new Set<string>();
         if (isManager) {
-          const userIds = Array.isArray(allowedUserIds) ? allowedUserIds : [user.id];
-          const map = await this.orderBlacklistService.getBlacklistedContactsForUsers(userIds);
+          const userIds = Array.isArray(allowedUserIds)
+            ? allowedUserIds
+            : [user.id];
+          const map =
+            await this.orderBlacklistService.getBlacklistedContactsForUsers(
+              userIds,
+            );
           for (const set of map.values()) {
             for (const id of set) blacklistedSet.add(id);
           }
         } else {
-          const list = await this.orderBlacklistService.getBlacklistedContactsForUser(user.id);
+          const list =
+            await this.orderBlacklistService.getBlacklistedContactsForUser(
+              user.id,
+            );
           for (const id of list) blacklistedSet.add(id);
         }
 
         if (blacklistedSet.size > 0) {
           return orderDetails.filter((orderDetail) => {
-            const customerId = this.extractCustomerIdFromMetadata(orderDetail.metadata);
+            const customerId = this.extractCustomerIdFromMetadata(
+              orderDetail.metadata,
+            );
             return !customerId || !blacklistedSet.has(customerId);
           });
         }
@@ -144,7 +160,10 @@ export class OrderDetailService {
     });
   }
 
-  async findByIdWithPermission(id: number, user?: any): Promise<OrderDetail | null> {
+  async findByIdWithPermission(
+    id: number,
+    user?: any,
+  ): Promise<OrderDetail | null> {
     const orderDetail = await this.findById(id);
 
     // Kiểm tra quyền xem order detail này
@@ -161,26 +180,38 @@ export class OrderDetailService {
 
         // Kiểm tra blacklist cho user thường và manager
         const roleNames = (user.roles || []).map((r: any) =>
-          typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
+          typeof r === 'string'
+            ? r.toLowerCase()
+            : (r.name || '').toLowerCase(),
         );
 
         const isAdmin = roleNames.includes('admin');
-        const isManager = roleNames.some((r: string) => r.startsWith('manager-'));
+        const isManager = roleNames.some((r: string) =>
+          r.startsWith('manager-'),
+        );
 
         if (!isAdmin) {
-          const customerId = this.extractCustomerIdFromMetadata(orderDetail.metadata);
+          const customerId = this.extractCustomerIdFromMetadata(
+            orderDetail.metadata,
+          );
           if (customerId) {
             if (isManager) {
-              const userIds = Array.isArray(allowedUserIds) ? allowedUserIds : [user.id];
-              const map = await this.orderBlacklistService.getBlacklistedContactsForUsers(userIds);
+              const userIds = Array.isArray(allowedUserIds)
+                ? allowedUserIds
+                : [user.id];
+              const map =
+                await this.orderBlacklistService.getBlacklistedContactsForUsers(
+                  userIds,
+                );
               for (const set of map.values()) {
                 if (set.has(customerId)) return null; // Bị blacklist bởi user trong scope của manager
               }
             } else {
-              const isBlacklisted = await this.orderBlacklistService.isBlacklisted(
-                user.id,
-                customerId,
-              );
+              const isBlacklisted =
+                await this.orderBlacklistService.isBlacklisted(
+                  user.id,
+                  customerId,
+                );
               if (isBlacklisted) {
                 return null; // Bị blacklist, không được xem
               }
@@ -201,12 +232,18 @@ export class OrderDetailService {
     });
   }
 
-  async findByZaloMessageId(zaloMessageId: string): Promise<OrderDetail | null> {
+  async findByZaloMessageId(
+    zaloMessageId: string,
+  ): Promise<OrderDetail | null> {
     return this.orderDetailRepository.findOne({ where: { zaloMessageId } });
   }
 
-  async getCustomerNameByZaloMessageId(zaloMessageId: string): Promise<string | null> {
-    const detail = await this.orderDetailRepository.findOne({ where: { zaloMessageId } });
+  async getCustomerNameByZaloMessageId(
+    zaloMessageId: string,
+  ): Promise<string | null> {
+    const detail = await this.orderDetailRepository.findOne({
+      where: { zaloMessageId },
+    });
     return detail?.customer_name || null;
   }
 
@@ -263,9 +300,12 @@ export class OrderDetailService {
         .createQueryBuilder('orderDetail')
         .leftJoin('orderDetail.order', 'order')
         .leftJoin('order.sale_by', 'sale_by')
-        .where("JSON_UNQUOTE(JSON_EXTRACT(orderDetail.metadata, '$.customer_id')) = :customerId", {
-          customerId,
-        })
+        .where(
+          "JSON_UNQUOTE(JSON_EXTRACT(orderDetail.metadata, '$.customer_id')) = :customerId",
+          {
+            customerId,
+          },
+        )
         .andWhere('sale_by.id = :userId', { userId: user?.id })
         .getMany();
 
@@ -282,14 +322,45 @@ export class OrderDetailService {
     } else {
       // Fallback: chỉ cập nhật order detail hiện tại nếu là của user hiện tại
       if (currentOrderDetail.order?.sale_by?.id === user?.id) {
-        await this.orderDetailRepository.update(id, { customer_name: customerName });
+        await this.orderDetailRepository.update(id, {
+          customer_name: customerName,
+        });
       }
     }
 
     return this.findById(id);
   }
 
-  async delete(id: number): Promise<void> {
+  async updateCustomerNameByCustomerId(
+    customerId: string,
+    customerName: string,
+  ): Promise<{ updated: number }> {
+    const orderDetails = await this.orderDetailRepository
+      .createQueryBuilder('orderDetail')
+      .where(
+        "JSON_UNQUOTE(JSON_EXTRACT(orderDetail.metadata, '$.customer_id')) = :customerId",
+        { customerId },
+      )
+      .getMany();
+
+    const idsToUpdate = orderDetails.map((od) => od.id);
+
+    if (idsToUpdate.length > 0) {
+      await this.orderDetailRepository
+        .createQueryBuilder()
+        .update()
+        .set({ customer_name: customerName })
+        .where('id IN (:...ids)', { ids: idsToUpdate })
+        .execute();
+    }
+
+    return { updated: idsToUpdate.length };
+  }
+
+  async delete(id: number, reason?: string): Promise<void> {
+    if (reason) {
+      await this.orderDetailRepository.update(id, { reason });
+    }
     await this.orderDetailRepository.softDelete(id);
   }
 
@@ -298,7 +369,11 @@ export class OrderDetailService {
   }
 
   // ✅ Bulk operations
-  async bulkDelete(ids: number[], reason: string, user: any): Promise<{ deleted: number }> {
+  async bulkDelete(
+    ids: number[],
+    reason: string,
+    user: any,
+  ): Promise<{ deleted: number }> {
     // Chỉ cho phép xóa các order detail thuộc sở hữu của user hiện tại
     const orderDetails = await this.orderDetailRepository
       .createQueryBuilder('orderDetail')
@@ -318,7 +393,9 @@ export class OrderDetailService {
       { reason },
     );
 
-    await this.orderDetailRepository.softDelete(orderDetails.map((od) => od.id));
+    await this.orderDetailRepository.softDelete(
+      orderDetails.map((od) => od.id),
+    );
 
     return { deleted: orderDetails.length };
   }
@@ -341,7 +418,10 @@ export class OrderDetailService {
       return { updated: 0 };
     }
 
-    await this.orderDetailRepository.update(orderDetails.map((od) => od.id), updates);
+    await this.orderDetailRepository.update(
+      orderDetails.map((od) => od.id),
+      updates,
+    );
 
     return { updated: orderDetails.length };
   }
@@ -371,7 +451,11 @@ export class OrderDetailService {
     return { updated: orderDetails.length };
   }
 
-  async bulkAddNotes(ids: number[], notes: string, user: any): Promise<{ updated: number }> {
+  async bulkAddNotes(
+    ids: number[],
+    notes: string,
+    user: any,
+  ): Promise<{ updated: number }> {
     // Chỉ cho phép ghi chú các order detail thuộc sở hữu của user hiện tại
     const orderDetails = await this.orderDetailRepository
       .createQueryBuilder('orderDetail')
@@ -386,7 +470,10 @@ export class OrderDetailService {
     }
 
     // ✅ Ghi đè ghi chú thay vì append
-    await this.orderDetailRepository.update(orderDetails.map((od) => od.id), { notes });
+    await this.orderDetailRepository.update(
+      orderDetails.map((od) => od.id),
+      { notes },
+    );
 
     return { updated: orderDetails.length };
   }
@@ -403,9 +490,17 @@ export class OrderDetailService {
       sortField?: 'quantity' | 'unit_price' | null;
       sortDirection?: 'asc' | 'desc' | null;
     },
-  ): Promise<{ data: OrderDetail[]; total: number; page: number; pageSize: number }> {
+  ): Promise<{
+    data: OrderDetail[];
+    total: number;
+    page: number;
+    pageSize: number;
+  }> {
     const page = Math.max(1, Number(options?.page) || 1);
-    const pageSize = Math.max(1, Math.min(Number(options?.pageSize) || 10, 200));
+    const pageSize = Math.max(
+      1,
+      Math.min(Number(options?.pageSize) || 10, 10000),
+    );
 
     const qb = this.orderDetailRepository
       .createQueryBuilder('details')
@@ -447,7 +542,10 @@ export class OrderDetailService {
         .map((s) => Number(s))
         .filter((n) => !Number.isNaN(n));
       if (deptIds.length > 0) {
-        qb.andWhere('EXISTS (SELECT 1 FROM users_departments_ud ud WHERE ud.user_id = sale_by.id AND ud.department_id IN (:...deptIds))', { deptIds });
+        qb.andWhere(
+          'EXISTS (SELECT 1 FROM users_departments_ud ud WHERE ud.user_id = sale_by.id AND ud.department_id IN (:...deptIds))',
+          { deptIds },
+        );
       }
     }
 
@@ -475,7 +573,9 @@ export class OrderDetailService {
 
     // Sorting
     const sortField = options?.sortField;
-    const sortDirection = ((options?.sortDirection || 'desc').toUpperCase() as 'ASC' | 'DESC');
+    const sortDirection = (options?.sortDirection || 'desc').toUpperCase() as
+      | 'ASC'
+      | 'DESC';
     if (sortField === 'quantity') {
       qb.orderBy('details.quantity', sortDirection);
     } else if (sortField === 'unit_price') {
@@ -500,11 +600,20 @@ export class OrderDetailService {
       if (!isAdmin) {
         let blacklistedSet = new Set<string>();
         if (isManager) {
-          const userIds = Array.isArray(allowedUserIds) ? allowedUserIds : [user.id];
-          const map = await this.orderBlacklistService.getBlacklistedContactsForUsers(userIds);
-          for (const set of map.values()) for (const id of set) blacklistedSet.add(id);
+          const userIds = Array.isArray(allowedUserIds)
+            ? allowedUserIds
+            : [user.id];
+          const map =
+            await this.orderBlacklistService.getBlacklistedContactsForUsers(
+              userIds,
+            );
+          for (const set of map.values())
+            for (const id of set) blacklistedSet.add(id);
         } else {
-          const list = await this.orderBlacklistService.getBlacklistedContactsForUser(user.id);
+          const list =
+            await this.orderBlacklistService.getBlacklistedContactsForUser(
+              user.id,
+            );
           for (const id of list) blacklistedSet.add(id);
         }
         if (blacklistedSet.size > 0) {
@@ -549,9 +658,14 @@ export class OrderDetailService {
       try {
         const created = new Date(od.created_at);
         created.setHours(0, 0, 0, 0);
-        const deltaDays = Math.floor((today.getTime() - created.getTime()) / msPerDay);
+        const deltaDays = Math.floor(
+          (today.getTime() - created.getTime()) / msPerDay,
+        );
         const newExtended = Math.max(4, deltaDays + 4);
-        await this.orderDetailRepository.update(od.id, { reason: '', extended: newExtended });
+        await this.orderDetailRepository.update(od.id, {
+          reason: '',
+          extended: newExtended,
+        });
       } catch (e) {
         // fallback: at least clear reason
         await this.orderDetailRepository.update(od.id, { reason: '' });

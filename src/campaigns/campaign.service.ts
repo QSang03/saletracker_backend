@@ -5,7 +5,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Like, In } from 'typeorm';
+import { Repository, Like, In, IsNull } from 'typeorm';
 import { Campaign, CampaignStatus, CampaignType } from './campaign.entity';
 import { Department } from '../departments/department.entity';
 import {
@@ -129,6 +129,1040 @@ export class CampaignService {
     private readonly departmentScheduleRepository: Repository<DepartmentSchedule>,
   ) {}
 
+  private async getAllDepartmentSchedules(
+    departmentId: number,
+    campaignType: CampaignType,
+  ): Promise<DepartmentSchedule[]> {
+    const requiredScheduleType =
+      ScheduleCalculatorHelper.getScheduleTypeByCampaignType(campaignType);
+
+    const schedules = await this.departmentScheduleRepository.find({
+      where: {
+        department: { id: departmentId },
+        schedule_type: requiredScheduleType,
+        status: In([ScheduleStatus.ACTIVE, ScheduleStatus.INACTIVE]),
+        deleted_at: IsNull(),
+      },
+      relations: ['department'],
+      order: {
+        status: 'DESC',
+        created_at: 'DESC',
+      },
+    });
+
+    // Sort schedules theo ngày đại diện
+    const sortedSchedules = schedules.sort((a, b) => {
+      const dateA = this.getRepresentativeDate(a.schedule_config);
+      const dateB = this.getRepresentativeDate(b.schedule_config);
+
+      return dateA.getTime() - dateB.getTime(); // Sort tăng dần
+    });
+
+    return sortedSchedules;
+  }
+
+  /**
+   * Lấy ngày đại diện từ schedule_config để dùng cho việc sort
+   */
+  private getRepresentativeDate(scheduleConfig: any): Date {
+    if (!scheduleConfig || !scheduleConfig.type) {
+      // Fallback nếu không có config hợp lệ
+      return new Date('1900-01-01');
+    }
+
+    switch (scheduleConfig.type) {
+      case 'daily_dates':
+        return this.getMinDateFromDailyDates(scheduleConfig.dates || []);
+
+      case 'hourly_slots':
+        return this.getMinDateFromHourlySlots(scheduleConfig.slots || []);
+
+      default:
+        // Fallback cho các type khác
+        return new Date('1900-01-01');
+    }
+  }
+
+  /**
+   * Lấy ngày nhỏ nhất từ mảng dates trong daily_dates
+   */
+  private getMinDateFromDailyDates(dates: any[]): Date {
+    if (!dates || dates.length === 0) {
+      return new Date('1900-01-01');
+    }
+
+    const validDates = dates
+      .filter((date) => date.year && date.month && date.day_of_month)
+      .map((date) => new Date(date.year, date.month - 1, date.day_of_month)); // month - 1 vì Date constructor dùng 0-based month
+
+    if (validDates.length === 0) {
+      return new Date('1900-01-01');
+    }
+
+    return new Date(Math.min(...validDates.map((date) => date.getTime())));
+  }
+
+  /**
+   * Lấy ngày nhỏ nhất từ applicable_date trong hourly_slots
+   */
+  private getMinDateFromHourlySlots(slots: any[]): Date {
+    if (!slots || slots.length === 0) {
+      return new Date('1900-01-01');
+    }
+
+    const validDates = slots
+      .filter((slot) => slot.applicable_date)
+      .map((slot) => new Date(slot.applicable_date));
+
+    if (validDates.length === 0) {
+      return new Date('1900-01-01');
+    }
+
+    return new Date(Math.min(...validDates.map((date) => date.getTime())));
+  }
+
+  /**
+   * ✅ FIXED: Find best matching schedule for 3-day campaigns
+   * Returns the first schedule that contains valid slots, since 3-day campaigns
+   * span across multiple schedule records
+   */
+  private async findBestMatchingScheduleFor3Day(
+    campaignScheduleConfig: any,
+    departmentSchedules: DepartmentSchedule[],
+  ): Promise<DepartmentSchedule | null> {
+    // ✅ For 3-day campaigns, validate against ALL schedules as a group
+    const isValid = this.validate3DayScheduleConfig(
+      campaignScheduleConfig,
+      departmentSchedules,
+    );
+
+    if (isValid && departmentSchedules.length > 0) {
+      // ✅ Return the first schedule as representative
+      // (since 3-day logic needs to work across multiple schedules)
+      const representativeSchedule = departmentSchedules[0];
+      return representativeSchedule;
+    }
+
+    this.logger.warn(
+      `❌ [findBestMatchingScheduleFor3Day] No valid 3-day configuration found across ${departmentSchedules.length} schedules`,
+    );
+    return null;
+  }
+
+  /**
+   * ✅ UPDATED: Find best matching schedule with 3-day support
+   */
+  private async findBestMatchingSchedule(
+    campaignScheduleConfig: any,
+    departmentSchedules: DepartmentSchedule[],
+    campaignType: CampaignType,
+  ): Promise<DepartmentSchedule | null> {
+    // ✅ NEW: Special handling for 3-day campaigns
+    if (campaignScheduleConfig?.type === '3_day') {
+      return this.findBestMatchingScheduleFor3Day(
+        campaignScheduleConfig,
+        departmentSchedules,
+      );
+    }
+
+    // ✅ Original logic for other campaign types
+    for (const schedule of departmentSchedules) {
+      const isValid = this.validateCampaignScheduleAgainstDepartment(
+        campaignScheduleConfig,
+        schedule.schedule_config,
+        schedule.schedule_type,
+      );
+
+      if (isValid) {
+        return schedule;
+      }
+    }
+
+    this.logger.warn(
+      `❌ [findBestMatchingSchedule] No matching schedule found`,
+    );
+    return null;
+  }
+
+  /**
+   * Tính toán date range từ Daily Dates config với applicable_date
+   */
+  private calculateDateRangeFromDailyDatesWithApplicableDate(
+    departmentConfig: any,
+    campaignConfig: any,
+  ): { startDate: Date; endDate: Date } {
+    if (!departmentConfig?.dates || !Array.isArray(departmentConfig.dates)) {
+      throw new Error('Invalid daily dates configuration');
+    }
+
+    const now = new Date();
+    const nowDateOnly = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate(),
+    );
+    const futureDates: Date[] = [];
+
+    for (const dateConfig of departmentConfig.dates) {
+      let targetDate: Date;
+
+      if (dateConfig.applicable_date) {
+        // Sử dụng applicable_date cụ thể
+        targetDate = new Date(dateConfig.applicable_date);
+      } else {
+        // Tính từ day_of_month, month, year
+        const year = dateConfig.year || now.getFullYear();
+        const month = dateConfig.month || now.getMonth() + 1;
+        targetDate = new Date(year, month - 1, dateConfig.day_of_month);
+      }
+
+      // ✅ SỬA: Chỉ lấy ngày >= ngày hiện tại (không tính giờ)
+      const targetDateOnly = new Date(
+        targetDate.getFullYear(),
+        targetDate.getMonth(),
+        targetDate.getDate(),
+      );
+      if (targetDateOnly >= nowDateOnly) {
+        futureDates.push(targetDate);
+      }
+    }
+
+    if (futureDates.length === 0) {
+      throw new Error('No valid future dates found');
+    }
+
+    // Sắp xếp và lấy ngày gần nhất
+    futureDates.sort((a, b) => a.getTime() - b.getTime());
+
+    // ✅ CẬP NHẬT: Tính start_date và end_date theo yêu cầu
+    const nearestDate = futureDates[0];
+    const startDate = new Date(nearestDate);
+    startDate.setHours(8, 0, 0, 0); // 8:00 AM
+
+    const endDate = new Date(nearestDate);
+    endDate.setHours(17, 45, 0, 0); // 17:45 PM (không cộng thêm giây/ms)
+
+    return { startDate, endDate };
+  }
+
+  private async calculateDateRangeFromHourlySlotsWithApplicableDate(
+    departmentConfig: any,
+    campaignConfig: any,
+    campaignType: CampaignType,
+  ): Promise<{ startDate: Date; endDate: Date }> {
+    if (!departmentConfig?.slots || !Array.isArray(departmentConfig.slots)) {
+      throw new Error('Invalid hourly slots configuration');
+    }
+
+    const now = new Date();
+    let validSlots: any[] = [];
+
+    // ✅ UPDATED: Enhanced logic for 3-day campaigns
+    let requiredDaysOfWeek: number[] = [];
+
+    if (campaignConfig) {
+      if (
+        campaignConfig.type === 'weekly' &&
+        campaignConfig.day_of_week !== undefined
+      ) {
+        requiredDaysOfWeek = [campaignConfig.day_of_week];
+      } else if (
+        campaignConfig.type === '3_day' &&
+        campaignConfig.days_of_week &&
+        Array.isArray(campaignConfig.days_of_week)
+      ) {
+        requiredDaysOfWeek = campaignConfig.days_of_week;
+        // ✅ VALIDATE: Kiểm tra 3 ngày có liên tiếp không
+        if (!this.areConsecutiveDays(requiredDaysOfWeek)) {
+          this.logger.warn(
+            `❌ [3-day campaign] Days [${requiredDaysOfWeek.join(',')}] are not consecutive!`,
+          );
+          throw new Error('3-day campaign requires consecutive days');
+        }
+      } else if (campaignConfig.type === 'hourly') {
+        // Hourly campaign có thể chạy mọi ngày
+        requiredDaysOfWeek = [];
+      }
+    }
+    // ✅ UPDATED: Enhanced slot processing for 3-day campaigns
+    for (const slot of departmentConfig.slots) {
+      let slotDates: Array<{ date: Date; slot: any }> = [];
+
+      if (slot.applicable_date) {
+        // ✅ Xử lý applicable_date
+        const applicableDate = new Date(slot.applicable_date);
+        const applicableDateOnly = new Date(
+          applicableDate.getFullYear(),
+          applicableDate.getMonth(),
+          applicableDate.getDate(),
+        );
+        const nowDateOnly = new Date(
+          now.getFullYear(),
+          now.getMonth(),
+          now.getDate(),
+        );
+
+        if (applicableDateOnly >= nowDateOnly) {
+          // ✅ NEW: For 3-day campaigns, check if this date matches any required day
+          if (
+            campaignConfig?.type === '3_day' &&
+            requiredDaysOfWeek.length > 0
+          ) {
+            const dateDay = applicableDate.getDay(); // 0=Sunday, 1=Monday, etc.
+            const mappedDay = dateDay === 0 ? 7 : dateDay; // Convert to 1-7 format (1=Monday, 7=Sunday)
+
+            if (requiredDaysOfWeek.includes(mappedDay)) {
+              // Check time validity for today's slots
+              if (applicableDateOnly.getTime() === nowDateOnly.getTime()) {
+                const [endHour, endMin] = slot.end_time.split(':').map(Number);
+                const slotEndTime = new Date(now);
+                slotEndTime.setHours(endHour, endMin, 0, 0);
+
+                if (slotEndTime > now) {
+                  slotDates.push({ date: applicableDate, slot });
+                }
+              } else {
+                // Future date - always valid
+                slotDates.push({ date: applicableDate, slot });
+              }
+            }
+          } else {
+            // Non-3-day logic (original)
+            if (applicableDateOnly.getTime() === nowDateOnly.getTime()) {
+              const [endHour, endMin] = slot.end_time.split(':').map(Number);
+              const slotEndTime = new Date(now);
+              slotEndTime.setHours(endHour, endMin, 0, 0);
+
+              if (slotEndTime > now) {
+                slotDates.push({ date: applicableDate, slot });
+              }
+            } else {
+              slotDates.push({ date: applicableDate, slot });
+            }
+          }
+        }
+      } else if (slot.day_of_week !== undefined && slot.day_of_week !== null) {
+        // ✅ Xử lý day_of_week
+        if (
+          requiredDaysOfWeek.length === 0 ||
+          requiredDaysOfWeek.includes(slot.day_of_week)
+        ) {
+          // ✅ NEW: For 3-day campaigns, find dates for ALL required days
+          if (
+            campaignConfig?.type === '3_day' &&
+            requiredDaysOfWeek.length > 0
+          ) {
+            // Find the next occurrence of this specific day
+            const nextDate = this.findNextDateByDayOfWeek(
+              now,
+              slot.day_of_week,
+            );
+
+            // Check if today and validate end time
+            const todayDay = now.getDay() === 0 ? 7 : now.getDay();
+            if (slot.day_of_week === todayDay) {
+              const [endHour, endMin] = slot.end_time.split(':').map(Number);
+              const slotEndTime = new Date(now);
+              slotEndTime.setHours(endHour, endMin, 0, 0);
+
+              if (slotEndTime > now) {
+                slotDates.push({ date: new Date(now), slot });
+              }
+            } else {
+              slotDates.push({ date: nextDate, slot });
+            }
+          } else {
+            // Original logic for non-3-day campaigns
+            for (let i = 0; i < 30; i++) {
+              const checkDate = new Date(now);
+              checkDate.setDate(checkDate.getDate() + i);
+
+              if (this.isDateMatchDayOfWeek(checkDate, slot.day_of_week)) {
+                if (i === 0) {
+                  const [endHour, endMin] = slot.end_time
+                    .split(':')
+                    .map(Number);
+                  const slotEndTime = new Date(now);
+                  slotEndTime.setHours(endHour, endMin, 0, 0);
+
+                  if (slotEndTime > now) {
+                    slotDates.push({ date: new Date(checkDate), slot });
+                  }
+                } else {
+                  slotDates.push({ date: new Date(checkDate), slot });
+                }
+                break; // Only find the first occurrence
+              }
+            }
+          }
+        }
+      } else {
+        if (requiredDaysOfWeek.length === 0) {
+          // Campaign type hourly - có thể chạy mọi ngày, bắt đầu từ ngày mai
+          const tomorrow = new Date(now);
+          tomorrow.setDate(tomorrow.getDate() + 1);
+          slotDates.push({ date: tomorrow, slot });
+        } else {
+          // ✅ NEW: For 3-day campaigns, add dates for all required days
+          if (campaignConfig?.type === '3_day') {
+            return await this.calculate3DayDateRange(
+              departmentConfig,
+              campaignConfig,
+              campaignType,
+            );
+          } else {
+            // Original logic for other campaign types
+            for (const dayOfWeek of requiredDaysOfWeek) {
+              const nextDate = this.findNextDateByDayOfWeek(now, dayOfWeek);
+              slotDates.push({ date: nextDate, slot });
+            }
+          }
+        }
+      }
+
+      // Thêm tất cả slot dates vào danh sách
+      validSlots.push(...slotDates);
+    }
+    if (validSlots.length === 0) {
+      this.logger.error(`❌ No valid future slots found. Debug info:`);
+      this.logger.error(`- Department slots:`, departmentConfig.slots);
+      this.logger.error(`- Campaign config:`, campaignConfig);
+      this.logger.error(`- Required days of week:`, requiredDaysOfWeek);
+      this.logger.error(`- Current time:`, now.toISOString());
+      throw new Error('No valid future slots found');
+    }
+
+    // ✅ UPDATED: Enhanced sorting and date calculation for 3-day campaigns
+    validSlots.sort((a, b) => a.date.getTime() - b.date.getTime());
+
+    // ✅ NEW: For 3-day campaigns, find the earliest valid consecutive sequence
+    if (campaignConfig?.type === '3_day' && requiredDaysOfWeek.length === 3) {
+      const consecutiveSequence = this.findEarliestConsecutive3DaySequence(
+        validSlots,
+        requiredDaysOfWeek,
+        campaignConfig,
+      );
+
+      if (consecutiveSequence) {
+        return consecutiveSequence;
+      } else {
+        this.logger.error(
+          `❌ [3-day] No valid consecutive 3-day sequence found`,
+        );
+        throw new Error('No valid consecutive 3-day sequence found');
+      }
+    }
+
+    // ✅ Original logic for non-3-day campaigns
+    const nearestSlotData = validSlots[0];
+    const nearestSlot = nearestSlotData.slot;
+    const targetDate = nearestSlotData.date;
+
+    // Calculate start_date and end_date based on campaign type
+    let startDate: Date;
+    let endDate: Date;
+
+    if (
+      campaignConfig?.type === 'hourly' ||
+      campaignType.includes('daily') ||
+      campaignType.includes('hourly')
+    ) {
+      // Hourly/Daily campaign: always use 8:00-17:45
+      startDate = new Date(targetDate);
+      startDate.setHours(8, 0, 0, 0);
+
+      endDate = new Date(targetDate);
+      endDate.setHours(17, 45, 0, 0);
+    } else {
+      // Weekly campaigns and other types
+      let campaignDuration = 1;
+
+      if (campaignConfig?.type === 'weekly') {
+        campaignDuration = 7;
+      } else if (campaignConfig?.type === '3_day') {
+        campaignDuration = 3;
+      }
+
+      // Find all slots for the same day to get full time range
+      const slotsForThisDay = departmentConfig.slots.filter((slot) => {
+        if (slot.applicable_date) {
+          const slotDate = new Date(slot.applicable_date);
+          return slotDate.toDateString() === targetDate.toDateString();
+        } else if (slot.day_of_week !== undefined) {
+          return slot.day_of_week === nearestSlot.day_of_week;
+        }
+        return false;
+      });
+
+      let earliestStartTime = nearestSlot.start_time;
+      let latestEndTime = nearestSlot.end_time;
+
+      for (const slot of slotsForThisDay) {
+        if (
+          this.parseTime(slot.start_time) < this.parseTime(earliestStartTime)
+        ) {
+          earliestStartTime = slot.start_time;
+        }
+        if (this.parseTime(slot.end_time) > this.parseTime(latestEndTime)) {
+          latestEndTime = slot.end_time;
+        }
+      }
+
+      startDate = new Date(targetDate);
+      const [startHour, startMin] = earliestStartTime.split(':').map(Number);
+      startDate.setHours(startHour, startMin, 0, 0);
+
+      if (campaignConfig?.type === 'weekly') {
+        // Weekly campaign: same day
+        endDate = new Date(targetDate);
+        const [endHour, endMin] = latestEndTime.split(':').map(Number);
+        endDate.setHours(endHour, endMin, 0, 0);
+      } else {
+        // Other campaign types
+        endDate = new Date(targetDate);
+        endDate.setDate(endDate.getDate() + campaignDuration - 1);
+        const [endHour, endMin] = latestEndTime.split(':').map(Number);
+        endDate.setHours(endHour, endMin, 0, 0);
+      }
+    }
+
+    return { startDate, endDate };
+  }
+
+  private calculate3DayDateRange(
+    allDepartmentSchedules: DepartmentSchedule[],
+    campaignConfig: any,
+    campaignType: CampaignType,
+  ): Promise<{ startDate: Date; endDate: Date }> {
+    const requiredDaysOfWeek = campaignConfig.days_of_week || [];
+    const campaignTime = campaignConfig.time_of_day;
+
+    // ✅ FIX: Sử dụng timezone UTC+7 (Việt Nam)
+    const now = new Date();
+    const vietnamTime = new Date(now.getTime() + 7 * 60 * 60 * 1000); // UTC+7
+
+    const allValidSlots: Array<{
+      date: Date;
+      slot: any;
+      schedule: DepartmentSchedule;
+    }> = [];
+
+    for (const schedule of allDepartmentSchedules) {
+      if (
+        !schedule.schedule_config ||
+        !('slots' in schedule.schedule_config) ||
+        !Array.isArray((schedule.schedule_config as any).slots)
+      ) {
+        continue;
+      }
+
+      for (const slot of schedule.schedule_config.slots) {
+        let isValidSlot = false;
+        let slotDate: Date | null = null;
+
+        // ✅ FIX: Kiểm tra day_of_week và time match
+        if (slot.day_of_week && requiredDaysOfWeek.includes(slot.day_of_week)) {
+          // ✅ FIX: Kiểm tra time có nằm trong range không (bao gồm cả start_time)
+          const timeMatches = this.isTimeInSlotRange(
+            campaignTime,
+            slot.start_time,
+            slot.end_time,
+          );
+
+          if (timeMatches) {
+            // Nếu có applicable_date thì dùng applicable_date
+            if (slot.applicable_date) {
+              // ✅ FIX: Parse date với timezone Việt Nam
+              slotDate = this.parseVietnamDate(slot.applicable_date);
+
+              // ✅ FIX: Validate applicable_date với day_of_week theo timezone VN
+              const applicableDateDay = this.getVietnamDayOfWeek(slotDate);
+              if (applicableDateDay === slot.day_of_week) {
+                isValidSlot = true;
+              } else {
+                this.logger.warn(
+                  `⚠️ [calculate3DayDateRange] applicable_date ${slot.applicable_date} (day ${applicableDateDay}) doesn't match day_of_week ${slot.day_of_week} - skipping due to timezone mismatch`,
+                );
+              }
+            } else {
+              // Không có applicable_date thì tìm ngày gần nhất có day_of_week này (theo VN timezone)
+              slotDate = this.findNextDateByDayOfWeekVN(
+                vietnamTime,
+                slot.day_of_week,
+              );
+
+              // Kiểm tra nếu là hôm nay thì validate thời gian (theo VN timezone)
+              const todayDay = this.getVietnamDayOfWeek(vietnamTime);
+              if (slot.day_of_week === todayDay) {
+                const [endHour, endMin] = slot.end_time.split(':').map(Number);
+                const slotEndTime = new Date(vietnamTime);
+                slotEndTime.setHours(endHour, endMin, 0, 0);
+
+                if (slotEndTime > vietnamTime) {
+                  isValidSlot = true;
+                }
+              } else {
+                isValidSlot = true;
+              }
+            }
+          }
+        }
+
+        // Thêm slot hợp lệ vào danh sách
+        if (isValidSlot && slotDate) {
+          allValidSlots.push({
+            date: slotDate,
+            slot: slot,
+            schedule: schedule,
+          });
+        }
+      }
+    }
+
+    if (allValidSlots.length === 0) {
+      throw new Error(
+        'No valid slots found for 3-day campaign across all schedules',
+      );
+    }
+
+    // ✅ Log chi tiết các slots tìm được
+    allValidSlots.forEach((slotData, index) => {
+      const dayOfWeek = this.getVietnamDayOfWeek(slotData.date);
+    });
+
+    // Find earliest consecutive 3-day sequence
+    const result = this.findEarliestConsecutive3DaySequence(
+      allValidSlots,
+      requiredDaysOfWeek,
+      campaignConfig,
+    );
+
+    if (!result) {
+      throw new Error('No valid consecutive 3-day sequence found');
+    }
+
+    // ✅ Điều chỉnh time: start_date dùng slot start nhỏ nhất của ngày đầu,
+    // end_date dùng slot end lớn nhất của ngày cuối, nhưng CHỈ trong các schedules
+    // đã được dùng trong chuỗi 3 ngày ở trên
+    const firstDay = new Date(result.startDate);
+    const lastDay = new Date(result.endDate);
+
+    const firstDayVNKey = this.vietnamDateKey(firstDay);
+    const lastDayVNKey = this.vietnamDateKey(lastDay);
+    const firstDayOfWeek = this.getVietnamDayOfWeek(firstDay); // 1..7
+    const lastDayOfWeek = this.getVietnamDayOfWeek(lastDay); // 1..7
+
+    let minStartTime: string | null = null;
+    let maxEndTime: string | null = null;
+
+    const schedulesToSearch =
+      result.usedSchedules && result.usedSchedules.length > 0
+        ? result.usedSchedules
+        : allDepartmentSchedules;
+
+    for (const schedule of schedulesToSearch) {
+      const slots = (schedule as any)?.schedule_config?.slots;
+      if (!Array.isArray(slots)) continue;
+
+      for (const slot of slots) {
+        // Kiểm tra slot có áp dụng cho ngày cần xét không
+        let appliesToFirst = false;
+        let appliesToLast = false;
+
+        if (slot.applicable_date) {
+          const slotDateKey = this.vietnamDateKey(
+            this.parseVietnamDate(slot.applicable_date),
+          );
+          if (slotDateKey === firstDayVNKey) appliesToFirst = true;
+          if (slotDateKey === lastDayVNKey) appliesToLast = true;
+        } else if (slot.day_of_week) {
+          if (slot.day_of_week === firstDayOfWeek) appliesToFirst = true;
+          if (slot.day_of_week === lastDayOfWeek) appliesToLast = true;
+        }
+
+        if (appliesToFirst && slot.start_time) {
+          if (
+            minStartTime === null ||
+            this.parseTime(slot.start_time) < this.parseTime(minStartTime)
+          ) {
+            minStartTime = slot.start_time;
+          }
+        }
+
+        if (appliesToLast && slot.end_time) {
+          if (
+            maxEndTime === null ||
+            this.parseTime(slot.end_time) > this.parseTime(maxEndTime)
+          ) {
+            maxEndTime = slot.end_time;
+          }
+        }
+      }
+    }
+
+    // Áp dụng nếu tìm thấy
+    if (minStartTime) {
+      const [h, m] = minStartTime.split(':').map(Number);
+      result.startDate.setHours(h, m, 0, 0);
+    }
+    if (maxEndTime) {
+      const [h, m] = maxEndTime.split(':').map(Number);
+      result.endDate.setHours(h, m, 0, 0);
+    }
+
+    return Promise.resolve(result);
+  }
+
+  private isTimeInRange(
+    time: string,
+    startTime: string,
+    endTime: string,
+  ): boolean {
+    const timeMinutes = this.parseTime(time);
+    const startMinutes = this.parseTime(startTime);
+    const endMinutes = this.parseTime(endTime);
+
+    return timeMinutes >= startMinutes && timeMinutes < endMinutes;
+  }
+
+  /**
+   * ✅ NEW: Parse date theo timezone Việt Nam
+   */
+  private parseVietnamDate(dateString: string): Date {
+    const date = new Date(dateString + 'T00:00:00+07:00'); // Force UTC+7
+    return date;
+  }
+
+  /**
+   * ✅ NEW: Lấy day of week theo timezone Việt Nam (2-7: Thứ 2-7)
+   */
+  private getVietnamDayOfWeek(date: Date): number {
+    // Chuyển sang timezone Việt Nam
+    const vietnamTime = new Date(date.getTime() + 7 * 60 * 60 * 1000);
+    const jsDay = vietnamTime.getUTCDay(); // 0=CN, 1=T2, ..., 6=T7
+
+    // Chuẩn hóa: 1=CN, 2=T2, ..., 7=T7
+    // => T2..T7 tương ứng 2..7; CN=1 (không dùng trong yêu cầu 2..7)
+    return jsDay === 0 ? 1 : jsDay + 1;
+  }
+
+  /**
+   * Tạo key ngày theo timezone Việt Nam (YYYY-MM-DD)
+   */
+  private vietnamDateKey(date: Date): string {
+    const vn = new Date(date.getTime() + 7 * 60 * 60 * 1000);
+    const y = vn.getUTCFullYear();
+    const m = String(vn.getUTCMonth() + 1).padStart(2, '0');
+    const d = String(vn.getUTCDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+
+  /**
+   * ✅ NEW: Tìm ngày gần nhất theo day_of_week trong timezone VN
+   */
+  private findNextDateByDayOfWeekVN(fromDate: Date, dayOfWeek: number): Date {
+    const vietnamTime = new Date(fromDate.getTime() + 7 * 60 * 60 * 1000);
+
+    // dayOfWeek: 2=T2, 3=T3, ..., 7=T7
+    // JavaScript getUTCDay(): 0=CN, 1=T2, 2=T3, ..., 6=T7
+    const targetJSDay = dayOfWeek === 7 ? 0 : dayOfWeek - 1;
+
+    let daysToAdd = (targetJSDay - vietnamTime.getUTCDay() + 7) % 7;
+    if (daysToAdd === 0) {
+      daysToAdd = 7; // Nếu hôm nay đúng thứ cần tìm, lấy tuần sau
+    }
+
+    const result = new Date(
+      vietnamTime.getTime() + daysToAdd * 24 * 60 * 60 * 1000,
+    );
+    return result;
+  }
+
+  /**
+   * ✅ FIX: Kiểm tra time có nằm trong slot range không (bao gồm start_time)
+   */
+  private isTimeInSlotRange(
+    time: string,
+    startTime: string,
+    endTime: string,
+  ): boolean {
+    const timeMinutes = this.parseTime(time);
+    const startMinutes = this.parseTime(startTime);
+    const endMinutes = this.parseTime(endTime);
+
+    // ✅ FIX: Bao gồm cả start_time (>= thay vì >)
+    return timeMinutes >= startMinutes && timeMinutes < endMinutes;
+  }
+
+  /**
+   * ✅ NEW: Helper method to check if days are consecutive
+   */
+  private areConsecutiveDays(days: number[]): boolean {
+    if (days.length < 2) return true;
+
+    const sortedDays = [...days].sort((a, b) => a - b);
+
+    for (let i = 1; i < sortedDays.length; i++) {
+      const diff = sortedDays[i] - sortedDays[i - 1];
+
+      // Check for normal consecutive days (1, 2, 3) or wrap-around (7, 1, 2)
+      if (diff !== 1 && !(sortedDays[i - 1] === 7 && sortedDays[i] === 1)) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  /**
+   * ✅ NEW: Find earliest consecutive 3-day sequence with proper time validation
+   */
+  private findEarliestConsecutive3DaySequence(
+    validSlots: Array<{ date: Date; slot: any; schedule?: DepartmentSchedule }>,
+    requiredDaysOfWeek: number[],
+    campaignConfig: any,
+  ): {
+    startDate: Date;
+    endDate: Date;
+    usedSchedules?: DepartmentSchedule[];
+    usedSlots?: Array<{ date: Date; slot: any; schedule?: DepartmentSchedule }>;
+  } | null {
+    const sortedDays = [...requiredDaysOfWeek].sort((a, b) => a - b);
+    const campaignTime = campaignConfig.time_of_day;
+
+    // Group slots by VN date and VN day of week
+    const slotsByDate = new Map<string, Array<{ date: Date; slot: any }>>();
+    const slotsByDayOfWeek = new Map<
+      number,
+      Array<{ date: Date; slot: any }>
+    >();
+
+    for (const slotData of validSlots) {
+      const dateKey = this.vietnamDateKey(slotData.date);
+      const dayOfWeek = this.getVietnamDayOfWeek(slotData.date); // 1=CN, 2..7=T2..T7
+
+      // Bỏ qua CN (1) vì yêu cầu 2..7
+      if (dayOfWeek === 1) continue;
+
+      // Group by date
+      if (!slotsByDate.has(dateKey)) {
+        slotsByDate.set(dateKey, []);
+      }
+      slotsByDate.get(dateKey)!.push(slotData);
+
+      // Group by day of week
+      if (!slotsByDayOfWeek.has(dayOfWeek)) {
+        slotsByDayOfWeek.set(dayOfWeek, []);
+      }
+      slotsByDayOfWeek.get(dayOfWeek)!.push(slotData);
+    }
+
+    // Check if we have all required days available
+    for (const requiredDay of sortedDays) {
+      if (!slotsByDayOfWeek.has(requiredDay)) {
+        this.logger.error(
+          `❌ [3-day sequence] Missing slots for day ${requiredDay}`,
+        );
+        return null;
+      }
+    }
+
+    // Find earliest possible start date that has all 3 consecutive days
+    const now = new Date();
+    const maxSearchDays = 90; // Search up to 3 months ahead
+
+    for (let offset = 0; offset < maxSearchDays; offset++) {
+      const checkDate = new Date(now);
+      checkDate.setDate(checkDate.getDate() + offset);
+      checkDate.setHours(0, 0, 0, 0);
+
+      const checkDayOfWeek = this.getVietnamDayOfWeek(checkDate); // 1..7
+
+      // Check if this date matches the first required day
+      if (checkDayOfWeek === sortedDays[0]) {
+        // Verify we have consecutive days and valid time slots
+        const consecutiveDates: Date[] = [];
+        let isValidSequence = true;
+        let earliestStartTime = '23:59';
+        let latestEndTime = '00:00';
+
+        const selectedSlots: Array<{
+          date: Date;
+          slot: any;
+          schedule?: DepartmentSchedule;
+        } | null> = [null, null, null];
+
+        for (let dayIndex = 0; dayIndex < 3; dayIndex++) {
+          const sequenceDate = new Date(checkDate);
+          sequenceDate.setDate(sequenceDate.getDate() + dayIndex);
+          const sequenceDayOfWeek = this.getVietnamDayOfWeek(sequenceDate);
+
+          // Check if this day matches our required sequence
+          if (sequenceDayOfWeek !== sortedDays[dayIndex]) {
+            isValidSequence = false;
+            break;
+          }
+
+          // Find slots for this specific date that match our time requirement
+          const slotsForThisDay = slotsByDayOfWeek.get(sequenceDayOfWeek) || [];
+          let hasValidTimeSlot = false;
+
+          for (const slotData of slotsForThisDay) {
+            // Check if slot date matches our sequence date (for applicable_date slots)
+            // Or if it's a day_of_week slot that applies to this day
+            const isApplicableSlot = slotData.slot.applicable_date
+              ? this.vietnamDateKey(slotData.date) ===
+                this.vietnamDateKey(sequenceDate)
+              : true; // day_of_week slots apply to all matching days
+
+            if (isApplicableSlot) {
+              // Check if campaign time fits within slot time range
+              const slotStart = this.parseTime(slotData.slot.start_time);
+              const slotEnd = this.parseTime(slotData.slot.end_time);
+              const campaignTimeParsed = this.parseTime(campaignTime);
+
+              if (
+                campaignTimeParsed >= slotStart &&
+                campaignTimeParsed < slotEnd
+              ) {
+                // Check if slot is still valid (not in the past for today)
+                if (
+                  this.vietnamDateKey(sequenceDate) === this.vietnamDateKey(now)
+                ) {
+                  const slotEndTime = new Date(now);
+                  const [endHour, endMin] = slotData.slot.end_time
+                    .split(':')
+                    .map(Number);
+                  slotEndTime.setHours(endHour, endMin, 0, 0);
+
+                  if (slotEndTime <= now) {
+                    continue; // Skip past slots for today
+                  }
+                }
+
+                hasValidTimeSlot = true;
+
+                // Update time range
+                if (
+                  this.parseTime(slotData.slot.start_time) <
+                  this.parseTime(earliestStartTime)
+                ) {
+                  earliestStartTime = slotData.slot.start_time;
+                }
+                if (
+                  this.parseTime(slotData.slot.end_time) >
+                  this.parseTime(latestEndTime)
+                ) {
+                  latestEndTime = slotData.slot.end_time;
+                }
+                selectedSlots[dayIndex] = slotData as any;
+                break;
+              }
+            }
+          }
+
+          if (!hasValidTimeSlot) {
+            isValidSequence = false;
+            break;
+          }
+
+          consecutiveDates.push(sequenceDate);
+        }
+
+        if (isValidSequence && consecutiveDates.length === 3) {
+          // Calculate start and end dates
+          const startDate = new Date(consecutiveDates[0]);
+          const [startHour, startMin] = earliestStartTime
+            .split(':')
+            .map(Number);
+          startDate.setHours(startHour, startMin, 0, 0);
+
+          const endDate = new Date(consecutiveDates[2]);
+          const [endHour, endMin] = latestEndTime.split(':').map(Number);
+          endDate.setHours(endHour, endMin, 0, 0);
+
+          // Collect used schedules (unique)
+          const usedSchedulesMap = new Map<string, DepartmentSchedule>();
+          selectedSlots.forEach((s) => {
+            if (s?.schedule)
+              usedSchedulesMap.set(String(s.schedule.id), s.schedule);
+          });
+
+          const usedSchedules = Array.from(usedSchedulesMap.values());
+
+          return {
+            startDate,
+            endDate,
+            usedSchedules,
+            usedSlots: selectedSlots.filter(Boolean) as Array<{
+              date: Date;
+              slot: any;
+              schedule?: DepartmentSchedule;
+            }>,
+          };
+        }
+      }
+    }
+
+    this.logger.error(
+      `❌ [3-day sequence] No valid consecutive sequence found within ${maxSearchDays} days`,
+    );
+    return null;
+  }
+
+  /**
+   * Tìm ngày gần nhất có day_of_week cụ thể (từ hiện tại trở đi)
+   * @param fromDate - Ngày bắt đầu tìm
+   * @param dayOfWeek - Thứ cần tìm (2-7: Thứ 2-7)
+   */
+  private findNextDateByDayOfWeek(fromDate: Date, dayOfWeek: number): Date {
+    // Validate input
+    if (dayOfWeek < 2 || dayOfWeek > 7) {
+      throw new Error(
+        `Invalid day_of_week: ${dayOfWeek}. Must be between 2-7 (Monday-Sunday)`,
+      );
+    }
+
+    const result = new Date(fromDate);
+
+    // dayOfWeek: 2=Thứ 2, 3=Thứ 3, ..., 7=Thứ 7
+    // JavaScript getDay(): 0=CN, 1=T2, 2=T3, ..., 6=T7
+    const targetJSDay = dayOfWeek - 1; // 2..7 -> 1..6 (T2..T7)
+
+    let daysToAdd = (targetJSDay - result.getDay() + 7) % 7;
+    if (daysToAdd === 0) {
+      // Nếu hôm nay đúng thứ cần tìm, lấy tuần sau
+      daysToAdd = 7;
+    }
+
+    result.setDate(result.getDate() + daysToAdd);
+
+    return result;
+  }
+
+  /**
+   * Kiểm tra ngày có khớp với day_of_week không
+   * @param date - Ngày cần kiểm tra
+   * @param dayOfWeek - Thứ cần khớp (2-7: Thứ 2-7)
+   */
+  private isDateMatchDayOfWeek(date: Date, dayOfWeek: number): boolean {
+    // Validate input
+    if (dayOfWeek < 2 || dayOfWeek > 7) {
+      this.logger.warn(
+        `Invalid day_of_week: ${dayOfWeek}. Must be between 2-7`,
+      );
+      return false;
+    }
+
+    // dayOfWeek: 2=Thứ 2, 3=Thứ 3, ..., 7=Thứ 7
+    // JavaScript getDay(): 0=CN, 1=T2, 2=T3, ..., 6=T7
+    const jsDay = date.getDay();
+    const expectedJSDay = dayOfWeek - 1; // 2..7 -> 1..6
+    const matches = jsDay === expectedJSDay;
+
+    return matches;
+  }
+
   /**
    * Lấy schedule active của department cho campaign type cụ thể
    * @param departmentId - ID của department
@@ -141,10 +1175,6 @@ export class CampaignService {
   ): Promise<DepartmentSchedule | null> {
     const requiredScheduleType =
       ScheduleCalculatorHelper.getScheduleTypeByCampaignType(campaignType);
-    this.logger.log(
-      `🔍 [getDepartmentActiveSchedule] Looking for schedule - Department ID: ${departmentId}, Campaign Type: ${campaignType}, Required Schedule Type: ${requiredScheduleType}`,
-    );
-
     const schedule = await this.departmentScheduleRepository.findOne({
       where: {
         department: { id: departmentId },
@@ -154,11 +1184,7 @@ export class CampaignService {
       relations: ['department'],
     });
 
-    if (schedule) {
-      this.logger.log(
-        `✅ [getDepartmentActiveSchedule] Found active schedule: ${schedule.name} (ID: ${schedule.id})`,
-      );
-    } else {
+    if (!schedule) {
       this.logger.warn(
         `❌ [getDepartmentActiveSchedule] No active schedule found for department ${departmentId} with type ${requiredScheduleType}`,
       );
@@ -168,15 +1194,6 @@ export class CampaignService {
         where: { department: { id: departmentId } },
         relations: ['department'],
       });
-      this.logger.debug(
-        `🔍 [getDepartmentActiveSchedule] All schedules for department ${departmentId}:`,
-        allSchedules.map((s) => ({
-          id: s.id,
-          name: s.name,
-          type: s.schedule_type,
-          status: s.status,
-        })),
-      );
     }
 
     return schedule;
@@ -265,9 +1282,6 @@ export class CampaignService {
       return false;
     }
 
-    this.logger.log(
-      `✅ Daily dates validation passed - campaign can run within department schedule dates`
-    );
     return true;
   }
 
@@ -325,7 +1339,11 @@ export class CampaignService {
     campaignConfig: any,
     departmentConfig: any,
   ): boolean {
-    if (!campaignConfig?.day_of_week || !campaignConfig?.time_of_day || !departmentConfig?.slots) {
+    if (
+      !campaignConfig?.day_of_week ||
+      !campaignConfig?.time_of_day ||
+      !departmentConfig?.slots
+    ) {
       this.logger.warn(`Missing required fields in weekly schedule config`);
       return false;
     }
@@ -346,22 +1364,16 @@ export class CampaignService {
       const campaignTimeParsed = this.parseTime(campaignTime);
 
       // Campaign time phải nằm trong khoảng [start_time, end_time)
-      const isTimeValid = campaignTimeParsed >= deptStart && campaignTimeParsed < deptEnd;
-      
-      if (isTimeValid) {
-        this.logger.log(
-          `✅ Weekly schedule valid: day_of_week=${campaignDay}, time=${campaignTime} ` +
-          `found in slot ${deptSlot.start_time}-${deptSlot.end_time}`
-        );
-      }
-      
+      const isTimeValid =
+        campaignTimeParsed >= deptStart && campaignTimeParsed < deptEnd;
+
       return isTimeValid;
     });
 
     if (!found) {
       this.logger.warn(
         `❌ Weekly schedule invalid: day_of_week=${campaignDay}, time=${campaignTime} ` +
-        `not found within any department schedule slots`
+          `not found within any department schedule slots`,
       );
       return false;
     }
@@ -379,7 +1391,11 @@ export class CampaignService {
     campaignConfig: any,
     departmentConfig: any,
   ): boolean {
-    if (!campaignConfig?.start_time || !campaignConfig?.end_time || !departmentConfig?.slots) {
+    if (
+      !campaignConfig?.start_time ||
+      !campaignConfig?.end_time ||
+      !departmentConfig?.slots
+    ) {
       this.logger.warn(`Missing required fields in hourly schedule config`);
       return false;
     }
@@ -401,66 +1417,72 @@ export class CampaignService {
     if (validSlots.length === 0) {
       this.logger.warn(
         `❌ Hourly schedule invalid: time range ${campaignStart}-${campaignEnd} ` +
-        `not found within any department schedule slots`
+          `not found within any department schedule slots`,
       );
       return false;
     }
 
-    this.logger.log(
-      `✅ Hourly schedule valid: time range ${campaignStart}-${campaignEnd} ` +
-      `found in ${validSlots.length} department slot(s)`
-    );
     return true;
   }
 
   /**
-   * Validate 3-day schedule config against hourly slots
-   * @param campaignConfig - Campaign 3-day schedule config
-   * @param departmentConfig - Department hourly slots config
-   * @returns true nếu hợp lệ
+   * ✅ UPDATED: Sử dụng timezone VN cho validation
    */
   private validate3DayScheduleConfig(
     campaignConfig: any,
-    departmentConfig: any,
+    departmentSchedules: any,
   ): boolean {
-    if (!campaignConfig?.days_of_week || !campaignConfig?.time_of_day || !departmentConfig?.slots) {
+    if (
+      !campaignConfig?.days_of_week ||
+      !campaignConfig?.time_of_day ||
+      !departmentSchedules ||
+      departmentSchedules.length === 0
+    ) {
       this.logger.warn(`Missing required fields in 3-day schedule config`);
       return false;
     }
 
     const campaignDays = campaignConfig.days_of_week;
     const campaignTime = campaignConfig.time_of_day;
-    const campaignTimeParsed = this.parseTime(campaignTime);
 
-    // Kiểm tra từng ngày trong days_of_week
+    // Collect all slots from all department schedules
+    const allSlots: Array<{ schedule: DepartmentSchedule; slot: any }> = [];
+
+    departmentSchedules.forEach((schedule) => {
+      if (
+        schedule.schedule_config?.slots &&
+        Array.isArray(schedule.schedule_config.slots)
+      ) {
+        schedule.schedule_config.slots.forEach((slot) => {
+          allSlots.push({ schedule, slot });
+        });
+      }
+    });
+    // Check each day in the 3-day sequence
     for (const dayOfWeek of campaignDays) {
-      const found = departmentConfig.slots.some((deptSlot: any) => {
-        // Check day_of_week trùng khớp
-        if (deptSlot.day_of_week !== dayOfWeek) {
+      const foundMatchingSlot = allSlots.some(({ slot }) => {
+        // Check day_of_week match
+        if (slot.day_of_week !== dayOfWeek) {
           return false;
         }
 
-        // Check thời gian campaign có nằm trong slot range không
-        const deptStart = this.parseTime(deptSlot.start_time);
-        const deptEnd = this.parseTime(deptSlot.end_time);
+        // ✅ FIX: Sử dụng logic time range mới
+        const isTimeValid = this.isTimeInSlotRange(
+          campaignTime,
+          slot.start_time,
+          slot.end_time,
+        );
 
-        // Campaign time phải nằm trong khoảng [start_time, end_time)
-        return campaignTimeParsed >= deptStart && campaignTimeParsed < deptEnd;
+        return isTimeValid;
       });
 
-      if (!found) {
+      if (!foundMatchingSlot) {
         this.logger.warn(
-          `❌ 3-day schedule invalid: day_of_week=${dayOfWeek}, time=${campaignTime} ` +
-          `not found within any department schedule slots`
+          `❌ [validate3DayScheduleConfig] No matching slot found for day_of_week=${dayOfWeek}, time=${campaignTime}`,
         );
         return false;
       }
     }
-
-    this.logger.log(
-      `✅ 3-day schedule valid: days=[${campaignDays.join(',')}], time=${campaignTime} ` +
-      `all days found in department schedule slots`
-    );
     return true;
   }
 
@@ -480,122 +1502,103 @@ export class CampaignService {
    * @param campaign - Campaign cần setup
    */
   private async setupCampaignScheduleDates(campaign: Campaign): Promise<void> {
-    this.logger.log(
-      `🔧 [setupCampaignScheduleDates] Setting up schedule for campaign ${campaign.id}`,
-    );
-    this.logger.log(
-      `🔧 [setupCampaignScheduleDates] Campaign Type: ${campaign.campaign_type}, Department ID: ${campaign.department.id}`,
-    );
-
-    // 1. Get department schedule
-    const departmentSchedule = await this.getDepartmentActiveSchedule(
+    // 1. Get ALL department schedules (bao gồm cả INACTIVE)
+    const departmentSchedules = await this.getAllDepartmentSchedules(
       campaign.department.id,
       campaign.campaign_type,
     );
 
-    if (!departmentSchedule) {
+    if (!departmentSchedules || departmentSchedules.length === 0) {
       const requiredScheduleType =
         ScheduleCalculatorHelper.getScheduleTypeByCampaignType(
           campaign.campaign_type,
         );
       this.logger.error(
-        `❌ [setupCampaignScheduleDates] No active schedule found for department ${campaign.department.id}, required type: ${requiredScheduleType}`,
+        `❌ [setupCampaignScheduleDates] No schedules found for department ${campaign.department.id}, required type: ${requiredScheduleType}`,
       );
       throw new Error('chưa có lịch hoạt động');
     }
 
-    this.logger.log(
-      `✅ [setupCampaignScheduleDates] Found schedule: ${departmentSchedule.name} (ID: ${departmentSchedule.id})`,
-    );
-    this.logger.log(
-      `✅ [setupCampaignScheduleDates] Schedule Type: ${departmentSchedule.schedule_type}, Status: ${departmentSchedule.status}`,
-    );
-    this.logger.debug(
-      `🔧 [setupCampaignScheduleDates] Schedule Config: ${JSON.stringify(departmentSchedule.schedule_config, null, 2)}`,
-    );
-
-    // 2. Validate campaign schedule config nằm trong department schedule
+    // 2. Get campaign schedule config
     const campaignSchedule = await this.campaignScheduleRepository.findOne({
       where: { campaign: { id: campaign.id } },
     });
 
-    let shouldSetNullDates = false; // Flag để xác định có set null dates không
+    let shouldSetNullDates = false;
+
+    // 3. Validate campaign schedule config và tìm best matching schedule
+    let bestMatchingSchedule: DepartmentSchedule | null = null;
 
     if (campaignSchedule?.schedule_config) {
-      this.logger.log(
-        `🔍 [setupCampaignScheduleDates] Validating campaign schedule config against department schedule...`,
-      );
-
-      const isValidConfig = this.validateCampaignScheduleAgainstDepartment(
+      // Tìm schedule phù hợp nhất từ tất cả schedules
+      bestMatchingSchedule = await this.findBestMatchingSchedule(
         campaignSchedule.schedule_config,
-        departmentSchedule.schedule_config,
-        departmentSchedule.schedule_type,
+        departmentSchedules,
+        campaign.campaign_type,
       );
 
-      if (!isValidConfig) {
+      if (!bestMatchingSchedule) {
         this.logger.warn(
-          `⚠️ [setupCampaignScheduleDates] Campaign schedule config is not within department schedule limits - will set dates to null`,
+          `⚠️ [setupCampaignScheduleDates] No matching schedule found - will set dates to null`,
         );
         shouldSetNullDates = true;
       } else {
-        this.logger.log(
-          `✅ [setupCampaignScheduleDates] Campaign schedule config is valid within department schedule`,
-        );
       }
     } else {
-      this.logger.log(
-        `⚠️ [setupCampaignScheduleDates] No campaign schedule config found - using department schedule directly`,
-      );
+      bestMatchingSchedule = departmentSchedules[0];
     }
 
-    // 3. Calculate date range hoặc set null dates
-    if (shouldSetNullDates) {
-      // Set dates thành null nếu campaign schedule không hợp lệ
-      this.logger.log(
-        `🚫 [setupCampaignScheduleDates] Setting dates to null due to invalid schedule config`,
-      );
+    // 4. Calculate date range hoặc set null dates
+    if (shouldSetNullDates || !bestMatchingSchedule) {
       await this.updateCampaignScheduleDates(campaign.id, null, null);
-      this.logger.log(
-        `✅ [setupCampaignScheduleDates] Campaign schedule dates set to null successfully`,
-      );
     } else {
-      // Tính toán dates bình thường
+      // Tính toán dates từ matching schedule
       let dateRange: { startDate: Date; endDate: Date };
 
       try {
-        if (departmentSchedule.schedule_type === ScheduleType.DAILY_DATES) {
-          this.logger.log(
-            `📅 [setupCampaignScheduleDates] Calculating daily dates range...`,
+        if (bestMatchingSchedule.schedule_type === ScheduleType.DAILY_DATES) {
+          dateRange = this.calculateDateRangeFromDailyDatesWithApplicableDate(
+            bestMatchingSchedule.schedule_config as any,
+            campaignSchedule?.schedule_config,
           );
-          dateRange = ScheduleCalculatorHelper.calculateDateRangeFromDailyDates(
-            departmentSchedule.schedule_config as any,
-          );
-        } else {
-          this.logger.log(
-            `⏰ [setupCampaignScheduleDates] Calculating hourly slots range...`,
-          );
-          dateRange =
-            ScheduleCalculatorHelper.calculateDateRangeFromHourlySlots(
-              departmentSchedule.schedule_config as any,
+        } else if (
+          bestMatchingSchedule.schedule_type === ScheduleType.HOURLY_SLOTS
+        ) {
+          // 🔍 KIỂM TRA CAMPAIGN TYPE để quyết định logic tính toán
+          if (
+            campaign.campaign_type.includes('hourly') ||
+            campaign.campaign_type.includes('daily')
+          ) {
+            dateRange = this.calculateDateRangeFromDailyDatesWithApplicableDate(
+              bestMatchingSchedule.schedule_config as any,
+              campaignSchedule?.schedule_config,
             );
+          } else {
+            if (campaignSchedule?.schedule_config?.type === '3_day') {
+              dateRange = await this.calculate3DayDateRange(
+                departmentSchedules, // Pass all schedules
+                campaignSchedule.schedule_config,
+                campaign.campaign_type,
+              );
+            } else {
+              dateRange =
+                await this.calculateDateRangeFromHourlySlotsWithApplicableDate(
+                  bestMatchingSchedule.schedule_config as any,
+                  campaignSchedule?.schedule_config,
+                  campaign.campaign_type,
+                );
+            }
+          }
+        } else {
+          throw new Error(
+            `Unsupported schedule type: ${bestMatchingSchedule.schedule_type}`,
+          );
         }
-        this.logger.log(
-          `✅ [setupCampaignScheduleDates] Date range calculated:`,
-        );
-        this.logger.log(`   Start: ${dateRange.startDate.toISOString()}`);
-        this.logger.log(`   End: ${dateRange.endDate.toISOString()}`);
 
-        // Update campaign schedule với calculated dates
-        this.logger.log(
-          `💾 [setupCampaignScheduleDates] Updating campaign schedule dates...`,
-        );
         await this.updateCampaignScheduleDates(
           campaign.id,
           dateRange.startDate,
           dateRange.endDate,
-        );
-        this.logger.log(
-          `✅ [setupCampaignScheduleDates] Campaign schedule dates updated successfully`,
         );
       } catch (error) {
         this.logger.error(
@@ -615,10 +1618,6 @@ export class CampaignService {
   private async validateCurrentTimeInSchedule(
     campaign: Campaign,
   ): Promise<void> {
-    this.logger.log(
-      `⏱️ [validateCurrentTimeInSchedule] Validating current time for campaign ${campaign.id}`,
-    );
-
     // Get existing campaign schedule
     const campaignSchedule = await this.campaignScheduleRepository.findOne({
       where: { campaign: { id: campaign.id } },
@@ -636,20 +1635,12 @@ export class CampaignService {
     const endDate = new Date(campaignSchedule.end_date);
     const now = new Date();
 
-    this.logger.log(
-      `⏱️ [validateCurrentTimeInSchedule] Time validation: ${now.toISOString()} should be between ${startDate.toISOString()} and ${endDate.toISOString()}`,
-    );
-
     if (now < startDate || now > endDate) {
       this.logger.error(
         `❌ [validateCurrentTimeInSchedule] Time validation failed - outside allowed range`,
       );
       throw new Error('không trong khung thời gian');
     }
-
-    this.logger.log(
-      `✅ [validateCurrentTimeInSchedule] Time validation passed`,
-    );
 
     // Check concurrent campaigns
     await this.validateNoConcurrentCampaigns(
@@ -659,84 +1650,6 @@ export class CampaignService {
         startDate,
         endDate,
       },
-    );
-  }
-
-  /**
-   * Validate và setup campaign schedule khi chuyển sang RUNNING
-   * @param campaign - Campaign cần validate
-   */
-  private async validateAndSetupCampaignSchedule(
-    campaign: Campaign,
-  ): Promise<void> {
-
-    // 1. Get department schedule
-    const departmentSchedule = await this.getDepartmentActiveSchedule(
-      campaign.department.id,
-      campaign.campaign_type,
-    );
-
-    if (!departmentSchedule) {
-      const requiredScheduleType =
-        ScheduleCalculatorHelper.getScheduleTypeByCampaignType(
-          campaign.campaign_type,
-        );
-      throw new BadRequestException(
-        `Phòng ban "${campaign.department.name}" chưa có lịch hoạt động loại "${requiredScheduleType}" cho chiến dịch loại "${campaign.campaign_type}". ` +
-          `Vui lòng tạo lịch hoạt động trước khi chạy chiến dịch.`,
-      );
-    }
-
-    // 2. Calculate date range từ schedule config
-    let dateRange: { startDate: Date; endDate: Date };
-
-    try {
-      if (departmentSchedule.schedule_type === ScheduleType.DAILY_DATES) {
-        dateRange = ScheduleCalculatorHelper.calculateDateRangeFromDailyDates(
-          departmentSchedule.schedule_config as any,
-        );
-      } else {
-        dateRange = ScheduleCalculatorHelper.calculateDateRangeFromHourlySlots(
-          departmentSchedule.schedule_config as any,
-        );
-      }
-    } catch (error) {
-      throw new BadRequestException(
-        `Lỗi khi tính toán thời gian từ cấu hình lịch: ${error.message}`,
-      );
-    }
-
-    const now = new Date();
-
-    if (now < dateRange.startDate || now > dateRange.endDate) {
-      const formatOptions: Intl.DateTimeFormatOptions = {
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        timeZone: 'Asia/Ho_Chi_Minh',
-      };
-
-      throw new BadRequestException(
-        `Chiến dịch chỉ có thể chạy trong khung thời gian từ ` +
-          `${dateRange.startDate.toLocaleString('vi-VN', formatOptions)} ` +
-          `đến ${dateRange.endDate.toLocaleString('vi-VN', formatOptions)}. ` +
-          `Thời gian hiện tại: ${now.toLocaleString('vi-VN', formatOptions)}`,
-      );
-    }
-
-    // 4. Check xem có campaign khác của cùng department đang chạy trong cùng time slot không
-    await this.validateNoConcurrentCampaigns(
-      campaign.department.id,
-      campaign.id,
-      dateRange,
-    );
-
-    await this.updateCampaignScheduleDates(
-      campaign.id,
-      dateRange.startDate,
-      dateRange.endDate,
     );
   }
 
@@ -784,9 +1697,7 @@ export class CampaignService {
    * @param campaignId - ID campaign
    */
   private async resetCampaignScheduleDates(campaignId: string): Promise<void> {
-
     await this.updateCampaignScheduleDates(campaignId, null, null);
-    
   }
 
   /**
@@ -1097,7 +2008,7 @@ export class CampaignService {
 
     // ✅ FIXED: Get campaigns without complex joins first
     const campaigns = await qb.getMany();
-    const campaignIds = campaigns.map(c => c.id);
+    const campaignIds = campaigns.map((c) => c.id);
 
     if (campaignIds.length === 0) {
       const stats = await this.getStats(user);
@@ -1105,37 +2016,38 @@ export class CampaignService {
     }
 
     // ✅ FIXED: Get related data separately to avoid duplicates
-    const [contents, schedules, emailReports, customerCounts] = await Promise.all([
-      // Get campaign contents
-      this.campaignContentRepository
-        .createQueryBuilder('content')
-        .leftJoinAndSelect('content.campaign', 'campaign')
-        .where('content.campaign_id IN (:...campaignIds)', { campaignIds })
-        .getMany(),
-      
-      // Get campaign schedules
-      this.campaignScheduleRepository
-        .createQueryBuilder('schedule')
-        .leftJoinAndSelect('schedule.campaign', 'campaign')
-        .where('schedule.campaign_id IN (:...campaignIds)', { campaignIds })
-        .getMany(),
-      
-      // Get email reports
-      this.campaignEmailReportRepository
-        .createQueryBuilder('email')
-        .leftJoinAndSelect('email.campaign', 'campaign')
-        .where('email.campaign_id IN (:...campaignIds)', { campaignIds })
-        .getMany(),
-      
-      // Get customer counts
-      this.campaignCustomerMapRepository
-        .createQueryBuilder('map')
-        .select('map.campaign_id', 'campaign_id')
-        .addSelect('COUNT(DISTINCT map.customer_id)', 'customer_count')
-        .where('map.campaign_id IN (:...campaignIds)', { campaignIds })
-        .groupBy('map.campaign_id')
-        .getRawMany()
-    ]);
+    const [contents, schedules, emailReports, customerCounts] =
+      await Promise.all([
+        // Get campaign contents
+        this.campaignContentRepository
+          .createQueryBuilder('content')
+          .leftJoinAndSelect('content.campaign', 'campaign')
+          .where('content.campaign_id IN (:...campaignIds)', { campaignIds })
+          .getMany(),
+
+        // Get campaign schedules
+        this.campaignScheduleRepository
+          .createQueryBuilder('schedule')
+          .leftJoinAndSelect('schedule.campaign', 'campaign')
+          .where('schedule.campaign_id IN (:...campaignIds)', { campaignIds })
+          .getMany(),
+
+        // Get email reports
+        this.campaignEmailReportRepository
+          .createQueryBuilder('email')
+          .leftJoinAndSelect('email.campaign', 'campaign')
+          .where('email.campaign_id IN (:...campaignIds)', { campaignIds })
+          .getMany(),
+
+        // Get customer counts
+        this.campaignCustomerMapRepository
+          .createQueryBuilder('map')
+          .select('map.campaign_id', 'campaign_id')
+          .addSelect('COUNT(DISTINCT map.customer_id)', 'customer_count')
+          .where('map.campaign_id IN (:...campaignIds)', { campaignIds })
+          .groupBy('map.campaign_id')
+          .getRawMany(),
+      ]);
 
     // ✅ FIXED: Get customers for campaigns
     const allCustomerMaps = await this.campaignCustomerMapRepository
@@ -1145,11 +2057,13 @@ export class CampaignService {
       .getMany();
 
     // ✅ FIXED: Create lookup maps using proper entity structure
-    const contentMap = new Map(contents.map(c => [c.campaign.id, c]));
-    const scheduleMap = new Map(schedules.map(s => [s.campaign.id, s]));
-    const emailMap = new Map(emailReports.map(e => [e.campaign.id, e]));
-    const countMap = new Map(customerCounts.map(c => [c.campaign_id, parseInt(c.customer_count)]));
-    
+    const contentMap = new Map(contents.map((c) => [c.campaign.id, c]));
+    const scheduleMap = new Map(schedules.map((s) => [s.campaign.id, s]));
+    const emailMap = new Map(emailReports.map((e) => [e.campaign.id, e]));
+    const countMap = new Map(
+      customerCounts.map((c) => [c.campaign_id, parseInt(c.customer_count)]),
+    );
+
     const customersByCampaign = allCustomerMaps.reduce(
       (acc, map) => {
         if (!acc[map.campaign_id]) acc[map.campaign_id] = [];
@@ -1160,11 +2074,14 @@ export class CampaignService {
         });
         return acc;
       },
-      {} as Record<string, Array<{
-        phone_number: string;
-        full_name: string;
-        salutation?: string;
-      }>>,
+      {} as Record<
+        string,
+        Array<{
+          phone_number: string;
+          full_name: string;
+          salutation?: string;
+        }>
+      >,
     );
 
     // ✅ FIXED: Build response data
@@ -1198,20 +2115,27 @@ export class CampaignService {
       return {
         ...campaign,
         customer_count: customerCount,
-        messages: initialMessage || { type: 'initial', text: '', attachment: null },
+        messages: initialMessage || {
+          type: 'initial',
+          text: '',
+          attachment: null,
+        },
         schedule_config: scheduleConfig,
         reminders: reminderMessages.map((msg: any) => ({
           content: msg.text || '',
           minutes: msg.remind_after_minutes || 0,
         })),
-        email_reports: emailReport ? {
-          recipients_to: emailReport.recipient_to || '',
-          recipients_cc: emailReport.recipients_cc || [],
-          report_interval_minutes: emailReport.report_interval_minutes,
-          stop_sending_at_time: emailReport.stop_sending_at_time,
-          is_active: emailReport.is_active || false,
-          send_when_campaign_completed: emailReport.send_when_campaign_completed || false,
-        } : undefined,
+        email_reports: emailReport
+          ? {
+              recipients_to: emailReport.recipient_to || '',
+              recipients_cc: emailReport.recipients_cc || [],
+              report_interval_minutes: emailReport.report_interval_minutes,
+              stop_sending_at_time: emailReport.stop_sending_at_time,
+              is_active: emailReport.is_active || false,
+              send_when_campaign_completed:
+                emailReport.send_when_campaign_completed || false,
+            }
+          : undefined,
         customers: customersByCampaign[campaign.id] || [],
         start_date,
         end_date,
@@ -1753,76 +2677,37 @@ export class CampaignService {
     status: CampaignStatus,
     user: User,
   ): Promise<{ success: boolean; error?: string; data?: CampaignWithDetails }> {
-    this.logger.log(
-      `🔄 [updateStatus] Starting status update for campaign ${id}: ${status}`,
-    );
-    this.logger.log(
-      `🔄 [updateStatus] User: ${user.username}, Department IDs: ${user.departments?.map((d) => d.id).join(',')}`,
-    );
-
     try {
       // Kiểm tra quyền truy cập và lấy campaign
       const campaign = await this.checkCampaignAccess(id, user);
-      this.logger.log(
-        `✅ [updateStatus] Campaign found: ${campaign.name}, Type: ${campaign.campaign_type}, Current Status: ${campaign.status}`,
-      );
-      this.logger.log(
-        `✅ [updateStatus] Campaign Department: ${campaign.department?.name} (ID: ${campaign.department?.id})`,
-      );
 
       // Validate status transitions
       this.validateStatusTransition(campaign.status, status);
-      this.logger.log(
-        `✅ [updateStatus] Status transition validated: ${campaign.status} → ${status}`,
-      );
 
       // ✨ THÊM LOGIC SCHEDULE
       if (
         campaign.status === CampaignStatus.DRAFT &&
         status === CampaignStatus.SCHEDULED
       ) {
-        this.logger.log(
-          `🚀 [updateStatus] Triggering schedule setup for DRAFT → SCHEDULED`,
-        );
         await this.setupCampaignScheduleDates(campaign);
-        this.logger.log(
-          `✅ [updateStatus] Schedule setup completed successfully`,
-        );
       } else if (
         campaign.status === CampaignStatus.SCHEDULED &&
         status === CampaignStatus.RUNNING
       ) {
-        this.logger.log(
-          `🚀 [updateStatus] Triggering schedule validation for SCHEDULED → RUNNING`,
-        );
         await this.validateCurrentTimeInSchedule(campaign);
-        this.logger.log(
-          `✅ [updateStatus] Schedule validation completed successfully`,
-        );
       } else if (
         campaign.status === CampaignStatus.SCHEDULED &&
         status === CampaignStatus.DRAFT
       ) {
-        this.logger.log(
-          `🚀 [updateStatus] Triggering schedule reset for SCHEDULED → DRAFT`,
-        );
         await this.resetCampaignScheduleDates(campaign.id);
-        this.logger.log(
-          `✅ [updateStatus] Schedule reset completed successfully`,
-        );
       } else {
-        this.logger.log(
-          `ℹ️ [updateStatus] Skipping schedule operations for ${campaign.status} → ${status}`,
-        );
       }
 
       // Update campaign status
       await this.campaignRepository.update(id, { status });
-      this.logger.log(`✅ [updateStatus] Campaign status updated to ${status}`);
 
       // Return updated campaign with full details
       const result = await this.findOne(id, user);
-      this.logger.log(`✅ [updateStatus] Returning updated campaign details`);
 
       return { success: true, data: result };
     } catch (error) {
