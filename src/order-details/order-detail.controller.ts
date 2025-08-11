@@ -78,6 +78,32 @@ export class OrderDetailController {
     return this.orderDetailService.bulkRestore(data.ids, req.user);
   }
 
+  // =============== Stats detailed endpoint ===============
+  @Get('stats/detailed')
+  async getDetailedStats(
+    @Query('period') period: string = 'day',
+    @Query('date') date?: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
+    @Query('status') status?: string,
+    @Query('employees') employees?: string,
+    @Query('departments') departments?: string,
+    @Query('products') products?: string,
+    @Req() req?: any,
+  ): Promise<any> {
+    return this.orderDetailService.getDetailedStats({
+      period,
+      date,
+      dateFrom,
+      dateTo,
+      status,
+      employees,
+      departments,
+      products,
+      user: req.user,
+    });
+  }
+
   @Get(':id')
   async findById(
     @Param('id', ParseIntPipe) id: number,

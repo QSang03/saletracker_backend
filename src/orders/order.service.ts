@@ -14,6 +14,7 @@ interface OrderFilters {
   pageSize: number;
   search?: string;
   status?: string;
+  statuses?: string;
   date?: string;
   dateRange?: { start: string; end: string };
   employee?: string;
@@ -49,6 +50,116 @@ export class OrderService {
     private productRepository: Repository<Product>,
     private orderBlacklistService: OrderBlacklistService,
   ) {}
+
+  // =============== Stats helpers ===============
+  private isAdmin(user: any): boolean {
+    const roleNames = (user?.roles || []).map((r: any) =>
+      typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
+    );
+    return roleNames.includes('admin');
+  }
+
+  private startOfDay(d: Date): Date {
+    const x = new Date(d);
+    x.setHours(0, 0, 0, 0);
+    return x;
+  }
+
+  private endOfDay(d: Date): Date {
+    const x = new Date(d);
+    x.setHours(23, 59, 59, 999);
+    return x;
+  }
+
+  private startOfWeekMonday(d: Date): Date {
+    const date = this.startOfDay(d);
+    const day = (date.getDay() + 6) % 7; // 0=Monday
+    date.setDate(date.getDate() - day);
+    return date;
+  }
+
+  private endOfWeekSunday(d: Date): Date {
+    const start = this.startOfWeekMonday(d);
+    const end = new Date(start);
+    end.setDate(start.getDate() + 6);
+    return this.endOfDay(end);
+  }
+
+  private startOfMonth(d: Date): Date {
+    return this.startOfDay(new Date(d.getFullYear(), d.getMonth(), 1));
+  }
+
+  private endOfMonth(d: Date): Date {
+    return this.endOfDay(new Date(d.getFullYear(), d.getMonth() + 1, 0));
+  }
+
+  private startOfQuarter(d: Date): Date {
+    const q = Math.floor(d.getMonth() / 3);
+    return this.startOfDay(new Date(d.getFullYear(), q * 3, 1));
+  }
+
+  private endOfQuarter(d: Date): Date {
+    const start = this.startOfQuarter(d);
+    return this.endOfDay(
+      new Date(start.getFullYear(), start.getMonth() + 3, 0),
+    );
+  }
+
+  private getDateRange(
+    period: string,
+    date?: string,
+    dateFrom?: string,
+    dateTo?: string,
+  ): {
+    from: Date;
+    to: Date;
+    normalizedPeriod: 'day' | 'week' | 'month' | 'quarter' | 'custom';
+  } {
+    const today = new Date();
+    const p = (period || 'day').toLowerCase();
+
+    if (p === 'custom' && dateFrom && dateTo) {
+      const from = this.startOfDay(new Date(dateFrom));
+      const to = this.endOfDay(new Date(dateTo));
+      return { from, to, normalizedPeriod: 'custom' };
+    }
+
+    const target = date ? new Date(date) : today;
+    switch (p) {
+      case 'week': {
+        const from = this.startOfWeekMonday(target);
+        const to = this.endOfWeekSunday(target);
+        return { from, to, normalizedPeriod: 'week' };
+      }
+      case 'month': {
+        const from = this.startOfMonth(target);
+        const to = this.endOfMonth(target);
+        return { from, to, normalizedPeriod: 'month' };
+      }
+      case 'quarter': {
+        const from = this.startOfQuarter(target);
+        const to = this.endOfQuarter(target);
+        return { from, to, normalizedPeriod: 'quarter' };
+      }
+      case 'day':
+      default: {
+        const from = this.startOfDay(target);
+        const to = this.endOfDay(target);
+        return { from, to, normalizedPeriod: 'day' };
+      }
+    }
+  }
+
+  private getPreviousPeriodRange(
+    period: 'day' | 'week' | 'month' | 'quarter' | 'custom',
+    from: Date,
+    to: Date,
+  ): { from: Date; to: Date } {
+    const diffMs = to.getTime() - from.getTime() + 1;
+    const prevTo = new Date(from.getTime() - 1);
+    const prevFrom = new Date(prevTo.getTime() - diffMs + 1);
+    return { from: this.startOfDay(prevFrom), to: this.endOfDay(prevTo) };
+  }
 
   async findAll(): Promise<Order[]> {
     return this.orderRepository.find({
@@ -315,6 +426,277 @@ export class OrderService {
   }
 
   // Updated findAllPaginated method với dynamic extended calculation và sorting
+  // async findAllPaginated(filters: OrderFilters): Promise<{
+  //   data: OrderDetail[];
+  //   total: number;
+  //   page: number;
+  //   pageSize: number;
+  // }> {
+  //   const {
+  //     page,
+  //     pageSize,
+  //     search,
+  //     status,
+  //     date,
+  //     dateRange,
+  //     employee,
+  //     employees,
+  //     departments,
+  //     products,
+  //     warningLevel,
+  //     sortField,
+  //     sortDirection,
+  //     user,
+  //   } = filters;
+  //   const skip = (page - 1) * pageSize;
+
+  //   const queryBuilder = this.orderDetailRepository
+  //     .createQueryBuilder('details')
+  //     .leftJoinAndSelect('details.order', 'order')
+  //     .leftJoinAndSelect('details.product', 'product')
+  //     .leftJoinAndSelect('order.sale_by', 'sale_by')
+  //     .leftJoinAndSelect('sale_by.departments', 'sale_by_departments');
+
+  //   // Phân quyền xem
+  //   const allowedUserIds = await this.getUserIdsByRole(user);
+  //   if (allowedUserIds !== null) {
+  //     if (allowedUserIds.length === 0) {
+  //       queryBuilder.andWhere('1 = 0');
+  //     } else {
+  //       queryBuilder.andWhere('sale_by.id IN (:...userIds)', {
+  //         userIds: allowedUserIds,
+  //       });
+  //     }
+  //   }
+
+  //   // Apply filters as before
+  //   if (search) {
+  //     queryBuilder.andWhere(
+  //       '(CAST(details.id AS CHAR) LIKE :search OR details.customer_name LIKE :search OR details.raw_item LIKE :search)',
+  //       { search: `%${search}%` },
+  //     );
+  //   }
+
+  //   if (status) {
+  //     queryBuilder.andWhere('details.status = :status', { status });
+  //   }
+
+  //   if (date) {
+  //     const startDate = new Date(date);
+  //     const endDate = new Date(date);
+  //     endDate.setHours(23, 59, 59, 999);
+  //     queryBuilder.andWhere(
+  //       'order.created_at BETWEEN :startDate AND :endDate',
+  //       { startDate, endDate },
+  //     );
+  //   }
+
+  //   if (dateRange && dateRange.start && dateRange.end) {
+  //     const startDate = new Date(dateRange.start);
+  //     const endDate = new Date(dateRange.end);
+  //     endDate.setHours(23, 59, 59, 999);
+  //     queryBuilder.andWhere(
+  //       'order.created_at BETWEEN :rangeStart AND :rangeEnd',
+  //       { rangeStart: startDate, rangeEnd: endDate },
+  //     );
+  //   }
+
+  //   if (employee) {
+  //     queryBuilder.andWhere('sale_by.id = :employee', { employee });
+  //   }
+
+  //   if (employees) {
+  //     const employeeIds = employees
+  //       .split(',')
+  //       .map((id) => parseInt(id.trim(), 10))
+  //       .filter((id) => !isNaN(id));
+  //     if (employeeIds.length > 0) {
+  //       queryBuilder.andWhere('sale_by.id IN (:...employeeIds)', {
+  //         employeeIds,
+  //       });
+  //     }
+  //   }
+
+  //   if (departments) {
+  //     const departmentIds = departments
+  //       .split(',')
+  //       .map((id) => parseInt(id.trim(), 10))
+  //       .filter((id) => !isNaN(id));
+  //     if (departmentIds.length > 0) {
+  //       queryBuilder.andWhere(
+  //         `
+  //       sale_by_departments.id IN (:...departmentIds)
+  //       AND sale_by_departments.server_ip IS NOT NULL
+  //       AND TRIM(sale_by_departments.server_ip) <> ''
+  //     `,
+  //         { departmentIds },
+  //       );
+  //     }
+  //   }
+
+  //   if (products) {
+  //     const productIds = products
+  //       .split(',')
+  //       .map((id) => parseInt(id.trim(), 10))
+  //       .filter((id) => !isNaN(id));
+  //     if (productIds.length > 0) {
+  //       queryBuilder.andWhere('details.product_id IN (:...productIds)', {
+  //         productIds,
+  //       });
+  //     }
+  //   }
+
+  //   if (warningLevel) {
+  //     const levels = warningLevel
+  //       .split(',')
+  //       .map((level) => parseInt(level.trim(), 10))
+  //       .filter((level) => !isNaN(level));
+  //     if (levels.length > 0) {
+  //       queryBuilder.andWhere('details.extended IN (:...levels)', { levels });
+  //     }
+  //   }
+
+  //   // Chuẩn bị data blacklist theo role
+  //   let managerBlacklistMap: Map<number, Set<string>> | undefined;
+  //   let userBlacklisted: string[] | undefined;
+
+  //   if (user && user.roles) {
+  //     const roleNames = (user.roles || []).map((r: any) =>
+  //       typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
+  //     );
+  //     const isAdmin = roleNames.includes('admin');
+  //     const isManager = roleNames.some((r: string) => r.startsWith('manager-'));
+
+  //     if (!isAdmin) {
+  //       if (isManager) {
+  //         // Manager: không được thấy các đơn của khách bị blacklist bởi bất kỳ user nào trong phạm vi họ có thể xem (allowedUserIds)
+  //         managerBlacklistMap =
+  //           await this.orderBlacklistService.getBlacklistedContactsForUsers(
+  //             allowedUserIds || [],
+  //           );
+  //       } else {
+  //         // User: ẩn các đơn của khách nằm trong blacklist của chính họ
+  //         userBlacklisted =
+  //           await this.orderBlacklistService.getBlacklistedContactsForUser(
+  //             user.id,
+  //           );
+  //       }
+  //     }
+  //   }
+
+  //   // LUÔN lấy tất cả data để áp dụng unified sorting
+  //   const allData = await queryBuilder.getMany();
+
+  //   // Tính calcDynamicExtended cho tất cả data
+  //   const dataWithDynamicExtended = allData.map((orderDetail) => ({
+  //     ...orderDetail,
+  //     dynamicExtended: this.calcDynamicExtended(
+  //       orderDetail.created_at || null,
+  //       orderDetail.extended,
+  //     ),
+  //   }));
+
+  //   // Áp dụng blacklist filter theo role
+  //   let filteredData = dataWithDynamicExtended;
+
+  //   if (user && !roleNamesIncludes(user, 'admin')) {
+  //     if (roleNamesSome(user, (r) => r.startsWith('manager-'))) {
+  //       if (managerBlacklistMap && (allowedUserIds?.length || 0) > 0) {
+  //         const blacklistedSet = new Set<string>();
+  //         for (const uid of allowedUserIds!) {
+  //           const set = managerBlacklistMap.get(uid);
+  //           if (set) for (const cid of set) blacklistedSet.add(cid);
+  //         }
+  //         const filterFn = (od: OrderDetail) => {
+  //           const cid = this.extractCustomerIdFromMetadata(od.metadata);
+  //           return !cid || !blacklistedSet.has(cid);
+  //         };
+  //         filteredData = filteredData.filter(filterFn);
+  //       }
+  //     } else {
+  //       if (userBlacklisted && userBlacklisted.length > 0) {
+  //         const set = new Set(userBlacklisted);
+  //         const filterFn = (od: OrderDetail) => {
+  //           const cid = this.extractCustomerIdFromMetadata(od.metadata);
+  //           return !cid || !set.has(cid);
+  //         };
+  //         filteredData = filteredData.filter(filterFn);
+  //       }
+  //     }
+  //   }
+
+  //   const actualSortDirection =
+  //     sortDirection?.toLowerCase() === 'asc' ? 'asc' : 'desc';
+
+  //   // LUÔN sort theo calcDynamicExtended
+  //   if (sortField === 'created_at') {
+  //     // Sort theo created_at
+  //     filteredData.sort((a, b) => {
+  //       const aTime = new Date(a.created_at || 0).getTime();
+  //       const bTime = new Date(b.created_at || 0).getTime();
+  //       return actualSortDirection === 'asc' ? aTime - bTime : bTime - aTime;
+  //     });
+  //   } else if (sortField === 'quantity') {
+  //     // ✅ THÊM: Sort theo quantity
+  //     filteredData.sort((a, b) => {
+  //       const aQty = a.quantity || 0;
+  //       const bQty = b.quantity || 0;
+  //       const qtyDiff =
+  //         actualSortDirection === 'asc' ? aQty - bQty : bQty - aQty;
+
+  //       // Nếu quantity bằng nhau, sort theo created_at giảm dần
+  //       if (qtyDiff === 0) {
+  //         const aTime = new Date(a.created_at || 0).getTime();
+  //         const bTime = new Date(b.created_at || 0).getTime();
+  //         return bTime - aTime;
+  //       }
+  //       return qtyDiff;
+  //     });
+  //   } else if (sortField === 'unit_price') {
+  //     // ✅ THÊM: Sort theo unit_price
+  //     filteredData.sort((a, b) => {
+  //       const aPrice = a.unit_price || 0;
+  //       const bPrice = b.unit_price || 0;
+  //       const priceDiff =
+  //         actualSortDirection === 'asc' ? aPrice - bPrice : bPrice - aPrice;
+
+  //       // Nếu unit_price bằng nhau, sort theo created_at giảm dần
+  //       if (priceDiff === 0) {
+  //         const aTime = new Date(a.created_at || 0).getTime();
+  //         const bTime = new Date(b.created_at || 0).getTime();
+  //         return bTime - aTime;
+  //       }
+  //       return priceDiff;
+  //     });
+  //   } else {
+  //     // Mặc định: Sort theo dynamicExtended
+  //     filteredData.sort((a, b) => {
+  //       const aExtended =
+  //         a.dynamicExtended !== null ? a.dynamicExtended : -999999;
+  //       const bExtended =
+  //         b.dynamicExtended !== null ? b.dynamicExtended : -999999;
+
+  //       const extendedDiff =
+  //         actualSortDirection === 'asc'
+  //           ? aExtended - bExtended
+  //           : bExtended - aExtended;
+
+  //       if (extendedDiff === 0) {
+  //         const aTime = new Date(a.created_at || 0).getTime();
+  //         const bTime = new Date(b.created_at || 0).getTime();
+  //         return bTime - aTime;
+  //       }
+  //       return extendedDiff;
+  //     });
+  //   }
+
+  //   // Áp dụng pagination sau khi sort và filter
+  //   const data = filteredData.slice(skip, skip + pageSize);
+  //   const actualTotal = filteredData.length;
+
+  //   return { data, total: actualTotal, page, pageSize };
+  // }
+
   async findAllPaginated(filters: OrderFilters): Promise<{
     data: OrderDetail[];
     total: number;
@@ -326,6 +708,7 @@ export class OrderService {
       pageSize,
       search,
       status,
+      statuses,
       date,
       dateRange,
       employee,
@@ -366,8 +749,23 @@ export class OrderService {
       );
     }
 
-    if (status) {
-      queryBuilder.andWhere('details.status = :status', { status });
+    if (status && status.trim()) {
+      // ✅ SỬA: Kiểm tra xem có phải CSV string không
+      if (status.includes(',')) {
+        // Multiple statuses - split thành array
+        const statusArray = status
+          .split(',')
+          .map((s) => s.trim())
+          .filter((s) => s);
+        if (statusArray.length > 0) {
+          queryBuilder.andWhere('details.status IN (:...statuses)', {
+            statuses: statusArray,
+          });
+        }
+      } else {
+        // Single status - giữ logic cũ
+        queryBuilder.andWhere('details.status = :status', { status });
+      }
     }
 
     if (date) {
@@ -435,15 +833,16 @@ export class OrderService {
       }
     }
 
-    if (warningLevel) {
-      const levels = warningLevel
-        .split(',')
-        .map((level) => parseInt(level.trim(), 10))
-        .filter((level) => !isNaN(level));
-      if (levels.length > 0) {
-        queryBuilder.andWhere('details.extended IN (:...levels)', { levels });
-      }
-    }
+    // ❌ BỎ phần filter warningLevel ở đây vì giờ cần dùng dynamicExtended
+    // if (warningLevel) {
+    //   const levels = warningLevel
+    //     .split(',')
+    //     .map((level) => parseInt(level.trim(), 10))
+    //     .filter((level) => !isNaN(level));
+    //   if (levels.length > 0) {
+    //     queryBuilder.andWhere('details.extended IN (:...levels)', { levels });
+    //   }
+    // }
 
     // Chuẩn bị data blacklist theo role
     let managerBlacklistMap: Map<number, Set<string>> | undefined;
@@ -511,6 +910,21 @@ export class OrderService {
           };
           filteredData = filteredData.filter(filterFn);
         }
+      }
+    }
+
+    // ✅ THÊM: Filter theo warningLevel dựa trên dynamicExtended
+    if (warningLevel) {
+      const levels = warningLevel
+        .split(',')
+        .map((level) => parseInt(level.trim(), 10))
+        .filter((level) => !isNaN(level));
+      if (levels.length > 0) {
+        const levelSet = new Set(levels);
+        filteredData = filteredData.filter((orderDetail) => {
+          const dynamicExt = orderDetail.dynamicExtended;
+          return dynamicExt !== null && levelSet.has(dynamicExt);
+        });
       }
     }
 
@@ -619,6 +1033,669 @@ export class OrderService {
   async delete(id: number): Promise<void> {
     await this.orderRepository.delete(id);
   }
+
+  // =============== Stats implementations ===============
+  private parseCsvNumbers(csv?: string): number[] {
+    if (!csv) return [];
+    return csv
+      .split(',')
+      .map((s) => Number((s || '').trim()))
+      .filter((n) => !Number.isNaN(n));
+  }
+
+  private parseCsvStrings(csv?: string): string[] {
+    if (!csv) return [];
+    return csv
+      .split(',')
+      .map((s) => (s || '').trim())
+      .filter((s) => s.length > 0);
+  }
+
+  async getOverviewStats(
+    params: StatsParamsCommon,
+  ): Promise<OverviewStatsResponse> {
+    const { from, to, normalizedPeriod } = this.getDateRange(
+      params.period,
+      params.date,
+      params.dateFrom,
+      params.dateTo,
+    );
+
+    const qb = this.orderDetailRepository
+      .createQueryBuilder('details')
+      .leftJoinAndSelect('details.order', 'order')
+      .leftJoinAndSelect('order.sale_by', 'sale_by')
+      .leftJoinAndSelect('sale_by.departments', 'sale_by_departments')
+      .where('order.created_at BETWEEN :from AND :to', { from, to })
+      .andWhere('details.deleted_at IS NULL');
+
+    const allowedUserIds = await this.getUserIdsByRole(params.user);
+    if (allowedUserIds !== null) {
+      if (allowedUserIds.length === 0) qb.andWhere('1 = 0');
+      else
+        qb.andWhere('sale_by.id IN (:...userIds)', { userIds: allowedUserIds });
+    }
+
+    const empIds = this.parseCsvNumbers(params.employees);
+    if (empIds.length > 0)
+      qb.andWhere('sale_by.id IN (:...empIds)', { empIds });
+
+    if (this.isAdmin(params.user)) {
+      const deptIds = this.parseCsvNumbers(params.departments);
+      if (deptIds.length > 0) {
+        qb.andWhere(
+          `sale_by_departments.id IN (:...deptIds)
+           AND sale_by_departments.server_ip IS NOT NULL
+           AND TRIM(sale_by_departments.server_ip) <> ''`,
+          { deptIds },
+        );
+      }
+    }
+
+    const rows = await qb.getMany();
+
+    // Blacklist filtering (mirror findAllPaginated approach)
+    let filtered = rows as any[];
+    const roleNames = (params.user?.roles || []).map((r: any) =>
+      typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
+    );
+    const isAdmin = roleNames.includes('admin');
+    if (!isAdmin) {
+      const allowedIds = await this.getUserIdsByRole(params.user);
+      const isManager = roleNames.some((r: string) => r.startsWith('manager-'));
+      if (isManager) {
+        const map =
+          await this.orderBlacklistService.getBlacklistedContactsForUsers(
+            allowedIds || [params.user.id],
+          );
+        const bl = new Set<string>();
+        for (const set of map.values()) for (const id of set) bl.add(id);
+        filtered = filtered.filter((od) => {
+          const cid = this.extractCustomerIdFromMetadata(od.metadata);
+          return !cid || !bl.has(cid);
+        });
+      } else {
+        const list =
+          await this.orderBlacklistService.getBlacklistedContactsForUser(
+            params.user.id,
+          );
+        const bl = new Set(list);
+        filtered = filtered.filter((od) => {
+          const cid = this.extractCustomerIdFromMetadata(od.metadata);
+          return !cid || !bl.has(cid);
+        });
+      }
+    }
+
+    // Aggregate
+    const orderIds = new Set<number>();
+    let orderDetails = 0;
+    let quantity = 0;
+    let revenue = 0;
+    const byStatusMap = new Map<
+      string,
+      { count: number; quantity: number; revenue: number }
+    >();
+
+    for (const od of filtered) {
+      if (od.order?.id) orderIds.add(od.order.id);
+      orderDetails += 1;
+      quantity += od.quantity || 0;
+      revenue += (od.quantity || 0) * (od.unit_price || 0);
+      const key = String(od.status || 'unknown');
+      const cur = byStatusMap.get(key) || { count: 0, quantity: 0, revenue: 0 };
+      cur.count += 1;
+      cur.quantity += od.quantity || 0;
+      cur.revenue += (od.quantity || 0) * (od.unit_price || 0);
+      byStatusMap.set(key, cur);
+    }
+
+    // Simple timeline by day/week/month/quarter start key
+    const bucketKey = (d: Date) => {
+      if (normalizedPeriod === 'week') {
+        const s = this.startOfWeekMonday(d);
+
+        return `${s.getFullYear()}-W${Math.floor((s.getTime() - new Date(s.getFullYear(), 0, 1).getTime()) / (7 * 24 * 3600 * 1000)) + 1}`;
+      }
+      if (normalizedPeriod === 'month') {
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      }
+      if (normalizedPeriod === 'quarter') {
+        const q = Math.floor(d.getMonth() / 3) + 1;
+        return `Q${q}-${d.getFullYear()}`;
+      }
+      // day
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    };
+
+    const timelineMap = new Map<
+      string,
+      {
+        orders: Set<number>;
+        orderDetails: number;
+        quantity: number;
+        revenue: number;
+      }
+    >();
+    for (const od of filtered) {
+      const d = new Date(od.order?.created_at || od.created_at || from);
+      const key = bucketKey(d);
+      const cur = timelineMap.get(key) || {
+        orders: new Set<number>(),
+        orderDetails: 0,
+        quantity: 0,
+        revenue: 0,
+      };
+      if (od.order?.id) cur.orders.add(od.order.id);
+      cur.orderDetails += 1;
+      cur.quantity += od.quantity || 0;
+      cur.revenue += (od.quantity || 0) * (od.unit_price || 0);
+      timelineMap.set(key, cur);
+    }
+
+    const byStatus = Array.from(byStatusMap.entries()).map(([status, v]) => ({
+      status,
+      ...v,
+    }));
+    const timeline = Array.from(timelineMap.entries()).map(([k, v]) => ({
+      bucket: k,
+      from: from.toISOString(),
+      to: to.toISOString(),
+      orders: v.orders.size,
+      orderDetails: v.orderDetails,
+      quantity: v.quantity,
+      revenue: v.revenue,
+    }));
+
+    return {
+      period: {
+        period: normalizedPeriod,
+        from: from.toISOString(),
+        to: to.toISOString(),
+      },
+      totals: { orders: orderIds.size, orderDetails, quantity, revenue },
+      byStatus,
+      timeline,
+    };
+  }
+
+  async getStatusStats(
+    params: StatsParamsCommon,
+  ): Promise<StatusStatsResponse> {
+    const { from, to } = this.getDateRange(
+      params.period,
+      params.date,
+      params.dateFrom,
+      params.dateTo,
+    );
+    const qb = this.orderDetailRepository
+      .createQueryBuilder('details')
+      .leftJoinAndSelect('details.order', 'order')
+      .leftJoinAndSelect('order.sale_by', 'sale_by')
+      .leftJoinAndSelect('sale_by.departments', 'sale_by_departments')
+      .where('order.created_at BETWEEN :from AND :to', { from, to })
+      .andWhere('details.deleted_at IS NULL');
+
+    const allowedUserIds = await this.getUserIdsByRole(params.user);
+    if (allowedUserIds !== null) {
+      if (allowedUserIds.length === 0) qb.andWhere('1 = 0');
+      else
+        qb.andWhere('sale_by.id IN (:...userIds)', { userIds: allowedUserIds });
+    }
+
+    const empIds = this.parseCsvNumbers(params.employees);
+    if (empIds.length > 0)
+      qb.andWhere('sale_by.id IN (:...empIds)', { empIds });
+
+    if (this.isAdmin(params.user)) {
+      const deptIds = this.parseCsvNumbers(params.departments);
+      if (deptIds.length > 0) {
+        qb.andWhere(
+          `sale_by_departments.id IN (:...deptIds)
+           AND sale_by_departments.server_ip IS NOT NULL
+           AND TRIM(sale_by_departments.server_ip) <> ''`,
+          { deptIds },
+        );
+      }
+    }
+
+    const statusFilter = this.parseCsvStrings(params.status);
+    if (statusFilter.length > 0)
+      qb.andWhere('details.status IN (:...sts)', { sts: statusFilter });
+
+    let rows = await qb.getMany();
+
+    // Blacklist filtering similar to overview
+    const roleNames2 = (params.user?.roles || []).map((r: any) =>
+      typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
+    );
+    const isAdmin2 = roleNames2.includes('admin');
+    if (!isAdmin2) {
+      const allowedIds = await this.getUserIdsByRole(params.user);
+      const isManager = roleNames2.some((r: string) =>
+        r.startsWith('manager-'),
+      );
+      if (isManager) {
+        const map =
+          await this.orderBlacklistService.getBlacklistedContactsForUsers(
+            allowedIds || [params.user.id],
+          );
+        const bl = new Set<string>();
+        for (const set of map.values()) for (const id of set) bl.add(id);
+        rows = rows.filter((od) => {
+          const cid = this.extractCustomerIdFromMetadata(od.metadata);
+          return !cid || !bl.has(cid);
+        });
+      } else {
+        const list =
+          await this.orderBlacklistService.getBlacklistedContactsForUser(
+            params.user.id,
+          );
+        const bl = new Set(list);
+        rows = rows.filter((od) => {
+          const cid = this.extractCustomerIdFromMetadata(od.metadata);
+          return !cid || !bl.has(cid);
+        });
+      }
+    }
+
+    const map = new Map<
+      string,
+      { count: number; quantity: number; revenue: number }
+    >();
+    for (const od of rows) {
+      const key = String(od.status || 'unknown');
+      const cur = map.get(key) || { count: 0, quantity: 0, revenue: 0 };
+      cur.count += 1;
+      cur.quantity += od.quantity || 0;
+      cur.revenue += (od.quantity || 0) * (od.unit_price || 0);
+      map.set(key, cur);
+    }
+    const items = Array.from(map.entries()).map(([status, v]) => ({
+      status,
+      ...v,
+    }));
+    return {
+      period: {
+        period: params.period,
+        from: from.toISOString(),
+        to: to.toISOString(),
+      },
+      items,
+    };
+  }
+
+  async getEmployeeStats(
+    params: StatsParamsCommon,
+  ): Promise<EmployeeStatsResponse> {
+    const { from, to } = this.getDateRange(
+      params.period,
+      params.date,
+      params.dateFrom,
+      params.dateTo,
+    );
+    const qb = this.orderDetailRepository
+      .createQueryBuilder('details')
+      .leftJoinAndSelect('details.order', 'order')
+      .leftJoinAndSelect('order.sale_by', 'sale_by')
+      .leftJoinAndSelect('sale_by.departments', 'sale_by_departments')
+      .where('order.created_at BETWEEN :from AND :to', { from, to })
+      .andWhere('details.deleted_at IS NULL');
+
+    const allowedUserIds = await this.getUserIdsByRole(params.user);
+    if (allowedUserIds !== null) {
+      if (allowedUserIds.length === 0) qb.andWhere('1 = 0');
+      else
+        qb.andWhere('sale_by.id IN (:...userIds)', { userIds: allowedUserIds });
+    }
+
+    if (this.isAdmin(params.user)) {
+      const deptIds = this.parseCsvNumbers(params.departments);
+      if (deptIds.length > 0) {
+        qb.andWhere(
+          `sale_by_departments.id IN (:...deptIds)
+           AND sale_by_departments.server_ip IS NOT NULL
+           AND TRIM(sale_by_departments.server_ip) <> ''`,
+          { deptIds },
+        );
+      }
+    }
+
+    const rows = await qb.getMany();
+
+    // Blacklist filtering for non-admins
+    let filtered = rows as any[];
+    const roleNames3 = (params.user?.roles || []).map((r: any) =>
+      typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
+    );
+    const isAdmin3 = roleNames3.includes('admin');
+    if (!isAdmin3) {
+      const allowedIds = await this.getUserIdsByRole(params.user);
+      const isManager = roleNames3.some((r: string) =>
+        r.startsWith('manager-'),
+      );
+      if (isManager) {
+        const map =
+          await this.orderBlacklistService.getBlacklistedContactsForUsers(
+            allowedIds || [params.user.id],
+          );
+        const bl = new Set<string>();
+        for (const set of map.values()) for (const id of set) bl.add(id);
+        filtered = filtered.filter((od) => {
+          const cid = this.extractCustomerIdFromMetadata(od.metadata);
+          return !cid || !bl.has(cid);
+        });
+      } else {
+        const list =
+          await this.orderBlacklistService.getBlacklistedContactsForUser(
+            params.user.id,
+          );
+        const bl = new Set(list);
+        filtered = filtered.filter((od) => {
+          const cid = this.extractCustomerIdFromMetadata(od.metadata);
+          return !cid || !bl.has(cid);
+        });
+      }
+    }
+
+    const map2 = new Map<
+      number,
+      {
+        fullName: string;
+        count: number;
+        orders: Set<number>;
+        quantity: number;
+        revenue: number;
+        byStatus: Map<string, number>;
+      }
+    >();
+    for (const od of filtered) {
+      const uid = od.order?.sale_by?.id;
+      if (!uid) continue;
+      const name =
+        od.order?.sale_by?.fullName ||
+        od.order?.sale_by?.username ||
+        String(uid);
+      const entry = map2.get(uid) || {
+        fullName: name,
+        count: 0,
+        orders: new Set<number>(),
+        quantity: 0,
+        revenue: 0,
+        byStatus: new Map<string, number>(),
+      };
+      entry.count += 1;
+      if (od.order?.id) entry.orders.add(od.order.id);
+      entry.quantity += od.quantity || 0;
+      entry.revenue += (od.quantity || 0) * (od.unit_price || 0);
+      const st = String(od.status || 'unknown');
+      entry.byStatus.set(st, (entry.byStatus.get(st) || 0) + 1);
+      map2.set(uid, entry);
+    }
+    const items = Array.from(map2.entries()).map(([userId, v]) => ({
+      userId,
+      fullName: v.fullName,
+      count: v.count,
+      orders: v.orders.size,
+      quantity: v.quantity,
+      revenue: v.revenue,
+      byStatus: Array.from(v.byStatus.entries()).map(([status, count]) => ({
+        status,
+        count,
+      })),
+    }));
+    return {
+      period: {
+        period: params.period,
+        from: from.toISOString(),
+        to: to.toISOString(),
+      },
+      items,
+    };
+  }
+
+  async getCustomerStats(
+    params: StatsParamsCommon,
+  ): Promise<CustomerStatsResponse> {
+    const { from, to } = this.getDateRange(
+      params.period,
+      params.date,
+      params.dateFrom,
+      params.dateTo,
+    );
+    const qb = this.orderDetailRepository
+      .createQueryBuilder('details')
+      .leftJoinAndSelect('details.order', 'order')
+      .leftJoinAndSelect('order.sale_by', 'sale_by')
+      .leftJoinAndSelect('sale_by.departments', 'sale_by_departments')
+      .where('order.created_at BETWEEN :from AND :to', { from, to })
+      .andWhere('details.deleted_at IS NULL');
+
+    const allowedUserIds = await this.getUserIdsByRole(params.user);
+    if (allowedUserIds !== null) {
+      if (allowedUserIds.length === 0) qb.andWhere('1 = 0');
+      else
+        qb.andWhere('sale_by.id IN (:...userIds)', { userIds: allowedUserIds });
+    }
+
+    const empIds = this.parseCsvNumbers(params.employees);
+    if (empIds.length > 0)
+      qb.andWhere('sale_by.id IN (:...empIds)', { empIds });
+
+    if (this.isAdmin(params.user)) {
+      const deptIds = this.parseCsvNumbers(params.departments);
+      if (deptIds.length > 0) {
+        qb.andWhere(
+          `sale_by_departments.id IN (:...deptIds)
+           AND sale_by_departments.server_ip IS NOT NULL
+           AND TRIM(sale_by_departments.server_ip) <> ''`,
+          { deptIds },
+        );
+      }
+    }
+
+    let rows = await qb.getMany();
+
+    // Blacklist filtering for non-admins
+    const roleNames4 = (params.user?.roles || []).map((r: any) =>
+      typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
+    );
+    const isAdmin4 = roleNames4.includes('admin');
+    if (!isAdmin4) {
+      const allowedIds = await this.getUserIdsByRole(params.user);
+      const isManager = roleNames4.some((r: string) =>
+        r.startsWith('manager-'),
+      );
+      if (isManager) {
+        const map =
+          await this.orderBlacklistService.getBlacklistedContactsForUsers(
+            allowedIds || [params.user.id],
+          );
+        const bl = new Set<string>();
+        for (const set of map.values()) for (const id of set) bl.add(id);
+        rows = rows.filter((od) => {
+          const cid = this.extractCustomerIdFromMetadata(od.metadata);
+          return !cid || !bl.has(cid);
+        });
+      } else {
+        const list =
+          await this.orderBlacklistService.getBlacklistedContactsForUser(
+            params.user.id,
+          );
+        const bl = new Set(list);
+        rows = rows.filter((od) => {
+          const cid = this.extractCustomerIdFromMetadata(od.metadata);
+          return !cid || !bl.has(cid);
+        });
+      }
+    }
+
+    const map3 = new Map<
+      string,
+      {
+        name: string | null;
+        orders: Set<number>;
+        count: number;
+        quantity: number;
+        revenue: number;
+      }
+    >();
+    for (const od of rows) {
+      const cid = this.extractCustomerIdFromMetadata(od.metadata) || null;
+      const key = cid || `name:${od.customer_name || ''}`;
+      const entry = map3.get(key) || {
+        name: od.customer_name || null,
+        orders: new Set<number>(),
+        count: 0,
+        quantity: 0,
+        revenue: 0,
+      };
+      entry.count += 1;
+      if (od.order?.id) entry.orders.add(od.order.id);
+      entry.quantity += od.quantity || 0;
+      entry.revenue += (od.quantity || 0) * (od.unit_price || 0);
+      if (!entry.name && od.customer_name) entry.name = od.customer_name;
+      map3.set(key, entry);
+    }
+    const items = Array.from(map3.entries()).map(([key, v]) => ({
+      customerId: key.startsWith('name:') ? null : key,
+      customerName: v.name,
+      count: v.count,
+      orders: v.orders.size,
+      quantity: v.quantity,
+      revenue: v.revenue,
+    }));
+    return {
+      period: {
+        period: params.period,
+        from: from.toISOString(),
+        to: to.toISOString(),
+      },
+      items,
+    };
+  }
+
+  async getExpiredTodayStats(params: {
+    employees?: string;
+    departments?: string;
+    user: any;
+  }) {
+    const today = this.startOfDay(new Date());
+    const qb = this.orderDetailRepository
+      .createQueryBuilder('details')
+      .leftJoinAndSelect('details.order', 'order')
+      .leftJoinAndSelect('order.sale_by', 'sale_by')
+      .leftJoinAndSelect('sale_by.departments', 'sale_by_departments')
+      .andWhere('details.deleted_at IS NULL');
+
+    const allowedUserIds = await this.getUserIdsByRole(params.user);
+    if (allowedUserIds !== null) {
+      if (allowedUserIds.length === 0) qb.andWhere('1 = 0');
+      else
+        qb.andWhere('sale_by.id IN (:...userIds)', { userIds: allowedUserIds });
+    }
+
+    const empIds = this.parseCsvNumbers(params.employees);
+    if (empIds.length > 0)
+      qb.andWhere('sale_by.id IN (:...empIds)', { empIds });
+
+    if (this.isAdmin(params.user)) {
+      const deptIds = this.parseCsvNumbers(params.departments);
+      if (deptIds.length > 0) {
+        qb.andWhere(
+          `sale_by_departments.id IN (:...deptIds)
+           AND sale_by_departments.server_ip IS NOT NULL
+           AND TRIM(sale_by_departments.server_ip) <> ''`,
+          { deptIds },
+        );
+      }
+    }
+
+    let rows = await qb.getMany();
+
+    // Blacklist filter for non-admins
+    const roleNames5 = (params.user?.roles || []).map((r: any) =>
+      typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
+    );
+    const isAdmin5 = roleNames5.includes('admin');
+    if (!isAdmin5) {
+      const allowedIds = await this.getUserIdsByRole(params.user);
+      const isManager = roleNames5.some((r: string) =>
+        r.startsWith('manager-'),
+      );
+      if (isManager) {
+        const map =
+          await this.orderBlacklistService.getBlacklistedContactsForUsers(
+            allowedIds || [params.user.id],
+          );
+        const bl = new Set<string>();
+        for (const set of map.values()) for (const id of set) bl.add(id);
+        rows = rows.filter((od) => {
+          const cid = this.extractCustomerIdFromMetadata(od.metadata);
+          return !cid || !bl.has(cid);
+        });
+      } else {
+        const list =
+          await this.orderBlacklistService.getBlacklistedContactsForUser(
+            params.user.id,
+          );
+        const bl = new Set(list);
+        rows = rows.filter((od) => {
+          const cid = this.extractCustomerIdFromMetadata(od.metadata);
+          return !cid || !bl.has(cid);
+        });
+      }
+    }
+
+    let expiredToday = 0;
+    let overdue = 0;
+    const byEmp = new Map<
+      number,
+      { fullName: string; expiredToday: number; overdue: number }
+    >();
+    for (const od of rows) {
+      const dExt = this.calcDynamicExtended(od.created_at || null, od.extended);
+      const uid = od.order?.sale_by?.id;
+      const name =
+        od.order?.sale_by?.fullName ||
+        od.order?.sale_by?.username ||
+        String(uid || 'N/A');
+      if (dExt === 0) {
+        expiredToday += 1;
+        if (uid) {
+          const e = byEmp.get(uid) || {
+            fullName: name,
+            expiredToday: 0,
+            overdue: 0,
+          };
+          e.expiredToday += 1;
+          byEmp.set(uid, e);
+        }
+      } else if (typeof dExt === 'number' && dExt < 0) {
+        overdue += 1;
+        if (uid) {
+          const e = byEmp.get(uid) || {
+            fullName: name,
+            expiredToday: 0,
+            overdue: 0,
+          };
+          e.overdue += 1;
+          byEmp.set(uid, e);
+        }
+      }
+    }
+
+    return {
+      date: this.startOfDay(today).toISOString().slice(0, 10),
+      totals: { expiredToday, overdue },
+      byEmployee: Array.from(byEmp.entries()).map(([userId, v]) => ({
+        userId,
+        fullName: v.fullName,
+        expiredToday: v.expiredToday,
+        overdue: v.overdue,
+      })),
+    };
+  }
 }
 
 function roleNamesIncludes(user: any, roleName: string): boolean {
@@ -632,4 +1709,77 @@ function roleNamesSome(user: any, predicate: (r: string) => boolean): boolean {
     typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
   );
   return roleNames.some(predicate);
+}
+
+// =============== Stats contracts ===============
+export interface OverviewStatsResponse {
+  period: { period: string; from: string; to: string };
+  totals: {
+    orders: number;
+    orderDetails: number;
+    quantity: number;
+    revenue: number;
+  };
+  byStatus: Array<{
+    status: string;
+    count: number;
+    quantity: number;
+    revenue: number;
+  }>;
+  timeline: Array<{
+    bucket: string;
+    from: string;
+    to: string;
+    orders: number;
+    orderDetails: number;
+    quantity: number;
+    revenue: number;
+  }>;
+}
+
+export interface StatusStatsResponse {
+  period: { period: string; from: string; to: string };
+  items: Array<{
+    status: string;
+    count: number;
+    quantity: number;
+    revenue: number;
+  }>;
+}
+
+export interface EmployeeStatsResponse {
+  period: { period: string; from: string; to: string };
+  items: Array<{
+    userId: number;
+    fullName: string;
+    count: number;
+    orders: number;
+    quantity: number;
+    revenue: number;
+    byStatus?: Array<{ status: string; count: number }>;
+  }>;
+}
+
+export interface CustomerStatsResponse {
+  period: { period: string; from: string; to: string };
+  items: Array<{
+    customerId: string | null;
+    customerName: string | null;
+    count: number;
+    orders: number;
+    quantity: number;
+    revenue: number;
+  }>;
+}
+
+// =============== Stats implementations ===============
+export interface StatsParamsCommon {
+  period: string;
+  date?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  employees?: string;
+  departments?: string;
+  status?: string; // csv
+  user: any;
 }

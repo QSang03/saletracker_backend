@@ -485,6 +485,141 @@ export class OrderDetailService {
     return { updated: orderDetails.length };
   }
 
+  // =============== Stats: detailed rows ===============
+  private startOfDay(d: Date): Date { const x = new Date(d); x.setHours(0,0,0,0); return x; }
+  private endOfDay(d: Date): Date { const x = new Date(d); x.setHours(23,59,59,999); return x; }
+  private startOfWeekMonday(d: Date): Date { const date = this.startOfDay(d); const day = (date.getDay()+6)%7; date.setDate(date.getDate()-day); return date; }
+  private endOfWeekSunday(d: Date): Date { const s = this.startOfWeekMonday(d); const e = new Date(s); e.setDate(s.getDate()+6); return this.endOfDay(e); }
+  private startOfMonth(d: Date): Date { return this.startOfDay(new Date(d.getFullYear(), d.getMonth(), 1)); }
+  private endOfMonth(d: Date): Date { return this.endOfDay(new Date(d.getFullYear(), d.getMonth()+1, 0)); }
+  private startOfQuarter(d: Date): Date { const q = Math.floor(d.getMonth()/3); return this.startOfDay(new Date(d.getFullYear(), q*3, 1)); }
+  private endOfQuarter(d: Date): Date { const s = this.startOfQuarter(d); return this.endOfDay(new Date(s.getFullYear(), s.getMonth()+3, 0)); }
+  private getDateRange(period: string, date?: string, dateFrom?: string, dateTo?: string): { from: Date; to: Date; normalizedPeriod: 'day'|'week'|'month'|'quarter'|'custom' } {
+    const p = (period||'day').toLowerCase();
+    const today = new Date();
+    if (p==='custom' && dateFrom && dateTo) return { from: this.startOfDay(new Date(dateFrom)), to: this.endOfDay(new Date(dateTo)), normalizedPeriod: 'custom' };
+    const target = date ? new Date(date) : today;
+    if (p==='week') return { from: this.startOfWeekMonday(target), to: this.endOfWeekSunday(target), normalizedPeriod: 'week' };
+    if (p==='month') return { from: this.startOfMonth(target), to: this.endOfMonth(target), normalizedPeriod: 'month' };
+    if (p==='quarter') return { from: this.startOfQuarter(target), to: this.endOfQuarter(target), normalizedPeriod: 'quarter' };
+    return { from: this.startOfDay(target), to: this.endOfDay(target), normalizedPeriod: 'day' };
+  }
+  private parseCsvNumbers(csv?: string): number[] { if (!csv) return []; return csv.split(',').map(s=>Number((s||'').trim())).filter(n=>!Number.isNaN(n)); }
+  private parseCsvStrings(csv?: string): string[] { if (!csv) return []; return csv.split(',').map(s=>(s||'').trim()).filter(s=>s.length>0); }
+
+  private calcDynamicExtended(createdAt: Date | null, originalExtended: number | null): number | null {
+    try {
+      if (!createdAt || originalExtended === null) {
+        return typeof originalExtended === 'number' ? originalExtended : null;
+      }
+      const createdDate = new Date(createdAt); createdDate.setHours(0,0,0,0);
+      const expiredDate = new Date(createdDate); expiredDate.setDate(expiredDate.getDate()+ (originalExtended || 0));
+      const today = new Date(); today.setHours(0,0,0,0);
+      const diffDays = Math.floor((expiredDate.getTime()-today.getTime())/(1000*60*60*24));
+      return diffDays;
+    } catch { return typeof originalExtended === 'number' ? originalExtended : null; }
+  }
+
+  async getDetailedStats(params: {
+    period: string;
+    date?: string;
+    dateFrom?: string;
+    dateTo?: string;
+    status?: string;
+    employees?: string;
+    departments?: string;
+    products?: string;
+    user: any;
+  }): Promise<any> {
+    const { from, to, normalizedPeriod } = this.getDateRange(params.period, params.date, params.dateFrom, params.dateTo);
+    const qb = this.orderDetailRepository
+      .createQueryBuilder('details')
+      .leftJoinAndSelect('details.order', 'order')
+      .leftJoinAndSelect('order.sale_by', 'sale_by')
+      .leftJoinAndSelect('details.product', 'product')
+      .leftJoinAndSelect('sale_by.departments', 'sale_by_departments')
+      .where('order.created_at BETWEEN :from AND :to', { from, to })
+      .andWhere('details.deleted_at IS NULL');
+
+    // Permission scoping
+    const allowedUserIds = await this.getUserIdsByRole(params.user);
+    if (allowedUserIds !== null) {
+      if (allowedUserIds.length === 0) qb.andWhere('1 = 0');
+      else qb.andWhere('sale_by.id IN (:...userIds)', { userIds: allowedUserIds });
+    }
+
+    // Filters
+    const statuses = this.parseCsvStrings(params.status);
+    if (statuses.length > 0) qb.andWhere('details.status IN (:...sts)', { sts: statuses });
+
+    const empIds = this.parseCsvNumbers(params.employees);
+    if (empIds.length > 0) qb.andWhere('sale_by.id IN (:...empIds)', { empIds });
+
+    const deptIds = this.parseCsvNumbers(params.departments);
+    if (deptIds.length > 0) {
+      qb.andWhere(
+        `sale_by_departments.id IN (:...deptIds)
+         AND sale_by_departments.server_ip IS NOT NULL
+         AND TRIM(sale_by_departments.server_ip) <> ''`,
+        { deptIds },
+      );
+    }
+
+    const productIds = this.parseCsvNumbers(params.products);
+    if (productIds.length > 0) qb.andWhere('details.product_id IN (:...productIds)', { productIds });
+
+    let rows = await qb.getMany();
+
+    // Blacklist filtering: non-admins
+    const roleNames = (params.user?.roles || []).map((r: any) => typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase());
+    const isAdmin = roleNames.includes('admin');
+    if (!isAdmin) {
+      const allowedIds2 = await this.getUserIdsByRole(params.user);
+      const isManager = roleNames.some((r: string) => r.startsWith('manager-'));
+      if (isManager) {
+        const map = await this.orderBlacklistService.getBlacklistedContactsForUsers(allowedIds2 || [params.user.id]);
+        const bl = new Set<string>();
+        for (const set of map.values()) for (const id of set) bl.add(id);
+        rows = rows.filter((od) => {
+          const cid = this.extractCustomerIdFromMetadata(od.metadata);
+          return !cid || !bl.has(cid);
+        });
+      } else {
+        const list = await this.orderBlacklistService.getBlacklistedContactsForUser(params.user.id);
+        const bl = new Set(list);
+        rows = rows.filter((od) => {
+          const cid = this.extractCustomerIdFromMetadata(od.metadata);
+          return !cid || !bl.has(cid);
+        });
+      }
+    }
+
+    // Map to response rows
+    const resultRows = rows.map((od) => {
+      const revenue = (od.quantity || 0) * (od.unit_price || 0);
+      const customerId = this.extractCustomerIdFromMetadata(od.metadata);
+      const dynamicExtended = this.calcDynamicExtended(od.created_at || null, od.extended);
+      return {
+        id: od.id,
+        orderId: od.order_id,
+        productId: od.product_id || null,
+        status: String(od.status),
+        quantity: od.quantity || 0,
+        unit_price: od.unit_price || 0,
+        revenue,
+        sale_by: { id: od.order?.sale_by?.id, fullName: od.order?.sale_by?.fullName || od.order?.sale_by?.username },
+        customer: { id: customerId, name: od.customer_name || null },
+        created_at: od.created_at?.toISOString?.() || new Date(od.created_at).toISOString(),
+        dynamicExtended,
+      };
+    });
+
+    return {
+      period: { period: normalizedPeriod, from: from.toISOString(), to: to.toISOString() },
+      rows: resultRows,
+    };
+  }
+
   async findAllTrashedPaginated(
     user: any,
     options?: {

@@ -15,6 +15,12 @@ import { AuthGuard } from '@nestjs/passport';
 import { OrderService } from './order.service';
 import { Order } from './order.entity';
 import { OrderDetail } from 'src/order-details/order-detail.entity';
+import {
+  OverviewStatsResponse,
+  StatusStatsResponse,
+  EmployeeStatsResponse,
+  CustomerStatsResponse,
+} from './order.service';
 
 @Controller('orders')
 @UseGuards(AuthGuard('jwt'))
@@ -89,6 +95,102 @@ export class OrderController {
     products: Array<{ value: number; label: string }>;
   }> {
     return this.orderService.getFilterOptions(req.user);
+  }
+
+  // =============== Stats endpoints ===============
+  @Get('stats/overview')
+  async getOverviewStats(
+    @Query('period') period: string = 'day',
+    @Query('date') date?: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
+    @Query('employees') employees?: string,
+    @Query('departments') departments?: string,
+    @Req() req?: any,
+  ): Promise<OverviewStatsResponse> {
+    return this.orderService.getOverviewStats({
+      period,
+      date,
+      dateFrom,
+      dateTo,
+      employees,
+      departments,
+      user: req.user,
+    });
+  }
+
+  @Get('stats/by-status')
+  async getStatusStats(
+    @Query('period') period: string = 'day',
+    @Query('date') date?: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
+    @Query('employees') employees?: string,
+    @Query('departments') departments?: string,
+    @Query('status') status?: string,
+    @Req() req?: any,
+  ): Promise<StatusStatsResponse> {
+    return this.orderService.getStatusStats({
+      period,
+      date,
+      dateFrom,
+      dateTo,
+      employees,
+      departments,
+      status,
+      user: req.user,
+    });
+  }
+
+  @Get('stats/by-employee')
+  async getEmployeeStats(
+    @Query('period') period: string = 'day',
+    @Query('date') date?: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
+    @Query('employees') employees?: string,
+    @Query('departments') departments?: string,
+    @Req() req?: any,
+  ): Promise<EmployeeStatsResponse> {
+    return this.orderService.getEmployeeStats({
+      period,
+      date,
+      dateFrom,
+      dateTo,
+      employees,
+      departments,
+      user: req.user,
+    });
+  }
+
+  @Get('stats/by-customer')
+  async getCustomerStats(
+    @Query('period') period: string = 'day',
+    @Query('date') date?: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
+    @Query('employees') employees?: string,
+    @Query('departments') departments?: string,
+    @Req() req?: any,
+  ): Promise<CustomerStatsResponse> {
+    return this.orderService.getCustomerStats({
+      period,
+      date,
+      dateFrom,
+      dateTo,
+      employees,
+      departments,
+      user: req.user,
+    });
+  }
+
+  @Get('stats/expired-today')
+  async getExpiredTodayStats(
+    @Query('employees') employees?: string,
+    @Query('departments') departments?: string,
+    @Req() req?: any,
+  ): Promise<any> {
+    return this.orderService.getExpiredTodayStats({ employees, departments, user: req.user });
   }
 
   @Get(':id')
