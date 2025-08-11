@@ -40,10 +40,6 @@ export class WebhookController {
   async updateCustomerNameByCustomerId(
     @Body() body: { customer_id: string; customer_name: string },
   ) {
-    console.log(
-      `Webhook gọi: update-customer-name-by-customer-id với customer_id=${body.customer_id}, customer_name=${body.customer_name}`,
-    );
-
     if (!body.customer_id || !body.customer_name) {
       return {
         success: false,
@@ -54,12 +50,8 @@ export class WebhookController {
       body.customer_id,
       body.customer_name,
     );
-    console.log(`Kết quả: ${JSON.stringify(result)}`);
 
     if (result.updated === 0) {
-      console.log(
-        `[Webhook] Không có order detail nào với customer_id=${body.customer_id}`,
-      );
       // Trả về 404 Not Found
       throw new NotFoundException(
         'Không tìm thấy order detail với customer_id này',
