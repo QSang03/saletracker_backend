@@ -514,40 +514,67 @@ export class OrderService {
       }
     }
 
+    const actualSortDirection =
+      sortDirection?.toLowerCase() === 'asc' ? 'asc' : 'desc';
+
     // LUÔN sort theo calcDynamicExtended
     if (sortField === 'created_at') {
-      // Sort theo created_at từ database trực tiếp
-      const actualSortDirection =
-        sortDirection?.toLowerCase() === 'asc' ? 'asc' : 'desc';
+      // Sort theo created_at
       filteredData.sort((a, b) => {
         const aTime = new Date(a.created_at || 0).getTime();
         const bTime = new Date(b.created_at || 0).getTime();
-        const timeDiff =
-          actualSortDirection === 'asc' ? aTime - bTime : bTime - aTime;
-        return timeDiff;
+        return actualSortDirection === 'asc' ? aTime - bTime : bTime - aTime;
+      });
+    } else if (sortField === 'quantity') {
+      // ✅ THÊM: Sort theo quantity
+      filteredData.sort((a, b) => {
+        const aQty = a.quantity || 0;
+        const bQty = b.quantity || 0;
+        const qtyDiff =
+          actualSortDirection === 'asc' ? aQty - bQty : bQty - aQty;
+
+        // Nếu quantity bằng nhau, sort theo created_at giảm dần
+        if (qtyDiff === 0) {
+          const aTime = new Date(a.created_at || 0).getTime();
+          const bTime = new Date(b.created_at || 0).getTime();
+          return bTime - aTime;
+        }
+        return qtyDiff;
+      });
+    } else if (sortField === 'unit_price') {
+      // ✅ THÊM: Sort theo unit_price
+      filteredData.sort((a, b) => {
+        const aPrice = a.unit_price || 0;
+        const bPrice = b.unit_price || 0;
+        const priceDiff =
+          actualSortDirection === 'asc' ? aPrice - bPrice : bPrice - aPrice;
+
+        // Nếu unit_price bằng nhau, sort theo created_at giảm dần
+        if (priceDiff === 0) {
+          const aTime = new Date(a.created_at || 0).getTime();
+          const bTime = new Date(b.created_at || 0).getTime();
+          return bTime - aTime;
+        }
+        return priceDiff;
       });
     } else {
-      const actualSortDirection =
-        sortDirection?.toLowerCase() === 'asc' ? 'asc' : 'desc';
+      // Mặc định: Sort theo dynamicExtended
       filteredData.sort((a, b) => {
         const aExtended =
           a.dynamicExtended !== null ? a.dynamicExtended : -999999;
         const bExtended =
           b.dynamicExtended !== null ? b.dynamicExtended : -999999;
 
-        // Tiêu chí 1: So sánh extended
         const extendedDiff =
           actualSortDirection === 'asc'
             ? aExtended - bExtended
             : bExtended - aExtended;
 
-        // Tiêu chí 2: Nếu extended bằng nhau, so sánh created_at giảm dần
         if (extendedDiff === 0) {
           const aTime = new Date(a.created_at || 0).getTime();
           const bTime = new Date(b.created_at || 0).getTime();
-          return bTime - aTime; // Giảm dần: mới hơn trước
+          return bTime - aTime;
         }
-
         return extendedDiff;
       });
     }
