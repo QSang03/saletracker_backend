@@ -487,9 +487,21 @@ export class OrderService {
         a.dynamicExtended !== null ? a.dynamicExtended : -999999;
       const bExtended =
         b.dynamicExtended !== null ? b.dynamicExtended : -999999;
-      return actualSortDirection === 'asc'
-        ? aExtended - bExtended
-        : bExtended - aExtended;
+
+      // Tiêu chí 1: So sánh extended
+      const extendedDiff =
+        actualSortDirection === 'asc'
+          ? aExtended - bExtended
+          : bExtended - aExtended;
+
+      // Tiêu chí 2: Nếu extended bằng nhau, so sánh created_at giảm dần
+      if (extendedDiff === 0) {
+        const aTime = new Date(a.created_at || 0).getTime();
+        const bTime = new Date(b.created_at || 0).getTime();
+        return bTime - aTime; // Giảm dần: mới hơn trước
+      }
+
+      return extendedDiff;
     });
 
     // Áp dụng blacklist filter theo role
