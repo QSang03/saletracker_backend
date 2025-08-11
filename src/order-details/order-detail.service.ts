@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { OrderDetail } from './order-detail.entity';
+import { ExtendReason, OrderDetail } from './order-detail.entity';
 import { Department } from 'src/departments/department.entity';
 import { User } from 'src/users/user.entity';
 import { OrderBlacklistService } from '../order-blacklist/order-blacklist.service';
@@ -262,6 +262,11 @@ export class OrderDetailService {
       if (currentOrderDetail) {
         const currentExtended = currentOrderDetail.extended || 4;
         orderDetailData.extended = currentExtended + orderDetailData.extended;
+
+        if (orderDetailData.extended > currentExtended) {
+          orderDetailData.last_extended_at = new Date();
+          orderDetailData.extend_reason = ExtendReason.USER_MANUAL;
+        }
       }
     }
 
@@ -445,6 +450,8 @@ export class OrderDetailService {
       const currentExtended = orderDetail.extended || 4;
       await this.orderDetailRepository.update(orderDetail.id, {
         extended: currentExtended + 4,
+        last_extended_at: new Date(),
+        extend_reason: ExtendReason.USER_MANUAL,
       });
     }
 

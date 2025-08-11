@@ -17,6 +17,10 @@ export enum OrderDetailStatus {
   QUOTED = 'quoted',
   CONFIRMED = 'confirmed',
 }
+export enum ExtendReason {
+  SYSTEM_SUNDAY_AUTO = 'hệ thống tự gia hạn vào chủ nhật hoặc nghỉ lễ',
+  USER_MANUAL = 'chính chủ gia hạn',
+}
 @Entity('order_details')
 export class OrderDetail {
   @PrimaryGeneratedColumn('increment', { type: 'bigint' })
@@ -48,6 +52,17 @@ export class OrderDetail {
 
   @Column('int', { default: 4 })
   extended: number;
+
+   @Column('timestamp', { nullable: true, default: null })
+  last_extended_at: Date;
+
+  @Column({
+    type: 'enum',
+    enum: ExtendReason,
+    nullable: true,
+    default: null,
+  })
+  extend_reason: ExtendReason;
 
   @Column('bigint', { unsigned: true, default: 0 })
   unit_price: number;
