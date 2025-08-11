@@ -527,6 +527,7 @@ export class DebtService {
               created_at: new Date(),
               updated_at: new Date(),
               pay_later: pay_later ?? null,
+              status: pay_later ? ('pay_later' as any) : undefined,
             });
 
             insertPromises.push(
