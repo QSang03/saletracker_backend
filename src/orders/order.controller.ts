@@ -34,7 +34,7 @@ export class OrderController {
     @Query('departments') departments?: string,
     @Query('products') products?: string,
     @Query('warningLevel') warningLevel?: string,
-    @Query('sortField') sortField?: 'quantity' | 'unit_price',
+    @Query('sortField') sortField?: 'quantity' | 'unit_price' | 'created_at',
     @Query('sortDirection') sortDirection?: 'asc' | 'desc',
     @Req() req?: any,
   ): Promise<{

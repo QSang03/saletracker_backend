@@ -21,7 +21,13 @@ interface OrderFilters {
   departments?: string;
   products?: string;
   warningLevel?: string;
-  sortField?: 'quantity' | 'unit_price' | 'extended' | 'dynamicExtended' | null;
+  sortField?:
+    | 'quantity'
+    | 'unit_price'
+    | 'extended'
+    | 'dynamicExtended'
+    | 'created_at'
+    | null;
   sortDirection?: 'asc' | 'desc' | null;
   user?: any; // truyền cả user object
 }
@@ -479,31 +485,6 @@ export class OrderService {
       ),
     }));
 
-    // LUÔN sort theo calcDynamicExtended
-    const actualSortDirection =
-      sortDirection?.toLowerCase() === 'asc' ? 'asc' : 'desc';
-    dataWithDynamicExtended.sort((a, b) => {
-      const aExtended =
-        a.dynamicExtended !== null ? a.dynamicExtended : -999999;
-      const bExtended =
-        b.dynamicExtended !== null ? b.dynamicExtended : -999999;
-
-      // Tiêu chí 1: So sánh extended
-      const extendedDiff =
-        actualSortDirection === 'asc'
-          ? aExtended - bExtended
-          : bExtended - aExtended;
-
-      // Tiêu chí 2: Nếu extended bằng nhau, so sánh created_at giảm dần
-      if (extendedDiff === 0) {
-        const aTime = new Date(a.created_at || 0).getTime();
-        const bTime = new Date(b.created_at || 0).getTime();
-        return bTime - aTime; // Giảm dần: mới hơn trước
-      }
-
-      return extendedDiff;
-    });
-
     // Áp dụng blacklist filter theo role
     let filteredData = dataWithDynamicExtended;
 
@@ -531,6 +512,44 @@ export class OrderService {
           filteredData = filteredData.filter(filterFn);
         }
       }
+    }
+
+    // LUÔN sort theo calcDynamicExtended
+    if (sortField === 'created_at') {
+      // Sort theo created_at từ database trực tiếp
+      const actualSortDirection =
+        sortDirection?.toLowerCase() === 'asc' ? 'asc' : 'desc';
+      filteredData.sort((a, b) => {
+        const aTime = new Date(a.created_at || 0).getTime();
+        const bTime = new Date(b.created_at || 0).getTime();
+        const timeDiff =
+          actualSortDirection === 'asc' ? aTime - bTime : bTime - aTime;
+        return timeDiff;
+      });
+    } else {
+      const actualSortDirection =
+        sortDirection?.toLowerCase() === 'asc' ? 'asc' : 'desc';
+      filteredData.sort((a, b) => {
+        const aExtended =
+          a.dynamicExtended !== null ? a.dynamicExtended : -999999;
+        const bExtended =
+          b.dynamicExtended !== null ? b.dynamicExtended : -999999;
+
+        // Tiêu chí 1: So sánh extended
+        const extendedDiff =
+          actualSortDirection === 'asc'
+            ? aExtended - bExtended
+            : bExtended - aExtended;
+
+        // Tiêu chí 2: Nếu extended bằng nhau, so sánh created_at giảm dần
+        if (extendedDiff === 0) {
+          const aTime = new Date(a.created_at || 0).getTime();
+          const bTime = new Date(b.created_at || 0).getTime();
+          return bTime - aTime; // Giảm dần: mới hơn trước
+        }
+
+        return extendedDiff;
+      });
     }
 
     // Áp dụng pagination sau khi sort và filter
