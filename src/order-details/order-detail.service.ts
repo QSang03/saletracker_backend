@@ -6,6 +6,18 @@ import { Department } from 'src/departments/department.entity';
 import { User } from 'src/users/user.entity';
 import { OrderBlacklistService } from '../order-blacklist/order-blacklist.service';
 
+interface HiddenOrderOptions {
+  page?: number;
+  pageSize?: number;
+  employees?: string;
+  departments?: string;
+  status?: string;
+  search?: string;
+  hiddenDateRange?: { start: string; end: string };
+  sortField?: 'quantity' | 'unit_price' | 'hidden_at' | null;
+  sortDirection?: 'asc' | 'desc' | null;
+}
+
 @Injectable()
 export class OrderDetailService {
   constructor(
@@ -91,7 +103,8 @@ export class OrderDetailService {
       .createQueryBuilder('details')
       .leftJoinAndSelect('details.order', 'order')
       .leftJoinAndSelect('details.product', 'product')
-      .leftJoinAndSelect('order.sale_by', 'sale_by');
+      .leftJoinAndSelect('order.sale_by', 'sale_by')
+      .andWhere('details.hidden_at IS NULL');
 
     const allowedUserIds = await this.getUserIdsByRole(user);
 
@@ -363,9 +376,7 @@ export class OrderDetailService {
   }
 
   async delete(id: number, reason?: string): Promise<void> {
-    if (reason) {
-      await this.orderDetailRepository.update(id, { reason });
-    }
+    // Deletion no longer requires a reason; keep reason unchanged
     await this.orderDetailRepository.softDelete(id);
   }
 
@@ -392,12 +403,7 @@ export class OrderDetailService {
       return { deleted: 0 };
     }
 
-    // Cập nhật reason và soft delete
-    await this.orderDetailRepository.update(
-      orderDetails.map((od) => od.id),
-      { reason },
-    );
-
+    // Soft delete without reason requirement
     await this.orderDetailRepository.softDelete(
       orderDetails.map((od) => od.id),
     );
@@ -486,38 +492,131 @@ export class OrderDetailService {
   }
 
   // =============== Stats: detailed rows ===============
-  private startOfDay(d: Date): Date { const x = new Date(d); x.setHours(0,0,0,0); return x; }
-  private endOfDay(d: Date): Date { const x = new Date(d); x.setHours(23,59,59,999); return x; }
-  private startOfWeekMonday(d: Date): Date { const date = this.startOfDay(d); const day = (date.getDay()+6)%7; date.setDate(date.getDate()-day); return date; }
-  private endOfWeekSunday(d: Date): Date { const s = this.startOfWeekMonday(d); const e = new Date(s); e.setDate(s.getDate()+6); return this.endOfDay(e); }
-  private startOfMonth(d: Date): Date { return this.startOfDay(new Date(d.getFullYear(), d.getMonth(), 1)); }
-  private endOfMonth(d: Date): Date { return this.endOfDay(new Date(d.getFullYear(), d.getMonth()+1, 0)); }
-  private startOfQuarter(d: Date): Date { const q = Math.floor(d.getMonth()/3); return this.startOfDay(new Date(d.getFullYear(), q*3, 1)); }
-  private endOfQuarter(d: Date): Date { const s = this.startOfQuarter(d); return this.endOfDay(new Date(s.getFullYear(), s.getMonth()+3, 0)); }
-  private getDateRange(period: string, date?: string, dateFrom?: string, dateTo?: string): { from: Date; to: Date; normalizedPeriod: 'day'|'week'|'month'|'quarter'|'custom' } {
-    const p = (period||'day').toLowerCase();
-    const today = new Date();
-    if (p==='custom' && dateFrom && dateTo) return { from: this.startOfDay(new Date(dateFrom)), to: this.endOfDay(new Date(dateTo)), normalizedPeriod: 'custom' };
-    const target = date ? new Date(date) : today;
-    if (p==='week') return { from: this.startOfWeekMonday(target), to: this.endOfWeekSunday(target), normalizedPeriod: 'week' };
-    if (p==='month') return { from: this.startOfMonth(target), to: this.endOfMonth(target), normalizedPeriod: 'month' };
-    if (p==='quarter') return { from: this.startOfQuarter(target), to: this.endOfQuarter(target), normalizedPeriod: 'quarter' };
-    return { from: this.startOfDay(target), to: this.endOfDay(target), normalizedPeriod: 'day' };
+  private startOfDay(d: Date): Date {
+    const x = new Date(d);
+    x.setHours(0, 0, 0, 0);
+    return x;
   }
-  private parseCsvNumbers(csv?: string): number[] { if (!csv) return []; return csv.split(',').map(s=>Number((s||'').trim())).filter(n=>!Number.isNaN(n)); }
-  private parseCsvStrings(csv?: string): string[] { if (!csv) return []; return csv.split(',').map(s=>(s||'').trim()).filter(s=>s.length>0); }
 
-  private calcDynamicExtended(createdAt: Date | null, originalExtended: number | null): number | null {
+  private endOfDay(d: Date): Date {
+    const x = new Date(d);
+    x.setHours(23, 59, 59, 999);
+    return x;
+  }
+
+  private startOfWeekMonday(d: Date): Date {
+    const date = this.startOfDay(d);
+    const day = (date.getDay() + 6) % 7;
+    date.setDate(date.getDate() - day);
+    return date;
+  }
+
+  private endOfWeekSunday(d: Date): Date {
+    const s = this.startOfWeekMonday(d);
+    const e = new Date(s);
+    e.setDate(s.getDate() + 6);
+    return this.endOfDay(e);
+  }
+
+  private startOfMonth(d: Date): Date {
+    return this.startOfDay(new Date(d.getFullYear(), d.getMonth(), 1));
+  }
+
+  private endOfMonth(d: Date): Date {
+    return this.endOfDay(new Date(d.getFullYear(), d.getMonth() + 1, 0));
+  }
+
+  private startOfQuarter(d: Date): Date {
+    const q = Math.floor(d.getMonth() / 3);
+    return this.startOfDay(new Date(d.getFullYear(), q * 3, 1));
+  }
+
+  private endOfQuarter(d: Date): Date {
+    const s = this.startOfQuarter(d);
+    return this.endOfDay(new Date(s.getFullYear(), s.getMonth() + 3, 0));
+  }
+
+  private getDateRange(
+    period: string,
+    date?: string,
+    dateFrom?: string,
+    dateTo?: string,
+  ): {
+    from: Date;
+    to: Date;
+    normalizedPeriod: 'day' | 'week' | 'month' | 'quarter' | 'custom';
+  } {
+    const p = (period || 'day').toLowerCase();
+    const today = new Date();
+    if (p === 'custom' && dateFrom && dateTo)
+      return {
+        from: this.startOfDay(new Date(dateFrom)),
+        to: this.endOfDay(new Date(dateTo)),
+        normalizedPeriod: 'custom',
+      };
+    const target = date ? new Date(date) : today;
+    if (p === 'week')
+      return {
+        from: this.startOfWeekMonday(target),
+        to: this.endOfWeekSunday(target),
+        normalizedPeriod: 'week',
+      };
+    if (p === 'month')
+      return {
+        from: this.startOfMonth(target),
+        to: this.endOfMonth(target),
+        normalizedPeriod: 'month',
+      };
+    if (p === 'quarter')
+      return {
+        from: this.startOfQuarter(target),
+        to: this.endOfQuarter(target),
+        normalizedPeriod: 'quarter',
+      };
+    return {
+      from: this.startOfDay(target),
+      to: this.endOfDay(target),
+      normalizedPeriod: 'day',
+    };
+  }
+
+  private parseCsvNumbers(csv?: string): number[] {
+    if (!csv) return [];
+    return csv
+      .split(',')
+      .map((s) => Number((s || '').trim()))
+      .filter((n) => !Number.isNaN(n));
+  }
+
+  private parseCsvStrings(csv?: string): string[] {
+    if (!csv) return [];
+    return csv
+      .split(',')
+      .map((s) => (s || '').trim())
+      .filter((s) => s.length > 0);
+  }
+
+  private calcDynamicExtended(
+    createdAt: Date | null,
+    originalExtended: number | null,
+  ): number | null {
     try {
       if (!createdAt || originalExtended === null) {
         return typeof originalExtended === 'number' ? originalExtended : null;
       }
-      const createdDate = new Date(createdAt); createdDate.setHours(0,0,0,0);
-      const expiredDate = new Date(createdDate); expiredDate.setDate(expiredDate.getDate()+ (originalExtended || 0));
-      const today = new Date(); today.setHours(0,0,0,0);
-      const diffDays = Math.floor((expiredDate.getTime()-today.getTime())/(1000*60*60*24));
+      const createdDate = new Date(createdAt);
+      createdDate.setHours(0, 0, 0, 0);
+      const expiredDate = new Date(createdDate);
+      expiredDate.setDate(expiredDate.getDate() + (originalExtended || 0));
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const diffDays = Math.floor(
+        (expiredDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24),
+      );
       return diffDays;
-    } catch { return typeof originalExtended === 'number' ? originalExtended : null; }
+    } catch {
+      return typeof originalExtended === 'number' ? originalExtended : null;
+    }
   }
 
   async getDetailedStats(params: {
@@ -531,7 +630,12 @@ export class OrderDetailService {
     products?: string;
     user: any;
   }): Promise<any> {
-    const { from, to, normalizedPeriod } = this.getDateRange(params.period, params.date, params.dateFrom, params.dateTo);
+    const { from, to, normalizedPeriod } = this.getDateRange(
+      params.period,
+      params.date,
+      params.dateFrom,
+      params.dateTo,
+    );
     const qb = this.orderDetailRepository
       .createQueryBuilder('details')
       .leftJoinAndSelect('details.order', 'order')
@@ -545,15 +649,18 @@ export class OrderDetailService {
     const allowedUserIds = await this.getUserIdsByRole(params.user);
     if (allowedUserIds !== null) {
       if (allowedUserIds.length === 0) qb.andWhere('1 = 0');
-      else qb.andWhere('sale_by.id IN (:...userIds)', { userIds: allowedUserIds });
+      else
+        qb.andWhere('sale_by.id IN (:...userIds)', { userIds: allowedUserIds });
     }
 
     // Filters
     const statuses = this.parseCsvStrings(params.status);
-    if (statuses.length > 0) qb.andWhere('details.status IN (:...sts)', { sts: statuses });
+    if (statuses.length > 0)
+      qb.andWhere('details.status IN (:...sts)', { sts: statuses });
 
     const empIds = this.parseCsvNumbers(params.employees);
-    if (empIds.length > 0) qb.andWhere('sale_by.id IN (:...empIds)', { empIds });
+    if (empIds.length > 0)
+      qb.andWhere('sale_by.id IN (:...empIds)', { empIds });
 
     const deptIds = this.parseCsvNumbers(params.departments);
     if (deptIds.length > 0) {
@@ -566,18 +673,24 @@ export class OrderDetailService {
     }
 
     const productIds = this.parseCsvNumbers(params.products);
-    if (productIds.length > 0) qb.andWhere('details.product_id IN (:...productIds)', { productIds });
+    if (productIds.length > 0)
+      qb.andWhere('details.product_id IN (:...productIds)', { productIds });
 
     let rows = await qb.getMany();
 
     // Blacklist filtering: non-admins
-    const roleNames = (params.user?.roles || []).map((r: any) => typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase());
+    const roleNames = (params.user?.roles || []).map((r: any) =>
+      typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
+    );
     const isAdmin = roleNames.includes('admin');
     if (!isAdmin) {
       const allowedIds2 = await this.getUserIdsByRole(params.user);
       const isManager = roleNames.some((r: string) => r.startsWith('manager-'));
       if (isManager) {
-        const map = await this.orderBlacklistService.getBlacklistedContactsForUsers(allowedIds2 || [params.user.id]);
+        const map =
+          await this.orderBlacklistService.getBlacklistedContactsForUsers(
+            allowedIds2 || [params.user.id],
+          );
         const bl = new Set<string>();
         for (const set of map.values()) for (const id of set) bl.add(id);
         rows = rows.filter((od) => {
@@ -585,7 +698,10 @@ export class OrderDetailService {
           return !cid || !bl.has(cid);
         });
       } else {
-        const list = await this.orderBlacklistService.getBlacklistedContactsForUser(params.user.id);
+        const list =
+          await this.orderBlacklistService.getBlacklistedContactsForUser(
+            params.user.id,
+          );
         const bl = new Set(list);
         rows = rows.filter((od) => {
           const cid = this.extractCustomerIdFromMetadata(od.metadata);
@@ -598,7 +714,10 @@ export class OrderDetailService {
     const resultRows = rows.map((od) => {
       const revenue = (od.quantity || 0) * (od.unit_price || 0);
       const customerId = this.extractCustomerIdFromMetadata(od.metadata);
-      const dynamicExtended = this.calcDynamicExtended(od.created_at || null, od.extended);
+      const dynamicExtended = this.calcDynamicExtended(
+        od.created_at || null,
+        od.extended,
+      );
       return {
         id: od.id,
         orderId: od.order_id,
@@ -607,15 +726,24 @@ export class OrderDetailService {
         quantity: od.quantity || 0,
         unit_price: od.unit_price || 0,
         revenue,
-        sale_by: { id: od.order?.sale_by?.id, fullName: od.order?.sale_by?.fullName || od.order?.sale_by?.username },
+        sale_by: {
+          id: od.order?.sale_by?.id,
+          fullName: od.order?.sale_by?.fullName || od.order?.sale_by?.username,
+        },
         customer: { id: customerId, name: od.customer_name || null },
-        created_at: od.created_at?.toISOString?.() || new Date(od.created_at).toISOString(),
+        created_at:
+          od.created_at?.toISOString?.() ||
+          new Date(od.created_at).toISOString(),
         dynamicExtended,
       };
     });
 
     return {
-      period: { period: normalizedPeriod, from: from.toISOString(), to: to.toISOString() },
+      period: {
+        period: normalizedPeriod,
+        from: from.toISOString(),
+        to: to.toISOString(),
+      },
       rows: resultRows,
     };
   }
@@ -815,5 +943,263 @@ export class OrderDetailService {
     }
 
     return { restored: items.length };
+  }
+
+  // ================= Hidden (Ẩn) flows =================
+  async hide(id: number, reason: string, user: any): Promise<void> {
+    // Only owner can hide
+    const existing = await this.orderDetailRepository
+      .createQueryBuilder('details')
+      .leftJoin('details.order', 'order')
+      .leftJoin('order.sale_by', 'sale_by')
+      .where('details.id = :id', { id })
+      .andWhere('sale_by.id = :userId', { userId: user.id })
+      .getOne();
+    if (!existing) return;
+    await this.orderDetailRepository.update(id, {
+      reason: reason || '',
+      hidden_at: new Date(),
+    });
+  }
+
+  async unhide(id: number, user: any): Promise<boolean> {
+    // Only owner can unhide
+    const existing = await this.orderDetailRepository
+      .createQueryBuilder('details')
+      .leftJoin('details.order', 'order')
+      .leftJoin('order.sale_by', 'sale_by')
+      .where('details.id = :id', { id })
+      .andWhere('sale_by.id = :userId', { userId: user.id })
+      .andWhere('details.hidden_at IS NOT NULL')
+      .getOne();
+
+    if (!existing) return false;
+
+    await this.orderDetailRepository.update(id, {
+      hidden_at: null,
+    });
+
+    return true;
+  }
+
+  async bulkHide(
+    ids: number[],
+    reason: string,
+    user: any,
+  ): Promise<{ hidden: number }> {
+    const orderDetails = await this.orderDetailRepository
+      .createQueryBuilder('orderDetail')
+      .leftJoinAndSelect('orderDetail.order', 'order')
+      .leftJoinAndSelect('order.sale_by', 'sale_by')
+      .where('orderDetail.id IN (:...ids)', { ids })
+      .andWhere('sale_by.id = :userId', { userId: user.id })
+      .getMany();
+
+    if (orderDetails.length === 0) {
+      return { hidden: 0 };
+    }
+
+    await this.orderDetailRepository
+      .createQueryBuilder()
+      .update(OrderDetail)
+      .set({ reason: reason || '', hidden_at: () => 'CURRENT_TIMESTAMP' })
+      .where('id IN (:...ids)', { ids: orderDetails.map((od) => od.id) })
+      .execute();
+
+    return { hidden: orderDetails.length };
+  }
+
+  async bulkUnhide(ids: number[], user: any): Promise<{ unhidden: number }> {
+    if (!Array.isArray(ids) || ids.length === 0) return { unhidden: 0 };
+
+    const items = await this.orderDetailRepository
+      .createQueryBuilder('details')
+      .leftJoin('details.order', 'order')
+      .leftJoin('order.sale_by', 'sale_by')
+      .where('details.id IN (:...ids)', { ids })
+      .andWhere('sale_by.id = :userId', { userId: user.id })
+      .andWhere('details.hidden_at IS NOT NULL')
+      .getMany();
+
+    if (items.length === 0) return { unhidden: 0 };
+
+    await this.orderDetailRepository
+      .createQueryBuilder()
+      .update(OrderDetail)
+      .set({ hidden_at: null })
+      .where('id IN (:...ids)', { ids: items.map((i) => i.id) })
+      .execute();
+
+    return { unhidden: items.length };
+  }
+
+  async findAllHiddenPaginated(
+    user: any,
+    options?: HiddenOrderOptions,
+  ): Promise<{
+    data: OrderDetail[];
+    total: number;
+    page: number;
+    pageSize: number;
+  }> {
+    const page = Math.max(1, Number(options?.page) || 1);
+    const pageSize = Math.max(
+      1,
+      Math.min(Number(options?.pageSize) || 10, 10000),
+    );
+
+    const qb = this.orderDetailRepository
+      .createQueryBuilder('details')
+      .leftJoinAndSelect('details.order', 'order')
+      .leftJoinAndSelect('details.product', 'product')
+      .leftJoinAndSelect('order.sale_by', 'sale_by')
+      .leftJoinAndSelect('sale_by.departments', 'sale_by_departments')
+      .where('details.hidden_at IS NOT NULL');
+
+    // ✅ Permission scoping (giữ nguyên logic hiện tại)
+    const allowedUserIds = await this.getUserIdsByRole(user);
+    if (allowedUserIds !== null) {
+      if (allowedUserIds.length === 0) {
+        qb.andWhere('1 = 0');
+      } else {
+        qb.andWhere('sale_by.id IN (:...userIds)', { userIds: allowedUserIds });
+      }
+    }
+
+    if (options?.search && options.search.trim()) {
+      const searchTerm = `%${options.search.trim()}%`;
+      qb.andWhere(
+        `(
+        CAST(details.id AS CHAR) LIKE :search 
+        OR LOWER(details.raw_item) LIKE LOWER(:search)
+        OR LOWER(product.productName) LIKE LOWER(:search)
+        OR LOWER(details.customer_name) LIKE LOWER(:search)
+      )`,
+        { search: searchTerm },
+      );
+    }
+
+    // ✅ Filter 1: Employees
+    if (options?.employees) {
+      const empIds = options.employees
+        .split(',')
+        .map((s) => Number(s.trim()))
+        .filter((n) => !Number.isNaN(n));
+      if (empIds.length > 0) {
+        qb.andWhere('sale_by.id IN (:...empIds)', { empIds });
+      }
+    }
+
+    // ✅ Filter 2: Departments
+    if (options?.departments) {
+      const deptIds = options.departments
+        .split(',')
+        .map((s) => Number(s.trim()))
+        .filter((n) => !Number.isNaN(n));
+      if (deptIds.length > 0) {
+        qb.andWhere(
+          `
+        sale_by_departments.id IN (:...deptIds)
+        AND sale_by_departments.server_ip IS NOT NULL
+        AND TRIM(sale_by_departments.server_ip) <> ''
+      `,
+          { deptIds },
+        );
+      }
+    }
+
+    // ✅ Filter 3: Status (hỗ trợ multiple statuses)
+    if (options?.status && options.status.trim()) {
+      if (options.status.includes(',')) {
+        // Multiple statuses
+        const statusArray = options.status
+          .split(',')
+          .map((s) => s.trim())
+          .filter((s) => s);
+        if (statusArray.length > 0) {
+          qb.andWhere('details.status IN (:...statuses)', {
+            statuses: statusArray,
+          });
+        }
+      } else {
+        // Single status
+        qb.andWhere('details.status = :status', { status: options.status });
+      }
+    }
+
+    // ✅ Filter 4: Hidden Date Range
+    if (options?.hiddenDateRange?.start && options?.hiddenDateRange?.end) {
+      const startDate = new Date(options.hiddenDateRange.start);
+      const endDate = new Date(options.hiddenDateRange.end);
+      endDate.setHours(23, 59, 59, 999);
+
+      qb.andWhere('details.hidden_at BETWEEN :hiddenStart AND :hiddenEnd', {
+        hiddenStart: startDate,
+        hiddenEnd: endDate,
+      });
+    }
+
+    // ✅ Sorting
+    const sortField = options?.sortField;
+    const sortDirection = (options?.sortDirection || 'desc').toUpperCase() as
+      | 'ASC'
+      | 'DESC';
+
+    if (sortField === 'quantity') {
+      qb.orderBy('details.quantity', sortDirection);
+    } else if (sortField === 'unit_price') {
+      qb.orderBy('details.unit_price', sortDirection);
+    } else if (sortField === 'hidden_at') {
+      qb.orderBy('details.hidden_at', sortDirection);
+    } else {
+      // Mặc định sort theo ngày ẩn mới nhất
+      qb.orderBy('details.hidden_at', 'DESC');
+    }
+
+    // ✅ Pagination
+    qb.skip((page - 1) * pageSize).take(pageSize);
+    const [rows, total] = await qb.getManyAndCount();
+
+    // ✅ Apply blacklist filtering (giữ nguyên logic cũ)
+    let filtered = rows;
+    if (user && user.roles && user.roles.length > 0) {
+      const roleNames = (user.roles || []).map((r: any) =>
+        typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
+      );
+      const isAdmin = roleNames.includes('admin');
+      const isManager = roleNames.some((r: string) => r.startsWith('manager-'));
+
+      if (!isAdmin) {
+        let blacklistedSet = new Set<string>();
+
+        if (isManager) {
+          const userIds = Array.isArray(allowedUserIds)
+            ? allowedUserIds
+            : [user.id];
+          const map =
+            await this.orderBlacklistService.getBlacklistedContactsForUsers(
+              userIds,
+            );
+          for (const set of map.values()) {
+            for (const id of set) blacklistedSet.add(id);
+          }
+        } else {
+          const list =
+            await this.orderBlacklistService.getBlacklistedContactsForUser(
+              user.id,
+            );
+          for (const id of list) blacklistedSet.add(id);
+        }
+
+        if (blacklistedSet.size > 0) {
+          filtered = filtered.filter((od) => {
+            const customerId = this.extractCustomerIdFromMetadata(od.metadata);
+            return !customerId || !blacklistedSet.has(customerId);
+          });
+        }
+      }
+    }
+
+    return { data: filtered, total, page, pageSize };
   }
 }

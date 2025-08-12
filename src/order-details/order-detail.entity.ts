@@ -101,4 +101,7 @@ export class OrderDetail {
 
   @DeleteDateColumn({ type: 'timestamp', nullable: true })
   deleted_at: Date;
+
+  @Column('timestamp', { nullable: true })
+  hidden_at: Date | null;
 }

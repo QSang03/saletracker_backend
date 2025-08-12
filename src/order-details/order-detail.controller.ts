@@ -78,6 +78,82 @@ export class OrderDetailController {
     return this.orderDetailService.bulkRestore(data.ids, req.user);
   }
 
+  // =============== Hidden (Ẩn) endpoints ===============
+  @Get('hidden')
+  async findAllHidden(
+    @Query('page') page: string = '1',
+    @Query('pageSize') pageSize: string = '10',
+    @Query('search') search?: string,
+    @Query('employees') employees?: string, // ✅ CSV của employee IDs
+    @Query('departments') departments?: string, // ✅ CSV của department IDs
+    @Query('status') status?: string, // ✅ CSV của statuses
+    @Query('hiddenDateRange') hiddenDateRange?: string, // ✅ JSON string cho date range
+    @Query('sortField') sortField?: 'quantity' | 'unit_price' | 'hidden_at',
+    @Query('sortDirection') sortDirection?: 'asc' | 'desc',
+    @Req() req?: any,
+  ): Promise<{
+    data: OrderDetail[];
+    total: number;
+    page: number;
+    pageSize: number;
+  }> {
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const pageSizeNum = Math.max(
+      1,
+      Math.min(parseInt(pageSize, 10) || 10, 10000),
+    );
+
+    // ✅ Parse hiddenDateRange nếu có
+    let parsedHiddenDateRange;
+    if (hiddenDateRange) {
+      try {
+        parsedHiddenDateRange = JSON.parse(hiddenDateRange);
+      } catch {
+        parsedHiddenDateRange = undefined;
+      }
+    }
+
+    return this.orderDetailService.findAllHiddenPaginated(req.user, {
+      page: pageNum,
+      pageSize: pageSizeNum,
+      search: search?.trim(),
+      employees,
+      departments,
+      status,
+      hiddenDateRange: parsedHiddenDateRange,
+      sortField: sortField || null,
+      sortDirection: sortDirection || null,
+    });
+  }
+
+  @Post('hidden/bulk-unhide')
+  async bulkUnhide(
+    @Body() data: { ids: number[] },
+    @Req() req?: any,
+  ): Promise<{ unhidden: number }> {
+    return this.orderDetailService.bulkUnhide(data.ids, req.user);
+  }
+
+  @Post('hidden/bulk-hide')
+  async bulkHide(
+    @Body() data: { ids: number[]; reason: string },
+    @Req() req?: any,
+  ): Promise<{ hidden: number }> {
+    return this.orderDetailService.bulkHide(data.ids, data.reason, req.user);
+  }
+
+  @Post(':id/unhide')
+  async unhideOrderDetail(
+    @Param('id', ParseIntPipe) id: number,
+    @Req() req?: any,
+  ): Promise<{ message: string }> {
+    const result = await this.orderDetailService.unhide(id, req.user);
+    if (!result) {
+      throw new NotFoundException('Order detail not found or not owned by you');
+    }
+    return { message: 'Order detail unhidden successfully' };
+  }
+
   // =============== Stats detailed endpoint ===============
   @Get('stats/detailed')
   async getDetailedStats(

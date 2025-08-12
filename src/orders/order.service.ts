@@ -873,7 +873,10 @@ export class OrderService {
     }
 
     // LUÔN lấy tất cả data để áp dụng unified sorting
-    const allData = await queryBuilder.getMany();
+  // Exclude hidden items from active lists
+  queryBuilder.andWhere('details.hidden_at IS NULL');
+
+  const allData = await queryBuilder.getMany();
 
     // Tính calcDynamicExtended cho tất cả data
     const dataWithDynamicExtended = allData.map((orderDetail) => ({

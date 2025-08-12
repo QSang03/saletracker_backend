@@ -46,7 +46,7 @@ export class OrderCleanupCronjobService {
         // ĐƯỢC phép chạy cleanup → Xử lý bình thường
         this.logger.log('✅ Được phép chạy cleanup hôm nay');
 
-        const orderDetails = await this.getActiveOrderDetails();
+  const orderDetails = await this.getActiveOrderDetails();
         this.logger.log(
           `📦 Tìm thấy ${orderDetails.length} order details cần kiểm tra`,
         );
@@ -54,10 +54,10 @@ export class OrderCleanupCronjobService {
         const expiredIds = this.calculateExpiredOrderDetails(orderDetails);
 
         if (expiredIds.length > 0) {
-          await this.softDeleteOrderDetails(expiredIds);
-          this.logger.log(`✅ Đã xóa mềm ${expiredIds.length} order details`);
+          await this.softHideOrderDetails(expiredIds);
+          this.logger.log(`✅ Đã ẩn ${expiredIds.length} order details`);
         } else {
-          this.logger.log('✅ Không có order detail nào cần xóa mềm');
+          this.logger.log('✅ Không có order detail nào cần ẩn');
         }
       }
 
@@ -114,6 +114,7 @@ export class OrderCleanupCronjobService {
           extend_reason: ExtendReason.SYSTEM_SUNDAY_AUTO,
         })
         .where('deleted_at IS NULL')
+        .andWhere('hidden_at IS NULL')
         .execute();
 
       this.logger.log(
@@ -363,6 +364,7 @@ export class OrderCleanupCronjobService {
     const result = await this.orderDetailRepository.find({
       where: {
         deleted_at: IsNull(),
+        hidden_at: IsNull(),
       },
       select: ['id', 'created_at', 'extended'],
       order: { created_at: 'ASC' }, // Sắp xếp theo thời gian tạo
@@ -466,23 +468,22 @@ export class OrderCleanupCronjobService {
   /**
    * Thực hiện xóa mềm các order_detail
    */
-  private async softDeleteOrderDetails(ids: number[]): Promise<void> {
-    const deleteTime = new Date();
-    const reason = 'Hệ Thống Xóa Tự Động';
-    this.logger.log(
-      `🗑️ Bắt đầu xóa mềm tại: ${this.formatDateTime(deleteTime)}`,
-    );
+  private async softHideOrderDetails(ids: number[]): Promise<void> {
+    const time = new Date();
+    const reason = 'Hệ Thống Ẩn Tự Động';
+    this.logger.log(`� Bắt đầu ẩn tại: ${this.formatDateTime(time)}`);
 
     const result = await this.orderDetailRepository
       .createQueryBuilder()
       .update(OrderDetail)
-      .set({ deleted_at: deleteTime, reason: reason })
+      .set({ hidden_at: time, reason })
       .where('id IN (:...ids)', { ids })
+      .andWhere('deleted_at IS NULL')
       .execute();
 
-    this.logger.log(`✅ Đã cập nhật deleted_at cho ${result.affected} records`);
-    this.logger.log(`📋 Chi tiết các ID đã xóa: [${ids.join(', ')}]`);
-    this.logger.log(`🕐 Thời gian xóa mềm: ${this.formatDateTime(deleteTime)}`);
+    this.logger.log(`✅ Đã cập nhật hidden_at cho ${result.affected} records`);
+    this.logger.log(`📋 Chi tiết các ID đã ẩn: [${ids.join(', ')}]`);
+    this.logger.log(`🕐 Thời gian ẩn: ${this.formatDateTime(time)}`);
   }
 
   /**
@@ -518,7 +519,7 @@ export class OrderCleanupCronjobService {
       const expiredIds = this.calculateExpiredOrderDetails(orderDetails);
 
       if (expiredIds.length > 0) {
-        await this.softDeleteOrderDetails(expiredIds);
+        await this.softHideOrderDetails(expiredIds);
       }
 
       const endTime = new Date();
