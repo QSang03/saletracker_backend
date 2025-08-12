@@ -873,10 +873,10 @@ export class OrderService {
     }
 
     // LUÔN lấy tất cả data để áp dụng unified sorting
-  // Exclude hidden items from active lists
-  queryBuilder.andWhere('details.hidden_at IS NULL');
+    // Exclude hidden items from active lists
+    queryBuilder.andWhere('details.hidden_at IS NULL');
 
-  const allData = await queryBuilder.getMany();
+    const allData = await queryBuilder.getMany();
 
     // Tính calcDynamicExtended cho tất cả data
     const dataWithDynamicExtended = allData.map((orderDetail) => ({
@@ -1578,19 +1578,148 @@ export class OrderService {
     };
   }
 
+  // async getExpiredTodayStats(params: {
+  //   employees?: string;
+  //   departments?: string;
+  //   user: any;
+  // }) {
+  //   const today = this.startOfDay(new Date());
+  //   const qb = this.orderDetailRepository
+  //     .createQueryBuilder('details')
+  //     .leftJoinAndSelect('details.order', 'order')
+  //     .leftJoinAndSelect('order.sale_by', 'sale_by')
+  //     .leftJoinAndSelect('sale_by.departments', 'sale_by_departments')
+  //     .andWhere('details.deleted_at IS NULL');
+
+  //   const allowedUserIds = await this.getUserIdsByRole(params.user);
+  //   if (allowedUserIds !== null) {
+  //     if (allowedUserIds.length === 0) qb.andWhere('1 = 0');
+  //     else
+  //       qb.andWhere('sale_by.id IN (:...userIds)', { userIds: allowedUserIds });
+  //   }
+
+  //   const empIds = this.parseCsvNumbers(params.employees);
+  //   if (empIds.length > 0)
+  //     qb.andWhere('sale_by.id IN (:...empIds)', { empIds });
+
+  //   if (this.isAdmin(params.user)) {
+  //     const deptIds = this.parseCsvNumbers(params.departments);
+  //     if (deptIds.length > 0) {
+  //       qb.andWhere(
+  //         `sale_by_departments.id IN (:...deptIds)
+  //          AND sale_by_departments.server_ip IS NOT NULL
+  //          AND TRIM(sale_by_departments.server_ip) <> ''`,
+  //         { deptIds },
+  //       );
+  //     }
+  //   }
+
+  //   let rows = await qb.getMany();
+
+  //   // Blacklist filter for non-admins
+  //   const roleNames5 = (params.user?.roles || []).map((r: any) =>
+  //     typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
+  //   );
+  //   const isAdmin5 = roleNames5.includes('admin');
+  //   if (!isAdmin5) {
+  //     const allowedIds = await this.getUserIdsByRole(params.user);
+  //     const isManager = roleNames5.some((r: string) =>
+  //       r.startsWith('manager-'),
+  //     );
+  //     if (isManager) {
+  //       const map =
+  //         await this.orderBlacklistService.getBlacklistedContactsForUsers(
+  //           allowedIds || [params.user.id],
+  //         );
+  //       const bl = new Set<string>();
+  //       for (const set of map.values()) for (const id of set) bl.add(id);
+  //       rows = rows.filter((od) => {
+  //         const cid = this.extractCustomerIdFromMetadata(od.metadata);
+  //         return !cid || !bl.has(cid);
+  //       });
+  //     } else {
+  //       const list =
+  //         await this.orderBlacklistService.getBlacklistedContactsForUser(
+  //           params.user.id,
+  //         );
+  //       const bl = new Set(list);
+  //       rows = rows.filter((od) => {
+  //         const cid = this.extractCustomerIdFromMetadata(od.metadata);
+  //         return !cid || !bl.has(cid);
+  //       });
+  //     }
+  //   }
+
+  //   let expiredToday = 0;
+  //   let overdue = 0;
+  //   const byEmp = new Map<
+  //     number,
+  //     { fullName: string; expiredToday: number; overdue: number }
+  //   >();
+  //   for (const od of rows) {
+  //     const dExt = this.calcDynamicExtended(od.created_at || null, od.extended);
+  //     const uid = od.order?.sale_by?.id;
+  //     const name =
+  //       od.order?.sale_by?.fullName ||
+  //       od.order?.sale_by?.username ||
+  //       String(uid || 'N/A');
+  //     if (dExt === 0) {
+  //       expiredToday += 1;
+  //       if (uid) {
+  //         const e = byEmp.get(uid) || {
+  //           fullName: name,
+  //           expiredToday: 0,
+  //           overdue: 0,
+  //         };
+  //         e.expiredToday += 1;
+  //         byEmp.set(uid, e);
+  //       }
+  //     } else if (typeof dExt === 'number' && dExt < 0) {
+  //       overdue += 1;
+  //       if (uid) {
+  //         const e = byEmp.get(uid) || {
+  //           fullName: name,
+  //           expiredToday: 0,
+  //           overdue: 0,
+  //         };
+  //         e.overdue += 1;
+  //         byEmp.set(uid, e);
+  //       }
+  //     }
+  //   }
+
+  //   return {
+  //     date: this.startOfDay(today).toISOString().slice(0, 10),
+  //     totals: { expiredToday, overdue },
+  //     byEmployee: Array.from(byEmp.entries()).map(([userId, v]) => ({
+  //       userId,
+  //       fullName: v.fullName,
+  //       expiredToday: v.expiredToday,
+  //       overdue: v.overdue,
+  //     })),
+  //   };
+  // }
   async getExpiredTodayStats(params: {
     employees?: string;
     departments?: string;
     user: any;
   }) {
     const today = this.startOfDay(new Date());
+    const tomorrow = new Date(today);
+    tomorrow.setDate(today.getDate() + 1);
+    // ✅ Chỉ lấy đơn ẩn HÔM NAY và chưa bị xóa mềm
     const qb = this.orderDetailRepository
       .createQueryBuilder('details')
       .leftJoinAndSelect('details.order', 'order')
       .leftJoinAndSelect('order.sale_by', 'sale_by')
       .leftJoinAndSelect('sale_by.departments', 'sale_by_departments')
-      .andWhere('details.deleted_at IS NULL');
+      .where('details.deleted_at IS NULL') // Loại bỏ đơn xóa mềm
+      .andWhere('details.hidden_at >= :todayStart', { todayStart: today })
+      .andWhere('details.hidden_at < :tomorrowStart', {
+        tomorrowStart: tomorrow,
+      });
 
+    // Permission scoping
     const allowedUserIds = await this.getUserIdsByRole(params.user);
     if (allowedUserIds !== null) {
       if (allowedUserIds.length === 0) qb.andWhere('1 = 0');
@@ -1598,34 +1727,34 @@ export class OrderService {
         qb.andWhere('sale_by.id IN (:...userIds)', { userIds: allowedUserIds });
     }
 
+    // Employee filter
     const empIds = this.parseCsvNumbers(params.employees);
     if (empIds.length > 0)
       qb.andWhere('sale_by.id IN (:...empIds)', { empIds });
 
+    // Department filter (chỉ admin)
     if (this.isAdmin(params.user)) {
       const deptIds = this.parseCsvNumbers(params.departments);
       if (deptIds.length > 0) {
         qb.andWhere(
           `sale_by_departments.id IN (:...deptIds)
-           AND sale_by_departments.server_ip IS NOT NULL
-           AND TRIM(sale_by_departments.server_ip) <> ''`,
+         AND sale_by_departments.server_ip IS NOT NULL
+         AND TRIM(sale_by_departments.server_ip) <> ''`,
           { deptIds },
         );
       }
     }
 
     let rows = await qb.getMany();
-
-    // Blacklist filter for non-admins
-    const roleNames5 = (params.user?.roles || []).map((r: any) =>
+    const roleNames = (params.user?.roles || []).map((r: any) =>
       typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
     );
-    const isAdmin5 = roleNames5.includes('admin');
-    if (!isAdmin5) {
+    const isAdmin = roleNames.includes('admin');
+
+    if (!isAdmin) {
       const allowedIds = await this.getUserIdsByRole(params.user);
-      const isManager = roleNames5.some((r: string) =>
-        r.startsWith('manager-'),
-      );
+      const isManager = roleNames.some((r: string) => r.startsWith('manager-'));
+
       if (isManager) {
         const map =
           await this.orderBlacklistService.getBlacklistedContactsForUsers(
@@ -1650,44 +1779,32 @@ export class OrderService {
       }
     }
 
-    let expiredToday = 0;
-    let overdue = 0;
+    // ✅ Đơn giản hóa: Tất cả đơn trả về đều là "hết hạn hôm nay"
+    let expiredToday = rows.length;
+    let overdue = 0; // Không có overdue vì chỉ lấy đơn ẩn hôm nay
+
     const byEmp = new Map<
       number,
       { fullName: string; expiredToday: number; overdue: number }
     >();
+
     for (const od of rows) {
-      const dExt = this.calcDynamicExtended(od.created_at || null, od.extended);
       const uid = od.order?.sale_by?.id;
       const name =
         od.order?.sale_by?.fullName ||
         od.order?.sale_by?.username ||
         String(uid || 'N/A');
-      if (dExt === 0) {
-        expiredToday += 1;
-        if (uid) {
-          const e = byEmp.get(uid) || {
-            fullName: name,
-            expiredToday: 0,
-            overdue: 0,
-          };
-          e.expiredToday += 1;
-          byEmp.set(uid, e);
-        }
-      } else if (typeof dExt === 'number' && dExt < 0) {
-        overdue += 1;
-        if (uid) {
-          const e = byEmp.get(uid) || {
-            fullName: name,
-            expiredToday: 0,
-            overdue: 0,
-          };
-          e.overdue += 1;
-          byEmp.set(uid, e);
-        }
+
+      if (uid) {
+        const e = byEmp.get(uid) || {
+          fullName: name,
+          expiredToday: 0,
+          overdue: 0,
+        };
+        e.expiredToday += 1; // Tất cả đều là hết hạn hôm nay
+        byEmp.set(uid, e);
       }
     }
-
     return {
       date: this.startOfDay(today).toISOString().slice(0, 10),
       totals: { expiredToday, overdue },

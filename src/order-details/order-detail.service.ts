@@ -722,6 +722,7 @@ export class OrderDetailService {
         id: od.id,
         orderId: od.order_id,
         productId: od.product_id || null,
+        productName: od.raw_item || null,
         status: String(od.status),
         quantity: od.quantity || 0,
         unit_price: od.unit_price || 0,

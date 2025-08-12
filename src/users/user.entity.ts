@@ -13,6 +13,7 @@ import { Role } from '../roles/role.entity';
 import { Department } from '../departments/department.entity';
 import { UserStatus } from './user-status.enum';
 import { Notification } from '../notifications/notification.entity';
+import { AutoReplySalesPersona } from 'src/auto_reply_sales_personas/auto_reply_sales_persona.entity';
 
 @Entity('users')
 export class User {
@@ -70,6 +71,9 @@ export class User {
     inverseJoinColumn: { name: 'department_id', referencedColumnName: 'id' },
   })
   departments?: Department[];
+
+  @OneToMany(() => AutoReplySalesPersona, (persona) => persona.user)
+  salesPersonas: AutoReplySalesPersona[]; // Thuộc tính này sẽ là một mảng các persona
 
   @Column({ type: 'datetime', nullable: true })
   deletedAt?: Date | null;
