@@ -37,6 +37,7 @@ import { CampaignScheduleModule } from './campaign_schedules/campaign_schedule.m
 import { CampaignContentModule } from './campaign_contents/campaign_content.module';
 import { CampaignDepartmentsSchedulesModule } from './campaign_departments_schedules/campaign_departments_schedules.module';
 import { OrderBlacklistModule } from './order-blacklist/order-blacklist.module';
+import { AutoReplyModule } from './auto_reply/auto_reply.module';
 
 @Module({
   imports: [
@@ -78,6 +79,7 @@ import { OrderBlacklistModule } from './order-blacklist/order-blacklist.module';
     CampaignScheduleModule,
     CampaignContentModule,
     CampaignDepartmentsSchedulesModule,
+  AutoReplyModule,
   ],
   controllers: [AppController],
   providers: [AppService],

@@ -83,7 +83,7 @@ export class OrderDetail {
   customer_name: string;
 
   @Column('varchar', {
-    name: 'zaloMessageId',
+    name: 'zalo_message_id',
     length: 255,
     nullable: true,
     default: null,

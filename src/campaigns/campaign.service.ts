@@ -3254,6 +3254,46 @@ export class CampaignService {
     }
   }
 
+  /**
+   * Remove a customer from a campaign (delete mapping only).
+   * Allowed only when campaign is in DRAFT state.
+   */
+  async removeCustomerFromCampaign(
+    campaignId: string,
+    customerId: string,
+    user: User,
+  ): Promise<{ success: boolean; message: string }> {
+    // Check access
+    const campaign = await this.checkCampaignAccess(campaignId, user);
+
+    // Only DRAFT can modify customer list
+    if (campaign.status !== CampaignStatus.DRAFT) {
+      throw new BadRequestException(
+        'Chỉ có thể xóa khách hàng khi chiến dịch ở trạng thái bản nháp',
+      );
+    }
+
+    // Ensure mapping exists
+    const mapping = await this.campaignCustomerMapRepository.findOne({
+      where: {
+        campaign_id: Number(campaignId),
+        customer_id: Number(customerId),
+      },
+    });
+
+    if (!mapping) {
+      throw new NotFoundException('Không tìm thấy khách hàng trong chiến dịch');
+    }
+
+    // Delete mapping
+    await this.campaignCustomerMapRepository.delete({
+      campaign_id: Number(campaignId),
+      customer_id: Number(customerId),
+    });
+
+    return { success: true, message: 'Đã xóa khách hàng khỏi chiến dịch' };
+  }
+
   async findAllArchived(
     query: any = {},
     user: User,

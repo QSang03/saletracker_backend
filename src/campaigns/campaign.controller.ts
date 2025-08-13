@@ -127,6 +127,20 @@ export class CampaignController {
     );
   }
 
+  @Delete(':campaignId/customers/:customerId')
+  @Permission('chien-dich', 'update')
+  async removeCustomerFromCampaign(
+    @Param('campaignId') campaignId: string,
+    @Param('customerId') customerId: string,
+    @Req() req,
+  ): Promise<{ success: boolean; message: string }> {
+    return this.campaignService.removeCustomerFromCampaign(
+      campaignId,
+      customerId,
+      req.user,
+    );
+  }
+
   @Post()
   @Permission('chien-dich', 'create')
   async create(

@@ -46,10 +46,10 @@ export class WebsocketGateway
         client.disconnect();
         return;
       }
-      const payload = this.jwtService.verify(token, {
+  const payload = this.jwtService.verify(token, {
         secret: process.env.JWT_SECRET || 'your_default_secret',
       });
-      client.user = payload;5
+  client.user = payload;
       this.userSocketMap.set(payload.sub, client.id);
       this.logger.log(`User ${payload.sub} connected with socket ${client.id}`);
     } catch (err) {

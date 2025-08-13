@@ -14,6 +14,7 @@ import { Department } from '../departments/department.entity';
 import { UserStatus } from './user-status.enum';
 import { Notification } from '../notifications/notification.entity';
 import { AutoReplySalesPersona } from 'src/auto_reply_sales_personas/auto_reply_sales_persona.entity';
+import { AutoReplyContact } from 'src/auto_reply_contacts/auto_reply_contact.entity';
 
 @Entity('users')
 export class User {
@@ -38,6 +39,9 @@ export class User {
 
   @Column({ default: false, name: 'is_block' })
   isBlock: boolean;
+
+  @Column({ default: false, name: 'is_auto_reply_enabled' })
+  isAutoReplyEnabled: boolean;
 
   @Column({ type: 'varchar', nullable: true, name: 'employee_code' })
   employeeCode?: string | null;
@@ -74,6 +78,9 @@ export class User {
 
   @OneToMany(() => AutoReplySalesPersona, (persona) => persona.user)
   salesPersonas: AutoReplySalesPersona[]; // Thuộc tính này sẽ là một mảng các persona
+
+  @OneToMany(() => AutoReplyContact, (contact) => contact.user)
+  autoReplyContacts: AutoReplyContact[];
 
   @Column({ type: 'datetime', nullable: true })
   deletedAt?: Date | null;

@@ -334,7 +334,7 @@ export class SeedService implements OnModuleInit {
         {
           name: 'campaign_timeout',
           display_name: 'Thời gian timeout chiến dịch',
-          value: '30',
+          value: '3001',
           type: 'number',
           section: 'campaign',
           status: 1,
