@@ -85,8 +85,8 @@ export class OrderDetail {
   @Column('varchar', {
     name: 'zalo_message_id',
     length: 255,
-    nullable: true,
-    default: null,
+    nullable: false,
+    unique: true,
   })
   zaloMessageId: string;
 
