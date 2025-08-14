@@ -98,11 +98,11 @@ export class AutoReplyController {
   ) {
     const userId =
       req.user?.id ?? (userIdFromQuery ? parseInt(userIdFromQuery) : undefined);
-    if (userId !== undefined) {
-      return this.svc.listContactsForUser(userId);
+    if (userId === undefined || userId === null) {
+      throw new BadRequestException('Missing userId (JWT or ?userId=)');
     }
-    // Backward compatible: ignore pagination/search for now
-    return this.svc.listContacts();
+    // Always scope contacts to the current user
+    return this.svc.listContactsForUser(userId);
   }
 
   @Patch('contacts/:contactId/role')
@@ -130,18 +130,40 @@ export class AutoReplyController {
   }
 
   @Patch('contacts/auto-reply-bulk')
-  toggleAutoReplyBulk(@Body() body: ToggleAutoReplyBulkDto) {
+  toggleAutoReplyBulk(
+    @Req() req: any,
+    @Body() body: ToggleAutoReplyBulkDto,
+    @Query('userId') userIdFromQuery?: string,
+  ) {
+    const uid =
+      req?.user?.id ??
+      (userIdFromQuery ? parseInt(userIdFromQuery) : undefined);
+    if (uid === undefined || uid === null) {
+      throw new BadRequestException('Missing userId (JWT or ?userId=)');
+    }
     return this.svc.bulkToggleAutoReply(
       (body.contactIds ?? 'ALL') as any,
       !!body.enabled,
+      uid,
     );
   }
 
   @Patch('contacts/persona-bulk')
-  assignPersonaBulk(@Body() body: AssignPersonaBulkDto) {
+  assignPersonaBulk(
+    @Req() req: any,
+    @Body() body: AssignPersonaBulkDto,
+    @Query('userId') userIdFromQuery?: string,
+  ) {
+    const uid =
+      req?.user?.id ??
+      (userIdFromQuery ? parseInt(userIdFromQuery) : undefined);
+    if (uid === undefined || uid === null) {
+      throw new BadRequestException('Missing userId (JWT or ?userId=)');
+    }
     return this.svc.assignPersonaBulk(
       (body.contactIds ?? 'ALL') as any,
       (body.personaId ?? null) as any,
+      uid,
     );
   }
 
@@ -164,19 +186,43 @@ export class AutoReplyController {
 
   @Get('products.paginated')
   listProductsPaginated(
+    @Req() req: any,
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page = 1,
     @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit = 10,
     @Query('search') search?: string,
     @Query('brands') brands?: string | string[],
     @Query('cates') cates?: string | string[],
+    @Query('myAllowed') myAllowed?: string,
+  @Query('activeForContact') activeForContact?: string,
+    @Query('userId') userIdFromQuery?: string,
+    @Query('contactId') contactIdFromQuery?: string,
   ) {
-    const arr = (v?: string | string[]) => (Array.isArray(v) ? v : v ? [v] : []);
+    const arr = (v?: string | string[]) =>
+      Array.isArray(v) ? v : v ? [v] : [];
+    const uid =
+      req?.user?.id ??
+      (userIdFromQuery ? parseInt(userIdFromQuery) : undefined);
+    const allowedForUserId =
+      (myAllowed === '1' || myAllowed === 'true') && uid
+        ? Number(uid)
+        : undefined;
+    const prioritizeContactId = contactIdFromQuery
+      ? parseInt(contactIdFromQuery)
+      : undefined;
+    const activeForContactId =
+      (activeForContact === '1' || activeForContact === 'true') &&
+      contactIdFromQuery
+        ? parseInt(contactIdFromQuery)
+        : undefined;
     return this.svc.listProductsPaginated({
       page,
       limit,
       search,
       brands: arr(brands),
       cates: arr(cates),
+      allowedForUserId,
+      prioritizeContactId,
+      activeForContactId,
     });
   }
 
@@ -206,21 +252,71 @@ export class AutoReplyController {
   }
 
   @Patch('allowed-products/bulk')
-  bulkAllowed(@Body() body: BulkAllowedProductsDto) {
+  bulkAllowed(
+    @Req() req: any,
+    @Body() body: BulkAllowedProductsDto,
+    @Query('userId') userIdFromQuery?: string,
+  ) {
+    const uid =
+      req?.user?.id ??
+      (userIdFromQuery ? parseInt(userIdFromQuery) : undefined);
+    if (uid === undefined || uid === null) {
+      throw new BadRequestException(
+        'Missing userId (JWT or ?userId=) for scoped bulk operation',
+      );
+    }
     return this.svc.bulkAllowedProducts(
       (body.contactIds ?? 'ALL') as any,
       body.productIds,
       body.active,
+      uid,
     );
   }
 
   @Post('allowed-products/bulk')
-  bulkAllowedPost(@Body() body: BulkAllowedProductsDto) {
+  bulkAllowedPost(
+    @Req() req: any,
+    @Body() body: BulkAllowedProductsDto,
+    @Query('userId') userIdFromQuery?: string,
+  ) {
+    const uid =
+      req?.user?.id ??
+      (userIdFromQuery ? parseInt(userIdFromQuery) : undefined);
+    if (uid === undefined || uid === null) {
+      throw new BadRequestException(
+        'Missing userId (JWT or ?userId=) for scoped bulk operation',
+      );
+    }
     return this.svc.bulkAllowedProducts(
       (body.contactIds ?? 'ALL') as any,
       body.productIds,
       body.active,
+      uid,
     );
+  }
+
+  // My allowed products across all my contacts
+  @Get('allowed-products/mine')
+  myAllowedProducts(
+    @Req() req: any,
+    @Query('userId') userIdFromQuery?: string,
+    @Query('flat') flat?: string,
+  ) {
+    const uid =
+      req?.user?.id ??
+      (userIdFromQuery ? parseInt(userIdFromQuery) : undefined);
+    if (uid === undefined || uid === null) {
+      throw new BadRequestException('Missing userId (JWT or ?userId=)');
+    }
+    return this.svc.listMyAllowedProducts(uid).then((rows) => {
+      if (flat === '1' || flat === 'true') {
+        // Return unique productIds only
+        const set = new Set<number>();
+        rows.forEach((r) => set.add(Number(r.productId)));
+        return Array.from(set.values());
+      }
+      return rows;
+    });
   }
 
   // Keyword routes
@@ -293,10 +389,11 @@ export class AutoReplyController {
     @Query('mine') mine?: string,
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page = 1,
     @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit = 50,
-  @Query('search') search?: string,
-  @Query('userId') userIdFromQuery?: string,
+    @Query('search') search?: string,
+    @Query('userId') userIdFromQuery?: string,
   ) {
-  const userId = req.user?.id ?? (userIdFromQuery ? parseInt(userIdFromQuery) : undefined);
+    const userId =
+      req.user?.id ?? (userIdFromQuery ? parseInt(userIdFromQuery) : undefined);
     return this.svc.listContactsPaginated({
       userId,
       mine: mine === '1' || mine === 'true',

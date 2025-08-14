@@ -313,6 +313,7 @@ export class UserService {
       zaloName: updateData.zaloName,
       avatarZalo: updateData.avatarZalo,
       zaloGender: updateData.zaloGender,
+      isAutoReplyEnabled: updateData.isAutoReplyEnabled,
     };
 
     // Xử lý refresh token
@@ -612,7 +613,10 @@ export class UserService {
       .leftJoinAndSelect('user.roles', 'role')
       .where('user.deletedAt IS NULL')
       .andWhere('department.id IN (:...departmentIds)', { departmentIds })
-      .andWhere('department.server_ip IS NOT NULL AND department.server_ip != :empty', { empty: '' });
+      .andWhere(
+        'department.server_ip IS NOT NULL AND department.server_ip != :empty',
+        { empty: '' },
+      );
 
     if (filter) {
       if (filter.search) {

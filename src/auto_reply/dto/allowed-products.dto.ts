@@ -1,4 +1,11 @@
-import { IsArray, IsBoolean, IsNumber, IsOptional } from 'class-validator';
+import {
+  IsArray,
+  IsBoolean,
+  IsIn,
+  IsNumber,
+  IsOptional,
+  ValidateIf,
+} from 'class-validator';
 
 export class PatchAllowedProductsDto {
   @IsArray()
@@ -11,8 +18,12 @@ export class PatchAllowedProductsDto {
 
 export class BulkAllowedProductsDto {
   @IsOptional()
+  @ValidateIf((o) => Array.isArray(o.contactIds))
   @IsArray()
+  @ValidateIf((o) => Array.isArray(o.contactIds))
   @IsNumber({}, { each: true })
+  @ValidateIf((o) => typeof o.contactIds === 'string')
+  @IsIn(['ALL'])
   contactIds?: number[] | 'ALL';
 
   @IsArray()

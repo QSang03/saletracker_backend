@@ -181,12 +181,22 @@ export class AutoReplyService {
     return updated;
   }
 
-  async bulkToggleAutoReply(contactIds: number[] | 'ALL', enabled: boolean) {
-    let targets: number[] = [];
-    if (contactIds === 'ALL') {
-      const all = await this.contactRepo.find({ select: ['contactId'] });
-      targets = all.map((c) => c.contactId);
-    } else targets = contactIds;
+  async bulkToggleAutoReply(
+    contactIds: number[] | 'ALL',
+    enabled: boolean,
+    userId?: number,
+  ) {
+    const qb = this.contactRepo
+      .createQueryBuilder('c')
+      .select('c.contact_id', 'contactId');
+    if (contactIds !== 'ALL' && Array.isArray(contactIds) && contactIds.length) {
+      qb.where('c.contact_id IN (:...ids)', { ids: contactIds });
+    }
+    if (userId !== undefined && userId !== null) {
+      qb.andWhere('c.user_id = :uid', { uid: userId });
+    }
+    const rows = await qb.getRawMany<{ contactId: number }>();
+    const targets = rows.map((r) => Number(r.contactId));
     if (targets.length) {
       await this.contactRepo
         .createQueryBuilder()
@@ -221,12 +231,19 @@ export class AutoReplyService {
   async assignPersonaBulk(
     contactIds: number[] | 'ALL',
     personaId: number | null,
+    userId?: number,
   ) {
-    let targets: number[] = [];
-    if (contactIds === 'ALL') {
-      const all = await this.contactRepo.find({ select: ['contactId'] });
-      targets = all.map((c) => c.contactId);
-    } else targets = contactIds;
+    const qb = this.contactRepo
+      .createQueryBuilder('c')
+      .select('c.contact_id', 'contactId');
+    if (contactIds !== 'ALL' && Array.isArray(contactIds) && contactIds.length) {
+      qb.where('c.contact_id IN (:...ids)', { ids: contactIds });
+    }
+    if (userId !== undefined && userId !== null) {
+      qb.andWhere('c.user_id = :uid', { uid: userId });
+    }
+    const rows = await qb.getRawMany<{ contactId: number }>();
+    const targets = rows.map((r) => Number(r.contactId));
     for (const cid of targets) await this.assignPersona(cid, personaId);
     this.ws.emitToAll('autoReply:contactsBulkUpdated', {
       contactIds: targets,
@@ -254,15 +271,27 @@ export class AutoReplyService {
   async listProducts() {
     return this.productRepo.find();
   }
-  
+
   async listProductsPaginated(opts: {
     page?: number;
     limit?: number;
     search?: string;
     brands?: string[];
     cates?: string[];
+    allowedForUserId?: number;
+    prioritizeContactId?: number;
+    activeForContactId?: number;
   }) {
-    const { page = 1, limit = 20, search, brands, cates } = opts || {};
+    const {
+      page = 1,
+      limit = 20,
+      search,
+      brands,
+      cates,
+      allowedForUserId,
+      prioritizeContactId,
+      activeForContactId,
+    } = opts || {};
     const qb = this.productRepo
       .createQueryBuilder('p')
       .orderBy('p.updatedAt', 'DESC');
@@ -275,27 +304,83 @@ export class AutoReplyService {
     if (cates && cates.length) {
       qb.andWhere('p.cate IN (:...cates)', { cates });
     }
+
+    if (allowedForUserId) {
+      // Only products that are allowed (active) for any contact of the current user
+      qb.andWhere(
+        `EXISTS (
+          SELECT 1 FROM auto_reply_contact_allowed_products cap
+          JOIN auto_reply_contacts c ON c.contact_id = cap.contact_id
+          WHERE cap.product_id = p.product_id
+            AND cap.active = TRUE
+            AND c.user_id = :uid
+        )`,
+        { uid: allowedForUserId },
+      );
+    }
+    // Only products active for a specific contact
+    if (activeForContactId) {
+      qb.andWhere(
+        `EXISTS (
+          SELECT 1 FROM auto_reply_contact_allowed_products cap3
+          WHERE cap3.product_id = p.product_id
+            AND cap3.contact_id = :afcid
+            AND cap3.active = TRUE
+        )`,
+        { afcid: activeForContactId },
+      );
+    }
+    // Prioritize products already active for a specific contactId at the top
+    if (prioritizeContactId) {
+      qb.orderBy(
+        `CASE WHEN EXISTS (
+            SELECT 1 FROM auto_reply_contact_allowed_products cap2
+            WHERE cap2.product_id = p.product_id
+              AND cap2.contact_id = :pcid
+              AND cap2.active = TRUE
+          ) THEN 1 ELSE 0 END`,
+        'DESC',
+      ).addOrderBy('p.updatedAt', 'DESC');
+      qb.setParameter('pcid', prioritizeContactId);
+    }
     const [items, total] = await qb
       .skip((page - 1) * limit)
       .take(limit)
       .getManyAndCount();
+    if (prioritizeContactId) {
+      const rows = await this.capRepo
+        .createQueryBuilder('cap')
+        .select('cap.product_id', 'productId')
+        .where('cap.contact_id = :cid', { cid: prioritizeContactId })
+        .andWhere('cap.active = :active', { active: true })
+        .getRawMany<{ productId: number }>();
+      const activeSet = new Set<number>(rows.map((r) => Number(r.productId)));
+      const annotated = items.map((p: any) => ({
+        ...(p as any),
+        activeForContact: activeSet.has(Number((p as any).productId)),
+      }));
+      return { items: annotated, total, page, limit } as any;
+    }
     return { items, total, page, limit };
   }
-  
+
   async getProductsMeta() {
     const brandRows = await this.productRepo
       .createQueryBuilder('p')
       .select('DISTINCT p.brand', 'brand')
-  .where("p.brand IS NOT NULL AND p.brand <> ''")
+      .where("p.brand IS NOT NULL AND p.brand <> ''")
       .orderBy('p.brand', 'ASC')
       .getRawMany<{ brand: string }>();
     const cateRows = await this.productRepo
       .createQueryBuilder('p')
       .select('DISTINCT p.cate', 'cate')
-  .where("p.cate IS NOT NULL AND p.cate <> ''")
+      .where("p.cate IS NOT NULL AND p.cate <> ''")
       .orderBy('p.cate', 'ASC')
       .getRawMany<{ cate: string }>();
-    return { brands: brandRows.map((r) => r.brand), cates: cateRows.map((r) => r.cate) };
+    return {
+      brands: brandRows.map((r) => r.brand),
+      cates: cateRows.map((r) => r.cate),
+    };
   }
 
   async importProductsFromExcel(fileBuffer: Buffer) {
@@ -420,12 +505,23 @@ export class AutoReplyService {
     contactIds: number[] | 'ALL',
     productIds: number[],
     active: boolean,
+    userId?: number,
   ) {
-    let targets: number[] = [];
-    if (contactIds === 'ALL') {
-      const all = await this.contactRepo.find({ select: ['contactId'] });
-      targets = all.map((c) => c.contactId);
-    } else targets = contactIds;
+    // Build target contact list scoped by userId when provided
+    const qb = this.contactRepo
+      .createQueryBuilder('c')
+      .select('c.contact_id', 'contactId');
+    if (contactIds !== 'ALL' && Array.isArray(contactIds) && contactIds.length) {
+      qb.where('c.contact_id IN (:...ids)', { ids: contactIds });
+    }
+    if (userId !== undefined && userId !== null) {
+      qb.andWhere('c.user_id = :uid', { uid: userId });
+    }
+    const rows = await qb.getRawMany<{ contactId: number }>();
+    const targets = rows.map((r) => Number(r.contactId));
+    if (targets.length === 0) {
+      return { success: true, count: 0 };
+    }
     for (const cid of targets) {
       await this.patchAllowedProducts(cid, productIds, active);
     }
@@ -433,6 +529,25 @@ export class AutoReplyService {
       contactIds: targets,
     });
     return { success: true, count: targets.length };
+  }
+
+  // List all active allowed (contactId, productId) pairs for contacts owned by a user
+  async listMyAllowedProducts(userId: number) {
+    if (userId === undefined || userId === null) {
+      throw new Error('Missing userId');
+    }
+
+    const rows = await this.capRepo
+      .createQueryBuilder('cap')
+      .innerJoin(AutoReplyContact, 'c', 'c.contact_id = cap.contact_id')
+      .where('c.user_id = :uid', { uid: userId })
+      .andWhere('cap.active = :active', { active: true })
+      .select(['cap.contact_id AS contactId', 'cap.product_id AS productId'])
+      .orderBy('cap.contact_id', 'ASC')
+      .addOrderBy('cap.product_id', 'ASC')
+      .getRawMany<{ contactId: number; productId: number }>();
+
+    return rows;
   }
 
   // Keyword routes
@@ -517,9 +632,9 @@ export class AutoReplyService {
     const full = await this.routeRepo.findOne({
       where: { routeId },
       relations: ['routeProducts'],
-  });
-  this.ws.emitToAll('autoReply:keywordRoutesChanged', { routeId });
-  return full;
+    });
+    this.ws.emitToAll('autoReply:keywordRoutesChanged', { routeId });
+    return full;
   }
   async deleteKeywordRoute(routeId: number) {
     await this.routeRepo.delete({ routeId });

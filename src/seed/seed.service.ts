@@ -170,6 +170,14 @@ export class SeedService implements OnModuleInit {
           status: 1,
         },
         {
+          name: 'total_conversation_segments',
+          display_name: 'Tổng số đoạn hội thoại phân tích',
+          value: '1500',
+          type: 'number',
+          section: 'transaction',
+          status: 1,
+        },
+        {
           name: 'transaction_batch',
           display_name: 'Tổng xử lý số lượng hội thoại 1 lần Giao dịch ',
           value: '300',

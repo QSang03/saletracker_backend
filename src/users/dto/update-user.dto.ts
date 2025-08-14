@@ -85,4 +85,9 @@ export class UpdateUserDto {
   @IsOptional()
   @IsString()
   refreshToken?: string;
+
+  // Enable/disable user-level auto-reply
+  @IsOptional()
+  @IsBoolean()
+  isAutoReplyEnabled?: boolean;
 }
