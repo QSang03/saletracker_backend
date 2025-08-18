@@ -10,7 +10,6 @@ import {
   DeleteDateColumn,
   OneToMany,
 } from 'typeorm';
-import { AutoReplyProduct } from '../auto_reply_products/auto_reply_product.entity';
 import { AutoReplyContact } from '../auto_reply_contacts/auto_reply_contact.entity';
 import { AutoReplyRouteProduct } from 'src/auto_reply_products/auto_reply_route_product.entity';
 
@@ -29,7 +28,7 @@ export class AutoReplyKeywordRoute {
   @OneToMany(() => AutoReplyRouteProduct, (rp) => rp.route, { cascade: ['insert','update'] })
   routeProducts: AutoReplyRouteProduct[];
 
-  @Column({ type: 'int', name: 'contact_id', comment: 'Nếu NULL thì áp dụng cho mọi contact' })
+  @Column({ type: 'int', name: 'contact_id' })
   contactId: number;
 
   @ManyToOne(() => AutoReplyContact, { onDelete: 'CASCADE' })

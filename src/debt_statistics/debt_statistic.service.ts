@@ -4,6 +4,8 @@ import { Repository } from 'typeorm';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { DebtStatistic } from './debt_statistic.entity';
 import { Debt } from '../debts/debt.entity';
+import { DebtLogs } from '../debt_logs/debt_logs.entity';
+import { DebtHistory } from '../debt_histories/debt_histories.entity';
 
 @Injectable()
 export class DebtStatisticService {
@@ -14,6 +16,10 @@ export class DebtStatisticService {
     private readonly debtStatisticRepository: Repository<DebtStatistic>,
     @InjectRepository(Debt)
     private readonly debtRepository: Repository<Debt>,
+    @InjectRepository(DebtLogs)
+    private readonly debtLogsRepository: Repository<DebtLogs>,
+    @InjectRepository(DebtHistory)
+    private readonly debtHistoriesRepository: Repository<DebtHistory>,
   ) {}
 
   @Cron(CronExpression.EVERY_DAY_AT_11PM)
@@ -237,7 +243,7 @@ export class DebtStatisticService {
       const now = new Date();
       const today = now.toISOString().split('T')[0];
 
-      const { date, status, contactStatus, page = 1, limit = 10 } = filters;
+      const { date, status, contactStatus, mode, minDays, maxDays, employeeCode, customerCode, page = 1, limit = 10 } = filters;
       if (!date) {
         throw new Error('Date parameter is required');
       }
@@ -255,6 +261,27 @@ export class DebtStatisticService {
         if (status) {
           query += ` AND status = ?`;
           params.push(status);
+        }
+
+        if (mode === 'payLater') {
+          if (typeof minDays === 'number') {
+            query += ` AND DATEDIFF(pay_later, statistic_date) >= ?`;
+            params.push(minDays);
+          }
+          if (typeof maxDays === 'number') {
+            query += ` AND DATEDIFF(pay_later, statistic_date) <= ?`;
+            params.push(maxDays);
+          }
+          query += ` AND status <> 'paid' AND pay_later IS NOT NULL`;
+        }
+
+        if (employeeCode) {
+          query += ` AND employee_code_raw = ?`;
+          params.push(employeeCode);
+        }
+        if (customerCode) {
+          query += ` AND customer_code = ?`;
+          params.push(customerCode);
         }
 
         query += ` LIMIT ? OFFSET ?`;
@@ -278,6 +305,26 @@ export class DebtStatisticService {
           // Note: debt_statistics table might need a contact_status column
           // countQuery += ` AND contact_status = ?`;
           // countParams.push(contactStatus);
+        }
+
+        if (mode === 'payLater') {
+          if (typeof minDays === 'number') {
+            countQuery += ` AND DATEDIFF(pay_later, statistic_date) >= ?`;
+            countParams.push(minDays);
+          }
+          if (typeof maxDays === 'number') {
+            countQuery += ` AND DATEDIFF(pay_later, statistic_date) <= ?`;
+            countParams.push(maxDays);
+          }
+          countQuery += ` AND status <> 'paid' AND pay_later IS NOT NULL`;
+        }
+        if (employeeCode) {
+          countQuery += ` AND employee_code_raw = ?`;
+          countParams.push(employeeCode);
+        }
+        if (customerCode) {
+          countQuery += ` AND customer_code = ?`;
+          countParams.push(customerCode);
         }
 
         const totalResult = await this.debtStatisticRepository.query(
@@ -308,6 +355,25 @@ export class DebtStatisticService {
           query += ` AND d.status = ?`;
           params.push(status);
         }
+        if (mode === 'payLater') {
+          if (typeof minDays === 'number') {
+            query += ` AND DATEDIFF(d.pay_later, DATE(d.updated_at)) >= ?`;
+            params.push(minDays);
+          }
+          if (typeof maxDays === 'number') {
+            query += ` AND DATEDIFF(d.pay_later, DATE(d.updated_at)) <= ?`;
+            params.push(maxDays);
+          }
+          query += ` AND d.status <> 'paid' AND d.pay_later IS NOT NULL`;
+        }
+        if (employeeCode) {
+          query += ` AND d.employee_code_raw = ?`;
+          params.push(employeeCode);
+        }
+        if (customerCode) {
+          query += ` AND dc.customer_code = ?`;
+          params.push(customerCode);
+        }
         query += ` LIMIT ? OFFSET ?`;
         params.push(limit, offset);
 
@@ -323,6 +389,25 @@ export class DebtStatisticService {
         if (status) {
           countQuery += ` AND d.status = ?`;
           countParams.push(status);
+        }
+        if (mode === 'payLater') {
+          if (typeof minDays === 'number') {
+            countQuery += ` AND DATEDIFF(d.pay_later, DATE(d.updated_at)) >= ?`;
+            countParams.push(minDays);
+          }
+          if (typeof maxDays === 'number') {
+            countQuery += ` AND DATEDIFF(d.pay_later, DATE(d.updated_at)) <= ?`;
+            countParams.push(maxDays);
+          }
+          countQuery += ` AND d.status <> 'paid' AND d.pay_later IS NOT NULL`;
+        }
+        if (employeeCode) {
+          countQuery += ` AND d.employee_code_raw = ?`;
+          countParams.push(employeeCode);
+        }
+        if (customerCode) {
+          countQuery += ` AND EXISTS (SELECT 1 FROM debt_configs dc WHERE dc.id = d.debt_config_id AND dc.customer_code = ?)`;
+          countParams.push(customerCode);
         }
 
         const totalResult = await this.debtRepository.query(
@@ -433,6 +518,301 @@ export class DebtStatisticService {
       count: Number(item.count) || 0,
       amount: Number(item.amount) || 0,
     }));
+  }
+
+  // New aggregate: pay-later delay and contact responses and details
+  async getPayLaterDelay(
+    fromDate: string,
+    toDate: string,
+    buckets: number[],
+    options: { employeeCode?: string; customerCode?: string } = {},
+  ) {
+    const today = new Date().toISOString().split('T')[0];
+    const sortedBuckets = [...buckets].sort((a, b) => a - b);
+    const ranges: Array<{ label: string; min: number; max: number | null }> = [];
+    let previous = 0;
+    for (const b of sortedBuckets) {
+      ranges.push({ label: `${previous + 1}-${b}`, min: previous + 1, max: b });
+      previous = b;
+    }
+    ranges.push({ label: `>${previous}`, min: previous + 1, max: null });
+
+    const resultsMap = new Map<string, { range: string; count: number; amount: number }>();
+    for (const r of ranges) {
+      resultsMap.set(r.label, { range: r.label, count: 0, amount: 0 });
+    }
+
+    if (fromDate < today) {
+      const endDateForHistory = toDate < today
+        ? toDate
+        : new Date(new Date(today).getTime() - 24 * 60 * 60 * 1000)
+            .toISOString()
+            .split('T')[0];
+
+      const whereClauses: string[] = [
+        'statistic_date >= ? AND statistic_date <= ? AND status <> "paid"',
+        'pay_later IS NOT NULL',
+      ];
+      const params: any[] = [fromDate, endDateForHistory];
+      if (options.employeeCode) {
+        whereClauses.push('employee_code_raw = ?');
+        params.push(options.employeeCode);
+      }
+      if (options.customerCode) {
+        whereClauses.push('customer_code = ?');
+        params.push(options.customerCode);
+      }
+
+      const diffExpr = 'DATEDIFF(statistic_date, pay_later)';
+      const selects = ranges
+        .map((r) => {
+          const cond = r.max === null
+            ? `${diffExpr} >= ${r.min}`
+            : `${diffExpr} BETWEEN ${r.min} AND ${r.max}`;
+          return `SUM(CASE WHEN ${cond} THEN 1 ELSE 0 END) AS cnt_${r.label.replace(/[^a-zA-Z0-9_]/g, '_')},` +
+                 ` SUM(CASE WHEN ${cond} THEN remaining ELSE 0 END) AS amt_${r.label.replace(/[^a-zA-Z0-9_]/g, '_')}`;
+        })
+        .join(',');
+
+      const query = `SELECT ${selects} FROM debt_statistics WHERE ${whereClauses.join(' AND ')}`;
+      const rows = await this.debtStatisticRepository.query(query, params);
+      if (rows && rows[0]) {
+        const row = rows[0];
+        for (const r of ranges) {
+          const key = r.label.replace(/[^a-zA-Z0-9_]/g, '_');
+          const cnt = Number(row[`cnt_${key}`]) || 0;
+          const amt = Number(row[`amt_${key}`]) || 0;
+          const agg = resultsMap.get(r.label)!;
+          agg.count += cnt;
+          agg.amount += amt;
+        }
+      }
+    }
+
+    if (toDate >= today) {
+      const whereClauses: string[] = [
+        'd.deleted_at IS NULL',
+        "d.status <> 'paid'",
+        'd.pay_later IS NOT NULL',
+        'DATE(d.updated_at) = ?',
+      ];
+      const params: any[] = [today];
+      if (options.employeeCode) {
+        whereClauses.push('d.employee_code_raw = ?');
+        params.push(options.employeeCode);
+      }
+      if (options.customerCode) {
+        whereClauses.push('dc.customer_code = ?');
+        params.push(options.customerCode);
+      }
+
+      const diffExpr = 'DATEDIFF(DATE(d.updated_at), d.pay_later)';
+      const selects = ranges
+        .map((r) => {
+          const cond = r.max === null
+            ? `${diffExpr} >= ${r.min}`
+            : `${diffExpr} BETWEEN ${r.min} AND ${r.max}`;
+          return `SUM(CASE WHEN ${cond} THEN 1 ELSE 0 END) AS cnt_${r.label.replace(/[^a-zA-Z0-9_]/g, '_')},` +
+                 ` SUM(CASE WHEN ${cond} THEN d.remaining ELSE 0 END) AS amt_${r.label.replace(/[^a-zA-Z0-9_]/g, '_')}`;
+        })
+        .join(',');
+
+      const query = `SELECT ${selects} FROM debts d LEFT JOIN debt_configs dc ON d.debt_config_id = dc.id WHERE ${whereClauses.join(' AND ')}`;
+      const rows = await this.debtRepository.query(query, params);
+      if (rows && rows[0]) {
+        const row = rows[0];
+        for (const r of ranges) {
+          const key = r.label.replace(/[^a-zA-Z0-9_]/g, '_');
+          const cnt = Number(row[`cnt_${key}`]) || 0;
+          const amt = Number(row[`amt_${key}`]) || 0;
+          const agg = resultsMap.get(r.label)!;
+          agg.count += cnt;
+          agg.amount += amt;
+        }
+      }
+    }
+
+    return Array.from(resultsMap.values());
+  }
+
+  async getContactResponses(
+    fromDate: string,
+    toDate: string,
+    by: 'customer' | 'invoice' = 'customer',
+    options: { employeeCode?: string; customerCode?: string } = {},
+  ) {
+    const today = new Date().toISOString().split('T')[0];
+    const resultsMap = new Map<string, { status: string; customers: number }>();
+
+    const addCount = (status: string, count: number) => {
+      const key = status || 'Unknown';
+      const existing = resultsMap.get(key) || { status: key, customers: 0 };
+      existing.customers += count;
+      resultsMap.set(key, existing);
+    };
+
+    if (fromDate < today) {
+      const endDateForHistory = toDate < today
+        ? toDate
+        : new Date(new Date(today).getTime() - 24 * 60 * 60 * 1000)
+            .toISOString()
+            .split('T')[0];
+
+      const whereClauses = [
+        'DATE(dh.created_at) >= ? AND DATE(dh.created_at) <= ?'
+      ];
+      const params: any[] = [fromDate, endDateForHistory];
+      if (options.employeeCode) {
+        whereClauses.push('u.employee_code = ?');
+        params.push(options.employeeCode);
+      }
+      if (options.customerCode) {
+        whereClauses.push('dc.customer_code = ?');
+        params.push(options.customerCode);
+      }
+      const selectDistinct = by === 'customer' ? 'COUNT(DISTINCT dc.customer_code)' : 'COUNT(*)';
+      const query = `
+        SELECT dh.remind_status as status, ${selectDistinct} as customers
+        FROM debt_histories dh
+        LEFT JOIN debt_logs dl ON dh.debt_log_id = dl.id
+        LEFT JOIN debt_configs dc ON dl.debt_config_id = dc.id
+        LEFT JOIN users u ON dc.employee_id = u.id
+        WHERE ${whereClauses.join(' AND ')}
+        GROUP BY dh.remind_status
+      `;
+      const rows = await this.debtHistoriesRepository.query(query, params);
+      for (const r of rows) {
+        addCount(r.status, Number(r.customers) || 0);
+      }
+    }
+
+    if (toDate >= today) {
+      const whereClauses = [
+        'DATE(CONVERT_TZ(dl.updated_at, "+00:00", "+07:00")) = ?'
+      ];
+      const params: any[] = [today];
+      if (options.employeeCode) {
+        whereClauses.push('u.employee_code = ?');
+        params.push(options.employeeCode);
+      }
+      if (options.customerCode) {
+        whereClauses.push('dc.customer_code = ?');
+        params.push(options.customerCode);
+      }
+      const selectDistinct = by === 'customer' ? 'COUNT(DISTINCT dc.customer_code)' : 'COUNT(*)';
+      const query = `
+        SELECT dl.remind_status as status, ${selectDistinct} as customers
+        FROM debt_logs dl
+        LEFT JOIN debt_configs dc ON dl.debt_config_id = dc.id
+        LEFT JOIN users u ON dc.employee_id = u.id
+        WHERE ${whereClauses.join(' AND ')}
+        GROUP BY dl.remind_status
+      `;
+      const rows = await this.debtLogsRepository.query(query, params);
+      for (const r of rows) {
+        addCount(r.status, Number(r.customers) || 0);
+      }
+    }
+
+    return Array.from(resultsMap.values());
+  }
+
+  async getContactDetails(params: {
+    date: string;
+    responseStatus: string;
+    employeeCode?: string;
+    customerCode?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const { date, responseStatus, employeeCode, customerCode, page = 1, limit = 50 } = params;
+    const today = new Date().toISOString().split('T')[0];
+    const offset = (page - 1) * limit;
+    const isHistorical = date < today;
+
+    if (isHistorical) {
+      const where: string[] = [
+        'DATE(dh.created_at) = ?',
+        'dh.remind_status = ?'
+      ];
+      const arr: any[] = [date, responseStatus];
+      if (employeeCode) {
+        where.push('u.employee_code = ?');
+        arr.push(employeeCode);
+      }
+      if (customerCode) {
+        where.push('dc.customer_code = ?');
+        arr.push(customerCode);
+      }
+      const dataQuery = `
+        SELECT dc.customer_code, dc.customer_name, u.employee_code as employee_code_raw, MAX(dh.created_at) as latest_time
+        FROM debt_histories dh
+        LEFT JOIN debt_logs dl ON dh.debt_log_id = dl.id
+        LEFT JOIN debt_configs dc ON dl.debt_config_id = dc.id
+        LEFT JOIN users u ON dc.employee_id = u.id
+        WHERE ${where.join(' AND ')}
+        GROUP BY dc.customer_code, dc.customer_name, u.employee_code
+        ORDER BY latest_time DESC
+        LIMIT ? OFFSET ?
+      `;
+      const dataParams = [...arr, limit, offset];
+      const data = await this.debtHistoriesRepository.query(dataQuery, dataParams);
+
+      const countQuery = `
+        SELECT COUNT(*) as total FROM (
+          SELECT dc.customer_code
+          FROM debt_histories dh
+          LEFT JOIN debt_logs dl ON dh.debt_log_id = dl.id
+          LEFT JOIN debt_configs dc ON dl.debt_config_id = dc.id
+          LEFT JOIN users u ON dc.employee_id = u.id
+          WHERE ${where.join(' AND ')}
+          GROUP BY dc.customer_code
+        ) t
+      `;
+      const totalRow = await this.debtHistoriesRepository.query(countQuery, arr);
+      const total = Number(totalRow[0]?.total) || 0;
+      return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
+    } else {
+      const where: string[] = [
+        'DATE(CONVERT_TZ(dl.updated_at, "+00:00", "+07:00")) = ?',
+        'dl.remind_status = ?'
+      ];
+      const arr: any[] = [today, responseStatus];
+      if (employeeCode) {
+        where.push('u.employee_code = ?');
+        arr.push(employeeCode);
+      }
+      if (customerCode) {
+        where.push('dc.customer_code = ?');
+        arr.push(customerCode);
+      }
+      const dataQuery = `
+        SELECT dc.customer_code, dc.customer_name, u.employee_code as employee_code_raw, MAX(dl.updated_at) as latest_time
+        FROM debt_logs dl
+        LEFT JOIN debt_configs dc ON dl.debt_config_id = dc.id
+        LEFT JOIN users u ON dc.employee_id = u.id
+        WHERE ${where.join(' AND ')}
+        GROUP BY dc.customer_code, dc.customer_name, u.employee_code
+        ORDER BY latest_time DESC
+        LIMIT ? OFFSET ?
+      `;
+      const dataParams = [...arr, limit, offset];
+      const data = await this.debtLogsRepository.query(dataQuery, dataParams);
+
+      const countQuery = `
+        SELECT COUNT(*) as total FROM (
+          SELECT dc.customer_code
+          FROM debt_logs dl
+          LEFT JOIN debt_configs dc ON dl.debt_config_id = dc.id
+          LEFT JOIN users u ON dc.employee_id = u.id
+          WHERE ${where.join(' AND ')}
+          GROUP BY dc.customer_code
+        ) t
+      `;
+      const totalRow = await this.debtLogsRepository.query(countQuery, arr);
+      const total = Number(totalRow[0]?.total) || 0;
+      return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
+    }
   }
 
   async getTrends(

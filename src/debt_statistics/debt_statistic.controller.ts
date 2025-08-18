@@ -70,6 +70,47 @@ export class DebtStatisticController {
     return this.debtStatisticService.getAgingAnalysis(fromDate, toDate);
   }
 
+  // New: Pay-later delay buckets (hybrid: history from debt_statistics, today from debts)
+  @Get('pay-later-delay')
+  @UseGuards(JwtAuthGuard)
+  async getPayLaterDelay(
+    @Query('from') fromDate: string,
+    @Query('to') toDate: string,
+    @Query('buckets') buckets: string = '7,14,30',
+    @Query('employeeCode') employeeCode?: string,
+    @Query('customerCode') customerCode?: string,
+  ) {
+    const bucketNumbers = buckets
+      .split(',')
+      .map((b) => parseInt(b.trim(), 10))
+      .filter((n) => !Number.isNaN(n))
+      .sort((a, b) => a - b);
+    return this.debtStatisticService.getPayLaterDelay(
+      fromDate,
+      toDate,
+      bucketNumbers,
+      { employeeCode, customerCode },
+    );
+  }
+
+  // New: Contact responses aggregation (hybrid: history from debt_histories, today from debt_logs)
+  @Get('contact-responses')
+  @UseGuards(JwtAuthGuard)
+  async getContactResponses(
+    @Query('from') fromDate: string,
+    @Query('to') toDate: string,
+    @Query('by') by: 'customer' | 'invoice' = 'customer',
+    @Query('employeeCode') employeeCode?: string,
+    @Query('customerCode') customerCode?: string,
+  ) {
+    return this.debtStatisticService.getContactResponses(
+      fromDate,
+      toDate,
+      by,
+      { employeeCode, customerCode },
+    );
+  }
+
   @Get('trends')
   @UseGuards(JwtAuthGuard)
   async getTrends(
@@ -101,6 +142,11 @@ export class DebtStatisticController {
     @Query('date') date: string,
     @Query('status') status?: string,
     @Query('contactStatus') contactStatus?: string,
+    @Query('mode') mode?: 'overdue' | 'payLater' | 'status',
+    @Query('minDays') minDays?: string,
+    @Query('maxDays') maxDays?: string,
+    @Query('employeeCode') employeeCode?: string,
+    @Query('customerCode') customerCode?: string,
     @Query('page') page: string = '1',
     @Query('limit') limit: string = '50',
     @Query('all') all?: string,
@@ -120,11 +166,40 @@ export class DebtStatisticController {
       date,
       status,
       contactStatus,
+      mode,
+      minDays: minDays ? parseInt(minDays, 10) : undefined,
+      maxDays: maxDays ? parseInt(maxDays, 10) : undefined,
+      employeeCode,
+      customerCode,
       page: parseInt(page, 10),
       limit: parsedLimit,
     };
     
     const result = await this.debtStatisticService.getDetailedDebts(filters);
     return result;
+  }
+
+  // New: Contact details (distinct customers by response status)
+  @Get('contact-details')
+  @UseGuards(JwtAuthGuard)
+  async getContactDetails(
+    @Query('date') date: string,
+    @Query('responseStatus') responseStatus: string,
+    @Query('employeeCode') employeeCode?: string,
+    @Query('customerCode') customerCode?: string,
+    @Query('page') page = '1',
+    @Query('limit') limit = '50',
+  ) {
+    if (!date || !responseStatus) {
+      throw new Error('date and responseStatus are required');
+    }
+    return this.debtStatisticService.getContactDetails({
+      date,
+      responseStatus,
+      employeeCode,
+      customerCode,
+      page: parseInt(page, 10),
+      limit: parseInt(limit, 10),
+    });
   }
 }

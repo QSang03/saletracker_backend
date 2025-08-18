@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { AutoReplySalesPersona } from '../auto_reply_sales_personas/auto_reply_sales_persona.entity';
-import { AutoReplyContact } from '../auto_reply_contacts/auto_reply_contact.entity';
+import { AutoReplyContact, ContactRole } from '../auto_reply_contacts/auto_reply_contact.entity';
 import { AutoReplyCustomerProfile } from '../auto_reply_customer_profiles/auto_reply_customer_profile.entity';
 import { AutoReplyProduct } from '../auto_reply_products/auto_reply_product.entity';
 import { AutoReplyContactAllowedProduct } from '../auto_reply_contact_allowed_products/auto_reply_contact_allowed_product.entity';
@@ -55,6 +55,19 @@ export class AutoReplyService {
       : { id: userId };
     return safe as any;
   }
+  // List all personas for a user
+  async listMyPersonas(userId: number) {
+    if (userId === undefined || userId === null) return [] as any;
+    const personas = await this.personaRepo.find({
+      where: { user: { id: userId } as any },
+      relations: ['user'],
+      order: { updatedAt: 'DESC' as any },
+    } as any);
+    return personas.map((p: any) => ({
+      ...p,
+      user: p.user ? { id: p.user.id } : { id: userId },
+    }));
+  }
   async upsertPersona(userId: number, payload: Partial<AutoReplySalesPersona>) {
     const existing = await this.personaRepo.findOne({
       where: { user: { id: userId } as any },
@@ -77,6 +90,25 @@ export class AutoReplyService {
       relations: ['user'],
     });
     this.ws.emitToUser(String(userId), 'autoReply:personaUpdated', {
+      personaId: savedRaw.personaId,
+    });
+    const safe = { ...(saved as any) };
+    safe.user = saved?.user ? { id: (saved.user as any).id } : { id: userId };
+    return safe as any;
+  }
+  // Create a new persona (does not replace existing ones)
+  async createPersona(userId: number, payload: Partial<AutoReplySalesPersona>) {
+    const toSave = this.personaRepo.create({
+      name: payload.name!,
+      personaPrompt: payload.personaPrompt!,
+      user: { id: userId } as any,
+    } as Partial<AutoReplySalesPersona>) as AutoReplySalesPersona;
+    const savedRaw = await this.personaRepo.save(toSave);
+    const saved = await this.personaRepo.findOne({
+      where: { personaId: savedRaw.personaId },
+      relations: ['user'],
+    });
+    this.ws.emitToUser(String(userId), 'autoReply:personaCreated', {
       personaId: savedRaw.personaId,
     });
     const safe = { ...(saved as any) };
@@ -117,6 +149,27 @@ export class AutoReplyService {
         : undefined;
     return safe as any;
   }
+  async deletePersona(personaId: number, userId: number) {
+    // Optional: verify ownership
+    const persona = await this.personaRepo.findOne({
+      where: { personaId },
+      relations: ['user'],
+    });
+    if (!persona) return { success: true, deleted: 0 } as any;
+    // Null out assignedPersona for contacts using this persona first to avoid FK constraint
+    await this.contactRepo
+      .createQueryBuilder()
+      .update()
+      .set({ assignedPersona: null as any })
+      .where('assigned_persona_id = :pid', { pid: personaId })
+      .execute();
+
+    await this.personaRepo.delete({ personaId });
+    this.ws.emitToUser(String(userId), 'autoReply:personaDeleted', {
+      personaId,
+    });
+    return { success: true, deleted: 1 } as any;
+  }
 
   // Contacts
   async listContacts() {
@@ -126,13 +179,18 @@ export class AutoReplyService {
     });
   }
 
-  async listContactsForUser(userId: number) {
-    return this.contactRepo
+  async listContactsForUser(userId: number, includeRestricted = false) {
+    const qb = this.contactRepo
       .createQueryBuilder('c')
       .leftJoin('c.user', 'u')
       .where('u.id = :userId', { userId })
-      .orderBy('c.updatedAt', 'DESC')
-      .getMany();
+      .orderBy('c.updatedAt', 'DESC');
+    if (!includeRestricted) {
+      qb.andWhere('c.role NOT IN (:...roles)', {
+        roles: [ContactRole.SUPPLIER, ContactRole.INTERNAL],
+      });
+    }
+    return qb.getMany();
   }
 
   async listContactsPaginated(opts: {
@@ -141,8 +199,9 @@ export class AutoReplyService {
     page?: number;
     limit?: number;
     search?: string;
+    excludeRoles?: string[];
   }) {
-    const { userId, mine, page = 1, limit = 50, search } = opts || {};
+    const { userId, mine, page = 1, limit = 50, search, excludeRoles } = opts || {};
     const qb = this.contactRepo
       .createQueryBuilder('c')
       .leftJoinAndSelect('c.assignedPersona', 'p')
@@ -150,6 +209,11 @@ export class AutoReplyService {
       .orderBy('c.updatedAt', 'DESC');
 
     if (mine && userId) qb.andWhere('u.id = :userId', { userId });
+    // Exclude restricted roles by default from selections; allow override via excludeRoles param
+    const rolesToExclude = excludeRoles && excludeRoles.length
+      ? excludeRoles
+      : [ContactRole.SUPPLIER, ContactRole.INTERNAL];
+    qb.andWhere('c.role NOT IN (:...roles)', { roles: rolesToExclude });
     if (search) {
       qb.andWhere('c.name LIKE :q', { q: `%${search}%` });
     }
@@ -270,6 +334,14 @@ export class AutoReplyService {
   // Products
   async listProducts() {
     return this.productRepo.find();
+  }
+
+  async listProductsByIds(ids: number[]) {
+    if (!Array.isArray(ids) || ids.length === 0) return [] as any;
+    return this.productRepo
+      .createQueryBuilder('p')
+      .where('p.product_id IN (:...ids)', { ids })
+      .getMany();
   }
 
   async listProductsPaginated(opts: {
@@ -517,6 +589,10 @@ export class AutoReplyService {
     if (userId !== undefined && userId !== null) {
       qb.andWhere('c.user_id = :uid', { uid: userId });
     }
+    // Exclude restricted roles (supplier/internal)
+    qb.andWhere('c.role NOT IN (:...roles)', {
+      roles: [ContactRole.SUPPLIER, ContactRole.INTERNAL],
+    });
     const rows = await qb.getRawMany<{ contactId: number }>();
     const targets = rows.map((r) => Number(r.contactId));
     if (targets.length === 0) {
@@ -541,6 +617,9 @@ export class AutoReplyService {
       .createQueryBuilder('cap')
       .innerJoin(AutoReplyContact, 'c', 'c.contact_id = cap.contact_id')
       .where('c.user_id = :uid', { uid: userId })
+      .andWhere('c.role NOT IN (:...roles)', {
+        roles: [ContactRole.SUPPLIER, ContactRole.INTERNAL],
+      })
       .andWhere('cap.active = :active', { active: true })
       .select(['cap.contact_id AS contactId', 'cap.product_id AS productId'])
       .orderBy('cap.contact_id', 'ASC')
@@ -552,43 +631,404 @@ export class AutoReplyService {
 
   // Keyword routes
   async listKeywordRoutes(contactId?: number | null) {
-    if (contactId === undefined)
-      return this.routeRepo.find({ relations: ['routeProducts'] });
-    if (contactId === null)
-      return this.routeRepo.find({
-        where: { contactId: null as any },
-        relations: ['routeProducts'],
-      });
+    if (contactId === undefined) {
+      return this.routeRepo.find({ relations: ['routeProducts', 'contact'] });
+    }
+    if (contactId === null) {
+      // No more global (null) routes; return empty list
+      return [] as any;
+    }
     return this.routeRepo.find({
-      where: [{ contactId }, { contactId: null as any }],
-      relations: ['routeProducts'],
+      where: { contactId },
+      relations: ['routeProducts', 'contact'],
     });
   }
+
+  // Bulk keyword operations scoped to a user's contacts
+  async renameKeywordForUser(oldKeyword: string, newKeyword: string, userId: number) {
+    // Find all routes for the user's contacts with the old keyword
+    const routes = await this.routeRepo
+      .createQueryBuilder('r')
+      .innerJoin(AutoReplyContact, 'c', 'c.contact_id = r.contact_id')
+      .leftJoinAndSelect('r.routeProducts', 'rp')
+      .where('c.user_id = :uid', { uid: userId })
+      .andWhere('r.keyword = :kw', { kw: oldKeyword })
+      .getMany();
+
+    let updated = 0;
+    for (const route of routes) {
+      // Check if a route with newKeyword already exists for this contact
+      let existingNew = await this.routeRepo.findOne({
+        where: { keyword: newKeyword, contactId: route.contactId as any },
+        relations: ['routeProducts'],
+      });
+      if (!existingNew) {
+        // Just update keyword
+        await this.routeRepo.update({ routeId: route.routeId }, { keyword: newKeyword } as any);
+        updated++;
+      } else {
+        // Merge products from old into new, then delete old
+        const existingIds = new Set<number>((existingNew.routeProducts || []).map((p: any) => Number(p.productId)));
+        for (const rp of route.routeProducts || []) {
+          if (!existingIds.has(Number(rp.productId))) {
+            await this.rpRepo.save(
+              this.rpRepo.create({
+                routeId: existingNew.routeId,
+                productId: rp.productId,
+                priority: rp.priority ?? 0,
+                active: rp.active ?? true,
+              } as any),
+            );
+          }
+        }
+        await this.routeRepo.delete({ routeId: route.routeId });
+        updated++;
+      }
+    }
+    this.ws.emitToUser(String(userId), 'autoReply:keywordRoutesChanged', {
+      action: 'renameAll',
+      oldKeyword,
+      newKeyword,
+      updated,
+    });
+    return { success: true, updated } as any;
+  }
+
+  async setKeywordActiveForUser(keyword: string, active: boolean, userId: number) {
+    // Update active flag for all routes with keyword under user's contacts
+    const qb = this.routeRepo
+      .createQueryBuilder()
+      .update()
+      .set({ active: !!active } as any)
+      .where('keyword = :kw', { kw: keyword })
+      .andWhere(
+        `contact_id IN (SELECT c.contact_id FROM auto_reply_contacts c WHERE c.user_id = :uid)`,
+        { uid: userId },
+      );
+    const res = await qb.execute();
+    const affected = (res as any)?.affected ?? 0;
+    this.ws.emitToUser(String(userId), 'autoReply:keywordRoutesChanged', {
+      action: 'setActiveAll',
+      keyword,
+      active: !!active,
+      affected,
+    });
+    return { success: true, affected } as any;
+  }
+
+  async reorderProductsForKeyword(keyword: string, productIds: number[], userId: number) {
+    // Get routes for this keyword under user's contacts
+    const routes = await this.routeRepo
+      .createQueryBuilder('r')
+      .innerJoin(AutoReplyContact, 'c', 'c.contact_id = r.contact_id')
+      .leftJoinAndSelect('r.routeProducts', 'rp')
+      .where('c.user_id = :uid', { uid: userId })
+      .andWhere('r.keyword = :kw', { kw: keyword })
+      .getMany();
+    let updated = 0;
+    for (const route of routes) {
+    // Use 1-based priorities consistently
+    const orderMap = new Map<number, number>();
+    productIds.forEach((pid, idx) => orderMap.set(Number(pid), idx + 1));
+    const base = productIds.length + 1;
+      for (const rp of route.routeProducts || []) {
+        const pid = Number(rp.productId);
+        if (orderMap.has(pid)) {
+          const newPrio = orderMap.get(pid)!;
+          if (rp.priority !== newPrio) {
+            await this.rpRepo.update({ id: rp.id }, { priority: newPrio } as any);
+            updated++;
+          }
+        } else {
+          // Push others after provided list, keep relative order by offsetting existing priority
+      const newPrio = base + (rp.priority ?? 0);
+          if (rp.priority !== newPrio) {
+            await this.rpRepo.update({ id: rp.id }, { priority: newPrio } as any);
+            updated++;
+          }
+        }
+      }
+    }
+    this.ws.emitToUser(String(userId), 'autoReply:keywordRoutesChanged', {
+      action: 'reorderProducts',
+      keyword,
+      updated,
+    });
+    return { success: true, updated } as any;
+  }
+
+  async deleteKeywordForUser(keyword: string, userId: number) {
+    // Delete all routes with keyword for this user
+    const routes = await this.routeRepo
+      .createQueryBuilder('r')
+      .innerJoin(AutoReplyContact, 'c', 'c.contact_id = r.contact_id')
+      .where('c.user_id = :uid', { uid: userId })
+      .andWhere('r.keyword = :kw', { kw: keyword })
+      .select(['r.route_id AS routeId'])
+      .getRawMany<{ routeId: number }>();
+    const ids = routes.map((r) => Number(r.routeId));
+    if (ids.length) {
+      await this.routeRepo.delete(ids as any);
+    }
+    this.ws.emitToUser(String(userId), 'autoReply:keywordRoutesChanged', {
+      action: 'deleteAll',
+      keyword,
+      deleted: ids.length,
+    });
+    return { success: true, deleted: ids.length } as any;
+  }
+
+  // Add or remove products for all routes of a keyword under a user
+  async addProductsToKeyword(keyword: string, productIds: number[], userId: number) {
+    if (!Array.isArray(productIds) || productIds.length === 0) {
+      return { success: true, added: 0 } as any;
+    }
+    const routes = await this.routeRepo
+      .createQueryBuilder('r')
+      .innerJoin(AutoReplyContact, 'c', 'c.contact_id = r.contact_id')
+      .leftJoinAndSelect('r.routeProducts', 'rp')
+      .where('c.user_id = :uid', { uid: userId })
+      .andWhere('r.keyword = :kw', { kw: keyword })
+      .getMany();
+    let added = 0;
+    for (const route of routes) {
+      const existingIds = new Set<number>((route.routeProducts || []).map((p: any) => Number(p.productId)));
+      // Determine append start priority
+      const maxPrio = (route.routeProducts || []).reduce((m: number, p: any) => Math.max(m, Number(p.priority ?? 0)), 0);
+      let offset = 1;
+      const addedForThisRoute: number[] = [];
+      for (const pidRaw of productIds) {
+        const pid = Number(pidRaw);
+        if (!existingIds.has(pid)) {
+          await this.rpRepo.save(
+            this.rpRepo.create({
+              routeId: (route as any).routeId,
+              productId: pid,
+              priority: maxPrio + offset,
+              active: true,
+            } as any),
+          );
+          offset++;
+          added++;
+          addedForThisRoute.push(pid);
+        }
+      }
+      // Ensure allowed-products reflect these selections for this contact
+      const ensureIds = addedForThisRoute.length ? addedForThisRoute : productIds.map(Number);
+      if (ensureIds.length) {
+        try {
+          await this.patchAllowedProducts(route.contactId as any, ensureIds, true);
+        } catch (_) {}
+      }
+    }
+    this.ws.emitToUser(String(userId), 'autoReply:keywordRoutesChanged', {
+      action: 'addProductsAll',
+      keyword,
+      count: added,
+    });
+    return { success: true, added } as any;
+  }
+
+  async removeProductsFromKeyword(keyword: string, productIds: number[], userId: number) {
+    if (!Array.isArray(productIds) || productIds.length === 0) {
+      return { success: true, removed: 0 } as any;
+    }
+    // Find route ids for this user+keyword
+    const routes = await this.routeRepo
+      .createQueryBuilder('r')
+      .innerJoin(AutoReplyContact, 'c', 'c.contact_id = r.contact_id')
+      .where('c.user_id = :uid', { uid: userId })
+      .andWhere('r.keyword = :kw', { kw: keyword })
+      .select(['r.route_id AS routeId'])
+      .getRawMany<{ routeId: number }>();
+    const routeIds = routes.map((r) => Number(r.routeId));
+    if (!routeIds.length) return { success: true, removed: 0 } as any;
+    const res = await this.rpRepo
+      .createQueryBuilder()
+      .delete()
+      .where('route_id IN (:...rids)', { rids: routeIds })
+      .andWhere('product_id IN (:...pids)', { pids: productIds })
+      .execute();
+    const removed = (res as any)?.affected ?? 0;
+    this.ws.emitToUser(String(userId), 'autoReply:keywordRoutesChanged', {
+      action: 'removeProductsAll',
+      keyword,
+      count: removed,
+    });
+    return { success: true, removed } as any;
+  }
+
+  async setProductsForKeyword(keyword: string, productIds: number[], userId: number) {
+    // Replace the product set for all routes of this keyword for the user
+    // Strategy: For each route, compute additions and deletions relative to current, then apply
+    const routes = await this.routeRepo
+      .createQueryBuilder('r')
+      .innerJoin(AutoReplyContact, 'c', 'c.contact_id = r.contact_id')
+      .leftJoinAndSelect('r.routeProducts', 'rp')
+      .where('c.user_id = :uid', { uid: userId })
+      .andWhere('r.keyword = :kw', { kw: keyword })
+      .getMany();
+    let added = 0;
+    let removed = 0;
+    const targetSet = new Set<number>((productIds || []).map((x) => Number(x)));
+    for (const route of routes) {
+      const current = new Set<number>((route.routeProducts || []).map((p: any) => Number(p.productId)));
+      const toAdd = Array.from(targetSet).filter((x) => !current.has(x));
+      const toRemove = Array.from(current).filter((x) => !targetSet.has(x));
+      if (toAdd.length)
+        added += (await this.addProductsToKeyword(keyword, toAdd, userId)).added;
+      if (toRemove.length)
+        removed += (await this.removeProductsFromKeyword(keyword, toRemove, userId)).removed;
+    }
+    this.ws.emitToUser(String(userId), 'autoReply:keywordRoutesChanged', {
+      action: 'setProductsAll',
+      keyword,
+      added,
+      removed,
+    });
+    return { success: true, added, removed } as any;
+  }
+
+  // Per-route product management (operate on a single contact's route)
+  async addProductsToRoute(routeId: number, productIds: number[]) {
+    const route = await this.routeRepo.findOne({ where: { routeId }, relations: ['routeProducts'] });
+    if (!route) return { success: true, added: 0 } as any;
+    const existingIds = new Set<number>((route.routeProducts || []).map((p: any) => Number(p.productId)));
+    const maxPrio = (route.routeProducts || []).reduce((m: number, p: any) => Math.max(m, Number(p.priority ?? 0)), 0);
+    let offset = 1;
+    let added = 0;
+    const addedIds: number[] = [];
+    for (const raw of productIds || []) {
+      const pid = Number(raw);
+      if (!existingIds.has(pid)) {
+        await this.rpRepo.save(this.rpRepo.create({ routeId: route.routeId as any, productId: pid, priority: maxPrio + offset, active: true } as any));
+        added++;
+        offset++;
+        addedIds.push(pid);
+      }
+    }
+    // Ensure allowed-products sync
+    try {
+      if ((route as any).contactId && (addedIds.length || (productIds || []).length)) {
+        const ensure = addedIds.length ? addedIds : (productIds || []).map(Number);
+        await this.patchAllowedProducts((route as any).contactId, ensure, true);
+      }
+    } catch (_) {}
+    return { success: true, added } as any;
+  }
+
+  async removeProductsFromRoute(routeId: number, productIds: number[]) {
+    const res = await this.rpRepo
+      .createQueryBuilder()
+      .delete()
+      .where('route_id = :rid', { rid: routeId })
+      .andWhere('product_id IN (:...pids)', { pids: productIds || [] })
+      .execute();
+    const removed = (res as any)?.affected ?? 0;
+    return { success: true, removed } as any;
+  }
+
+  async setProductsForRoute(routeId: number, productIds: number[]) {
+    const route = await this.routeRepo.findOne({ where: { routeId }, relations: ['routeProducts'] });
+    if (!route) return { success: true, added: 0, removed: 0 } as any;
+    // Normalize inputs and compute delta
+    const normalized = (productIds || []).map((x) => Number(x)).filter((x, i, arr) => arr.indexOf(x) === i);
+    const current = new Set<number>((route.routeProducts || []).map((p: any) => Number(p.productId)));
+    const target = new Set<number>(normalized);
+    const toAdd = Array.from(target).filter((x) => !current.has(x));
+    const toRemove = Array.from(current).filter((x) => !target.has(x));
+    let added = 0;
+    let removed = 0;
+    if (toAdd.length) added += (await this.addProductsToRoute(routeId, toAdd)).added;
+    if (toRemove.length) removed += (await this.removeProductsFromRoute(routeId, toRemove)).removed;
+
+    // Re-fetch routeProducts after mutations to ensure we have current IDs
+    const refreshed = await this.routeRepo.findOne({ where: { routeId }, relations: ['routeProducts'] });
+    const rpMap = new Map<number, any>();
+    for (const rp of refreshed?.routeProducts || []) {
+      rpMap.set(Number((rp as any).productId), rp);
+    }
+    // Persist priority exactly as the order in 'normalized' (1-based)
+    for (let i = 0; i < normalized.length; i++) {
+      const pid = normalized[i];
+      const rp = rpMap.get(pid);
+      const desired = i + 1;
+      if (rp && Number(rp.priority ?? -1) !== desired) {
+        await this.rpRepo.update({ id: (rp as any).id }, { priority: desired } as any);
+      }
+    }
+    return { success: true, added, removed } as any;
+  }
+
   async createKeywordRoute(
     keyword: string,
     contactId: number | null,
     routeProducts: { productId: number; priority?: number; active?: boolean }[],
+    options?: { fanoutForUserId?: number },
   ) {
-    const route = this.routeRepo.create({
-      keyword,
-      contactId: contactId as any,
-      active: true,
-    });
-    const saved = await this.routeRepo.save(route);
-    for (const rp of routeProducts) {
-      await this.rpRepo.save(
-        this.rpRepo.create({
-          routeId: saved.routeId,
-          productId: rp.productId,
-          priority: rp.priority ?? 0,
-          active: rp.active ?? true,
-        } as any),
-      );
+    // If contactId is null and fanout is requested, create one per contact for that user
+    if (contactId == null && options?.fanoutForUserId) {
+      // Include all roles for GLOBAL fanout per requirement
+      const contacts = await this.listContactsForUser(options.fanoutForUserId, true);
+      const createdRoutes = [] as AutoReplyKeywordRoute[];
+      for (const c of contacts) {
+        const r = await this.createKeywordRoute(
+          keyword,
+          c.contactId,
+          routeProducts,
+        );
+        createdRoutes.push(r as any);
+      }
+      this.ws.emitToUser(String(options.fanoutForUserId), 'autoReply:keywordRoutesChanged', { scope: 'GLOBAL-FANOUT' });
+      return createdRoutes;
     }
-    const full = await this.routeRepo.findOne({
-      where: { routeId: saved.routeId },
+
+    // Disallow null contactId when not using fan-out
+    if (contactId == null) {
+      throw new Error('contactId is required (no global null). Use fan-out option instead.');
+    }
+
+    // If a route already exists for this (keyword, contactId), merge products
+    let existing = await this.routeRepo.findOne({
+      where: { keyword, contactId: contactId as any },
       relations: ['routeProducts'],
     });
+    if (!existing) {
+      const route = this.routeRepo.create({
+        keyword,
+        contactId: contactId as any,
+        active: true,
+      });
+      existing = await this.routeRepo.save(route);
+      existing = await this.routeRepo.findOne({
+        where: { routeId: existing.routeId },
+        relations: ['routeProducts'],
+      }) as any;
+    }
+    const existingProductIds = new Set((existing?.routeProducts || []).map((rp: any) => Number(rp.productId)));
+    for (const rp of routeProducts) {
+      if (!existingProductIds.has(Number(rp.productId))) {
+        await this.rpRepo.save(
+          this.rpRepo.create({
+            routeId: (existing as any).routeId,
+            productId: rp.productId,
+            priority: rp.priority ?? 0,
+            active: rp.active ?? true,
+          } as any),
+        );
+      }
+    }
+    const full = await this.routeRepo.findOne({
+      where: { routeId: (existing as any).routeId },
+      relations: ['routeProducts'],
+    });
+    // Ensure selected products for this keyword are also allowed for the contact
+    try {
+      const toAllow = Array.from(new Set((routeProducts || []).map((rp) => Number(rp.productId))));
+      if ((contactId as any) && toAllow.length) {
+        await this.patchAllowedProducts(contactId as any, toAllow, true);
+      }
+    } catch (_) {}
     this.ws.emitToAll('autoReply:keywordRoutesChanged', {
       scope: contactId ?? 'GLOBAL',
     });
@@ -601,8 +1041,18 @@ export class AutoReplyService {
     defaultPriority = 0,
     active = true,
   ) {
+    // Filter out restricted roles to ensure we don't create routes for supplier/internal contacts
+    const allowedContactRows = await this.contactRepo
+      .createQueryBuilder('c')
+      .select('c.contact_id', 'contactId')
+      .where('c.contact_id IN (:...ids)', { ids: contactIds.length ? contactIds : [0] })
+      .andWhere('c.role NOT IN (:...roles)', {
+        roles: [ContactRole.SUPPLIER, ContactRole.INTERNAL],
+      })
+      .getRawMany<{ contactId: number }>();
+    const allowedContactIds = allowedContactRows.map((r) => Number(r.contactId));
     const created = [] as any[];
-    for (const cid of contactIds) {
+    for (const cid of allowedContactIds) {
       const route = await this.createKeywordRoute(
         keyword,
         cid,
