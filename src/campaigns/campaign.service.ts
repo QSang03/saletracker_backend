@@ -2123,7 +2123,7 @@ export class CampaignService {
         schedule_config: scheduleConfig,
         reminders: reminderMessages.map((msg: any) => ({
           content: msg.text || '',
-          minutes: msg.remind_after_minutes || 0,
+          minutes: msg.offset_minutes || 0,
         })),
         email_reports: emailReport
           ? {
