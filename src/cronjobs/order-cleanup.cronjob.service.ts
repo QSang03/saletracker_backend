@@ -110,7 +110,6 @@ export class OrderCleanupCronjobService {
         .update(OrderDetail)
         .set({
           extended: () => 'COALESCE(extended, 4) + 1',
-          last_extended_at: new Date(),
           extend_reason: ExtendReason.SYSTEM_SUNDAY_AUTO,
         })
         .where('deleted_at IS NULL')
