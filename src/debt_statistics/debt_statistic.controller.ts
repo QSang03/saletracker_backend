@@ -64,28 +64,18 @@ export class DebtStatisticController {
   @Get('aging')
   @UseGuards(JwtAuthGuard)
   async getAgingAnalysis(
-    @Query('from') fromDate?: string,
-    @Query('to') toDate?: string,
-    @Query('singleDate') singleDate?: string,
-    @Query('employeeCode') employeeCode?: string,
-    @Query('customerCode') customerCode?: string,
+    @Query('from') fromDate: string,
+    @Query('to') toDate: string,
   ) {
-    return this.debtStatisticService.getAgingAnalysisAsOf({
-      singleDate,
-      from: fromDate,
-      to: toDate,
-      employeeCode,
-      customerCode,
-    });
+    return this.debtStatisticService.getAgingAnalysis(fromDate, toDate);
   }
 
   // New: Pay-later delay buckets (hybrid: history from debt_statistics, today from debts)
   @Get('pay-later-delay')
   @UseGuards(JwtAuthGuard)
   async getPayLaterDelay(
-    @Query('from') fromDate?: string,
-    @Query('to') toDate?: string,
-    @Query('singleDate') singleDate?: string,
+    @Query('from') fromDate: string,
+    @Query('to') toDate: string,
     @Query('buckets') buckets: string = '7,14,30',
     @Query('employeeCode') employeeCode?: string,
     @Query('customerCode') customerCode?: string,
@@ -95,14 +85,12 @@ export class DebtStatisticController {
       .map((b) => parseInt(b.trim(), 10))
       .filter((n) => !Number.isNaN(n))
       .sort((a, b) => a - b);
-    return this.debtStatisticService.getPayLaterDelayAsOf({
-      singleDate,
-      from: fromDate,
-      to: toDate,
-      buckets: bucketNumbers,
-      employeeCode,
-      customerCode,
-    });
+    return this.debtStatisticService.getPayLaterDelay(
+      fromDate,
+      toDate,
+      bucketNumbers,
+      { employeeCode, customerCode },
+    );
   }
 
   // New: Contact responses aggregation (hybrid: history from debt_histories, today from debt_logs)
@@ -112,7 +100,6 @@ export class DebtStatisticController {
     @Query('from') fromDate: string,
     @Query('to') toDate: string,
     @Query('by') by: 'customer' | 'invoice' = 'customer',
-    @Query('mode') mode: 'events' | 'distribution' = 'events',
     @Query('employeeCode') employeeCode?: string,
     @Query('customerCode') customerCode?: string,
   ) {
@@ -120,7 +107,7 @@ export class DebtStatisticController {
       fromDate,
       toDate,
       by,
-      { employeeCode, customerCode, mode },
+      { employeeCode, customerCode },
     );
   }
 
