@@ -215,7 +215,7 @@ export class OrderDetailController {
       throw new ForbiddenException('Bạn không có quyền sửa order này');
     }
 
-    return this.orderDetailService.update(id, orderDetailData);
+  return this.orderDetailService.update(id, orderDetailData, req?.user);
   }
 
   @Delete(':id')

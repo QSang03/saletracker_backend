@@ -76,6 +76,9 @@ export class OrderDetail {
   @Column('longtext', { nullable: true })
   notes: string;
 
+  @Column('json', { nullable: true })
+  notes_history: { user_id: number | null; content: string; changed_at: string }[];
+
   @Column('longtext', { nullable: true })
   reason: string;
 

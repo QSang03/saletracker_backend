@@ -268,22 +268,54 @@ export class OrderDetailService {
   async update(
     id: number,
     orderDetailData: Partial<OrderDetail>,
+    user?: any,
   ): Promise<OrderDetail | null> {
-    // ✅ Xử lý đặc biệt cho trường extended - cộng thêm thay vì ghi đè
-    if (orderDetailData.extended !== undefined) {
-      const currentOrderDetail = await this.findById(id);
-      if (currentOrderDetail) {
-        const currentExtended = currentOrderDetail.extended || 4;
-        orderDetailData.extended = currentExtended + orderDetailData.extended;
+    // Determine if we need the current row
+    const needsExisting =
+      orderDetailData.extended !== undefined ||
+      typeof orderDetailData.notes === 'string';
+    const currentOrderDetail = needsExisting ? await this.findById(id) : null;
 
-        if (orderDetailData.extended > currentExtended) {
-          orderDetailData.last_extended_at = new Date();
-          orderDetailData.extend_reason = ExtendReason.USER_MANUAL;
-        }
+    // ✅ Xử lý đặc biệt cho trường extended - cộng thêm thay vì ghi đè
+    if (orderDetailData.extended !== undefined && currentOrderDetail) {
+      const currentExtended = currentOrderDetail.extended || 4;
+      orderDetailData.extended = currentExtended + orderDetailData.extended;
+
+      if ((orderDetailData.extended || 0) > currentExtended) {
+        orderDetailData.last_extended_at = new Date();
+        orderDetailData.extend_reason = ExtendReason.USER_MANUAL;
       }
     }
 
-    await this.orderDetailRepository.update(id, orderDetailData);
+    // ✅ Ghi lại lịch sử thay đổi ghi chú nếu có cập nhật notes
+    if (typeof orderDetailData.notes === 'string') {
+      // Parse existing history
+      let history: any[] = [];
+      const raw = (currentOrderDetail as any)?.notes_history;
+      try {
+        if (Array.isArray(raw)) history = raw;
+        else if (raw && typeof raw === 'string') history = JSON.parse(raw);
+      } catch {
+        history = [];
+      }
+
+      history.push({
+        user_id: user?.id ?? null,
+        content: orderDetailData.notes,
+        changed_at: new Date().toISOString(),
+      });
+
+      // Optional cap to avoid unbounded growth
+      if (history.length > 500) history = history.slice(-500);
+
+      await this.orderDetailRepository.update(id, {
+        ...orderDetailData,
+        notes_history: history,
+      });
+    } else {
+      await this.orderDetailRepository.update(id, orderDetailData);
+    }
+
     return this.findById(id);
   }
 
@@ -429,11 +461,34 @@ export class OrderDetailService {
       return { updated: 0 };
     }
 
-    await this.orderDetailRepository.update(
-      orderDetails.map((od) => od.id),
-      updates,
-    );
+    // Nếu có cập nhật notes, cần ghi lịch sử theo từng item
+    if (typeof updates.notes === 'string') {
+      for (const od of orderDetails) {
+        let history: any[] = [];
+        const raw = (od as any).notes_history;
+        try {
+          if (Array.isArray(raw)) history = raw;
+          else if (raw && typeof raw === 'string') history = JSON.parse(raw);
+        } catch {
+          history = [];
+        }
+        history.push({
+          user_id: user?.id ?? null,
+          content: updates.notes,
+          changed_at: new Date().toISOString(),
+        });
+        if (history.length > 500) history = history.slice(-500);
 
+        await this.orderDetailRepository.update(od.id, {
+          ...updates,
+          notes_history: history,
+        });
+      }
+      return { updated: orderDetails.length };
+    }
+
+    // Không có cập nhật notes: có thể update hàng loạt
+    await this.orderDetailRepository.update(orderDetails.map((od) => od.id), updates);
     return { updated: orderDetails.length };
   }
 
@@ -482,11 +537,28 @@ export class OrderDetailService {
       return { updated: 0 };
     }
 
-    // ✅ Ghi đè ghi chú thay vì append
-    await this.orderDetailRepository.update(
-      orderDetails.map((od) => od.id),
-      { notes },
-    );
+    // ✅ Ghi đè ghi chú và lưu lịch sử cho từng item
+    for (const od of orderDetails) {
+      let history: any[] = [];
+      const raw = (od as any).notes_history;
+      try {
+        if (Array.isArray(raw)) history = raw;
+        else if (raw && typeof raw === 'string') history = JSON.parse(raw);
+      } catch {
+        history = [];
+      }
+      history.push({
+        user_id: user?.id ?? null,
+        content: notes,
+        changed_at: new Date().toISOString(),
+      });
+      if (history.length > 500) history = history.slice(-500);
+
+      await this.orderDetailRepository.update(od.id, {
+        notes,
+        notes_history: history,
+      });
+    }
 
     return { updated: orderDetails.length };
   }
