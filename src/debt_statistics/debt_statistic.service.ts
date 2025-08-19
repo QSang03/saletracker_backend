@@ -243,20 +243,29 @@ export class DebtStatisticService {
       const now = new Date();
       const today = now.toISOString().split('T')[0];
 
-      const { date, status, contactStatus, mode, minDays, maxDays, employeeCode, customerCode, page = 1, limit = 10 } = filters;
-      if (!date) {
-        throw new Error('Date parameter is required');
+      const { date, from, to, status, contactStatus, mode, minDays, maxDays, employeeCode, customerCode, page = 1, limit = 10 } = filters;
+      if (!date && (!from || !to)) {
+        throw new Error('Either date or from/to parameters are required');
       }
 
       const offset = (page - 1) * limit;
-      const isHistoricalDate = date < today;
+      const useRange = !!from && !!to;
+      const rangeFrom = from || date;
+      const rangeTo = to || date;
+      const isHistoricalDate = rangeTo < today;
 
       if (isHistoricalDate) {
         let query = `
-        SELECT * FROM debt_statistics 
-        WHERE statistic_date = ?
+        SELECT ds.* FROM debt_statistics ds
+        INNER JOIN (
+          SELECT original_debt_id, MAX(statistic_date) AS last_date
+          FROM debt_statistics
+          WHERE statistic_date >= ? AND statistic_date <= ?
+          GROUP BY original_debt_id
+        ) latest ON latest.original_debt_id = ds.original_debt_id AND latest.last_date = ds.statistic_date
+        WHERE 1=1
       `;
-        const params: any[] = [date];
+        const params: any[] = [rangeFrom, rangeTo];
 
         if (status) {
           query += ` AND status = ?`;
@@ -301,10 +310,17 @@ export class DebtStatisticService {
         const data = await this.debtStatisticRepository.query(query, params);
 
         let countQuery = `
-        SELECT COUNT(*) as total FROM debt_statistics 
-        WHERE statistic_date = ?
-      `;
-        const countParams: any[] = [date];
+        SELECT COUNT(*) as total FROM (
+          SELECT ds.id FROM debt_statistics ds
+          INNER JOIN (
+            SELECT original_debt_id, MAX(statistic_date) AS last_date
+            FROM debt_statistics
+            WHERE statistic_date >= ? AND statistic_date <= ?
+            GROUP BY original_debt_id
+          ) latest ON latest.original_debt_id = ds.original_debt_id AND latest.last_date = ds.statistic_date
+          WHERE 1=1
+        `;
+        const countParams: any[] = [rangeFrom, rangeTo];
 
         if (status) {
           countQuery += ` AND status = ?`;
@@ -349,10 +365,8 @@ export class DebtStatisticService {
           countParams.push(customerCode);
         }
 
-        const totalResult = await this.debtStatisticRepository.query(
-          countQuery,
-          countParams,
-        );
+        countQuery += `) t`;
+        const totalResult = await this.debtStatisticRepository.query(countQuery, countParams);
         const total = totalResult[0]?.total || 0;
 
         return {
@@ -369,9 +383,10 @@ export class DebtStatisticService {
         LEFT JOIN debt_configs dc ON d.debt_config_id = dc.id
         LEFT JOIN users u ON d.sale_id = u.id
         WHERE d.deleted_at IS NULL
-        AND DATE(d.updated_at) = ?
+          AND DATE(CONVERT_TZ(d.updated_at, '+00:00', '+07:00')) >= ?
+          AND DATE(CONVERT_TZ(d.updated_at, '+00:00', '+07:00')) <= ?
       `;
-        const params: any[] = [date];
+        const params: any[] = [rangeFrom, rangeTo];
 
         if (status) {
           query += ` AND d.status = ?`;
@@ -415,9 +430,10 @@ export class DebtStatisticService {
         let countQuery = `
         SELECT COUNT(*) as total FROM debts d
         WHERE d.deleted_at IS NULL
-        AND DATE(d.updated_at) = ?
+          AND DATE(CONVERT_TZ(d.updated_at, '+00:00', '+07:00')) >= ?
+          AND DATE(CONVERT_TZ(d.updated_at, '+00:00', '+07:00')) <= ?
       `;
-        const countParams: any[] = [date];
+        const countParams: any[] = [rangeFrom, rangeTo];
 
         if (status) {
           countQuery += ` AND d.status = ?`;
@@ -640,7 +656,7 @@ export class DebtStatisticService {
         'd.deleted_at IS NULL',
         "d.status <> 'paid'",
         'd.pay_later IS NOT NULL',
-        'DATE(d.updated_at) = ?',
+        "DATE(CONVERT_TZ(d.updated_at, '+00:00', '+07:00')) = ?",
       ];
       const params: any[] = [today];
       if (options.employeeCode) {
@@ -652,7 +668,7 @@ export class DebtStatisticService {
         params.push(options.customerCode);
       }
 
-      const diffExpr = 'DATEDIFF(DATE(d.updated_at), d.pay_later)';
+      const diffExpr = "DATEDIFF(DATE(CONVERT_TZ(d.updated_at, '+00:00', '+07:00')), d.pay_later)";
       const selects = ranges
         .map((r) => {
           const cond = r.max === null

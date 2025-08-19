@@ -140,6 +140,8 @@ export class DebtStatisticController {
   @UseGuards(JwtAuthGuard)
   async getDetailedDebts(
     @Query('date') date: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
     @Query('status') status?: string,
     @Query('contactStatus') contactStatus?: string,
     @Query('mode') mode?: 'overdue' | 'payLater' | 'status',
@@ -151,8 +153,9 @@ export class DebtStatisticController {
     @Query('limit') limit: string = '50',
     @Query('all') all?: string,
   ) {
-    if (!date) {
-      throw new Error('Date parameter is required');
+    // Allow either single date or from/to range
+    if (!date && (!from || !to)) {
+      throw new Error('Either date or from/to parameters are required');
     }
     
     let parsedLimit = parseInt(limit, 10);
@@ -164,6 +167,8 @@ export class DebtStatisticController {
     
     const filters = {
       date,
+      from,
+      to,
       status,
       contactStatus,
       mode,
