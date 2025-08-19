@@ -274,6 +274,17 @@ export class DebtStatisticService {
           }
           query += ` AND status <> 'paid' AND pay_later IS NOT NULL`;
         }
+        if (mode === 'overdue') {
+          if (typeof minDays === 'number') {
+            query += ` AND DATEDIFF(statistic_date, due_date) >= ?`;
+            params.push(minDays);
+          }
+          if (typeof maxDays === 'number') {
+            query += ` AND DATEDIFF(statistic_date, due_date) <= ?`;
+            params.push(maxDays);
+          }
+          query += ` AND status <> 'paid'`;
+        }
 
         if (employeeCode) {
           query += ` AND employee_code_raw = ?`;
@@ -317,6 +328,17 @@ export class DebtStatisticService {
             countParams.push(maxDays);
           }
           countQuery += ` AND status <> 'paid' AND pay_later IS NOT NULL`;
+        }
+        if (mode === 'overdue') {
+          if (typeof minDays === 'number') {
+            countQuery += ` AND DATEDIFF(statistic_date, due_date) >= ?`;
+            countParams.push(minDays);
+          }
+          if (typeof maxDays === 'number') {
+            countQuery += ` AND DATEDIFF(statistic_date, due_date) <= ?`;
+            countParams.push(maxDays);
+          }
+          countQuery += ` AND status <> 'paid'`;
         }
         if (employeeCode) {
           countQuery += ` AND employee_code_raw = ?`;
@@ -366,6 +388,17 @@ export class DebtStatisticService {
           }
           query += ` AND d.status <> 'paid' AND d.pay_later IS NOT NULL`;
         }
+        if (mode === 'overdue') {
+          if (typeof minDays === 'number') {
+            query += ` AND DATEDIFF(DATE(CONVERT_TZ(d.updated_at, '+00:00', '+07:00')), d.due_date) >= ?`;
+            params.push(minDays);
+          }
+          if (typeof maxDays === 'number') {
+            query += ` AND DATEDIFF(DATE(CONVERT_TZ(d.updated_at, '+00:00', '+07:00')), d.due_date) <= ?`;
+            params.push(maxDays);
+          }
+          query += ` AND d.status <> 'paid'`;
+        }
         if (employeeCode) {
           query += ` AND d.employee_code_raw = ?`;
           params.push(employeeCode);
@@ -400,6 +433,17 @@ export class DebtStatisticService {
             countParams.push(maxDays);
           }
           countQuery += ` AND d.status <> 'paid' AND d.pay_later IS NOT NULL`;
+        }
+        if (mode === 'overdue') {
+          if (typeof minDays === 'number') {
+            countQuery += ` AND DATEDIFF(DATE(CONVERT_TZ(d.updated_at, '+00:00', '+07:00')), d.due_date) >= ?`;
+            countParams.push(minDays);
+          }
+          if (typeof maxDays === 'number') {
+            countQuery += ` AND DATEDIFF(DATE(CONVERT_TZ(d.updated_at, '+00:00', '+07:00')), d.due_date) <= ?`;
+            countParams.push(maxDays);
+          }
+          countQuery += ` AND d.status <> 'paid'`;
         }
         if (employeeCode) {
           countQuery += ` AND d.employee_code_raw = ?`;
@@ -448,7 +492,7 @@ export class DebtStatisticService {
     const today = new Date().toISOString().split('T')[0];
     const results: any[] = [];
 
-    // Quá khứ: dùng debt_statistics, tính DATEDIFF(statistic_date, due_date)
+    // Quá khứ: dùng debt_statistics, tính DATEDIFF(statistic_date, due_date) và chỉ lấy khoản nợ đã quá hạn (>0)
     if (fromDate < today) {
       const endDateForHistory =
         toDate < today
@@ -460,43 +504,45 @@ export class DebtStatisticService {
       const agingQuery = `
         SELECT 
           CASE 
-            WHEN DATEDIFF(statistic_date, due_date) <= 0 THEN 'current'
-            WHEN DATEDIFF(statistic_date, due_date) BETWEEN 1 AND 30 THEN '1-30'
-            WHEN DATEDIFF(statistic_date, due_date) BETWEEN 31 AND 60 THEN '31-60'
-            WHEN DATEDIFF(statistic_date, due_date) BETWEEN 61 AND 90 THEN '61-90'
+            WHEN DATEDIFF(ds.statistic_date, ds.due_date) BETWEEN 1 AND 30 THEN '1-30'
+            WHEN DATEDIFF(ds.statistic_date, ds.due_date) BETWEEN 31 AND 60 THEN '31-60'
+            WHEN DATEDIFF(ds.statistic_date, ds.due_date) BETWEEN 61 AND 90 THEN '61-90'
             ELSE '>90'
           END as age_range,
           COUNT(*) as count,
-          SUM(remaining) as amount
-        FROM debt_statistics
-        WHERE statistic_date >= ? AND statistic_date <= ?
-          AND status != 'paid'
+          SUM(ds.remaining) as amount
+        FROM debt_statistics ds
+        INNER JOIN (
+          SELECT original_debt_id, MAX(statistic_date) AS last_date
+          FROM debt_statistics
+          WHERE statistic_date >= ? AND statistic_date <= ?
+          GROUP BY original_debt_id
+        ) latest ON latest.original_debt_id = ds.original_debt_id AND latest.last_date = ds.statistic_date
+        WHERE ds.status != 'paid'
+          AND DATEDIFF(ds.statistic_date, ds.due_date) > 0
         GROUP BY age_range
       `;
 
-      const historyAging = await this.debtStatisticRepository.query(
-        agingQuery,
-        [fromDate, endDateForHistory],
-      );
+      const historyAging = await this.debtStatisticRepository.query(agingQuery, [fromDate, endDateForHistory]);
       results.push(...historyAging);
     }
 
-    // Hôm nay: dùng debts, tính DATEDIFF(DATE(updated_at), due_date) và filter theo DATE(updated_at) = today
+    // Hôm nay: dùng debts, tính DATEDIFF(DATE(updated_at), due_date) và chỉ lấy quá hạn (>0)
     if (toDate >= today) {
       const currentAgingQuery = `
         SELECT 
           CASE 
-            WHEN DATEDIFF(DATE(updated_at), due_date) <= 0 THEN 'current'
-            WHEN DATEDIFF(DATE(updated_at), due_date) BETWEEN 1 AND 30 THEN '1-30'
-            WHEN DATEDIFF(DATE(updated_at), due_date) BETWEEN 31 AND 60 THEN '31-60'
-            WHEN DATEDIFF(DATE(updated_at), due_date) BETWEEN 61 AND 90 THEN '61-90'
+            WHEN DATEDIFF(DATE(CONVERT_TZ(updated_at, '+00:00', '+07:00')), due_date) BETWEEN 1 AND 30 THEN '1-30'
+            WHEN DATEDIFF(DATE(CONVERT_TZ(updated_at, '+00:00', '+07:00')), due_date) BETWEEN 31 AND 60 THEN '31-60'
+            WHEN DATEDIFF(DATE(CONVERT_TZ(updated_at, '+00:00', '+07:00')), due_date) BETWEEN 61 AND 90 THEN '61-90'
             ELSE '>90'
           END as age_range,
           COUNT(*) as count,
           SUM(remaining) as amount
         FROM debts
         WHERE deleted_at IS NULL AND status != 'paid'
-          AND DATE(updated_at) = ?
+          AND DATE(CONVERT_TZ(updated_at, '+00:00', '+07:00')) = ?
+          AND DATEDIFF(DATE(CONVERT_TZ(updated_at, '+00:00', '+07:00')), due_date) > 0
         GROUP BY age_range
       `;
 
