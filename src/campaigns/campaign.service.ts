@@ -2991,12 +2991,12 @@ export class CampaignService {
           };
         }
 
-        // Chỉ thêm log nếu có dữ liệu log
-        if (row.sent_at) {
+        // Chỉ thêm log nếu có sent_at hoặc status = 'failed'
+        if (row.sent_at || row.interaction_status === 'failed') {
           acc[customerId].logs.push({
             status: row.interaction_status,
             conversation_metadata: row.conversation_metadata,
-            sent_at: new Date(row.sent_at),
+            sent_at: row.sent_at ? new Date(row.sent_at) : null,
           });
         }
 
