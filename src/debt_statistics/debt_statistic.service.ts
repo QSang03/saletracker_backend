@@ -444,11 +444,11 @@ export class DebtStatisticService {
   }
 
   async getAgingAnalysis(fromDate: string, toDate: string) {
-    // Logic hybrid tương tự overview
+    // Logic hybrid theo snapshot: quá khứ theo statistic_date, hôm nay theo DATE(updated_at)
     const today = new Date().toISOString().split('T')[0];
     const results: any[] = [];
 
-    // Lấy dữ liệu từ debt_statistics cho các ngày trong quá khứ
+    // Quá khứ: dùng debt_statistics, tính DATEDIFF(statistic_date, due_date)
     if (fromDate < today) {
       const endDateForHistory =
         toDate < today
@@ -460,11 +460,11 @@ export class DebtStatisticService {
       const agingQuery = `
         SELECT 
           CASE 
-            WHEN DATEDIFF(CURDATE(), due_date) <= 0 THEN 'current'
-            WHEN DATEDIFF(CURDATE(), due_date) <= 30 THEN '1-30'
-            WHEN DATEDIFF(CURDATE(), due_date) <= 60 THEN '31-60'
-            WHEN DATEDIFF(CURDATE(), due_date) <= 90 THEN '61-90'
-            ELSE '90+'
+            WHEN DATEDIFF(statistic_date, due_date) <= 0 THEN 'current'
+            WHEN DATEDIFF(statistic_date, due_date) BETWEEN 1 AND 30 THEN '1-30'
+            WHEN DATEDIFF(statistic_date, due_date) BETWEEN 31 AND 60 THEN '31-60'
+            WHEN DATEDIFF(statistic_date, due_date) BETWEEN 61 AND 90 THEN '61-90'
+            ELSE '>90'
           END as age_range,
           COUNT(*) as count,
           SUM(remaining) as amount
@@ -481,27 +481,27 @@ export class DebtStatisticService {
       results.push(...historyAging);
     }
 
-    // Nếu toDate là hôm nay, lấy thêm dữ liệu realtime từ debts
+    // Hôm nay: dùng debts, tính DATEDIFF(DATE(updated_at), due_date) và filter theo DATE(updated_at) = today
     if (toDate >= today) {
       const currentAgingQuery = `
         SELECT 
           CASE 
-            WHEN DATEDIFF(CURDATE(), due_date) <= 0 THEN 'current'
-            WHEN DATEDIFF(CURDATE(), due_date) <= 30 THEN '1-30'
-            WHEN DATEDIFF(CURDATE(), due_date) <= 60 THEN '31-60'
-            WHEN DATEDIFF(CURDATE(), due_date) <= 90 THEN '61-90'
-            ELSE '90+'
+            WHEN DATEDIFF(DATE(updated_at), due_date) <= 0 THEN 'current'
+            WHEN DATEDIFF(DATE(updated_at), due_date) BETWEEN 1 AND 30 THEN '1-30'
+            WHEN DATEDIFF(DATE(updated_at), due_date) BETWEEN 31 AND 60 THEN '31-60'
+            WHEN DATEDIFF(DATE(updated_at), due_date) BETWEEN 61 AND 90 THEN '61-90'
+            ELSE '>90'
           END as age_range,
           COUNT(*) as count,
           SUM(remaining) as amount
         FROM debts
         WHERE deleted_at IS NULL AND status != 'paid'
+          AND DATE(updated_at) = ?
         GROUP BY age_range
       `;
 
-      const currentAging = await this.debtRepository.query(currentAgingQuery);
+      const currentAging = await this.debtRepository.query(currentAgingQuery, [today]);
 
-      // Merge results
       for (const current of currentAging) {
         const existing = results.find((r) => r.age_range === current.age_range);
         if (existing) {
