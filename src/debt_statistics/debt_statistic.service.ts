@@ -866,7 +866,9 @@ export class DebtStatisticService {
             SELECT original_debt_id, MAX(statistic_date) AS snap_date FROM debt_statistics WHERE statistic_date <= ? GROUP BY original_debt_id
           ) latest ON latest.original_debt_id = ds.original_debt_id AND latest.snap_date = ds.statistic_date WHERE ${where.join(' AND ')}
         ) t`;
-        const row = (await this.debtStatisticRepository.query(query, [D, D, ...arr]))[0] || {};
+        // There are 2 placeholders (count/amount) per bucket in 'parts' plus 1 for the inner snapshot <= ?
+        const diffParams = new Array(ranges.length * 2).fill(D);
+        const row = (await this.debtStatisticRepository.query(query, [...diffParams, D, ...arr]))[0] || {};
         for (const r of ranges) {
           const key = r.label.replace(/[^a-zA-Z0-9_]/g, '_');
           results.push({ date: D, range: r.label, count: Number(row[`cnt_${key}`]) || 0, amount: Number(row[`amt_${key}`]) || 0 });
