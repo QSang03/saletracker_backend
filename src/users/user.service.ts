@@ -653,6 +653,7 @@ export class UserService {
       'user.isBlock',
       'user.zaloLinkStatus',
       'user.zaloName',
+      'user.zaloGender',
       'department.id',
       'department.name',
       'department.slug',

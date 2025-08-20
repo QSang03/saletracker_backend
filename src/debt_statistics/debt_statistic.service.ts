@@ -368,6 +368,92 @@ export class DebtStatisticService {
         };
       }
 
+      // Range-based details for overdue (aging) to match aggregated buckets
+      if (isRange && mode === 'overdue') {
+        const dataCombined: any[] = [];
+        let total = 0;
+
+        if ((from as string) < today) {
+          const endHistory = (to as string) < today
+            ? (to as string)
+            : new Date(new Date(today).getTime() - 24 * 60 * 60 * 1000)
+                .toISOString()
+                .split('T')[0];
+
+          const where: string[] = [
+            'ds.statistic_date >= ? AND ds.statistic_date <= ?',
+            "ds.status <> 'paid'",
+            'ds.due_date IS NOT NULL',
+            'DATEDIFF(ds.statistic_date, ds.due_date) > 0',
+          ];
+          const params: any[] = [from, endHistory];
+          if (typeof minDays === 'number') {
+            where.push('DATEDIFF(ds.statistic_date, ds.due_date) >= ?');
+            params.push(minDays);
+          }
+          if (typeof maxDays === 'number') {
+            where.push('DATEDIFF(ds.statistic_date, ds.due_date) <= ?');
+            params.push(maxDays);
+          }
+          if (employeeCode) {
+            where.push('ds.employee_code_raw = ?');
+            params.push(employeeCode);
+          }
+          if (customerCode) {
+            where.push('ds.customer_code = ?');
+            params.push(customerCode);
+          }
+          const q = `SELECT ds.* FROM debt_statistics ds WHERE ${where.join(' AND ')}`;
+          const rows = await this.debtStatisticRepository.query(q, params);
+          dataCombined.push(...rows);
+        }
+
+        if ((to as string) >= today) {
+          const whereToday: string[] = [
+            'd.deleted_at IS NULL',
+            "d.status <> 'paid'",
+            'd.due_date IS NOT NULL',
+            'DATEDIFF(DATE(CONVERT_TZ(d.updated_at, "+00:00", "+07:00")), d.due_date) > 0',
+            'DATE(CONVERT_TZ(d.updated_at, "+00:00", "+07:00")) = ?',
+          ];
+          const paramsToday: any[] = [today];
+          if (typeof minDays === 'number') {
+            whereToday.push('DATEDIFF(DATE(CONVERT_TZ(d.updated_at, "+00:00", "+07:00")), d.due_date) >= ?');
+            paramsToday.push(minDays);
+          }
+          if (typeof maxDays === 'number') {
+            whereToday.push('DATEDIFF(DATE(CONVERT_TZ(d.updated_at, "+00:00", "+07:00")), d.due_date) <= ?');
+            paramsToday.push(maxDays);
+          }
+          if (employeeCode) {
+            whereToday.push('d.employee_code_raw = ?');
+            paramsToday.push(employeeCode);
+          }
+          if (customerCode) {
+            whereToday.push('dc.customer_code = ?');
+            paramsToday.push(customerCode);
+          }
+          const qToday = `
+            SELECT d.*, dc.customer_code, dc.customer_name
+            FROM debts d
+            LEFT JOIN debt_configs dc ON d.debt_config_id = dc.id
+            WHERE ${whereToday.join(' AND ')}
+          `;
+          const rowsToday = await this.debtRepository.query(qToday, paramsToday);
+          dataCombined.push(...rowsToday);
+        }
+
+        total = dataCombined.length;
+        const data = dataCombined.slice(offset, offset + limit);
+        return {
+          data,
+          total,
+          page,
+          limit,
+          totalPages: Math.ceil(total / limit),
+        };
+      }
+
       if (isHistoricalDate) {
         let query = `
         SELECT ds.*
@@ -1060,17 +1146,62 @@ export class DebtStatisticService {
   }
 
   async getContactDetails(params: {
-    date: string;
+    date?: string;
+    from?: string;
+    to?: string;
     responseStatus: string;
+    mode?: 'events' | 'distribution';
     employeeCode?: string;
     customerCode?: string;
     page?: number;
     limit?: number;
   }) {
-    const { date, responseStatus, employeeCode, customerCode, page = 1, limit = 50 } = params;
+    const { date, from, to, responseStatus, mode = 'events', employeeCode, customerCode, page = 1, limit = 50 } = params;
     const today = this.getVietnamToday();
     const offset = (page - 1) * limit;
-    const isHistorical = date < today;
+
+    // Range mode (events): list distinct customers having that response in [from, to]
+    if (!date && from && to && mode === 'events') {
+      const where: string[] = [
+        "DATE(CONVERT_TZ(dh.created_at, '+00:00', '+07:00')) >= ?",
+        "DATE(CONVERT_TZ(dh.created_at, '+00:00', '+07:00')) <= ?",
+        'dh.remind_status = ?',
+      ];
+      const arr: any[] = [from, to, responseStatus];
+      if (employeeCode) { where.push('u.employee_code = ?'); arr.push(employeeCode); }
+      if (customerCode) { where.push('dc.customer_code = ?'); arr.push(customerCode); }
+
+      const dataQuery = `
+        SELECT dc.customer_code, dc.customer_name, u.employee_code as employee_code_raw, MAX(dh.created_at) as latest_time
+        FROM debt_histories dh
+        LEFT JOIN debt_logs dl ON dh.debt_log_id = dl.id
+        LEFT JOIN debt_configs dc ON dl.debt_config_id = dc.id
+        LEFT JOIN users u ON dc.employee_id = u.id
+        WHERE ${where.join(' AND ')}
+        GROUP BY dc.customer_code, dc.customer_name, u.employee_code
+        ORDER BY latest_time DESC
+        LIMIT ? OFFSET ?
+      `;
+      const dataParams = [...arr, limit, offset];
+      const data = await this.debtHistoriesRepository.query(dataQuery, dataParams);
+
+      const countQuery = `
+        SELECT COUNT(*) as total FROM (
+          SELECT dc.customer_code
+          FROM debt_histories dh
+          LEFT JOIN debt_logs dl ON dh.debt_log_id = dl.id
+          LEFT JOIN debt_configs dc ON dl.debt_config_id = dc.id
+          LEFT JOIN users u ON dc.employee_id = u.id
+          WHERE ${where.join(' AND ')}
+          GROUP BY dc.customer_code
+        ) t
+      `;
+      const totalRow = await this.debtHistoriesRepository.query(countQuery, arr);
+      const total = Number(totalRow[0]?.total) || 0;
+      return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
+    }
+
+    const isHistorical = (date || today) < today;
 
     if (isHistorical) {
       const where: string[] = [

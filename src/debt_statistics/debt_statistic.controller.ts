@@ -64,18 +64,28 @@ export class DebtStatisticController {
   @Get('aging')
   @UseGuards(JwtAuthGuard)
   async getAgingAnalysis(
-    @Query('from') fromDate: string,
-    @Query('to') toDate: string,
+    @Query('from') fromDate?: string,
+    @Query('to') toDate?: string,
+    @Query('singleDate') singleDate?: string,
+    @Query('employeeCode') employeeCode?: string,
+    @Query('customerCode') customerCode?: string,
   ) {
-    return this.debtStatisticService.getAgingAnalysis(fromDate, toDate);
+    return this.debtStatisticService.getAgingAnalysisAsOf({
+      singleDate,
+      from: fromDate,
+      to: toDate,
+      employeeCode,
+      customerCode,
+    });
   }
 
   // New: Pay-later delay buckets (hybrid: history from debt_statistics, today from debts)
   @Get('pay-later-delay')
   @UseGuards(JwtAuthGuard)
   async getPayLaterDelay(
-    @Query('from') fromDate: string,
-    @Query('to') toDate: string,
+    @Query('from') fromDate?: string,
+    @Query('to') toDate?: string,
+    @Query('singleDate') singleDate?: string,
     @Query('buckets') buckets: string = '7,14,30',
     @Query('employeeCode') employeeCode?: string,
     @Query('customerCode') customerCode?: string,
@@ -85,12 +95,14 @@ export class DebtStatisticController {
       .map((b) => parseInt(b.trim(), 10))
       .filter((n) => !Number.isNaN(n))
       .sort((a, b) => a - b);
-    return this.debtStatisticService.getPayLaterDelay(
-      fromDate,
-      toDate,
-      bucketNumbers,
-      { employeeCode, customerCode },
-    );
+    return this.debtStatisticService.getPayLaterDelayAsOf({
+      singleDate,
+      from: fromDate,
+      to: toDate,
+      buckets: bucketNumbers,
+      employeeCode,
+      customerCode,
+    });
   }
 
   // New: Contact responses aggregation (hybrid: history from debt_histories, today from debt_logs)
@@ -100,6 +112,7 @@ export class DebtStatisticController {
     @Query('from') fromDate: string,
     @Query('to') toDate: string,
     @Query('by') by: 'customer' | 'invoice' = 'customer',
+    @Query('mode') mode: 'events' | 'distribution' = 'events',
     @Query('employeeCode') employeeCode?: string,
     @Query('customerCode') customerCode?: string,
   ) {
@@ -107,7 +120,7 @@ export class DebtStatisticController {
       fromDate,
       toDate,
       by,
-      { employeeCode, customerCode },
+      { employeeCode, customerCode, mode },
     );
   }
 
@@ -188,19 +201,25 @@ export class DebtStatisticController {
   @Get('contact-details')
   @UseGuards(JwtAuthGuard)
   async getContactDetails(
-    @Query('date') date: string,
     @Query('responseStatus') responseStatus: string,
+    @Query('date') date?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('mode') mode: 'events' | 'distribution' = 'events',
     @Query('employeeCode') employeeCode?: string,
     @Query('customerCode') customerCode?: string,
     @Query('page') page = '1',
     @Query('limit') limit = '50',
   ) {
-    if (!date || !responseStatus) {
-      throw new Error('date and responseStatus are required');
+    if ((!date && (!from || !to)) || !responseStatus) {
+      throw new Error('Either date or from/to and responseStatus are required');
     }
     return this.debtStatisticService.getContactDetails({
       date,
+      from,
+      to,
       responseStatus,
+      mode,
       employeeCode,
       customerCode,
       page: parseInt(page, 10),
