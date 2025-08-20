@@ -95,14 +95,17 @@ export class DebtStatisticController {
       .map((b) => parseInt(b.trim(), 10))
       .filter((n) => !Number.isNaN(n))
       .sort((a, b) => a - b);
-    return this.debtStatisticService.getPayLaterDelayAsOf({
-      singleDate,
-      from: fromDate,
-      to: toDate,
-      buckets: bucketNumbers,
-      employeeCode,
-      customerCode,
-    });
+    if (!fromDate || !toDate) {
+      const today = new Date().toISOString().split('T')[0];
+      fromDate = fromDate || today;
+      toDate = toDate || today;
+    }
+    return this.debtStatisticService.getPayLaterDelay(
+      fromDate,
+      toDate,
+      bucketNumbers,
+      { employeeCode, customerCode },
+    );
   }
 
   // New: Contact responses aggregation (hybrid: history from debt_histories, today from debt_logs)

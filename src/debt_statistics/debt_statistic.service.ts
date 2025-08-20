@@ -817,6 +817,10 @@ export class DebtStatisticService {
         GROUP BY bucket
         ORDER BY CASE bucket WHEN '1-30' THEN 1 WHEN '31-60' THEN 2 WHEN '61-90' THEN 3 ELSE 4 END
       `;
+      // Placeholders:
+      //  - 3 for SELECT DATEDIFF
+      //  - 1 for latest.snap_date (<= ?)
+      //  - remaining placeholders (including one D for WHERE DATEDIFF) come from ...args
       const rows = await this.debtStatisticRepository.query(query, [D, D, D, D, ...args]);
       return rows.map((r: any) => ({ range: r.bucket, count: Number(r.count) || 0, amount: Number(r.amount) || 0 }));
     } else {
@@ -851,7 +855,10 @@ export class DebtStatisticService {
         GROUP BY bucket
         ORDER BY CASE bucket WHEN '1-30' THEN 1 WHEN '31-60' THEN 2 WHEN '61-90' THEN 3 ELSE 4 END
       `;
-      const rows = await this.debtRepository.query(query, [D, D, D, D, ...arr]);
+      // Placeholders:
+      //  - 3 for SELECT DATEDIFF
+      //  - WHERE DATEDIFF placeholder provided in ...arr (arr starts with D)
+      const rows = await this.debtRepository.query(query, [D, D, D, ...arr]);
       return rows.map((r: any) => ({ range: r.bucket, count: Number(r.count) || 0, amount: Number(r.amount) || 0 }));
     }
   }
@@ -1028,8 +1035,8 @@ export class DebtStatisticService {
         GROUP BY rng
         ORDER BY CASE rng ${ranges.map((r, idx) => `WHEN '${r.label}' THEN ${idx + 1}`).join(' ')} ELSE 999 END
       `;
-      const placeholders = new Array(ranges.length + 1).fill(D); // caseExpr uses D multiple times
-      const rows = await this.debtStatisticRepository.query(query, [...placeholders, D, ...arr]);
+      // Placeholders: one for caseExpr (DATEDIFF), one for latest.snap_date compare
+      const rows = await this.debtStatisticRepository.query(query, [D, D, ...arr]);
       return rows.map((r: any) => ({ range: r.bucket, count: Number(r.count) || 0, amount: Number(r.amount) || 0 }));
     } else {
       const where: string[] = [
@@ -1061,8 +1068,8 @@ export class DebtStatisticService {
           .map((r, idx) => `WHEN '${r.label}' THEN ${idx + 1}`)
           .join(' ')} ELSE 999 END
       `;
-      const placeholders = new Array(ranges.length + 1).fill(D);
-      const rows = await this.debtRepository.query(query, [...placeholders, ...arr]);
+      // Placeholders: one for caseExpr (DATEDIFF)
+      const rows = await this.debtRepository.query(query, [D, ...arr]);
       return rows.map((r: any) => ({ range: r.bucket, count: Number(r.count) || 0, amount: Number(r.amount) || 0 }));
     }
   }
