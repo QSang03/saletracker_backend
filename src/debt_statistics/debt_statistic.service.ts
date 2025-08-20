@@ -858,8 +858,8 @@ export class DebtStatisticService {
         if (options.employeeCode) { where.push('ds.employee_code_raw = ?'); arr.push(options.employeeCode); }
         if (options.customerCode) { where.push('ds.customer_code = ?'); arr.push(options.customerCode); }
         const parts = ranges.map((r) => {
-          const cond = r.max == null ? `DATEDIFF(?, ds.pay_later) >= ${r.min}` : `DATEDIFF(?, ds.pay_later) BETWEEN ${r.min} AND ${r.max}`;
-          return `SUM(CASE WHEN ${cond} THEN 1 ELSE 0 END) AS cnt_${r.label.replace(/[^a-zA-Z0-9_]/g, '_')}, SUM(CASE WHEN ${cond} THEN ds.remaining ELSE 0 END) AS amt_${r.label.replace(/[^a-zA-Z0-9_]/g, '_')}`;
+          const cond = r.max == null ? `DATEDIFF(?, t.pay_later) >= ${r.min}` : `DATEDIFF(?, t.pay_later) BETWEEN ${r.min} AND ${r.max}`;
+          return `SUM(CASE WHEN ${cond} THEN 1 ELSE 0 END) AS cnt_${r.label.replace(/[^a-zA-Z0-9_]/g, '_')}, SUM(CASE WHEN ${cond} THEN t.remaining ELSE 0 END) AS amt_${r.label.replace(/[^a-zA-Z0-9_]/g, '_')}`;
         }).join(',');
         const query = `SELECT ${parts} FROM (
           SELECT ds.* FROM debt_statistics ds INNER JOIN (
