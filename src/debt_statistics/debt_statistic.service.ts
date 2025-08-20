@@ -457,6 +457,7 @@ export class DebtStatisticService {
       if (isHistoricalDate) {
         // Special case: overview drilldown by status for a specific historical day
         if (date && status && !mode && typeof minDays === 'undefined' && typeof maxDays === 'undefined') {
+          console.log('🔍 [getDetailedDebts] Processing paid status for date:', { date, status, mode });
           // For 'paid' status, we need to get from debts table with updated_at filter
           if (status === 'paid') {
             const where: string[] = [
@@ -468,6 +469,7 @@ export class DebtStatisticService {
             if (employeeCode) { where.push('d.employee_code_raw = ?'); paramsEq.push(employeeCode); }
             if (customerCode) { where.push('dc.customer_code = ?'); paramsEq.push(customerCode); }
 
+            console.log('🔍 [getDetailedDebts] Query for paid status:', { where: where.join(' AND '), params: paramsEq });
             const dataEq = await this.debtRepository.query(
               `SELECT d.*, dc.customer_code, dc.customer_name FROM debts d LEFT JOIN debt_configs dc ON d.debt_config_id = dc.id WHERE ${where.join(' AND ')} LIMIT ? OFFSET ?`,
               [...paramsEq, limit, offset],
@@ -477,6 +479,7 @@ export class DebtStatisticService {
               paramsEq,
             );
             const totalEq = Number(totalEqRow[0]?.total) || 0;
+            console.log('🔍 [getDetailedDebts] Paid status result:', { count: dataEq.length, total: totalEq });
             return { data: dataEq, total: totalEq, page, limit, totalPages: Math.ceil(totalEq / limit) };
           } else {
             // For other statuses, use debt_statistics
