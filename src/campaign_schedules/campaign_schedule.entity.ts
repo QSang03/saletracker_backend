@@ -7,6 +7,7 @@ import {
   Check,
   CreateDateColumn,
   UpdateDateColumn,
+  Index,
 } from 'typeorm';
 import { Campaign } from '../campaigns/campaign.entity';
 import { WeeklyPromotion } from 'src/campaign_config/weekly_promotion';
@@ -31,9 +32,11 @@ export class CampaignSchedule {
   @Column({ type: 'boolean', default: true })
   is_active: boolean;
 
+  @Index()
   @Column({ type: 'datetime', nullable: true })
   start_date?: string;
 
+  @Index()
   @Column({ type: 'datetime', nullable: true })
   end_date?: string;
 

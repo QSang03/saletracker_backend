@@ -8,6 +8,7 @@ import {
   UpdateDateColumn,
   DeleteDateColumn,
   OneToMany,
+  Index,
 } from 'typeorm';
 import { User } from '../users/user.entity';
 import { OrderDetail } from '../order-details/order-detail.entity';
@@ -17,12 +18,14 @@ export class Order {
   @PrimaryGeneratedColumn('increment', { type: 'bigint' })
   id: number;
 
+  @Index()
   @Column('bigint', { nullable: false })
   conversation_id: number;
 
   @Column('json', { nullable: true })
   order_history: any;
 
+  @Index()
   @ManyToOne(() => User, { nullable: true })
   @JoinColumn({ name: 'sale_by' })
   sale_by: User;
@@ -35,6 +38,7 @@ export class Order {
   })
   details: OrderDetail[];
 
+  @Index()
   @CreateDateColumn({ type: 'timestamp' })
   created_at: Date;
 

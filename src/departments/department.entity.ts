@@ -7,6 +7,7 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   DeleteDateColumn,
+  Index,
 } from 'typeorm';
 import { User } from '../users/user.entity';
 
@@ -18,9 +19,11 @@ export class Department {
   @Column({ unique: true })
   name: string;
 
+  @Index({ unique: true })
   @Column({ unique: true })
   slug: string;
 
+  @Index()
   @Column({ type: 'varchar', length: 255, nullable: true })
   server_ip: string;
 
@@ -29,12 +32,15 @@ export class Department {
   })
   users?: User[];
 
+  @Index()
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 
+  @Index()
   @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
 
+  @Index()
   @DeleteDateColumn({ name: 'deleted_at' })
   deletedAt?: Date;
 }

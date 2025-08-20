@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, ManyToOne, JoinColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, ManyToOne, JoinColumn, Index } from 'typeorm';
 import { User } from '../users/user.entity';
 
 @Entity('campaign_audit_history')
@@ -6,6 +6,7 @@ export class CampaignAuditHistory {
   @PrimaryGeneratedColumn('increment', { type: 'bigint' })
   id: string;
 
+  @Index()
   @Column({ type: 'varchar', length: 255 })
   table_name: string;
 
@@ -18,9 +19,11 @@ export class CampaignAuditHistory {
   @Column({ type: 'json', nullable: true })
   new_data?: Record<string, any>;
 
+  @Index()
   @Column({ type: 'varchar', length: 20 })
   operation_type: string;
 
+  @Index()
   @Column({ type: 'bigint', nullable: true })
   changed_by_user_id?: string;
 
@@ -28,6 +31,7 @@ export class CampaignAuditHistory {
   @JoinColumn({ name: 'changed_by_user_id' })
   changed_by_user?: User;
 
+  @Index()
   @CreateDateColumn({ type: 'datetime' })
   changed_at: Date;
 }

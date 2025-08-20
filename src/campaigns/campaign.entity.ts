@@ -6,6 +6,7 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   DeleteDateColumn,
+  Index,
 } from 'typeorm';
 import { User } from '../users/user.entity';
 import { Department } from '../departments/department.entity';
@@ -37,27 +38,35 @@ export class Campaign {
   @PrimaryGeneratedColumn('increment', { type: 'bigint' })
   id: string;
 
+  @Index()
   @Column({ type: 'varchar', length: 255 })
   name: string;
 
+  @Index()
   @Column({ type: 'enum', enum: CampaignType })
   campaign_type: CampaignType;
 
+  @Index()
   @Column({ type: 'enum', enum: CampaignStatus, default: CampaignStatus.DRAFT })
   status: CampaignStatus;
 
+  @Index()
   @Column({ type: 'enum', enum: SendMethod, default: SendMethod.BOT })
   send_method: SendMethod;
 
+  @Index()
   @ManyToOne(() => Department, { nullable: false })
   department: Department;
 
+  @Index()
   @ManyToOne(() => User, { nullable: false })
   created_by: User;
 
+  @Index()
   @CreateDateColumn()
   created_at: Date;
 
+  @Index()
   @UpdateDateColumn()
   updated_at: Date;
 

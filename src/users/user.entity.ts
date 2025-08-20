@@ -8,6 +8,7 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   OneToMany,
+  Index,
 } from 'typeorm';
 import { Role } from '../roles/role.entity';
 import { Department } from '../departments/department.entity';
@@ -34,24 +35,31 @@ export class User {
   @Column({ nullable: true, name: 'full_name' })
   fullName?: string;
 
+  @Index()
   @Column({ type: 'varchar', nullable: true })
   email?: string | null;
 
+  @Index()
   @Column({ default: false, name: 'is_block' })
   isBlock: boolean;
 
+  @Index()
   @Column({ default: false, name: 'is_auto_reply_enabled' })
   isAutoReplyEnabled: boolean;
 
+  @Index()
   @Column({ type: 'varchar', nullable: true, name: 'employee_code' })
   employeeCode?: string | null;
 
+  @Index()
   @Column({ type: 'enum', enum: UserStatus, default: UserStatus.ACTIVE })
   status: UserStatus;
 
+  @Index()
   @Column({ type: 'datetime', nullable: true })
   lastLogin?: Date | null;
 
+  @Index()
   @Column({ nullable: true, name: 'nick_name' })
   nickName?: string;
 
@@ -82,24 +90,31 @@ export class User {
   @OneToMany(() => AutoReplyContact, (contact) => contact.user)
   autoReplyContacts: AutoReplyContact[];
 
+  @Index()
   @Column({ type: 'datetime', nullable: true })
   deletedAt?: Date | null;
 
+  @Index()
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 
+  @Index()
   @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
 
+  @Index()
   @Column({ type: 'tinyint', default: 0, name: 'zalo_link_status' })
   zaloLinkStatus: number; // 0: chưa liên kết, 1: đã liên kết, 2: lỗi liên kết
 
+  @Index()
   @Column({ nullable: true, name: 'zalo_name' })
   zaloName?: string;
 
+  @Index()
   @Column({ nullable: true, name: 'avatar_zalo' })
   avatarZalo?: string;
 
+  @Index()
   @Column({ nullable: true, name: 'zalo_gender' })
   zaloGender?: string;
 
@@ -114,6 +129,7 @@ export class User {
   })
   refreshToken?: string;
 
+  @Index()
   @Column({ nullable: true, name: 'last_online_at' })
   lastOnlineAt?: Date;
 }

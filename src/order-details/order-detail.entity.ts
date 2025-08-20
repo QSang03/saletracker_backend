@@ -7,6 +7,7 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   DeleteDateColumn,
+  Index,
 } from 'typeorm';
 import { Product } from '../products/product.entity';
 import { Order } from '../orders/order.entity';
@@ -21,6 +22,8 @@ export enum ExtendReason {
   SYSTEM_SUNDAY_AUTO = 'hệ thống tự gia hạn vào chủ nhật hoặc nghỉ lễ',
   USER_MANUAL = 'chính chủ gia hạn',
 }
+@Index('idx_order_details_order_status', ['order_id', 'status'])
+@Index('idx_order_details_product_status', ['product_id', 'status'])
 @Entity('order_details')
 export class OrderDetail {
   @PrimaryGeneratedColumn('increment', { type: 'bigint' })
@@ -30,6 +33,7 @@ export class OrderDetail {
   @JoinColumn({ name: 'order_id' })
   order: Order;
 
+  @Index()
   @Column('bigint', { nullable: false })
   order_id: number;
 
@@ -37,6 +41,7 @@ export class OrderDetail {
   @JoinColumn({ name: 'product_id' })
   product: Product;
 
+  @Index()
   @Column({
     type: 'enum',
     enum: OrderDetailStatus,
@@ -44,6 +49,7 @@ export class OrderDetail {
   })
   status: OrderDetailStatus;
 
+  @Index()
   @Column('bigint', { nullable: true })
   product_id: number;
 
@@ -53,7 +59,8 @@ export class OrderDetail {
   @Column('int', { default: 4 })
   extended: number;
 
-   @Column('timestamp', { nullable: true, default: null })
+  @Index()
+  @Column('timestamp', { nullable: true, default: null })
   last_extended_at: Date;
 
   @Column({
@@ -96,15 +103,18 @@ export class OrderDetail {
   @Column('json', { nullable: true })
   metadata: Record<string, any>;
 
+  @Index()
   @CreateDateColumn({ type: 'timestamp' })
   created_at: Date;
 
+  @Index()
   @UpdateDateColumn({ type: 'timestamp', nullable: true })
   updated_at: Date;
 
   @DeleteDateColumn({ type: 'timestamp', nullable: true })
   deleted_at: Date;
 
+  @Index()
   @Column('timestamp', { nullable: true })
   hidden_at: Date | null;
 }

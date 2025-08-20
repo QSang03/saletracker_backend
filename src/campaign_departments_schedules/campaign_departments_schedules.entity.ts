@@ -84,9 +84,11 @@ export class DepartmentSchedule {
   @Column({ type: 'text', nullable: true })
   description?: string;
 
+  @Index()
   @Column({ type: 'enum', enum: ScheduleType })
   schedule_type: ScheduleType;
 
+  @Index()
   @Column({ type: 'enum', enum: ScheduleStatus, default: ScheduleStatus.ACTIVE })
   status: ScheduleStatus;
 
@@ -94,15 +96,19 @@ export class DepartmentSchedule {
   @Column({ type: 'json' })
   schedule_config: ScheduleConfig;
 
+  @Index()
   @ManyToOne(() => Department, { nullable: false })
   department: Department;
 
+  @Index()
   @ManyToOne(() => User, { nullable: false })
   created_by: User;
 
+  @Index()
   @CreateDateColumn()
   created_at: Date;
 
+  @Index()
   @UpdateDateColumn()
   updated_at: Date;
 

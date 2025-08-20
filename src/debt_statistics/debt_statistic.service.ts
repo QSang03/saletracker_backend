@@ -927,15 +927,44 @@ export class DebtStatisticService {
   async getContactResponsesDaily(from: string, to: string, by: 'customer' | 'invoice' = 'customer', options: { employeeCode?: string; customerCode?: string } = {}) {
     const dates = this.generateDateRange(from, to).filter((d) => new Date(d).getDay() !== 0);
     const results: Array<{ date: string; status: string; customers: number }> = [];
+    const today = this.getVietnamToday();
     for (const D of dates) {
-      const where = ["DATE(CONVERT_TZ(dh.created_at, '+00:00', '+07:00')) = ?"] as string[];
-      const arr: any[] = [D];
-      if (options.employeeCode) { where.push('u.employee_code = ?'); arr.push(options.employeeCode); }
-      if (options.customerCode) { where.push('dc.customer_code = ?'); arr.push(options.customerCode); }
       const selectDistinct = by === 'customer' ? 'COUNT(DISTINCT dc.customer_code)' : 'COUNT(*)';
-      const query = `SELECT dh.remind_status as status, ${selectDistinct} as customers FROM debt_histories dh LEFT JOIN debt_logs dl ON dh.debt_log_id = dl.id LEFT JOIN debt_configs dc ON dl.debt_config_id = dc.id LEFT JOIN users u ON dc.employee_id = u.id WHERE ${where.join(' AND ')} GROUP BY dh.remind_status`;
-      const rows = await this.debtHistoriesRepository.query(query, arr);
-      for (const r of rows) results.push({ date: D, status: r.status, customers: Number(r.customers) || 0 });
+
+      if (D < today) {
+        // Past days: use events from debt_histories on that day
+        const where = ["DATE(CONVERT_TZ(dh.created_at, '+00:00', '+07:00')) = ?"] as string[];
+        const arr: any[] = [D];
+        if (options.employeeCode) { where.push('u.employee_code = ?'); arr.push(options.employeeCode); }
+        if (options.customerCode) { where.push('dc.customer_code = ?'); arr.push(options.customerCode); }
+        const query = `
+          SELECT dh.remind_status as status, ${selectDistinct} as customers
+          FROM debt_histories dh
+          LEFT JOIN debt_logs dl ON dh.debt_log_id = dl.id
+          LEFT JOIN debt_configs dc ON dl.debt_config_id = dc.id
+          LEFT JOIN users u ON dc.employee_id = u.id
+          WHERE ${where.join(' AND ')}
+          GROUP BY dh.remind_status
+        `;
+        const rows = await this.debtHistoriesRepository.query(query, arr);
+        for (const r of rows) results.push({ date: D, status: r.status, customers: Number(r.customers) || 0 });
+      } else {
+        // Today: use current distribution from debt_logs (as-of today)
+        const where: string[] = ['1=1'];
+        const arr: any[] = [];
+        if (options.employeeCode) { where.push('u.employee_code = ?'); arr.push(options.employeeCode); }
+        if (options.customerCode) { where.push('dc.customer_code = ?'); arr.push(options.customerCode); }
+        const query = `
+          SELECT dl.remind_status as status, ${selectDistinct} as customers
+          FROM debt_logs dl
+          LEFT JOIN debt_configs dc ON dl.debt_config_id = dc.id
+          LEFT JOIN users u ON dc.employee_id = u.id
+          WHERE ${where.join(' AND ')}
+          GROUP BY dl.remind_status
+        `;
+        const rows = await this.debtLogsRepository.query(query, arr);
+        for (const r of rows) results.push({ date: D, status: r.status, customers: Number(r.customers) || 0 });
+      }
     }
     return results;
   }
