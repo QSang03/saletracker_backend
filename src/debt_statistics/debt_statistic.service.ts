@@ -457,22 +457,46 @@ export class DebtStatisticService {
       if (isHistoricalDate) {
         // Special case: overview drilldown by status for a specific historical day
         if (date && status && !mode && typeof minDays === 'undefined' && typeof maxDays === 'undefined') {
-          const where: string[] = ['ds.statistic_date = ?', '1=1'];
-          const paramsEq: any[] = [date];
-          if (status) { where.push('ds.status = ?'); paramsEq.push(status); }
-          if (employeeCode) { where.push('ds.employee_code_raw = ?'); paramsEq.push(employeeCode); }
-          if (customerCode) { where.push('ds.customer_code = ?'); paramsEq.push(customerCode); }
+          // For 'paid' status, we need to get from debts table with updated_at filter
+          if (status === 'paid') {
+            const where: string[] = [
+              'd.deleted_at IS NULL',
+              'd.status = ?',
+              "DATE(CONVERT_TZ(d.updated_at, '+00:00', '+07:00')) = ?"
+            ];
+            const paramsEq: any[] = [status, date];
+            if (employeeCode) { where.push('d.employee_code_raw = ?'); paramsEq.push(employeeCode); }
+            if (customerCode) { where.push('dc.customer_code = ?'); paramsEq.push(customerCode); }
 
-          const dataEq = await this.debtStatisticRepository.query(
-            `SELECT ds.* FROM debt_statistics ds WHERE ${where.join(' AND ')} LIMIT ? OFFSET ?`,
-            [...paramsEq, limit, offset],
-          );
-          const totalEqRow = await this.debtStatisticRepository.query(
-            `SELECT COUNT(*) as total FROM debt_statistics ds WHERE ${where.join(' AND ')}`,
-            paramsEq,
-          );
-          const totalEq = Number(totalEqRow[0]?.total) || 0;
-          return { data: dataEq, total: totalEq, page, limit, totalPages: Math.ceil(totalEq / limit) };
+            const dataEq = await this.debtRepository.query(
+              `SELECT d.*, dc.customer_code, dc.customer_name FROM debts d LEFT JOIN debt_configs dc ON d.debt_config_id = dc.id WHERE ${where.join(' AND ')} LIMIT ? OFFSET ?`,
+              [...paramsEq, limit, offset],
+            );
+            const totalEqRow = await this.debtRepository.query(
+              `SELECT COUNT(*) as total FROM debts d LEFT JOIN debt_configs dc ON d.debt_config_id = dc.id WHERE ${where.join(' AND ')}`,
+              paramsEq,
+            );
+            const totalEq = Number(totalEqRow[0]?.total) || 0;
+            return { data: dataEq, total: totalEq, page, limit, totalPages: Math.ceil(totalEq / limit) };
+          } else {
+            // For other statuses, use debt_statistics
+            const where: string[] = ['ds.statistic_date = ?', '1=1'];
+            const paramsEq: any[] = [date];
+            if (status) { where.push('ds.status = ?'); paramsEq.push(status); }
+            if (employeeCode) { where.push('ds.employee_code_raw = ?'); paramsEq.push(employeeCode); }
+            if (customerCode) { where.push('ds.customer_code = ?'); paramsEq.push(customerCode); }
+
+            const dataEq = await this.debtStatisticRepository.query(
+              `SELECT ds.* FROM debt_statistics ds WHERE ${where.join(' AND ')} LIMIT ? OFFSET ?`,
+              [...paramsEq, limit, offset],
+            );
+            const totalEqRow = await this.debtStatisticRepository.query(
+              `SELECT COUNT(*) as total FROM debt_statistics ds WHERE ${where.join(' AND ')}`,
+              paramsEq,
+            );
+            const totalEq = Number(totalEqRow[0]?.total) || 0;
+            return { data: dataEq, total: totalEq, page, limit, totalPages: Math.ceil(totalEq / limit) };
+          }
         }
 
         let query = `
