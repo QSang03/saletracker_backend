@@ -455,6 +455,26 @@ export class DebtStatisticService {
       }
 
       if (isHistoricalDate) {
+        // Special case: overview drilldown by status for a specific historical day
+        if (date && status && !mode && typeof minDays === 'undefined' && typeof maxDays === 'undefined') {
+          const where: string[] = ['ds.statistic_date = ?', '1=1'];
+          const paramsEq: any[] = [date];
+          if (status) { where.push('ds.status = ?'); paramsEq.push(status); }
+          if (employeeCode) { where.push('ds.employee_code_raw = ?'); paramsEq.push(employeeCode); }
+          if (customerCode) { where.push('ds.customer_code = ?'); paramsEq.push(customerCode); }
+
+          const dataEq = await this.debtStatisticRepository.query(
+            `SELECT ds.* FROM debt_statistics ds WHERE ${where.join(' AND ')} LIMIT ? OFFSET ?`,
+            [...paramsEq, limit, offset],
+          );
+          const totalEqRow = await this.debtStatisticRepository.query(
+            `SELECT COUNT(*) as total FROM debt_statistics ds WHERE ${where.join(' AND ')}`,
+            paramsEq,
+          );
+          const totalEq = Number(totalEqRow[0]?.total) || 0;
+          return { data: dataEq, total: totalEq, page, limit, totalPages: Math.ceil(totalEq / limit) };
+        }
+
         let query = `
         SELECT ds.*
         FROM debt_statistics ds
@@ -585,6 +605,11 @@ export class DebtStatisticService {
           query += ` AND d.status = ?`;
           params.push(status);
         }
+        // Align with trends/overview: restrict to selected as-of day for today's data
+        if (date) {
+          query += ` AND DATE(CONVERT_TZ(d.updated_at, '+00:00', '+07:00')) = ?`;
+          params.push(date);
+        }
         if (mode === 'payLater') {
           if (typeof minDays === 'number') {
             query += ` AND DATEDIFF(?, d.pay_later) >= ?`;
@@ -630,6 +655,10 @@ export class DebtStatisticService {
         if (status) {
           countQuery += ` AND d.status = ?`;
           countParams.push(status);
+        }
+        if (date) {
+          countQuery += ` AND DATE(CONVERT_TZ(d.updated_at, '+00:00', '+07:00')) = ?`;
+          countParams.push(date);
         }
         if (mode === 'payLater') {
           if (typeof minDays === 'number') {
