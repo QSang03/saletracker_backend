@@ -79,6 +79,18 @@ export class DebtStatisticController {
     });
   }
 
+  // Daily aging buckets per day (4 buckets) similar to overview trends
+  @Get('aging-daily')
+  @UseGuards(JwtAuthGuard)
+  async getAgingDaily(
+    @Query('from') fromDate: string,
+    @Query('to') toDate: string,
+    @Query('employeeCode') employeeCode?: string,
+    @Query('customerCode') customerCode?: string,
+  ) {
+    return this.debtStatisticService.getAgingDaily(fromDate, toDate, { employeeCode, customerCode });
+  }
+
   // New: Pay-later delay buckets (hybrid: history from debt_statistics, today from debts)
   @Get('pay-later-delay')
   @UseGuards(JwtAuthGuard)
@@ -108,6 +120,24 @@ export class DebtStatisticController {
     );
   }
 
+  // Daily pay-later delay buckets per day
+  @Get('pay-later-delay-daily')
+  @UseGuards(JwtAuthGuard)
+  async getPayLaterDelayDaily(
+    @Query('from') fromDate: string,
+    @Query('to') toDate: string,
+    @Query('buckets') buckets: string = '7,14,30',
+    @Query('employeeCode') employeeCode?: string,
+    @Query('customerCode') customerCode?: string,
+  ) {
+    const bucketNumbers = buckets
+      .split(',')
+      .map((b) => parseInt(b.trim(), 10))
+      .filter((n) => !Number.isNaN(n))
+      .sort((a, b) => a - b);
+    return this.debtStatisticService.getPayLaterDelayDaily(fromDate, toDate, bucketNumbers, { employeeCode, customerCode });
+  }
+
   // New: Contact responses aggregation (hybrid: history from debt_histories, today from debt_logs)
   @Get('contact-responses')
   @UseGuards(JwtAuthGuard)
@@ -125,6 +155,19 @@ export class DebtStatisticController {
       by,
       { employeeCode, customerCode, mode },
     );
+  }
+
+  // Daily customer responses by remind_status per day
+  @Get('contact-responses-daily')
+  @UseGuards(JwtAuthGuard)
+  async getContactResponsesDaily(
+    @Query('from') fromDate: string,
+    @Query('to') toDate: string,
+    @Query('by') by: 'customer' | 'invoice' = 'customer',
+    @Query('employeeCode') employeeCode?: string,
+    @Query('customerCode') customerCode?: string,
+  ) {
+    return this.debtStatisticService.getContactResponsesDaily(fromDate, toDate, by, { employeeCode, customerCode });
   }
 
   @Get('trends')
@@ -170,8 +213,14 @@ export class DebtStatisticController {
     @Query('all') all?: string,
   ) {
     // Allow either single date or from/to range
+    // Special case: if only status provided (e.g. clicking overview bar), infer as-of date from 'to' or today
     if (!date && (!from || !to)) {
-      throw new Error('Either date or from/to parameters are required');
+      if (status) {
+        const today = new Date().toISOString().split('T')[0];
+        date = today;
+      } else {
+        throw new Error('Either date or from/to parameters are required');
+      }
     }
     
     let parsedLimit = parseInt(limit, 10);

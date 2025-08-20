@@ -774,6 +774,141 @@ export class DebtStatisticService {
     }));
   }
 
+  // Daily aging buckets per date range, 4 buckets per day
+  async getAgingDaily(fromDate: string, toDate: string, opts: { employeeCode?: string; customerCode?: string } = {}) {
+    const today = this.getVietnamToday();
+    const dates = this.generateDateRange(fromDate, toDate).filter((d) => new Date(d).getDay() !== 0); // skip Sunday
+    const results: Array<{ date: string; range: string; count: number; amount: number }> = [];
+    for (const D of dates) {
+      if (D < today) {
+        const filters: string[] = [
+          "ds.status <> 'paid'",
+          'ds.due_date IS NOT NULL',
+          'DATEDIFF(?, ds.due_date) > 0',
+        ];
+        const args: any[] = [D];
+        if (opts.employeeCode) { filters.push('ds.employee_code_raw = ?'); args.push(opts.employeeCode); }
+        if (opts.customerCode) { filters.push('ds.customer_code = ?'); args.push(opts.customerCode); }
+        const query = `
+          SELECT
+            CASE
+              WHEN DATEDIFF(?, ds.due_date) BETWEEN 1 AND 30 THEN '1-30'
+              WHEN DATEDIFF(?, ds.due_date) BETWEEN 31 AND 60 THEN '31-60'
+              WHEN DATEDIFF(?, ds.due_date) BETWEEN 61 AND 90 THEN '61-90'
+              ELSE '>90'
+            END AS bucket,
+            COUNT(*) AS count,
+            SUM(ds.remaining) AS amount
+          FROM debt_statistics ds
+          INNER JOIN (
+            SELECT original_debt_id, MAX(statistic_date) AS snap_date
+            FROM debt_statistics
+            WHERE statistic_date <= ?
+            GROUP BY original_debt_id
+          ) latest ON latest.original_debt_id = ds.original_debt_id AND latest.snap_date = ds.statistic_date
+          WHERE ${filters.join(' AND ')}
+          GROUP BY bucket`;
+        const rows = await this.debtStatisticRepository.query(query, [D, D, D, D, ...args]);
+        for (const r of rows) results.push({ date: D, range: r.bucket, count: Number(r.count) || 0, amount: Number(r.amount) || 0 });
+      } else {
+        const where: string[] = [
+          'd.deleted_at IS NULL',
+          "d.status <> 'paid'",
+          'd.due_date IS NOT NULL',
+          'DATEDIFF(?, d.due_date) > 0',
+        ];
+        const arr: any[] = [D];
+        if (opts.employeeCode) { where.push('d.employee_code_raw = ?'); arr.push(opts.employeeCode); }
+        if (opts.customerCode) { where.push('dc.customer_code = ?'); arr.push(opts.customerCode); }
+        const query = `
+          SELECT
+            CASE
+              WHEN DATEDIFF(?, d.due_date) BETWEEN 1 AND 30 THEN '1-30'
+              WHEN DATEDIFF(?, d.due_date) BETWEEN 31 AND 60 THEN '31-60'
+              WHEN DATEDIFF(?, d.due_date) BETWEEN 61 AND 90 THEN '61-90'
+              ELSE '>90'
+            END AS bucket,
+            COUNT(*) AS count,
+            SUM(d.remaining) AS amount
+          FROM debts d
+          LEFT JOIN debt_configs dc ON d.debt_config_id = dc.id
+          WHERE ${where.join(' AND ')}
+          GROUP BY bucket`;
+        const rows = await this.debtRepository.query(query, [D, D, D, ...arr]);
+        for (const r of rows) results.push({ date: D, range: r.bucket, count: Number(r.count) || 0, amount: Number(r.amount) || 0 });
+      }
+    }
+    return results;
+  }
+
+  // Daily pay-later buckets per day using ranges config
+  async getPayLaterDelayDaily(from: string, to: string, buckets: number[], options: { employeeCode?: string; customerCode?: string } = {}) {
+    const today = this.getVietnamToday();
+    const dates = this.generateDateRange(from, to).filter((d) => new Date(d).getDay() !== 0);
+    const sorted = [...buckets].sort((a, b) => a - b);
+    const ranges = [] as Array<{ label: string; min: number; max: number | null }>;
+    let prev = 0;
+    for (const b of sorted) { ranges.push({ label: `${prev + 1}-${b}`, min: prev + 1, max: b }); prev = b; }
+    ranges.push({ label: `>${prev}`, min: prev + 1, max: null });
+    const results: Array<{ date: string; range: string; count: number; amount: number }> = [];
+    for (const D of dates) {
+      if (D < today) {
+        const where: string[] = ["ds.status <> 'paid'", 'ds.pay_later IS NOT NULL'];
+        const arr: any[] = [];
+        if (options.employeeCode) { where.push('ds.employee_code_raw = ?'); arr.push(options.employeeCode); }
+        if (options.customerCode) { where.push('ds.customer_code = ?'); arr.push(options.customerCode); }
+        const parts = ranges.map((r) => {
+          const cond = r.max == null ? `DATEDIFF(?, ds.pay_later) >= ${r.min}` : `DATEDIFF(?, ds.pay_later) BETWEEN ${r.min} AND ${r.max}`;
+          return `SUM(CASE WHEN ${cond} THEN 1 ELSE 0 END) AS cnt_${r.label.replace(/[^a-zA-Z0-9_]/g, '_')}, SUM(CASE WHEN ${cond} THEN ds.remaining ELSE 0 END) AS amt_${r.label.replace(/[^a-zA-Z0-9_]/g, '_')}`;
+        }).join(',');
+        const query = `SELECT ${parts} FROM (
+          SELECT ds.* FROM debt_statistics ds INNER JOIN (
+            SELECT original_debt_id, MAX(statistic_date) AS snap_date FROM debt_statistics WHERE statistic_date <= ? GROUP BY original_debt_id
+          ) latest ON latest.original_debt_id = ds.original_debt_id AND latest.snap_date = ds.statistic_date WHERE ${where.join(' AND ')}
+        ) t`;
+        const row = (await this.debtStatisticRepository.query(query, [D, D, ...arr]))[0] || {};
+        for (const r of ranges) {
+          const key = r.label.replace(/[^a-zA-Z0-9_]/g, '_');
+          results.push({ date: D, range: r.label, count: Number(row[`cnt_${key}`]) || 0, amount: Number(row[`amt_${key}`]) || 0 });
+        }
+      } else {
+        const where: string[] = ['d.deleted_at IS NULL', "d.status <> 'paid'", 'd.pay_later IS NOT NULL', "DATE(CONVERT_TZ(d.updated_at, '+00:00', '+07:00')) = ?"];
+        const arr: any[] = [D];
+        if (options.employeeCode) { where.push('d.employee_code_raw = ?'); arr.push(options.employeeCode); }
+        if (options.customerCode) { where.push('dc.customer_code = ?'); arr.push(options.customerCode); }
+        const diff = "DATEDIFF(DATE(CONVERT_TZ(d.updated_at, '+00:00', '+07:00')), d.pay_later)";
+        const parts = ranges.map((r) => {
+          const cond = r.max == null ? `${diff} >= ${r.min}` : `${diff} BETWEEN ${r.min} AND ${r.max}`;
+          return `SUM(CASE WHEN ${cond} THEN 1 ELSE 0 END) AS cnt_${r.label.replace(/[^a-zA-Z0-9_]/g, '_')}, SUM(CASE WHEN ${cond} THEN d.remaining ELSE 0 END) AS amt_${r.label.replace(/[^a-zA-Z0-9_]/g, '_')}`;
+        }).join(',');
+        const query = `SELECT ${parts} FROM debts d LEFT JOIN debt_configs dc ON d.debt_config_id = dc.id WHERE ${where.join(' AND ')}`;
+        const row = (await this.debtRepository.query(query, arr))[0] || {};
+        for (const r of ranges) {
+          const key = r.label.replace(/[^a-zA-Z0-9_]/g, '_');
+          results.push({ date: D, range: r.label, count: Number(row[`cnt_${key}`]) || 0, amount: Number(row[`amt_${key}`]) || 0 });
+        }
+      }
+    }
+    return results;
+  }
+
+  // Daily contact responses per remind_status
+  async getContactResponsesDaily(from: string, to: string, by: 'customer' | 'invoice' = 'customer', options: { employeeCode?: string; customerCode?: string } = {}) {
+    const dates = this.generateDateRange(from, to).filter((d) => new Date(d).getDay() !== 0);
+    const results: Array<{ date: string; status: string; customers: number }> = [];
+    for (const D of dates) {
+      const where = ["DATE(CONVERT_TZ(dh.created_at, '+00:00', '+07:00')) = ?"] as string[];
+      const arr: any[] = [D];
+      if (options.employeeCode) { where.push('u.employee_code = ?'); arr.push(options.employeeCode); }
+      if (options.customerCode) { where.push('dc.customer_code = ?'); arr.push(options.customerCode); }
+      const selectDistinct = by === 'customer' ? 'COUNT(DISTINCT dc.customer_code)' : 'COUNT(*)';
+      const query = `SELECT dh.remind_status as status, ${selectDistinct} as customers FROM debt_histories dh LEFT JOIN debt_logs dl ON dh.debt_log_id = dl.id LEFT JOIN debt_configs dc ON dl.debt_config_id = dc.id LEFT JOIN users u ON dc.employee_id = u.id WHERE ${where.join(' AND ')} GROUP BY dh.remind_status`;
+      const rows = await this.debtHistoriesRepository.query(query, arr);
+      for (const r of rows) results.push({ date: D, status: r.status, customers: Number(r.customers) || 0 });
+    }
+    return results;
+  }
+
   // New as-of implementation per plan: single D date determines snapshot selection
   async getAgingAnalysisAsOf(params: { singleDate?: string; from?: string; to?: string; employeeCode?: string; customerCode?: string }) {
     const D = this.resolveAsOfDate(params);
