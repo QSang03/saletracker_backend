@@ -181,7 +181,7 @@ export class DebtStatisticController {
       parsedLimit = 100000; // Giới hạn tối đa để tránh memory issues
     }
     
-    const filters = {
+    const filters: any = {
       date,
       from,
       to,
@@ -195,6 +195,12 @@ export class DebtStatisticController {
       page: parseInt(page, 10),
       limit: parsedLimit,
     };
+
+    // Force today to match trend/overview logic when clicking daily bars
+    if (status === 'paid' && (!from || !to)) {
+      const today = new Date().toISOString().split('T')[0];
+      filters.date = today;
+    }
     
     const result = await this.debtStatisticService.getDetailedDebts(filters);
     return result;
