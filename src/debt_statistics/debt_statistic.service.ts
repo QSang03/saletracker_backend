@@ -33,7 +33,10 @@ export class DebtStatisticService {
     const sd = this.normalizeDateOnly(params.singleDate);
     const to = this.normalizeDateOnly(params.to);
     const from = this.normalizeDateOnly(params.from);
-    return sd || to || from || today;
+    
+    // Nếu ngày được chọn là tương lai, chỉ trả về ngày hiện tại
+    const resolvedDate = sd || to || from || today;
+    return resolvedDate > today ? today : resolvedDate;
   }
 
   constructor(
@@ -97,6 +100,9 @@ export class DebtStatisticService {
 
   async getOverviewStatistics(fromDate: string, toDate: string, filters?: { employeeCode?: string; customerCode?: string }) {
     const today = this.getVietnamToday();
+    
+    // Nếu toDate là tương lai, chỉ tính đến ngày hiện tại
+    const effectiveToDate = toDate > today ? today : toDate;
 
     const results = {
       total: 0,
@@ -112,8 +118,8 @@ export class DebtStatisticService {
     // Xử lý các ngày trong quá khứ từ debt_statistics
     if (fromDate < today) {
       const endDateForHistory =
-        toDate < today
-          ? toDate
+        effectiveToDate < today
+          ? effectiveToDate
           : new Date(new Date(today).getTime() - 24 * 60 * 60 * 1000)
               .toISOString()
               .split('T')[0];
@@ -161,7 +167,7 @@ export class DebtStatisticService {
     }
 
     // Xử lý ngày hôm nay từ debts
-    if (toDate >= today) {
+    if (effectiveToDate >= today) {
       let todayQuery = `
     SELECT 
       COUNT(*) as total,
@@ -217,6 +223,10 @@ export class DebtStatisticService {
     groupBy: 'day' | 'week' | 'month' = 'day',
   ) {
     const today = this.getVietnamToday();
+    
+    // Nếu toDate là tương lai, chỉ tính đến ngày hiện tại
+    const effectiveToDate = toDate > today ? today : toDate;
+    
     const results: Array<{
       date: string;
       name: string;
@@ -228,8 +238,8 @@ export class DebtStatisticService {
       collectionRate: number;
     }> = [];
 
-    // Generate date range
-    const dates = this.generateDateRange(fromDate, toDate);
+    // Generate date range (skip Sundays)
+    const dates = this.generateDateRange(fromDate, effectiveToDate).filter((d) => new Date(d).getDay() !== 0);
 
     for (const date of dates) {
       if (date < today) {
@@ -312,10 +322,13 @@ export class DebtStatisticService {
         const dataCombined: any[] = [];
         let total = 0;
 
+        // Nếu to là tương lai, chỉ tính đến ngày hiện tại
+        const effectiveTo = (to as string) > today ? today : (to as string);
+
         // Historical snapshots part (from .. min(to, yesterday))
         if ((from as string) < today) {
-          const endHistory = (to as string) < today
-            ? (to as string)
+          const endHistory = effectiveTo < today
+            ? effectiveTo
             : new Date(new Date(today).getTime() - 24 * 60 * 60 * 1000)
                 .toISOString()
                 .split('T')[0];
@@ -348,7 +361,7 @@ export class DebtStatisticService {
         }
 
         // Today's live debts part (only if range includes today)
-        if ((to as string) >= today) {
+        if (effectiveTo >= today) {
           const whereToday: string[] = [
             'd.deleted_at IS NULL',
             "d.status <> 'paid'",
@@ -398,9 +411,12 @@ export class DebtStatisticService {
         const dataCombined: any[] = [];
         let total = 0;
 
+        // Nếu to là tương lai, chỉ tính đến ngày hiện tại
+        const effectiveTo = (to as string) > today ? today : (to as string);
+
         if ((from as string) < today) {
-          const endHistory = (to as string) < today
-            ? (to as string)
+          const endHistory = effectiveTo < today
+            ? effectiveTo
             : new Date(new Date(today).getTime() - 24 * 60 * 60 * 1000)
                 .toISOString()
                 .split('T')[0];
@@ -433,7 +449,7 @@ export class DebtStatisticService {
           dataCombined.push(...rows);
         }
 
-        if ((to as string) >= today) {
+        if (effectiveTo >= today) {
           const whereToday: string[] = [
             'd.deleted_at IS NULL',
             "d.status <> 'paid'",
@@ -738,13 +754,17 @@ export class DebtStatisticService {
   async getAgingAnalysis(fromDate: string, toDate: string) {
     // Logic hybrid theo snapshot: quá khứ theo statistic_date, hôm nay theo DATE(updated_at)
     const today = this.getVietnamToday();
+    
+    // Nếu toDate là tương lai, chỉ tính đến ngày hiện tại
+    const effectiveToDate = toDate > today ? today : toDate;
+    
     const results: any[] = [];
 
     // Quá khứ: dùng debt_statistics, tính DATEDIFF(statistic_date, due_date) và chỉ lấy khoản nợ đã quá hạn (>0)
     if (fromDate < today) {
       const endDateForHistory =
-        toDate < today
-          ? toDate
+        effectiveToDate < today
+          ? effectiveToDate
           : new Date(new Date(today).getTime() - 24 * 60 * 60 * 1000)
               .toISOString()
               .split('T')[0];
@@ -776,7 +796,7 @@ export class DebtStatisticService {
     }
 
     // Hôm nay: dùng debts, tính DATEDIFF(DATE(updated_at), due_date) và chỉ lấy quá hạn (>0)
-    if (toDate >= today) {
+    if (effectiveToDate >= today) {
       const currentAgingQuery = `
         SELECT 
           CASE 
@@ -817,7 +837,11 @@ export class DebtStatisticService {
   // Daily aging buckets per date range, 4 buckets per day
   async getAgingDaily(fromDate: string, toDate: string, opts: { employeeCode?: string; customerCode?: string } = {}) {
     const today = this.getVietnamToday();
-    const dates = this.generateDateRange(fromDate, toDate).filter((d) => new Date(d).getDay() !== 0); // skip Sunday
+    
+    // Nếu toDate là tương lai, chỉ tính đến ngày hiện tại
+    const effectiveToDate = toDate > today ? today : toDate;
+    
+    const dates = this.generateDateRange(fromDate, effectiveToDate).filter((d) => new Date(d).getDay() !== 0); // skip Sunday
     const results: Array<{ date: string; range: string; count: number; amount: number }> = [];
     for (const D of dates) {
       if (D < today) {
@@ -884,7 +908,11 @@ export class DebtStatisticService {
   // Daily pay-later buckets per day using ranges config
   async getPayLaterDelayDaily(from: string, to: string, buckets: number[], options: { employeeCode?: string; customerCode?: string } = {}) {
     const today = this.getVietnamToday();
-    const dates = this.generateDateRange(from, to).filter((d) => new Date(d).getDay() !== 0);
+    
+    // Nếu to là tương lai, chỉ tính đến ngày hiện tại
+    const effectiveTo = to > today ? today : to;
+    
+    const dates = this.generateDateRange(from, effectiveTo).filter((d) => new Date(d).getDay() !== 0);
     const sorted = [...buckets].sort((a, b) => a - b);
     const ranges = [] as Array<{ label: string; min: number; max: number | null }>;
     let prev = 0;
@@ -937,9 +965,13 @@ export class DebtStatisticService {
   // Daily contact responses per remind_status
   async getContactResponsesDaily(from: string, to: string, by: 'customer' | 'invoice' = 'customer', options: { employeeCode?: string; customerCode?: string } = {}) {
     // Keep Sunday filter but fix timezone issue
-    const dates = this.generateDateRange(from, to).filter((d) => new Date(d).getDay() !== 0);
-    const results: Array<{ date: string; status: string; customers: number }> = [];
     const today = this.getVietnamToday();
+    
+    // Nếu to là tương lai, chỉ tính đến ngày hiện tại
+    const effectiveTo = to > today ? today : to;
+    
+    const dates = this.generateDateRange(from, effectiveTo).filter((d) => new Date(d).getDay() !== 0);
+    const results: Array<{ date: string; status: string; customers: number }> = [];
     for (const D of dates) {
       const selectDistinct = by === 'customer' ? 'COUNT(DISTINCT dc.customer_code)' : 'COUNT(*)';
 
@@ -1079,6 +1111,10 @@ export class DebtStatisticService {
     options: { employeeCode?: string; customerCode?: string } = {},
   ) {
     const today = this.getVietnamToday();
+    
+    // Nếu toDate là tương lai, chỉ tính đến ngày hiện tại
+    const effectiveToDate = toDate > today ? today : toDate;
+    
     const sortedBuckets = [...buckets].sort((a, b) => a - b);
     const ranges: Array<{ label: string; min: number; max: number | null }> = [];
     let previous = 0;
@@ -1094,8 +1130,8 @@ export class DebtStatisticService {
     }
 
     if (fromDate < today) {
-      const endDateForHistory = toDate < today
-        ? toDate
+      const endDateForHistory = effectiveToDate < today
+        ? effectiveToDate
         : new Date(new Date(today).getTime() - 24 * 60 * 60 * 1000)
             .toISOString()
             .split('T')[0];
@@ -1140,7 +1176,7 @@ export class DebtStatisticService {
       }
     }
 
-    if (toDate >= today) {
+    if (effectiveToDate >= today) {
       const whereClauses: string[] = [
         'd.deleted_at IS NULL',
         "d.status <> 'paid'",
@@ -1289,6 +1325,10 @@ export class DebtStatisticService {
     options: { employeeCode?: string; customerCode?: string; mode?: 'events' | 'distribution' } = {},
   ) {
     const today = this.getVietnamToday();
+    
+    // Nếu toDate là tương lai, chỉ tính đến ngày hiện tại
+    const effectiveToDate = toDate > today ? today : toDate;
+    
     const resultsMap = new Map<string, { status: string; customers: number }>();
 
     const addCount = (status: string, count: number) => {
@@ -1305,7 +1345,7 @@ export class DebtStatisticService {
       const whereClauses = [
         "DATE(dh.created_at) >= ? AND DATE(dh.created_at) <= ?",
       ];
-      const params: any[] = [fromDate, toDate];
+      const params: any[] = [fromDate, effectiveToDate];
       if (options.employeeCode) {
         whereClauses.push('u.employee_code = ?');
         params.push(options.employeeCode);
@@ -1513,14 +1553,18 @@ export class DebtStatisticService {
   }
 
   async getEmployeePerformance(fromDate: string, toDate: string) {
-    const today = new Date().toISOString().split('T')[0];
+    const today = this.getVietnamToday();
+    
+    // Nếu toDate là tương lai, chỉ tính đến ngày hiện tại
+    const effectiveToDate = toDate > today ? today : toDate;
+    
     const results: any[] = [];
 
     // Lấy dữ liệu từ debt_statistics cho các ngày trong quá khứ
     if (fromDate < today) {
       const endDateForHistory =
-        toDate < today
-          ? toDate
+        effectiveToDate < today
+          ? effectiveToDate
           : new Date(new Date(today).getTime() - 24 * 60 * 60 * 1000)
               .toISOString()
               .split('T')[0];
@@ -1548,7 +1592,7 @@ export class DebtStatisticService {
     }
 
     // Nếu toDate là hôm nay, lấy thêm dữ liệu realtime từ debts
-    if (toDate >= today) {
+    if (effectiveToDate >= today) {
       const currentPerformanceQuery = `
         SELECT 
           sale_name_raw as employee_name,
