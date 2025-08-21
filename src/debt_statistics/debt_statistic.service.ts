@@ -936,6 +936,7 @@ export class DebtStatisticService {
 
   // Daily contact responses per remind_status
   async getContactResponsesDaily(from: string, to: string, by: 'customer' | 'invoice' = 'customer', options: { employeeCode?: string; customerCode?: string } = {}) {
+    // Keep Sunday filter but fix timezone issue
     const dates = this.generateDateRange(from, to).filter((d) => new Date(d).getDay() !== 0);
     const results: Array<{ date: string; status: string; customers: number }> = [];
     const today = this.getVietnamToday();
@@ -944,7 +945,8 @@ export class DebtStatisticService {
 
       if (D < today) {
         // Past days: use events from debt_histories on that day
-        const where = ["DATE(CONVERT_TZ(dh.created_at, '+00:00', '+07:00')) = ?"] as string[];
+        // FIX: Use DATE(created_at) directly like the working query
+        const where = ["DATE(dh.created_at) = ?"] as string[];
         const arr: any[] = [D];
         if (options.employeeCode) { where.push('u.employee_code = ?'); arr.push(options.employeeCode); }
         if (options.customerCode) { where.push('dc.customer_code = ?'); arr.push(options.customerCode); }
@@ -1298,10 +1300,10 @@ export class DebtStatisticService {
 
     const mode = options.mode || 'events';
 
-    // Mode events: đếm sự kiện trong khoảng [from, to] thuần theo debt_histories (UTC+7)
+    // Mode events: đếm sự kiện trong khoảng [from, to] thuần theo debt_histories
     if (mode === 'events') {
       const whereClauses = [
-        "DATE(CONVERT_TZ(dh.created_at, '+00:00', '+07:00')) >= ? AND DATE(CONVERT_TZ(dh.created_at, '+00:00', '+07:00')) <= ?",
+        "DATE(dh.created_at) >= ? AND DATE(dh.created_at) <= ?",
       ];
       const params: any[] = [fromDate, toDate];
       if (options.employeeCode) {
@@ -1376,8 +1378,8 @@ export class DebtStatisticService {
     // Range mode (events): list distinct customers having that response in [from, to]
     if (!date && from && to && mode === 'events') {
       const where: string[] = [
-        "DATE(CONVERT_TZ(dh.created_at, '+00:00', '+07:00')) >= ?",
-        "DATE(CONVERT_TZ(dh.created_at, '+00:00', '+07:00')) <= ?",
+        "DATE(dh.created_at) >= ?",
+        "DATE(dh.created_at) <= ?",
         'dh.remind_status = ?',
       ];
       const arr: any[] = [from, to, responseStatus];
@@ -1418,7 +1420,7 @@ export class DebtStatisticService {
 
     if (isHistorical) {
       const where: string[] = [
-        "DATE(CONVERT_TZ(dh.created_at, '+00:00', '+07:00')) = ?",
+        "DATE(dh.created_at) = ?",
         'dh.remind_status = ?'
       ];
       const arr: any[] = [date, responseStatus];
