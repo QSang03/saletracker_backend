@@ -392,19 +392,21 @@ export class DebtStatisticService {
 
         // Today's live debts part (only if range includes today)
         if (effectiveTo >= today) {
+          // Format today to Vietnam timezone for MySQL query (optimized for index)
+          const todayVietnam = this.formatDateStringToVietnam(today);
           const whereToday: string[] = [
             'd.deleted_at IS NULL',
             "d.status <> 'paid'",
             'd.pay_later IS NOT NULL',
-            "DATE(CONVERT_TZ(d.updated_at, '+00:00', '+07:00')) = ?",
+            "DATE(d.updated_at) = DATE(?)",
           ];
-          const paramsToday: any[] = [today];
+          const paramsToday: any[] = [todayVietnam];
           if (typeof minDays === 'number') {
-            whereToday.push("DATEDIFF(DATE(CONVERT_TZ(d.updated_at, '+00:00', '+07:00')), d.pay_later) >= ?");
+            whereToday.push("DATEDIFF(DATE(d.updated_at), d.pay_later) >= ?");
             paramsToday.push(minDays);
           }
           if (typeof maxDays === 'number') {
-            whereToday.push("DATEDIFF(DATE(CONVERT_TZ(d.updated_at, '+00:00', '+07:00')), d.pay_later) <= ?");
+            whereToday.push("DATEDIFF(DATE(d.updated_at), d.pay_later) <= ?");
             paramsToday.push(maxDays);
           }
           if (employeeCode) {
@@ -480,20 +482,22 @@ export class DebtStatisticService {
         }
 
         if (effectiveTo >= today) {
+          // Format today to Vietnam timezone for MySQL query (optimized for index)
+          const todayVietnam = this.formatDateStringToVietnam(today);
           const whereToday: string[] = [
             'd.deleted_at IS NULL',
             "d.status <> 'paid'",
             'd.due_date IS NOT NULL',
-            'DATEDIFF(DATE(CONVERT_TZ(d.updated_at, "+00:00", "+07:00")), d.due_date) > 0',
-            'DATE(CONVERT_TZ(d.updated_at, "+00:00", "+07:00")) = ?',
+            'DATEDIFF(DATE(d.updated_at), d.due_date) > 0',
+            'DATE(d.updated_at) = DATE(?)',
           ];
-          const paramsToday: any[] = [today];
+          const paramsToday: any[] = [todayVietnam];
           if (typeof minDays === 'number') {
-            whereToday.push('DATEDIFF(DATE(CONVERT_TZ(d.updated_at, "+00:00", "+07:00")), d.due_date) >= ?');
+            whereToday.push('DATEDIFF(DATE(d.updated_at), d.due_date) >= ?');
             paramsToday.push(minDays);
           }
           if (typeof maxDays === 'number') {
-            whereToday.push('DATEDIFF(DATE(CONVERT_TZ(d.updated_at, "+00:00", "+07:00")), d.due_date) <= ?');
+            whereToday.push('DATEDIFF(DATE(d.updated_at), d.due_date) <= ?');
             paramsToday.push(maxDays);
           }
           if (employeeCode) {
@@ -831,24 +835,26 @@ export class DebtStatisticService {
 
     // Hôm nay: dùng debts, tính DATEDIFF(DATE(updated_at), due_date) và chỉ lấy quá hạn (>0)
     if (effectiveToDate >= today) {
+      // Format today to Vietnam timezone for MySQL query (optimized for index)
+      const todayVietnam = this.formatDateStringToVietnam(today);
       const currentAgingQuery = `
         SELECT 
           CASE 
-            WHEN DATEDIFF(DATE(CONVERT_TZ(updated_at, '+00:00', '+07:00')), due_date) BETWEEN 1 AND 30 THEN '1-30'
-            WHEN DATEDIFF(DATE(CONVERT_TZ(updated_at, '+00:00', '+07:00')), due_date) BETWEEN 31 AND 60 THEN '31-60'
-            WHEN DATEDIFF(DATE(CONVERT_TZ(updated_at, '+00:00', '+07:00')), due_date) BETWEEN 61 AND 90 THEN '61-90'
+            WHEN DATEDIFF(DATE(updated_at), due_date) BETWEEN 1 AND 30 THEN '1-30'
+            WHEN DATEDIFF(DATE(updated_at), due_date) BETWEEN 31 AND 60 THEN '31-60'
+            WHEN DATEDIFF(DATE(updated_at), due_date) BETWEEN 61 AND 90 THEN '61-90'
             ELSE '>90'
           END as age_range,
           COUNT(*) as count,
           SUM(remaining) as amount
         FROM debts
         WHERE deleted_at IS NULL AND status != 'paid'
-          AND DATE(CONVERT_TZ(updated_at, '+00:00', '+07:00')) = ?
-          AND DATEDIFF(DATE(CONVERT_TZ(updated_at, '+00:00', '+07:00')), due_date) > 0
+          AND DATE(updated_at) = DATE(?)
+          AND DATEDIFF(DATE(updated_at), due_date) > 0
         GROUP BY age_range
       `;
 
-      const currentAging = await this.debtRepository.query(currentAgingQuery, [today]);
+      const currentAging = await this.debtRepository.query(currentAgingQuery, [todayVietnam]);
 
       for (const current of currentAging) {
         const existing = results.find((r) => r.age_range === current.age_range);
@@ -976,11 +982,13 @@ export class DebtStatisticService {
           results.push({ date: D, range: r.label, count: Number(row[`cnt_${key}`]) || 0, amount: Number(row[`amt_${key}`]) || 0 });
         }
       } else {
-        const where: string[] = ['d.deleted_at IS NULL', "d.status <> 'paid'", 'd.pay_later IS NOT NULL', "DATE(CONVERT_TZ(d.updated_at, '+00:00', '+07:00')) = ?"];
-        const arr: any[] = [D];
+        // Format date to Vietnam timezone for MySQL query (optimized for index)
+        const dateVietnam = this.formatDateStringToVietnam(D);
+        const where: string[] = ['d.deleted_at IS NULL', "d.status <> 'paid'", 'd.pay_later IS NOT NULL', "DATE(d.updated_at) = DATE(?)"];
+        const arr: any[] = [dateVietnam];
         if (options.employeeCode) { where.push('d.employee_code_raw = ?'); arr.push(options.employeeCode); }
         if (options.customerCode) { where.push('dc.customer_code = ?'); arr.push(options.customerCode); }
-        const diff = "DATEDIFF(DATE(CONVERT_TZ(d.updated_at, '+00:00', '+07:00')), d.pay_later)";
+        const diff = "DATEDIFF(DATE(d.updated_at), d.pay_later)";
         const parts = ranges.map((r) => {
           const cond = r.max == null ? `${diff} >= ${r.min}` : `${diff} BETWEEN ${r.min} AND ${r.max}`;
           return `SUM(CASE WHEN ${cond} THEN 1 ELSE 0 END) AS cnt_${r.label.replace(/[^a-zA-Z0-9_]/g, '_')}, SUM(CASE WHEN ${cond} THEN d.remaining ELSE 0 END) AS amt_${r.label.replace(/[^a-zA-Z0-9_]/g, '_')}`;
@@ -1209,13 +1217,15 @@ export class DebtStatisticService {
     }
 
     if (effectiveToDate >= today) {
+      // Format today to Vietnam timezone for MySQL query (optimized for index)
+      const todayVietnam = this.formatDateStringToVietnam(today);
       const whereClauses: string[] = [
         'd.deleted_at IS NULL',
         "d.status <> 'paid'",
         'd.pay_later IS NOT NULL',
-        "DATE(CONVERT_TZ(d.updated_at, '+00:00', '+07:00')) = ?",
+        "DATE(d.updated_at) = DATE(?)",
       ];
-      const params: any[] = [today];
+      const params: any[] = [todayVietnam];
       if (options.employeeCode) {
         whereClauses.push('d.employee_code_raw = ?');
         params.push(options.employeeCode);
@@ -1225,7 +1235,7 @@ export class DebtStatisticService {
         params.push(options.customerCode);
       }
 
-      const diffExpr = "DATEDIFF(DATE(CONVERT_TZ(d.updated_at, '+00:00', '+07:00')), d.pay_later)";
+      const diffExpr = "DATEDIFF(DATE(d.updated_at), d.pay_later)";
       const selects = ranges
         .map((r) => {
           const cond = r.max === null
@@ -1547,11 +1557,13 @@ export class DebtStatisticService {
       const total = Number(totalRow[0]?.total) || 0;
       return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
     } else {
+      // Format today to Vietnam timezone for MySQL query (optimized for index)
+      const todayVietnam = this.formatDateStringToVietnam(today);
       const where: string[] = [
-        'DATE(CONVERT_TZ(dl.updated_at, "+00:00", "+07:00")) = ?',
+        'DATE(dl.updated_at) = DATE(?)',
         'dl.remind_status = ?'
       ];
-      const arr: any[] = [today, responseStatus];
+      const arr: any[] = [todayVietnam, responseStatus];
       if (employeeCode) {
         where.push('u.employee_code = ?');
         arr.push(employeeCode);
