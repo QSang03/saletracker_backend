@@ -17,6 +17,32 @@ export class DebtStatisticService {
     return vietnamTime.toISOString().split('T')[0];
   }
 
+  // Format date to Vietnam timezone for MySQL queries (without CONVERT_TZ)
+  private formatToVietnamDate(date: Date): string {
+    const vietnamTime = new Date(date.getTime() + 7 * 60 * 60 * 1000);
+    return vietnamTime.toISOString().slice(0, 19).replace('T', ' ');
+  }
+
+  // Format date string to Vietnam timezone
+  private formatDateStringToVietnam(dateStr: string): string {
+    const date = new Date(dateStr + 'T00:00:00Z');
+    const vietnamTime = new Date(date.getTime() + 7 * 60 * 60 * 1000);
+    return vietnamTime.toISOString().slice(0, 19).replace('T', ' ');
+  }
+
+  // Helper to format date for MySQL queries (optimized for index usage)
+  private formatDateForMySQL(dateStr: string): string {
+    return dateStr + ' 00:00:00';
+  }
+
+  // Helper to format date range for MySQL queries
+  private formatDateRangeForMySQL(fromDate: string, toDate: string): { from: string; to: string } {
+    return {
+      from: this.formatDateForMySQL(fromDate),
+      to: this.formatDateForMySQL(toDate)
+    };
+  }
+
   private normalizeDateOnly(input?: string): string | undefined {
     if (!input) return undefined;
     // Expect formats like YYYY-MM-DD or full ISO; take date part only
@@ -168,6 +194,8 @@ export class DebtStatisticService {
 
     // Xử lý ngày hôm nay từ debts
     if (effectiveToDate >= today) {
+      // Format today to Vietnam timezone for MySQL query
+      const todayVietnam = this.formatDateStringToVietnam(today);
       let todayQuery = `
     SELECT 
       COUNT(*) as total,
@@ -180,10 +208,10 @@ export class DebtStatisticService {
     FROM debts d
     LEFT JOIN debt_configs dc ON d.debt_config_id = dc.id
     WHERE d.deleted_at IS NULL
-      AND DATE(CONVERT_TZ(d.updated_at, '+00:00', '+07:00')) = ?
+      AND DATE(d.updated_at) = DATE(?)
   `;
 
-      const todayParams = [today];
+      const todayParams = [todayVietnam];
       
       if (filters?.employeeCode) {
         todayQuery += ` AND d.employee_code_raw = ?`;
@@ -271,6 +299,8 @@ export class DebtStatisticService {
         });
       } else if (date === today) {
         // Lấy từ debts với filter theo updated_at của ngày hiện tại
+        // Format today to Vietnam timezone for MySQL query
+        const todayVietnam = this.formatDateStringToVietnam(today);
         const query = `
           SELECT 
             COUNT(*) as total,
@@ -280,10 +310,10 @@ export class DebtStatisticService {
             SUM(total_amount) as totalAmount,
             AVG(CASE WHEN total_amount > 0 THEN ((total_amount - remaining) / total_amount) * 100 ELSE 0 END) as collectionRate
           FROM debts
-          WHERE deleted_at IS NULL AND DATE(CONVERT_TZ(updated_at, '+00:00', '+07:00')) = ?
+          WHERE deleted_at IS NULL AND DATE(updated_at) = DATE(?)
         `;
 
-        const stats = await this.debtRepository.query(query, [date]);
+        const stats = await this.debtRepository.query(query, [todayVietnam]);
         const data = stats[0] || {};
 
         results.push({
@@ -634,8 +664,10 @@ export class DebtStatisticService {
         }
         // Align with trends/overview: restrict to selected as-of day for today's data
         if (date) {
-          query += ` AND DATE(CONVERT_TZ(d.updated_at, '+00:00', '+07:00')) = ?`;
-          params.push(date);
+          // Format date to Vietnam timezone for MySQL query (optimized for index)
+          const dateVietnam = this.formatDateStringToVietnam(date);
+          query += ` AND DATE(d.updated_at) = DATE(?)`;
+          params.push(dateVietnam);
         }
         if (mode === 'payLater') {
           if (typeof minDays === 'number') {
@@ -684,8 +716,10 @@ export class DebtStatisticService {
           countParams.push(status);
         }
         if (date) {
-          countQuery += ` AND DATE(CONVERT_TZ(d.updated_at, '+00:00', '+07:00')) = ?`;
-          countParams.push(date);
+          // Format date to Vietnam timezone for MySQL query (optimized for index)
+          const dateVietnam = this.formatDateStringToVietnam(date);
+          countQuery += ` AND DATE(d.updated_at) = DATE(?)`;
+          countParams.push(dateVietnam);
         }
         if (mode === 'payLater') {
           if (typeof minDays === 'number') {
@@ -966,11 +1000,7 @@ export class DebtStatisticService {
   async getContactResponsesDaily(from: string, to: string, by: 'customer' | 'invoice' = 'customer', options: { employeeCode?: string; customerCode?: string } = {}) {
     // Keep Sunday filter but fix timezone issue
     const today = this.getVietnamToday();
-    
-    // Nếu to là tương lai, chỉ tính đến ngày hiện tại
-    const effectiveTo = to > today ? today : to;
-    
-    const dates = this.generateDateRange(from, effectiveTo).filter((d) => new Date(d).getDay() !== 0);
+    const dates = this.generateDateRange(from, to).filter((d) => new Date(d).getDay() !== 0);
     const results: Array<{ date: string; status: string; customers: number }> = [];
     for (const D of dates) {
       const selectDistinct = by === 'customer' ? 'COUNT(DISTINCT dc.customer_code)' : 'COUNT(*)';
@@ -995,8 +1025,10 @@ export class DebtStatisticService {
         for (const r of rows) results.push({ date: D, status: r.status, customers: Number(r.customers) || 0 });
       } else {
         // Today: use current distribution from debt_logs (as-of today)
-        const where: string[] = ['1=1'];
-        const arr: any[] = [];
+        // Format today to Vietnam timezone for MySQL query (optimized for index)
+        const todayVietnam = this.formatDateStringToVietnam(today);
+        const where: string[] = ["DATE(dl.updated_at) = DATE(?)"];
+        const arr: any[] = [todayVietnam];
         if (options.employeeCode) { where.push('u.employee_code = ?'); arr.push(options.employeeCode); }
         if (options.customerCode) { where.push('dc.customer_code = ?'); arr.push(options.customerCode); }
         const query = `
