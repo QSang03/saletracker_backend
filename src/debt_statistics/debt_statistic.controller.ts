@@ -43,8 +43,10 @@ export class DebtStatisticController {
   async getOverviewStatistics(
     @Query('from') fromDate: string,
     @Query('to') toDate: string,
+    @Query('employeeCode') employeeCode?: string,
+    @Query('customerCode') customerCode?: string,
   ) {
-    return this.debtStatisticService.getOverviewStatistics(fromDate, toDate);
+    return this.debtStatisticService.getOverviewStatistics(fromDate, toDate, { employeeCode, customerCode });
   }
 
   @Get('trend')
@@ -253,6 +255,12 @@ export class DebtStatisticController {
     // }
     
     const result = await this.debtStatisticService.getDetailedDebts(filters);
+    
+    // Log để debug sự khác biệt giữa chart và modal
+    console.log('🔍 [getDetailedDebts] Request filters:', filters);
+    console.log('🔍 [getDetailedDebts] Response total:', result.total);
+    console.log('🔍 [getDetailedDebts] Response data count:', result.data?.length || 0);
+    
     return result;
   }
 

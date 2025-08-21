@@ -95,7 +95,7 @@ export class DebtStatisticService {
     }
   }
 
-  async getOverviewStatistics(fromDate: string, toDate: string) {
+  async getOverviewStatistics(fromDate: string, toDate: string, filters?: { employeeCode?: string; customerCode?: string }) {
     const today = this.getVietnamToday();
 
     const results = {
@@ -118,7 +118,7 @@ export class DebtStatisticService {
               .toISOString()
               .split('T')[0];
 
-      const historyQuery = `
+      let historyQuery = `
         SELECT 
           COUNT(*) as total,
           SUM(CASE WHEN status = 'paid' THEN 1 ELSE 0 END) as paid,
@@ -130,10 +130,22 @@ export class DebtStatisticService {
         FROM debt_statistics
         WHERE statistic_date >= ? AND statistic_date <= ?
       `;
+      
+      const historyParams = [fromDate, endDateForHistory];
+      
+      if (filters?.employeeCode) {
+        historyQuery += ` AND employee_code_raw = ?`;
+        historyParams.push(filters.employeeCode);
+      }
+      
+      if (filters?.customerCode) {
+        historyQuery += ` AND customer_code = ?`;
+        historyParams.push(filters.customerCode);
+      }
 
       const historyStats = await this.debtStatisticRepository.query(
         historyQuery,
-        [fromDate, endDateForHistory],
+        historyParams,
       );
 
       if (historyStats[0]) {
@@ -150,7 +162,7 @@ export class DebtStatisticService {
 
     // Xử lý ngày hôm nay từ debts
     if (toDate >= today) {
-      const todayQuery = `
+      let todayQuery = `
     SELECT 
       COUNT(*) as total,
       SUM(CASE WHEN d.status = 'paid' THEN 1 ELSE 0 END) as paid,
@@ -160,11 +172,24 @@ export class DebtStatisticService {
       SUM(d.total_amount - d.remaining) as paidAmount,
       SUM(d.remaining) as remainingAmount
     FROM debts d
+    LEFT JOIN debt_configs dc ON d.debt_config_id = dc.id
     WHERE d.deleted_at IS NULL
-      AND DATE(d.updated_at) = ?
+      AND DATE(CONVERT_TZ(d.updated_at, '+00:00', '+07:00')) = ?
   `;
 
-      const todayStats = await this.debtRepository.query(todayQuery, [today]);
+      const todayParams = [today];
+      
+      if (filters?.employeeCode) {
+        todayQuery += ` AND d.employee_code_raw = ?`;
+        todayParams.push(filters.employeeCode);
+      }
+      
+      if (filters?.customerCode) {
+        todayQuery += ` AND dc.customer_code = ?`;
+        todayParams.push(filters.customerCode);
+      }
+
+      const todayStats = await this.debtRepository.query(todayQuery, todayParams);
 
       if (todayStats[0]) {
         const stats = todayStats[0];
@@ -455,63 +480,30 @@ export class DebtStatisticService {
       }
 
       if (isHistoricalDate) {
-        // Special case: overview drilldown by status for a specific historical day
+        // Overview drilldown by status for a specific historical day should come from snapshots for ALL statuses
         if (date && status && !mode && typeof minDays === 'undefined' && typeof maxDays === 'undefined') {
-          console.log('🔍 [getDetailedDebts] Processing paid status for date:', { date, status, mode });
-          // For 'paid' status, we need to get from debts table with updated_at filter
-          if (status === 'paid') {
-            const where: string[] = [
-              'd.deleted_at IS NULL',
-              'd.status = ?',
-              "DATE(CONVERT_TZ(d.updated_at, '+00:00', '+07:00')) = ?"
-            ];
-            const paramsEq: any[] = [status, date];
-            if (employeeCode) { where.push('d.employee_code_raw = ?'); paramsEq.push(employeeCode); }
-            if (customerCode) { where.push('dc.customer_code = ?'); paramsEq.push(customerCode); }
+          const where: string[] = ['ds.statistic_date = ?', '1=1'];
+          const paramsEq: any[] = [date];
+          if (status) { where.push('ds.status = ?'); paramsEq.push(status); }
+          if (employeeCode) { where.push('ds.employee_code_raw = ?'); paramsEq.push(employeeCode); }
+          if (customerCode) { where.push('ds.customer_code = ?'); paramsEq.push(customerCode); }
 
-            console.log('🔍 [getDetailedDebts] Query for paid status:', { where: where.join(' AND '), params: paramsEq });
-            const dataEq = await this.debtRepository.query(
-              `SELECT d.*, dc.customer_code, dc.customer_name FROM debts d LEFT JOIN debt_configs dc ON d.debt_config_id = dc.id WHERE ${where.join(' AND ')} LIMIT ? OFFSET ?`,
-              [...paramsEq, limit, offset],
-            );
-            const totalEqRow = await this.debtRepository.query(
-              `SELECT COUNT(*) as total FROM debts d LEFT JOIN debt_configs dc ON d.debt_config_id = dc.id WHERE ${where.join(' AND ')}`,
-              paramsEq,
-            );
-            const totalEq = Number(totalEqRow[0]?.total) || 0;
-            console.log('🔍 [getDetailedDebts] Paid status result:', { count: dataEq.length, total: totalEq });
-            return { data: dataEq, total: totalEq, page, limit, totalPages: Math.ceil(totalEq / limit) };
-          } else {
-            // For other statuses, use debt_statistics
-            const where: string[] = ['ds.statistic_date = ?', '1=1'];
-            const paramsEq: any[] = [date];
-            if (status) { where.push('ds.status = ?'); paramsEq.push(status); }
-            if (employeeCode) { where.push('ds.employee_code_raw = ?'); paramsEq.push(employeeCode); }
-            if (customerCode) { where.push('ds.customer_code = ?'); paramsEq.push(customerCode); }
-
-            const dataEq = await this.debtStatisticRepository.query(
-              `SELECT ds.* FROM debt_statistics ds WHERE ${where.join(' AND ')} LIMIT ? OFFSET ?`,
-              [...paramsEq, limit, offset],
-            );
-            const totalEqRow = await this.debtStatisticRepository.query(
-              `SELECT COUNT(*) as total FROM debt_statistics ds WHERE ${where.join(' AND ')}`,
-              paramsEq,
-            );
-            const totalEq = Number(totalEqRow[0]?.total) || 0;
-            return { data: dataEq, total: totalEq, page, limit, totalPages: Math.ceil(totalEq / limit) };
-          }
+          const dataEq = await this.debtStatisticRepository.query(
+            `SELECT ds.* FROM debt_statistics ds WHERE ${where.join(' AND ')} LIMIT ? OFFSET ?`,
+            [...paramsEq, limit, offset],
+          );
+          const totalEqRow = await this.debtStatisticRepository.query(
+            `SELECT COUNT(*) as total FROM debt_statistics ds WHERE ${where.join(' AND ')}`,
+            paramsEq,
+          );
+          const totalEq = Number(totalEqRow[0]?.total) || 0;
+          return { data: dataEq, total: totalEq, page, limit, totalPages: Math.ceil(totalEq / limit) };
         }
 
         let query = `
         SELECT ds.*
         FROM debt_statistics ds
-        INNER JOIN (
-          SELECT original_debt_id, MAX(statistic_date) AS last_date
-          FROM debt_statistics
-          WHERE statistic_date <= ?
-          GROUP BY original_debt_id
-        ) latest ON latest.original_debt_id = ds.original_debt_id AND latest.last_date = ds.statistic_date
-        WHERE 1=1
+        WHERE ds.statistic_date = ?
       `;
         const params: any[] = [D];
 
@@ -558,17 +550,9 @@ export class DebtStatisticService {
         const data = await this.debtStatisticRepository.query(query, params);
 
         let countQuery = `
-        SELECT COUNT(*) as total FROM (
-          SELECT ds.id
-          FROM debt_statistics ds
-          INNER JOIN (
-            SELECT original_debt_id, MAX(statistic_date) AS last_date
-            FROM debt_statistics
-            WHERE statistic_date <= ?
-            GROUP BY original_debt_id
-          ) latest ON latest.original_debt_id = ds.original_debt_id AND latest.last_date = ds.statistic_date
-          WHERE 1=1
-        `;
+        SELECT COUNT(*) as total FROM debt_statistics ds
+        WHERE ds.statistic_date = ?
+      `;
         const countParams: any[] = [D];
 
         if (status) {
@@ -607,7 +591,7 @@ export class DebtStatisticService {
           countParams.push(customerCode);
         }
 
-        countQuery += `) t`;
+
         const totalResult = await this.debtStatisticRepository.query(countQuery, countParams);
         const total = totalResult[0]?.total || 0;
 
