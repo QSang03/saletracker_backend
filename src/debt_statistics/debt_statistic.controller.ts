@@ -245,11 +245,12 @@ export class DebtStatisticController {
       limit: parsedLimit,
     };
 
-    // Force today to match trend/overview logic when clicking daily bars
-    if (status === 'paid' && (!from || !to)) {
-      const today = new Date().toISOString().split('T')[0];
-      filters.date = today;
-    }
+    // Không force today nữa - để frontend truyền đúng ngày từ chart
+    // Logic cũ gây lỗi khi click vào cột paid của ngày quá khứ
+    // if (status === 'paid' && (!from || !to)) {
+    //   const today = new Date().toISOString().split('T')[0];
+    //   filters.date = today;
+    // }
     
     const result = await this.debtStatisticService.getDetailedDebts(filters);
     return result;

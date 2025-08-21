@@ -73,7 +73,7 @@ export class CronjobService {
           is_notified, original_created_at, original_updated_at, original_debt_id
         )
         SELECT 
-          DATE(d.updated_at) as statistic_date,
+          DATE(CONVERT_TZ(d.updated_at, '+00:00', '+07:00')) as statistic_date,
           d.customer_raw_code, d.invoice_code, d.bill_code,
           d.total_amount, d.remaining, d.issue_date, d.due_date, d.pay_later,
           d.status, d.sale_id, d.sale_name_raw, d.employee_code_raw,
@@ -82,7 +82,7 @@ export class CronjobService {
         FROM debts d
         LEFT JOIN debt_configs dc ON d.debt_config_id = dc.id
         WHERE d.deleted_at IS NULL
-        AND DATE(d.updated_at) = ?
+        AND DATE(CONVERT_TZ(d.updated_at, '+00:00', '+07:00')) = ?
       `;
 
       const result = await this.debtStatisticRepo.query(query, [todayStr]);
@@ -134,7 +134,7 @@ export class CronjobService {
           is_notified, original_created_at, original_updated_at, original_debt_id
         )
         SELECT 
-          DATE(d.created_at) as statistic_date,
+          DATE(CONVERT_TZ(d.created_at, '+00:00', '+07:00')) as statistic_date,
           d.customer_raw_code, d.invoice_code, d.bill_code,
           d.total_amount, d.remaining, d.issue_date, d.due_date, d.pay_later,
           d.status, d.sale_id, d.sale_name_raw, d.employee_code_raw,
@@ -143,7 +143,7 @@ export class CronjobService {
         FROM debts d
         LEFT JOIN debt_configs dc ON d.debt_config_id = dc.id
         WHERE d.deleted_at IS NULL
-        AND DATE(d.created_at) = ?
+        AND DATE(CONVERT_TZ(d.created_at, '+00:00', '+07:00')) = ?
       `;
 
       this.logger.log(
