@@ -1427,7 +1427,14 @@ export class DebtStatisticService {
       if (customerCode) { where.push('dc.customer_code = ?'); arr.push(customerCode); }
 
       const dataQuery = `
-        SELECT dc.customer_code, dc.customer_name, u.employee_code as employee_code_raw, MAX(dh.created_at) as latest_time
+        SELECT 
+          dc.customer_code, 
+          dc.customer_name, 
+          u.employee_code as employee_code_raw, 
+          MAX(dh.created_at) as latest_time,
+          MAX(dh.send_at) as send_at,
+          MAX(dh.first_remind_at) as first_remind_at,
+          MAX(dh.second_remind_at) as second_remind_at
         FROM debt_histories dh
         LEFT JOIN debt_logs dl ON dh.debt_log_id = dl.id
         LEFT JOIN debt_configs dc ON dl.debt_config_id = dc.id
@@ -1473,7 +1480,14 @@ export class DebtStatisticService {
         arr.push(customerCode);
       }
       const dataQuery = `
-        SELECT dc.customer_code, dc.customer_name, u.employee_code as employee_code_raw, MAX(dh.created_at) as latest_time
+        SELECT 
+          dc.customer_code, 
+          dc.customer_name, 
+          u.employee_code as employee_code_raw, 
+          MAX(dh.created_at) as latest_time,
+          MAX(dh.send_at) as send_at,
+          MAX(dh.first_remind_at) as first_remind_at,
+          MAX(dh.second_remind_at) as second_remind_at
         FROM debt_histories dh
         LEFT JOIN debt_logs dl ON dh.debt_log_id = dl.id
         LEFT JOIN debt_configs dc ON dl.debt_config_id = dc.id
@@ -1515,7 +1529,14 @@ export class DebtStatisticService {
         arr.push(customerCode);
       }
       const dataQuery = `
-        SELECT dc.customer_code, dc.customer_name, u.employee_code as employee_code_raw, MAX(dl.updated_at) as latest_time
+        SELECT 
+          dc.customer_code, 
+          dc.customer_name, 
+          u.employee_code as employee_code_raw, 
+          MAX(dl.updated_at) as latest_time,
+          MAX(dl.send_at) as send_at,
+          MAX(dl.first_remind_at) as first_remind_at,
+          MAX(dl.second_remind_at) as second_remind_at
         FROM debt_logs dl
         LEFT JOIN debt_configs dc ON dl.debt_config_id = dc.id
         LEFT JOIN users u ON dc.employee_id = u.id
