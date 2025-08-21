@@ -136,7 +136,7 @@ export class DebtStatisticService {
       payLater: 0,
       noInfo: 0,
       totalAmount: 0,
-      paidAmount: 0,
+      collectedAmount: 0, // Changed from paidAmount to collectedAmount to match frontend
       remainingAmount: 0,
       collectionRate: 0,
     };
@@ -187,7 +187,7 @@ export class DebtStatisticService {
         results.payLater += Number(stats.payLater) || 0;
         results.noInfo += Number(stats.noInfo) || 0;
         results.totalAmount += Number(stats.totalAmount) || 0;
-        results.paidAmount += Number(stats.paidAmount) || 0;
+        results.collectedAmount += Number(stats.paidAmount) || 0;
         results.remainingAmount += Number(stats.remainingAmount) || 0;
       }
     }
@@ -232,14 +232,14 @@ export class DebtStatisticService {
         results.payLater += Number(stats.payLater) || 0;
         results.noInfo += Number(stats.noInfo) || 0;
         results.totalAmount += Number(stats.totalAmount) || 0;
-        results.paidAmount += Number(stats.paidAmount) || 0;
+        results.collectedAmount += Number(stats.paidAmount) || 0;
         results.remainingAmount += Number(stats.remainingAmount) || 0;
       }
     }
 
     // Tính collection rate
     if (results.totalAmount > 0) {
-      results.collectionRate = (results.paidAmount / results.totalAmount) * 100;
+      results.collectionRate = (results.collectedAmount / results.totalAmount) * 100;
     }
 
     return results;
