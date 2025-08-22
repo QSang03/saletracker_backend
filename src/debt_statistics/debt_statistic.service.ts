@@ -796,6 +796,9 @@ export class DebtStatisticService {
     // Nếu toDate là tương lai, chỉ tính đến ngày hiện tại
     const effectiveToDate = toDate > today ? today : toDate;
     
+    // Chỉ lấy dữ liệu cho ngày hôm nay nếu thực sự có dữ liệu mới
+    const hasTodayData = effectiveToDate === today;
+    
     const results: any[] = [];
 
     // Quá khứ: dùng debt_statistics, tính DATEDIFF(statistic_date, due_date) và chỉ lấy khoản nợ đã quá hạn (>0)
@@ -834,7 +837,7 @@ export class DebtStatisticService {
     }
 
     // Hôm nay: dùng debts, tính DATEDIFF(DATE(updated_at), due_date) và chỉ lấy quá hạn (>0)
-    if (effectiveToDate >= today) {
+    if (hasTodayData) {
       // Format today to Vietnam timezone for MySQL query (optimized for index)
       const todayVietnam = this.formatDateStringToVietnam(today);
       const currentAgingQuery = `
@@ -856,13 +859,16 @@ export class DebtStatisticService {
 
       const currentAging = await this.debtRepository.query(currentAgingQuery, [todayVietnam]);
 
-      for (const current of currentAging) {
-        const existing = results.find((r) => r.age_range === current.age_range);
-        if (existing) {
-          existing.count = Number(existing.count) + Number(current.count);
-          existing.amount = Number(existing.amount) + Number(current.amount);
-        } else {
-          results.push(current);
+      // Chỉ thêm dữ liệu nếu thực sự có kết quả
+      if (currentAging && currentAging.length > 0) {
+        for (const current of currentAging) {
+          const existing = results.find((r) => r.age_range === current.age_range);
+          if (existing) {
+            existing.count = Number(existing.count) + Number(current.count);
+            existing.amount = Number(existing.amount) + Number(current.amount);
+          } else {
+            results.push(current);
+          }
         }
       }
     }
@@ -914,22 +920,23 @@ export class DebtStatisticService {
           GROUP BY bucket`;
         const rows = await this.debtStatisticRepository.query(query, [D, D, D, D, ...args]);
         for (const r of rows) results.push({ date: D, range: r.bucket, count: Number(r.count) || 0, amount: Number(r.amount) || 0 });
-      } else {
+      } else if (D === today) {
+        // Chỉ lấy dữ liệu cho hôm nay nếu thực sự có dữ liệu mới
         const where: string[] = [
           'd.deleted_at IS NULL',
           "d.status <> 'paid'",
           'd.due_date IS NOT NULL',
-          'DATEDIFF(?, d.due_date) > 0',
+          'DATEDIFF(DATE(d.updated_at), d.due_date) > 0',
         ];
-        const arr: any[] = [D];
+        const arr: any[] = [];
         if (opts.employeeCode) { where.push('d.employee_code_raw = ?'); arr.push(opts.employeeCode); }
         if (opts.customerCode) { where.push('dc.customer_code = ?'); arr.push(opts.customerCode); }
         const query = `
           SELECT
             CASE
-              WHEN DATEDIFF(?, d.due_date) BETWEEN 1 AND 30 THEN '1-30'
-              WHEN DATEDIFF(?, d.due_date) BETWEEN 31 AND 60 THEN '31-60'
-              WHEN DATEDIFF(?, d.due_date) BETWEEN 61 AND 90 THEN '61-90'
+              WHEN DATEDIFF(DATE(d.updated_at), d.due_date) BETWEEN 1 AND 30 THEN '1-30'
+              WHEN DATEDIFF(DATE(d.updated_at), d.due_date) BETWEEN 31 AND 60 THEN '31-60'
+              WHEN DATEDIFF(DATE(d.updated_at), d.due_date) BETWEEN 61 AND 90 THEN '61-90'
               ELSE '>90'
             END AS bucket,
             COUNT(*) AS count,
@@ -938,8 +945,11 @@ export class DebtStatisticService {
           LEFT JOIN debt_configs dc ON d.debt_config_id = dc.id
           WHERE ${where.join(' AND ')}
           GROUP BY bucket`;
-        const rows = await this.debtRepository.query(query, [D, D, D, ...arr]);
-        for (const r of rows) results.push({ date: D, range: r.bucket, count: Number(r.count) || 0, amount: Number(r.amount) || 0 });
+        const rows = await this.debtRepository.query(query, arr);
+        // Chỉ thêm kết quả nếu có dữ liệu
+        if (rows && rows.length > 0) {
+          for (const r of rows) results.push({ date: D, range: r.bucket, count: Number(r.count) || 0, amount: Number(r.amount) || 0 });
+        }
       }
     }
     return results;
@@ -981,11 +991,10 @@ export class DebtStatisticService {
           const key = r.label.replace(/[^a-zA-Z0-9_]/g, '_');
           results.push({ date: D, range: r.label, count: Number(row[`cnt_${key}`]) || 0, amount: Number(row[`amt_${key}`]) || 0 });
         }
-      } else {
-        // Format date to Vietnam timezone for MySQL query (optimized for index)
-        const dateVietnam = this.formatDateStringToVietnam(D);
-        const where: string[] = ['d.deleted_at IS NULL', "d.status <> 'paid'", 'd.pay_later IS NOT NULL', "DATE(d.updated_at) = DATE(?)"];
-        const arr: any[] = [dateVietnam];
+      } else if (D === today) {
+        // Chỉ lấy dữ liệu cho hôm nay nếu thực sự có dữ liệu mới
+        const where: string[] = ['d.deleted_at IS NULL', "d.status <> 'paid'", 'd.pay_later IS NOT NULL'];
+        const arr: any[] = [];
         if (options.employeeCode) { where.push('d.employee_code_raw = ?'); arr.push(options.employeeCode); }
         if (options.customerCode) { where.push('dc.customer_code = ?'); arr.push(options.customerCode); }
         const diff = "DATEDIFF(DATE(d.updated_at), d.pay_later)";
@@ -995,9 +1004,12 @@ export class DebtStatisticService {
         }).join(',');
         const query = `SELECT ${parts} FROM debts d LEFT JOIN debt_configs dc ON d.debt_config_id = dc.id WHERE ${where.join(' AND ')}`;
         const row = (await this.debtRepository.query(query, arr))[0] || {};
-        for (const r of ranges) {
-          const key = r.label.replace(/[^a-zA-Z0-9_]/g, '_');
-          results.push({ date: D, range: r.label, count: Number(row[`cnt_${key}`]) || 0, amount: Number(row[`amt_${key}`]) || 0 });
+        // Chỉ thêm kết quả nếu có dữ liệu
+        if (row && Object.values(row).some(v => Number(v) > 0)) {
+          for (const r of ranges) {
+            const key = r.label.replace(/[^a-zA-Z0-9_]/g, '_');
+            results.push({ date: D, range: r.label, count: Number(row[`cnt_${key}`]) || 0, amount: Number(row[`amt_${key}`]) || 0 });
+          }
         }
       }
     }
