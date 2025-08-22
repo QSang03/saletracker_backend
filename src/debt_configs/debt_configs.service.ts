@@ -446,13 +446,14 @@ export class DebtConfigService {
       );
     }
 
-    // Status filter
+    // Status filter - Updated mapping
     if (Array.isArray(filters.statuses) && filters.statuses.length > 0) {
       queryBuilder.andWhere(
         new Brackets((qb) => {
           if (Array.isArray(filters.statuses)) {
             for (const status of filters.statuses) {
               if (status === 'normal') {
+                // "Không có phiếu nợ" = "Bình thường" (employee IS NOT NULL và không có lỗi)
                 qb.orWhere(
                   `(debt_config.employee IS NOT NULL AND (
                   debt_log.id IS NULL
@@ -462,9 +463,11 @@ export class DebtConfigService {
                 );
               }
               if (status === 'not_matched_debt') {
+                // "Có phiếu nợ trong ngày" = "Không trùng phiếu nợ" (employee IS NULL)
                 qb.orWhere('debt_config.employee IS NULL');
               }
               if (status === 'wrong_customer_name') {
+                // "Lỗi gửi Zalo" = "Sai tên khách hàng" (có lỗi gửi)
                 qb.orWhere(
                   'debt_config.id = debt_log.debt_config_id AND debt_log.remind_status = :errorSend',
                   { errorSend: 'Error Send' },
