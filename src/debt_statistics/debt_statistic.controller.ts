@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Query, UseGuards, BadRequestException } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { DebtStatisticService } from './debt_statistic.service';
 import { CronjobService } from '../cronjobs/cronjob.service';
@@ -278,14 +278,23 @@ export class DebtStatisticController {
     @Query('page') page = '1',
     @Query('limit') limit = '50',
   ) {
-    if ((!date && (!from || !to)) || !responseStatus) {
-      throw new Error('Either date or from/to and responseStatus are required');
+    // Distinguish between missing param (undefined) and provided-but-empty ("")
+    const responseStatusProvided = typeof responseStatus !== 'undefined';
+    const normalizedResponseStatus = responseStatusProvided ? responseStatus.trim() : undefined;
+
+    // Validation: require either a single date, or a from/to range, and the responseStatus param must be present
+    if ((!date && (!from || !to)) || !responseStatusProvided) {
+      throw new BadRequestException('Either date or from/to and responseStatus are required');
     }
+
+    // Treat an explicitly empty responseStatus (responseStatus=) as 'no filtering' (pass undefined to service)
+    const responseStatusForService = normalizedResponseStatus === '' ? undefined : normalizedResponseStatus;
+
     return this.debtStatisticService.getContactDetails({
       date,
       from,
       to,
-      responseStatus,
+      responseStatus: responseStatusForService,
       mode,
       employeeCode,
       customerCode,

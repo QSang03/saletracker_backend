@@ -1458,7 +1458,7 @@ export class DebtStatisticService {
     date?: string;
     from?: string;
     to?: string;
-    responseStatus: string;
+    responseStatus?: string;
     mode?: 'events' | 'distribution';
     employeeCode?: string;
     customerCode?: string;
@@ -1474,9 +1474,12 @@ export class DebtStatisticService {
       const where: string[] = [
         "DATE(dh.created_at) >= ?",
         "DATE(dh.created_at) <= ?",
-        'dh.remind_status = ?',
       ];
-      const arr: any[] = [from, to, responseStatus];
+      const arr: any[] = [from, to];
+      if (responseStatus && responseStatus.trim() !== '') {
+        where.push('dh.remind_status = ?');
+        arr.push(responseStatus);
+      }
       if (employeeCode) { where.push('u.employee_code = ?'); arr.push(employeeCode); }
       if (customerCode) { where.push('dc.customer_code = ?'); arr.push(customerCode); }
 
@@ -1522,9 +1525,12 @@ export class DebtStatisticService {
     if (isHistorical) {
       const where: string[] = [
         "DATE(dh.created_at) = ?",
-        'dh.remind_status = ?'
       ];
-      const arr: any[] = [date, responseStatus];
+      const arr: any[] = [date];
+      if (responseStatus && responseStatus.trim() !== '') {
+        where.push('dh.remind_status = ?');
+        arr.push(responseStatus);
+      }
       if (employeeCode) {
         where.push('u.employee_code = ?');
         arr.push(employeeCode);
@@ -1573,9 +1579,12 @@ export class DebtStatisticService {
       const todayVietnam = this.formatDateStringToVietnam(today);
       const where: string[] = [
         'DATE(dl.updated_at) = DATE(?)',
-        'dl.remind_status = ?'
       ];
-      const arr: any[] = [todayVietnam, responseStatus];
+      const arr: any[] = [todayVietnam];
+      if (responseStatus && responseStatus.trim() !== '') {
+        where.push('dl.remind_status = ?');
+        arr.push(responseStatus);
+      }
       if (employeeCode) {
         where.push('u.employee_code = ?');
         arr.push(employeeCode);
