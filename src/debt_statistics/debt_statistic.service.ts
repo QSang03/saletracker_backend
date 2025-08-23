@@ -195,50 +195,8 @@ export class DebtStatisticService {
       }
     }
 
-    // Xử lý ngày hôm nay từ debts
-    if (effectiveToDate >= today) {
-      // Format today to Vietnam timezone for MySQL query
-      const todayVietnam = this.formatDateStringToVietnam(today);
-      let todayQuery = `
-    SELECT 
-      COUNT(*) as total,
-      SUM(CASE WHEN d.status = 'paid' THEN 1 ELSE 0 END) as paid,
-      SUM(CASE WHEN d.status = 'pay_later' THEN 1 ELSE 0 END) as payLater,
-      SUM(CASE WHEN d.status = 'no_information_available' THEN 1 ELSE 0 END) as noInfo,
-      SUM(d.total_amount) as totalAmount,
-      SUM(d.total_amount - d.remaining) as paidAmount,
-      SUM(d.remaining) as remainingAmount
-    FROM debts d
-    LEFT JOIN debt_configs dc ON d.debt_config_id = dc.id
-    WHERE d.deleted_at IS NULL
-      AND DATE(d.updated_at) = DATE(?)
-  `;
-
-      const todayParams = [todayVietnam];
-      
-      if (filters?.employeeCode) {
-        todayQuery += ` AND d.employee_code_raw = ?`;
-        todayParams.push(filters.employeeCode);
-      }
-      
-      if (filters?.customerCode) {
-        todayQuery += ` AND dc.customer_code = ?`;
-        todayParams.push(filters.customerCode);
-      }
-
-      const todayStats = await this.debtRepository.query(todayQuery, todayParams);
-
-      if (todayStats[0]) {
-        const stats = todayStats[0];
-        results.total += Number(stats.total) || 0;
-        results.paid += Number(stats.paid) || 0;
-        results.payLater += Number(stats.payLater) || 0;
-        results.noInfo += Number(stats.noInfo) || 0;
-        results.totalAmount += Number(stats.totalAmount) || 0;
-        results.collectedAmount += Number(stats.paidAmount) || 0;
-        results.remainingAmount += Number(stats.remainingAmount) || 0;
-      }
-    }
+    // BỎ FALLBACK: Không lấy dữ liệu realtime từ debts cho ngày hiện tại
+    // Chỉ lấy từ debt_statistics để đảm bảo tính nhất quán
 
     // Tính collection rate
     if (results.totalAmount > 0) {
@@ -301,7 +259,7 @@ export class DebtStatisticService {
           collectionRate: Number(data.collectionRate) || 0,
         });
       } else if (date === today) {
-        // Lấy từ debts với filter theo updated_at của ngày hiện tại
+        // Ngày hiện tại: Lấy từ debts (real-time) - BÌNH THƯỜNG
         // Format today to Vietnam timezone for MySQL query
         const todayVietnam = this.formatDateStringToVietnam(today);
         const query = `
@@ -352,6 +310,13 @@ export class DebtStatisticService {
         throw new Error('Either date or to parameter is required');
       }
       const isHistoricalDate = D < today;
+      
+      // Log để debug sự khác biệt giữa chart và modal
+      console.log('🔍 [getDetailedDebts] Date requested:', D);
+      console.log('🔍 [getDetailedDebts] Today:', today);
+      console.log('🔍 [getDetailedDebts] Is historical date:', isHistoricalDate);
+      console.log('🔍 [getDetailedDebts] Status filter:', status);
+      console.log('🔍 [getDetailedDebts] Mode:', mode);
 
       // New: support range-based details to align with range aggregations (e.g., pay-later delay buckets)
       const isRange = !date && !!from && !!to;
@@ -536,27 +501,9 @@ export class DebtStatisticService {
         };
       }
 
+      // Đảm bảo tính nhất quán: nếu là ngày quá khứ thì luôn lấy từ debt_statistics
       if (isHistoricalDate) {
-        // Overview drilldown by status for a specific historical day should come from snapshots for ALL statuses
-        if (date && status && !mode && typeof minDays === 'undefined' && typeof maxDays === 'undefined') {
-          const where: string[] = ['ds.statistic_date = ?', '1=1'];
-          const paramsEq: any[] = [date];
-          if (status) { where.push('ds.status = ?'); paramsEq.push(status); }
-          if (employeeCode) { where.push('ds.employee_code_raw = ?'); paramsEq.push(employeeCode); }
-          if (customerCode) { where.push('ds.customer_code = ?'); paramsEq.push(customerCode); }
-
-          const dataEq = await this.debtStatisticRepository.query(
-            `SELECT ds.* FROM debt_statistics ds WHERE ${where.join(' AND ')} LIMIT ? OFFSET ?`,
-            [...paramsEq, limit, offset],
-          );
-          const totalEqRow = await this.debtStatisticRepository.query(
-            `SELECT COUNT(*) as total FROM debt_statistics ds WHERE ${where.join(' AND ')}`,
-            paramsEq,
-          );
-          const totalEq = Number(totalEqRow[0]?.total) || 0;
-          return { data: dataEq, total: totalEq, page, limit, totalPages: Math.ceil(totalEq / limit) };
-        }
-
+        // Tất cả các trường hợp cho ngày quá khứ đều lấy từ debt_statistics để đồng nhất với biểu đồ
         let query = `
         SELECT ds.*
         FROM debt_statistics ds
@@ -648,7 +595,6 @@ export class DebtStatisticService {
           countParams.push(customerCode);
         }
 
-
         const totalResult = await this.debtStatisticRepository.query(countQuery, countParams);
         const total = totalResult[0]?.total || 0;
 
@@ -660,6 +606,7 @@ export class DebtStatisticService {
           totalPages: Math.ceil(total / limit),
         };
       } else {
+        // Ngày hiện tại: Lấy từ debts (real-time) - BÌNH THƯỜNG
         let query = `
         SELECT d.*, dc.customer_code, dc.customer_name, u.full_name as sale_name
         FROM debts d
@@ -769,13 +716,20 @@ export class DebtStatisticService {
         );
         const total = totalResult[0]?.total || 0;
 
-        return {
+        const result = {
           data,
           total,
           page,
           limit,
           totalPages: Math.ceil(total / limit),
         };
+        
+        // Log kết quả để debug
+        console.log('🔍 [getDetailedDebts] Final result - Data source: debts (current)');
+        console.log('🔍 [getDetailedDebts] Final result - Total records:', result.total);
+        console.log('🔍 [getDetailedDebts] Final result - Data count:', result.data?.length || 0);
+        
+        return result;
       }
     } catch (error) {
       this.logger.error('Error in getDetailedDebts:', error);
@@ -989,22 +943,10 @@ export class DebtStatisticService {
           results.push({ date: D, range: r.label, count: Number(row[`cnt_${key}`]) || 0, amount: Number(row[`amt_${key}`]) || 0 });
         }
       } else {
-        // Format date to Vietnam timezone for MySQL query (optimized for index)
-        const dateVietnam = this.formatDateStringToVietnam(D);
-        const where: string[] = ['d.deleted_at IS NULL', "d.status <> 'paid'", 'd.pay_later IS NOT NULL', "DATE(d.updated_at) = DATE(?)"];
-        const arr: any[] = [dateVietnam];
-        if (options.employeeCode) { where.push('d.employee_code_raw = ?'); arr.push(options.employeeCode); }
-        if (options.customerCode) { where.push('dc.customer_code = ?'); arr.push(options.customerCode); }
-        const diff = "DATEDIFF(DATE(d.updated_at), d.pay_later)";
-        const parts = ranges.map((r) => {
-          const cond = r.max == null ? `${diff} >= ${r.min}` : `${diff} BETWEEN ${r.min} AND ${r.max}`;
-          return `SUM(CASE WHEN ${cond} THEN 1 ELSE 0 END) AS cnt_${r.label.replace(/[^a-zA-Z0-9_]/g, '_')}, SUM(CASE WHEN ${cond} THEN d.remaining ELSE 0 END) AS amt_${r.label.replace(/[^a-zA-Z0-9_]/g, '_')}`;
-        }).join(',');
-        const query = `SELECT ${parts} FROM debts d LEFT JOIN debt_configs dc ON d.debt_config_id = dc.id WHERE ${where.join(' AND ')}`;
-        const row = (await this.debtRepository.query(query, arr))[0] || {};
+        // BỎ FALLBACK: Nếu không có snapshot cho ngày hiện tại thì trả về 0
+        // Không lấy từ debts nữa để đảm bảo tính nhất quán
         for (const r of ranges) {
-          const key = r.label.replace(/[^a-zA-Z0-9_]/g, '_');
-          results.push({ date: D, range: r.label, count: Number(row[`cnt_${key}`]) || 0, amount: Number(row[`amt_${key}`]) || 0 });
+          results.push({ date: D, range: r.label, count: 0, amount: 0 });
         }
       }
     }
@@ -1039,23 +981,9 @@ export class DebtStatisticService {
         const rows = await this.debtHistoriesRepository.query(query, arr);
         for (const r of rows) results.push({ date: D, status: r.status, customers: Number(r.customers) || 0 });
       } else {
-        // Today: use current distribution from debt_logs (as-of today)
-        // Format today to Vietnam timezone for MySQL query (optimized for index)
-        const todayVietnam = this.formatDateStringToVietnam(today);
-        const where: string[] = ["DATE(dl.updated_at) = DATE(?)"];
-        const arr: any[] = [todayVietnam];
-        if (options.employeeCode) { where.push('u.employee_code = ?'); arr.push(options.employeeCode); }
-        if (options.customerCode) { where.push('dc.customer_code = ?'); arr.push(options.customerCode); }
-        const query = `
-          SELECT dl.remind_status as status, ${selectDistinct} as customers
-          FROM debt_logs dl
-          LEFT JOIN debt_configs dc ON dl.debt_config_id = dc.id
-          LEFT JOIN users u ON dc.employee_id = u.id
-          WHERE ${where.join(' AND ')}
-          GROUP BY dl.remind_status
-        `;
-        const rows = await this.debtLogsRepository.query(query, arr);
-        for (const r of rows) results.push({ date: D, status: r.status, customers: Number(r.customers) || 0 });
+        // BỎ FALLBACK: Nếu không có snapshot cho ngày hiện tại thì trả về 0
+        // Không lấy từ debt_logs nữa để đảm bảo tính nhất quán
+        // Trả về 0 cho tất cả status
       }
     }
     return results;
@@ -1663,49 +1591,8 @@ export class DebtStatisticService {
       results.push(...historyPerformance);
     }
 
-    // Nếu toDate là hôm nay, lấy thêm dữ liệu realtime từ debts
-    if (effectiveToDate >= today) {
-      const currentPerformanceQuery = `
-        SELECT 
-          sale_name_raw as employee_name,
-          employee_code_raw as employee_code,
-          COUNT(*) as total_debts,
-          SUM(CASE WHEN status = 'paid' THEN 1 ELSE 0 END) as paid_debts,
-          SUM(total_amount) as total_amount,
-          SUM(total_amount - remaining) as collected_amount,
-          AVG(CASE WHEN status = 'paid' THEN DATEDIFF(updated_at, created_at) END) as avg_collection_days
-        FROM debts
-        WHERE deleted_at IS NULL
-          AND sale_name_raw IS NOT NULL
-        GROUP BY sale_name_raw, employee_code_raw
-      `;
-
-      const currentPerformance = await this.debtRepository.query(
-        currentPerformanceQuery,
-      );
-
-      // Merge results
-      for (const current of currentPerformance) {
-        const existing = results.find(
-          (r) =>
-            r.employee_code === current.employee_code &&
-            r.employee_name === current.employee_name,
-        );
-        if (existing) {
-          existing.total_debts =
-            Number(existing.total_debts) + Number(current.total_debts);
-          existing.paid_debts =
-            Number(existing.paid_debts) + Number(current.paid_debts);
-          existing.total_amount =
-            Number(existing.total_amount) + Number(current.total_amount);
-          existing.collected_amount =
-            Number(existing.collected_amount) +
-            Number(current.collected_amount);
-        } else {
-          results.push(current);
-        }
-      }
-    }
+    // BỎ FALLBACK: Không lấy dữ liệu realtime từ debts nữa
+    // Chỉ lấy từ debt_statistics để đảm bảo tính nhất quán
 
     return results.map((item) => ({
       employeeCode: item.employee_code || item.employee_name, // fallback to name if code missing
