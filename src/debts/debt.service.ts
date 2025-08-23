@@ -38,16 +38,15 @@ export class DebtService {
       .leftJoinAndSelect('debt.debt_config', 'debt_config')
       .leftJoinAndSelect('debt_config.employee', 'employee');
 
-    // Filter ngày (giữ nguyên logic cũ)
+    // Filter ngày (chỉ áp dụng khi có date được truyền vào)
     let filterDate: string | undefined = query.singleDate;
     if (!filterDate && query.date) {
       filterDate = query.date;
     }
-    if (!filterDate) {
-      const today = new Date();
-      filterDate = today.toISOString().slice(0, 10);
+    // Chỉ áp dụng filter ngày khi có giá trị, không mặc định ngày hôm nay
+    if (filterDate) {
+      qb.andWhere('DATE(debt.updated_at) = :filterDate', { filterDate });
     }
-    qb.andWhere('DATE(debt.updated_at) = :filterDate', { filterDate });
 
     // Filter search (áp dụng cho nhiều trường)
     if (query.search) {
