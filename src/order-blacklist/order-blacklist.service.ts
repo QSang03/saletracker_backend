@@ -19,6 +19,11 @@ import { Department } from '../departments/department.entity';
 @Injectable()
 export class OrderBlacklistService {
   private readonly logger = new Logger(OrderBlacklistService.name);
+  
+  // ✅ Thêm cache để tối ưu hiệu suất
+  private customerNameCache = new Map<string, string>();
+  private cacheExpiry = new Map<string, number>();
+  private readonly CACHE_TTL = 5 * 60 * 1000; // 5 phút
 
   constructor(
     @InjectRepository(OrderBlacklist)
@@ -30,6 +35,23 @@ export class OrderBlacklistService {
     @InjectRepository(Department)
     private readonly departmentRepository: Repository<Department>,
   ) {}
+
+  // ✅ Thêm method để quản lý cache
+  private getCachedCustomerName(zaloContactId: string): string | null {
+    const expiry = this.cacheExpiry.get(zaloContactId);
+    if (expiry && Date.now() < expiry) {
+      return this.customerNameCache.get(zaloContactId) || null;
+    }
+    // Xóa cache hết hạn
+    this.customerNameCache.delete(zaloContactId);
+    this.cacheExpiry.delete(zaloContactId);
+    return null;
+  }
+
+  private setCachedCustomerName(zaloContactId: string, customerName: string): void {
+    this.customerNameCache.set(zaloContactId, customerName);
+    this.cacheExpiry.set(zaloContactId, Date.now() + this.CACHE_TTL);
+  }
 
   async create(createDto: CreateOrderBlacklistDto): Promise<OrderBlacklist> {
     try {
@@ -237,19 +259,30 @@ export class OrderBlacklistService {
     zaloContactId: string,
   ): Promise<string | null> {
     try {
+      // ✅ Kiểm tra cache trước
+      const cachedName = this.getCachedCustomerName(zaloContactId);
+      if (cachedName !== null) {
+        return cachedName;
+      }
+
+      // ✅ Tối ưu: Query trực tiếp với điều kiện JSON
       const orderDetail = await this.orderDetailRepository
         .createQueryBuilder('od')
         .where('od.metadata IS NOT NULL')
-        .getMany();
+        .andWhere("JSON_EXTRACT(od.metadata, '$.customer_id') = :zaloContactId", {
+          zaloContactId,
+        })
+        .select(['od.customer_name'])
+        .getOne();
 
-      for (const od of orderDetail) {
-        const customerId = this.extractCustomerIdFromMetadata(od.metadata);
-        if (customerId === zaloContactId) {
-          return od.customer_name || null;
-        }
+      const customerName = orderDetail?.customer_name || null;
+      
+      // ✅ Lưu vào cache nếu có kết quả
+      if (customerName) {
+        this.setCachedCustomerName(zaloContactId, customerName);
       }
 
-      return null;
+      return customerName;
     } catch (error) {
       this.logger.error(
         `Error getting customer name for contact ${zaloContactId}:`,
@@ -291,7 +324,7 @@ export class OrderBlacklistService {
         (role) => role && role.includes('manager'),
       );
 
-      // Nếu có search customer name, lấy trước các zaloContactId matching
+      // ✅ Tối ưu: Batch query customer names thay vì N+1 queries
       let matchingZaloContactIds: string[] = [];
       if (search && search.trim()) {
         const orderDetails = await this.orderDetailRepository
@@ -299,7 +332,9 @@ export class OrderBlacklistService {
           .where('LOWER(od.customer_name) LIKE LOWER(:search)', {
             search: `%${search.trim()}%`,
           })
+          .andWhere('od.metadata IS NOT NULL')
           .select(['od.metadata'])
+          .limit(1000) // ✅ Giới hạn kết quả để tránh quá tải
           .getMany();
 
         matchingZaloContactIds = orderDetails
@@ -401,18 +436,8 @@ export class OrderBlacklistService {
         .take(limit)
         .getMany();
 
-      // Enrich with customer names
-      const enrichedData = await Promise.all(
-        blacklists.map(async (blacklist) => {
-          const customerName = await this.getCustomerNameByZaloContactId(
-            blacklist.zaloContactId,
-          );
-          return {
-            ...blacklist,
-            customerName: customerName || 'N/A',
-          };
-        }),
-      );
+      // ✅ Tối ưu: Batch query customer names thay vì N+1 queries
+      const enrichedData = await this.enrichBlacklistWithCustomerNames(blacklists);
 
       return {
         data: enrichedData,
@@ -424,6 +449,55 @@ export class OrderBlacklistService {
         error,
       );
       throw error;
+    }
+  }
+
+  // ✅ Thêm method mới để batch query customer names
+  private async enrichBlacklistWithCustomerNames(
+    blacklists: OrderBlacklist[],
+  ): Promise<any[]> {
+    if (blacklists.length === 0) return [];
+
+    try {
+      // Lấy tất cả unique zaloContactIds
+      const zaloContactIds = [...new Set(blacklists.map(bl => bl.zaloContactId))];
+      
+      // Batch query customer names
+      const customerNamesMap = new Map<string, string>();
+      
+      if (zaloContactIds.length > 0) {
+        // ✅ TODO: Cần tạo migration để thêm index cho JSON_EXTRACT trên order_details.metadata
+        // CREATE INDEX idx_order_details_metadata_customer_id ON order_details ((JSON_EXTRACT(metadata, '$.customer_id')));
+        const orderDetails = await this.orderDetailRepository
+          .createQueryBuilder('od')
+          .where('od.metadata IS NOT NULL')
+          .andWhere("JSON_EXTRACT(od.metadata, '$.customer_id') IN (:...zaloContactIds)", {
+            zaloContactIds,
+          })
+          .select(['od.metadata', 'od.customer_name'])
+          .getMany();
+
+        // Tạo map từ zaloContactId -> customer_name
+        for (const od of orderDetails) {
+          const customerId = this.extractCustomerIdFromMetadata(od.metadata);
+          if (customerId && od.customer_name) {
+            customerNamesMap.set(customerId, od.customer_name);
+          }
+        }
+      }
+
+      // Enrich blacklist data
+      return blacklists.map(blacklist => ({
+        ...blacklist,
+        customerName: customerNamesMap.get(blacklist.zaloContactId) || 'N/A',
+      }));
+    } catch (error) {
+      this.logger.error('Error enriching blacklist with customer names:', error);
+      // Fallback: trả về data gốc nếu có lỗi
+      return blacklists.map(blacklist => ({
+        ...blacklist,
+        customerName: 'N/A',
+      }));
     }
   }
 

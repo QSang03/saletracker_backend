@@ -14,6 +14,8 @@ import { User } from '../users/user.entity';
 @Index(['userId', 'zaloContactId'], { unique: true })
 @Index(['userId'])
 @Index(['zaloContactId'])
+@Index(['created_at']) // ✅ Thêm index cho sorting
+@Index(['userId', 'created_at']) // ✅ Thêm composite index cho query phổ biến
 export class OrderBlacklist {
   @PrimaryGeneratedColumn('increment', { type: 'bigint' })
   id: number;
