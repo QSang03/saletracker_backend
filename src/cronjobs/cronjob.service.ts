@@ -39,19 +39,18 @@ export class CronjobService {
 
   @Cron(process.env.CRON_DEBT_STATISTICS_TIME || '0 23 * * *')
   async handleDebtStatisticsCron() {
-  // Sử dụng timezone Việt Nam (UTC+7) và LÙI 1 NGÀY
-  const now = new Date();
-  const vietnamTime = new Date(now.getTime() + 7 * 60 * 60 * 1000); // +7h sang giờ VN
-  const targetDateTime = new Date(vietnamTime.getTime() - 24 * 60 * 60 * 1000); // hôm qua theo giờ VN
-  const todayStr = targetDateTime.toISOString().split('T')[0]; // YYYY-MM-DD (hôm qua)
-  const vietnamDate = new Date(todayStr); // Dùng để so sánh trong count
+    // Sử dụng timezone Việt Nam (UTC+7)
+    const today = new Date();
+    const vietnamTime = new Date(today.getTime() + 7 * 60 * 60 * 1000); // Add 7 hours
+    const todayStr = vietnamTime.toISOString().split('T')[0]; // Format: YYYY-MM-DD
+    const vietnamDate = new Date(todayStr); // Parse as date for comparison
 
     this.logger.log(
       `🔄 [Auto Cron] Bắt đầu capture debt statistics cho ngày: ${todayStr}`,
     );
 
     try {
-  // Kiểm tra đã có data cho ngày hôm qua chưa
+      // Kiểm tra đã có data cho ngày hôm nay chưa
       const existingCount = await this.debtStatisticRepo.count({
         where: { statistic_date: vietnamDate },
       });
@@ -83,7 +82,7 @@ export class CronjobService {
         FROM debts d
         LEFT JOIN debt_configs dc ON d.debt_config_id = dc.id
         WHERE d.deleted_at IS NULL
-  AND DATE(d.updated_at) = ?
+        AND DATE(d.updated_at) = ?
       `;
 
       const result = await this.debtStatisticRepo.query(query, [todayStr]);
@@ -338,11 +337,9 @@ export class CronjobService {
 
   @Cron(process.env.CRON_CLONE_DEBT_LOGS_TIME || '0 23 * * *')
   async cloneDebtLogsToHistories() {
-  // LÙI 1 NGÀY theo giờ VN
-  const now = new Date();
-  const vietnamTime = new Date(now.getTime() + 7 * 60 * 60 * 1000); // +7h
-  const targetDate = new Date(vietnamTime.getTime() - 24 * 60 * 60 * 1000); // hôm qua
-  const todayStr = targetDate.toISOString().split('T')[0]; // YYYY-MM-DD của hôm qua
+    const today = new Date();
+    const vietnamTime = new Date(today.getTime() + 7 * 60 * 60 * 1000); // Cộng thêm 7 tiếng
+    const todayStr = vietnamTime.toISOString().split('T')[0]; // Định dạng YYYY-MM-DD
 
     this.logger.log(
       `[CRON] Bắt đầu clone debt_logs sang debt_histories cho ngày ${todayStr}`,
@@ -392,11 +389,9 @@ export class CronjobService {
 
   @Cron(process.env.CRON_DEBT_LOGS_TIME || '0 23 * * *')
   async snapshotAndResetDebtLogs() {
-  // LÙI 1 NGÀY theo giờ VN
-  const now = new Date();
-  const vietnamTime = new Date(now.getTime() + 7 * 60 * 60 * 1000);
-  const targetDate = new Date(vietnamTime.getTime() - 24 * 60 * 60 * 1000); // hôm qua
-  const todayStr = targetDate.toISOString().split('T')[0];
+    const today = new Date();
+    const vietnamTime = new Date(today.getTime() + 7 * 60 * 60 * 1000);
+    const todayStr = vietnamTime.toISOString().split('T')[0];
 
     // 1. Snapshot các bản ghi debt_logs có send_at >= ngày hiện tại
     const insertQuery = `
