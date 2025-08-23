@@ -921,8 +921,9 @@ export class DebtStatisticService {
           "d.status <> 'paid'",
           'd.due_date IS NOT NULL',
           'DATEDIFF(?, d.due_date) > 0',
+          'DATE(d.updated_at) = DATE(?)', // Thêm filter theo ngày hiện tại
         ];
-        const arr: any[] = [D];
+        const arr: any[] = [D, D]; // Thêm D cho filter DATE(d.updated_at) = DATE(?)
         if (opts.employeeCode) { where.push('d.employee_code_raw = ?'); arr.push(opts.employeeCode); }
         if (opts.customerCode) { where.push('dc.customer_code = ?'); arr.push(opts.customerCode); }
         const query = `
