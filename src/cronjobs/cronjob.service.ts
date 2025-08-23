@@ -39,19 +39,18 @@ export class CronjobService {
 
   @Cron(process.env.CRON_DEBT_STATISTICS_TIME || '0 23 * * *')
   async handleDebtStatisticsCron() {
-  // Sử dụng timezone Việt Nam (UTC+7) và LÙI 1 NGÀY
-  const now = new Date();
-  const vietnamTime = new Date(now.getTime() + 7 * 60 * 60 * 1000); // +7h sang giờ VN
-  const targetDateTime = new Date(vietnamTime.getTime() - 24 * 60 * 60 * 1000); // hôm qua theo giờ VN
-  const todayStr = targetDateTime.toISOString().split('T')[0]; // YYYY-MM-DD (hôm qua)
-  const vietnamDate = new Date(todayStr); // Dùng để so sánh trong count
+    // Sử dụng timezone Việt Nam (UTC+7)
+    const today = new Date();
+    const vietnamTime = new Date(today.getTime() + 7 * 60 * 60 * 1000); // Add 7 hours
+    const todayStr = vietnamTime.toISOString().split('T')[0]; // Format: YYYY-MM-DD
+    const vietnamDate = new Date(todayStr); // Parse as date for comparison
 
     this.logger.log(
       `🔄 [Auto Cron] Bắt đầu capture debt statistics cho ngày: ${todayStr}`,
     );
 
     try {
-  // Kiểm tra đã có data cho ngày hôm qua chưa
+      // Kiểm tra đã có data cho ngày hôm nay chưa
       const existingCount = await this.debtStatisticRepo.count({
         where: { statistic_date: vietnamDate },
       });
@@ -83,7 +82,7 @@ export class CronjobService {
         FROM debts d
         LEFT JOIN debt_configs dc ON d.debt_config_id = dc.id
         WHERE d.deleted_at IS NULL
-  AND DATE(d.updated_at) = ?
+        AND DATE(d.updated_at) = ?
       `;
 
       const result = await this.debtStatisticRepo.query(query, [todayStr]);
@@ -338,16 +337,19 @@ export class CronjobService {
 
   @Cron(process.env.CRON_CLONE_DEBT_LOGS_TIME || '0 23 * * *')
   async cloneDebtLogsToHistories() {
-  // LÙI 1 NGÀY theo giờ VN
-  const now = new Date();
-  const vietnamTime = new Date(now.getTime() + 7 * 60 * 60 * 1000); // +7h
-  const targetDate = new Date(vietnamTime.getTime() - 24 * 60 * 60 * 1000); // hôm qua
-  const todayStr = targetDate.toISOString().split('T')[0]; // YYYY-MM-DD của hôm qua
+    // Dùng ngày hôm qua theo múi giờ VN
+    const now = new Date();
+    const vnNow = new Date(now.getTime() + 7 * 60 * 60 * 1000);
+    const vnTodayStr = vnNow.toISOString().split('T')[0];
+    const vnYesterday = new Date(vnNow);
+    vnYesterday.setDate(vnYesterday.getDate() - 1);
+    const targetDateStr = vnYesterday.toISOString().split('T')[0]; // YYYY-MM-DD (hôm qua)
 
     this.logger.log(
-      `[CRON] Bắt đầu clone debt_logs sang debt_histories cho ngày ${todayStr}`,
+      `[CRON] Bắt đầu clone debt_logs sang debt_histories cho ngày ${targetDateStr}`,
     );
 
+    // Ghi nhận bản ghi theo ngày gửi (send_at) theo múi giờ VN và idempotent theo từng ngày
     const query = `
   INSERT INTO debt_histories (
     debt_log_id, debt_msg, send_at, user_name, full_name, first_remind, error_msg,
@@ -362,13 +364,16 @@ export class CronjobService {
   FROM debt_logs dl
   LEFT JOIN debt_configs dc ON dl.debt_config_id = dc.id
   LEFT JOIN users u ON dc.employee_id = u.id
-  WHERE DATE(CONVERT_TZ(dl.updated_at, '+00:00', '+07:00')) = ?
-    AND dl.id NOT IN (SELECT debt_log_id FROM debt_histories)
+  WHERE DATE(CONVERT_TZ(dl.send_at, '+00:00', '+07:00')) = ?
+    AND NOT EXISTS (
+      SELECT 1 FROM debt_histories dh
+      WHERE dh.debt_log_id = dl.id AND DATE(dh.created_at) = ?
+    )
 `;
-    const result = await this.debtHistoryRepo.query(query, [todayStr]);
+    const result = await this.debtHistoryRepo.query(query, [targetDateStr, targetDateStr]);
 
     this.logger.log(
-      `[CRON] Đã clone xong debt_logs sang debt_histories cho ngày ${todayStr}`,
+      `[CRON] Đã clone xong debt_logs sang debt_histories cho ngày ${targetDateStr}`,
     );
     this.logger.debug(`[CRON] Query result: ${JSON.stringify(result)}`);
   }
@@ -392,13 +397,15 @@ export class CronjobService {
 
   @Cron(process.env.CRON_DEBT_LOGS_TIME || '0 23 * * *')
   async snapshotAndResetDebtLogs() {
-  // LÙI 1 NGÀY theo giờ VN
-  const now = new Date();
-  const vietnamTime = new Date(now.getTime() + 7 * 60 * 60 * 1000);
-  const targetDate = new Date(vietnamTime.getTime() - 24 * 60 * 60 * 1000); // hôm qua
-  const todayStr = targetDate.toISOString().split('T')[0];
+    // Dùng snapshot cho ngày hôm qua theo múi giờ VN
+    const now = new Date();
+    const vnNow = new Date(now.getTime() + 7 * 60 * 60 * 1000);
+    const vnTodayStr = vnNow.toISOString().split('T')[0];
+    const vnYesterday = new Date(vnNow);
+    vnYesterday.setDate(vnYesterday.getDate() - 1);
+    const targetDateStr = vnYesterday.toISOString().split('T')[0]; // YYYY-MM-DD hôm qua
 
-    // 1. Snapshot các bản ghi debt_logs có send_at >= ngày hiện tại
+    // 1. Snapshot các bản ghi debt_logs theo ngày gửi (send_at) đúng 1 ngày (hôm qua)
     const insertQuery = `
     INSERT INTO debt_histories (
       created_at, remind_status, gender, debt_log_id, send_at, first_remind_at, second_remind_at,
@@ -411,10 +418,13 @@ export class CronjobService {
     FROM debt_logs dl
     LEFT JOIN debt_configs dc ON dl.debt_config_id = dc.id
     LEFT JOIN users u ON dc.employee_id = u.id
-    WHERE dl.send_at >= ?
-      AND dl.id NOT IN (SELECT debt_log_id FROM debt_histories WHERE DATE(created_at) = ?)
+    WHERE DATE(CONVERT_TZ(dl.send_at, '+00:00', '+07:00')) = ?
+      AND NOT EXISTS (
+        SELECT 1 FROM debt_histories dh
+        WHERE dh.debt_log_id = dl.id AND DATE(dh.created_at) = ?
+      )
   `;
-    await this.debtHistoryRepo.query(insertQuery, [todayStr, todayStr]);
+    await this.debtHistoryRepo.query(insertQuery, [targetDateStr, targetDateStr]);
 
     // 2. Reset toàn bộ debt_logs (không điều kiện WHERE)
     const updateQuery = `
@@ -434,7 +444,7 @@ export class CronjobService {
     await this.debtHistoryRepo.query(updateQuery);
 
     this.logger.log(
-      `[CRON] Đã snapshot debt_logs (send_at >= ${todayStr}) và reset toàn bộ debt_logs.`,
+      `[CRON] Đã snapshot debt_logs cho ngày ${targetDateStr} và reset toàn bộ debt_logs.`,
     );
   }
 }
