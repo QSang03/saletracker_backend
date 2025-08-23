@@ -2005,12 +2005,8 @@ export class CampaignService {
 
     qb.skip(skip).take(pageSize);
     
-    // Sort by status first (scheduled -> draft -> running -> paused -> completed), then by creation date
-    qb.orderBy(
-      "CASE WHEN campaign.status = 'scheduled' THEN 1 WHEN campaign.status = 'draft' THEN 2 WHEN campaign.status = 'running' THEN 3 WHEN campaign.status = 'paused' THEN 4 WHEN campaign.status = 'completed' THEN 5 ELSE 6 END",
-      'ASC'
-    )
-    .addOrderBy('campaign.created_at', 'DESC');
+    // Sort by creation date first, then we'll sort by status in JavaScript
+    qb.orderBy('campaign.created_at', 'DESC');
 
     // ✅ FIXED: Get campaigns without complex joins first
     const campaigns = await qb.getMany();
@@ -2146,6 +2142,27 @@ export class CampaignService {
         start_date,
         end_date,
       } as CampaignWithDetails;
+    });
+
+    // Sort by status first (scheduled -> draft -> running -> paused -> completed), then by creation date
+    const statusOrder = {
+      'scheduled': 1,
+      'draft': 2,
+      'running': 3,
+      'paused': 4,
+      'completed': 5,
+    };
+
+    data.sort((a, b) => {
+      const statusA = statusOrder[a.status] || 6;
+      const statusB = statusOrder[b.status] || 6;
+      
+      if (statusA !== statusB) {
+        return statusA - statusB;
+      }
+      
+      // If status is the same, sort by creation date (newest first)
+      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
     });
 
     const stats = await this.getStats(user);
@@ -3459,12 +3476,8 @@ export class CampaignService {
 
     qb.skip(skip).take(pageSize);
     
-    // Sort by status first (scheduled -> draft -> running -> paused -> completed), then by creation date
-    qb.orderBy(
-      "CASE WHEN campaign.status = 'scheduled' THEN 1 WHEN campaign.status = 'draft' THEN 2 WHEN campaign.status = 'running' THEN 3 WHEN campaign.status = 'paused' THEN 4 WHEN campaign.status = 'completed' THEN 5 ELSE 6 END",
-      'ASC'
-    )
-    .addOrderBy('campaign.created_at', 'DESC');
+    // Sort by creation date first, then we'll sort by status in JavaScript
+    qb.orderBy('campaign.created_at', 'DESC');
 
     const rawResults = await qb.getRawMany();
 
@@ -3695,6 +3708,27 @@ export class CampaignService {
         start_date,
         end_date,
       } as CampaignWithDetails;
+    });
+
+    // Sort by status first (scheduled -> draft -> running -> paused -> completed), then by creation date
+    const statusOrder = {
+      'scheduled': 1,
+      'draft': 2,
+      'running': 3,
+      'paused': 4,
+      'completed': 5,
+    };
+
+    data.sort((a, b) => {
+      const statusA = statusOrder[a.status] || 6;
+      const statusB = statusOrder[b.status] || 6;
+      
+      if (statusA !== statusB) {
+        return statusA - statusB;
+      }
+      
+      // If status is the same, sort by creation date (newest first)
+      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
     });
 
     // Generate stats for archived campaigns only
