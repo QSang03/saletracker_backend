@@ -195,8 +195,48 @@ export class DebtStatisticService {
       }
     }
 
-    // BỎ FALLBACK: Không lấy dữ liệu realtime từ debts cho ngày hiện tại
-    // Chỉ lấy từ debt_statistics để đảm bảo tính nhất quán
+    // Xử lý ngày hôm nay từ debts
+    if (effectiveToDate >= today) {
+      // Format today to Vietnam timezone for MySQL query
+      const todayVietnam = this.formatDateStringToVietnam(today);
+      let todayQuery = `
+        SELECT 
+          COUNT(*) as total,
+          SUM(CASE WHEN status = 'paid' THEN 1 ELSE 0 END) as paid,
+          SUM(CASE WHEN status = 'pay_later' THEN 1 ELSE 0 END) as payLater,
+          SUM(CASE WHEN status = 'no_information_available' THEN 1 ELSE 0 END) as noInfo,
+          SUM(total_amount) as totalAmount,
+          SUM(total_amount - remaining) as paidAmount,
+          SUM(remaining) as remainingAmount
+        FROM debts
+        WHERE deleted_at IS NULL AND DATE(updated_at) = DATE(?)
+      `;
+      
+      const todayParams = [todayVietnam];
+      
+      if (filters?.employeeCode) {
+        todayQuery += ` AND employee_code_raw = ?`;
+        todayParams.push(filters.employeeCode);
+      }
+      
+      if (filters?.customerCode) {
+        todayQuery += ` AND customer_code = ?`;
+        todayParams.push(filters.customerCode);
+      }
+
+      const todayStats = await this.debtRepository.query(todayQuery, todayParams);
+
+      if (todayStats[0]) {
+        const stats = todayStats[0];
+        results.total += Number(stats.total) || 0;
+        results.paid += Number(stats.paid) || 0;
+        results.payLater += Number(stats.payLater) || 0;
+        results.noInfo += Number(stats.noInfo) || 0;
+        results.totalAmount += Number(stats.totalAmount) || 0;
+        results.collectedAmount += Number(stats.paidAmount) || 0;
+        results.remainingAmount += Number(stats.remainingAmount) || 0;
+      }
+    }
 
     // Tính collection rate
     if (results.totalAmount > 0) {
@@ -1039,6 +1079,7 @@ export class DebtStatisticService {
       const rows = await this.debtStatisticRepository.query(query, [D, D, D, D, ...args]);
       return rows.map((r: any) => ({ range: r.bucket, count: Number(r.count) || 0, amount: Number(r.amount) || 0 }));
     } else {
+      // Ngày hiện tại: Lấy từ debts (real-time) - BÌNH THƯỜNG
       const where: string[] = [
         'd.deleted_at IS NULL',
         "d.status <> 'paid'",
