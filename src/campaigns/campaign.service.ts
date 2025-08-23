@@ -1998,18 +1998,23 @@ export class CampaignService {
     // ✅ FIXED: Get total count before pagination
     const total = await qb.getCount();
 
-    // Pagination
-    const page = Math.max(1, parseInt(query.page) || 1);
-    const pageSize = Math.max(1, parseInt(query.pageSize) || 10);
-    const skip = (page - 1) * pageSize;
-
-    qb.skip(skip).take(pageSize);
-    
     // Sort by creation date first, then we'll sort by status in JavaScript
     qb.orderBy('campaign.created_at', 'DESC');
 
-    // ✅ FIXED: Get campaigns without complex joins first
-    const campaigns = await qb.getMany();
+    // Get all campaigns first (without pagination) to sort properly
+    const allCampaigns = await qb.getMany();
+    const allCampaignIds = allCampaigns.map((c) => c.id);
+
+    if (allCampaignIds.length === 0) {
+      const stats = await this.getStats(user);
+      return { data: [], total: 0, stats };
+    }
+
+    // Apply pagination after getting all data
+    const page = Math.max(1, parseInt(query.page) || 1);
+    const pageSize = Math.max(1, parseInt(query.pageSize) || 10);
+    const skip = (page - 1) * pageSize;
+    const campaigns = allCampaigns.slice(skip, skip + pageSize);
     const campaignIds = campaigns.map((c) => c.id);
 
     if (campaignIds.length === 0) {
@@ -2086,8 +2091,8 @@ export class CampaignService {
       >,
     );
 
-    // ✅ FIXED: Build response data
-    const data: CampaignWithDetails[] = campaigns.map((campaign: Campaign) => {
+    // ✅ FIXED: Build response data for all campaigns first
+    const allData: CampaignWithDetails[] = allCampaigns.map((campaign: Campaign) => {
       const content = contentMap.get(campaign.id);
       const schedule = scheduleMap.get(campaign.id);
       const emailReport = emailMap.get(campaign.id);
@@ -2153,7 +2158,11 @@ export class CampaignService {
       'completed': 5,
     };
 
-    data.sort((a, b) => {
+    // Debug: Log the data before sorting
+    console.log('Before sorting - First 5 campaigns:', allData.slice(0, 5).map(c => ({ name: c.name, status: c.status, created_at: c.created_at })));
+
+    // Sort all data by status first, then by creation date
+    allData.sort((a, b) => {
       const statusA = statusOrder[a.status] || 6;
       const statusB = statusOrder[b.status] || 6;
       
@@ -2164,6 +2173,12 @@ export class CampaignService {
       // If status is the same, sort by creation date (newest first)
       return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
     });
+
+    // Debug: Log the data after sorting
+    console.log('After sorting - First 5 campaigns:', allData.slice(0, 5).map(c => ({ name: c.name, status: c.status, created_at: c.created_at })));
+
+    // Apply pagination to sorted data
+    const data = allData.slice(skip, skip + pageSize);
 
     const stats = await this.getStats(user);
     return { data, total, stats };
@@ -3469,17 +3484,29 @@ export class CampaignService {
       }
     }
 
-    // Pagination
-    const page = Math.max(1, parseInt(query.page) || 1);
-    const pageSize = Math.max(1, parseInt(query.pageSize) || 10);
-    const skip = (page - 1) * pageSize;
-
-    qb.skip(skip).take(pageSize);
-    
     // Sort by creation date first, then we'll sort by status in JavaScript
     qb.orderBy('campaign.created_at', 'DESC');
 
-    const rawResults = await qb.getRawMany();
+    // Get all archived campaigns first (without pagination) to sort properly
+    const allRawResults = await qb.getRawMany();
+
+    if (allRawResults.length === 0) {
+      const stats = {
+        totalCampaigns: 0,
+        draftCampaigns: 0,
+        runningCampaigns: 0,
+        completedCampaigns: 0,
+        scheduledCampaigns: 0,
+        archivedCampaigns: 0,
+      };
+      return { data: [], total: 0, stats };
+    }
+
+    // Apply pagination after getting all data
+    const page = Math.max(1, parseInt(query.page) || 1);
+    const pageSize = Math.max(1, parseInt(query.pageSize) || 10);
+    const skip = (page - 1) * pageSize;
+    const rawResults = allRawResults.slice(skip, skip + pageSize);
 
     // Count query with same logic
     const countQb = this.campaignRepository
@@ -3577,15 +3604,16 @@ export class CampaignService {
 
     const total = await countQb.getCount();
 
-    // Process data same as findAll method
+    // Process data same as findAll method - use all data for customer mapping
+    const allCampaignIds = allRawResults.map((result) => result.campaign_id);
     const campaignIds = rawResults.map((result) => result.campaign_id);
 
     const allCustomerMaps =
-      campaignIds.length > 0
+      allCampaignIds.length > 0
         ? await this.campaignCustomerMapRepository
             .createQueryBuilder('map')
             .leftJoinAndSelect('map.campaign_customer', 'customer')
-            .where('map.campaign_id IN (:...campaignIds)', { campaignIds })
+            .where('map.campaign_id IN (:...allCampaignIds)', { allCampaignIds })
             .getMany()
         : [];
 
@@ -3609,7 +3637,8 @@ export class CampaignService {
       >,
     );
 
-    const data: CampaignWithDetails[] = rawResults.map((result: any) => {
+    // Build all data first, then sort, then paginate
+    const allData: CampaignWithDetails[] = allRawResults.map((result: any) => {
       const messages = result.content_messages || [];
       const initialMessage = Array.isArray(messages)
         ? messages.find((msg) => msg.type === 'initial') || messages[0]
@@ -3719,7 +3748,11 @@ export class CampaignService {
       'completed': 5,
     };
 
-    data.sort((a, b) => {
+    // Debug: Log the data before sorting
+    console.log('Before sorting archived - First 5 campaigns:', allData.slice(0, 5).map(c => ({ name: c.name, status: c.status, created_at: c.created_at })));
+
+    // Sort all data by status first, then by creation date
+    allData.sort((a, b) => {
       const statusA = statusOrder[a.status] || 6;
       const statusB = statusOrder[b.status] || 6;
       
@@ -3730,6 +3763,12 @@ export class CampaignService {
       // If status is the same, sort by creation date (newest first)
       return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
     });
+
+    // Debug: Log the data after sorting
+    console.log('After sorting archived - First 5 campaigns:', allData.slice(0, 5).map(c => ({ name: c.name, status: c.status, created_at: c.created_at })));
+
+    // Apply pagination to sorted data
+    const data = allData.slice(skip, skip + pageSize);
 
     // Generate stats for archived campaigns only
     const stats = {
