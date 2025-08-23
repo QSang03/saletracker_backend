@@ -44,8 +44,9 @@ export class DebtService {
       filterDate = query.date;
     }
     // Chỉ áp dụng filter ngày khi có giá trị, không mặc định ngày hôm nay
-    if (filterDate) {
-      qb.andWhere('DATE(debt.updated_at) = :filterDate', { filterDate });
+    if (!filterDate) {
+      const today = new Date();
+      filterDate = today.toISOString().slice(0, 10);
     }
 
     // Filter search (áp dụng cho nhiều trường)
