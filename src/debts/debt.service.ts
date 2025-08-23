@@ -48,7 +48,8 @@ export class DebtService {
       const today = new Date();
       filterDate = today.toISOString().slice(0, 10);
     }
-
+    qb.andWhere('DATE(debt.updated_at) = :filterDate', { filterDate });
+    
     // Filter search (áp dụng cho nhiều trường)
     if (query.search) {
       const search = `%${query.search.trim()}%`;
