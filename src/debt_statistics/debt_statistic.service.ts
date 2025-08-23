@@ -56,8 +56,15 @@ export class DebtStatisticService {
     const to = this.normalizeDateOnly(params.to);
     const from = this.normalizeDateOnly(params.from);
     
+    // Ưu tiên ngày được truyền vào, chỉ fallback về hôm nay khi thực sự cần thiết
+    const resolvedDate = sd || to || from;
+    
+    // Nếu không có ngày nào được truyền vào, mới dùng hôm nay
+    if (!resolvedDate) {
+      return today;
+    }
+    
     // Nếu ngày được chọn là tương lai, chỉ trả về ngày hiện tại
-    const resolvedDate = sd || to || from || today;
     return resolvedDate > today ? today : resolvedDate;
   }
 
@@ -339,7 +346,11 @@ export class DebtStatisticService {
       }
 
       const offset = (page - 1) * limit;
-      const D = (date || to || today) as string;
+      // Không fallback về today - phải có date hoặc to được truyền vào
+      const D = (date || to) as string;
+      if (!D) {
+        throw new Error('Either date or to parameter is required');
+      }
       const isHistoricalDate = D < today;
 
       // New: support range-based details to align with range aggregations (e.g., pay-later delay buckets)

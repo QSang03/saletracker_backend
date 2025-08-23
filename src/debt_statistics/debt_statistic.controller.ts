@@ -215,14 +215,9 @@ export class DebtStatisticController {
     @Query('all') all?: string,
   ) {
     // Allow either single date or from/to range
-    // Special case: if only status provided (e.g. clicking overview bar), infer as-of date from 'to' or today
+    // Không tự động fallback về ngày hôm nay - để frontend truyền đúng ngày từ chart
     if (!date && (!from || !to)) {
-      if (status) {
-        const today = new Date().toISOString().split('T')[0];
-        date = today;
-      } else {
-        throw new Error('Either date or from/to parameters are required');
-      }
+      throw new Error('Either date or from/to parameters are required');
     }
     
     let parsedLimit = parseInt(limit, 10);
@@ -249,10 +244,7 @@ export class DebtStatisticController {
 
     // Không force today nữa - để frontend truyền đúng ngày từ chart
     // Logic cũ gây lỗi khi click vào cột paid của ngày quá khứ
-    // if (status === 'paid' && (!from || !to)) {
-    //   const today = new Date().toISOString().split('T')[0];
-    //   filters.date = today;
-    // }
+    // Đã xóa hoàn toàn logic fallback về ngày hôm nay
     
     const result = await this.debtStatisticService.getDetailedDebts(filters);
     
