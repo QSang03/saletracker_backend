@@ -360,9 +360,9 @@ export class CronjobService {
   LEFT JOIN debt_configs dc ON dl.debt_config_id = dc.id
   LEFT JOIN users u ON dc.employee_id = u.id
   WHERE DATE(CONVERT_TZ(dl.updated_at, '+00:00', '+07:00')) = ?
-    AND dl.id NOT IN (SELECT debt_log_id FROM debt_histories)
+    AND dl.id NOT IN (SELECT debt_log_id FROM debt_histories WHERE DATE(created_at) = ?)
 `;
-    const result = await this.debtHistoryRepo.query(query, [todayStr]);
+    const result = await this.debtHistoryRepo.query(query, [todayStr, todayStr]);
 
     this.logger.log(
       `[CRON] Đã clone xong debt_logs sang debt_histories cho ngày ${todayStr}`,

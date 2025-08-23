@@ -983,13 +983,35 @@ export class DebtStatisticService {
           const key = r.label.replace(/[^a-zA-Z0-9_]/g, '_');
           results.push({ date: D, range: r.label, count: Number(row[`cnt_${key}`]) || 0, amount: Number(row[`amt_${key}`]) || 0 });
         }
-      } else {
-        // BỎ FALLBACK: Nếu không có snapshot cho ngày hiện tại thì trả về 0
-        // Không lấy từ debts nữa để đảm bảo tính nhất quán
+      } else if (D === today) {
+        // Ngày hiện tại: Lấy từ debts (real-time)
+        const where: string[] = [
+          'd.deleted_at IS NULL',
+          "d.status <> 'paid'",
+          'd.pay_later IS NOT NULL',
+          'DATE(d.updated_at) = DATE(?)', // Thêm filter theo ngày hiện tại
+        ];
+        const arr: any[] = [D, D]; // Thêm D cho filter DATE(d.updated_at) = DATE(?)
+        if (options.employeeCode) { where.push('d.employee_code_raw = ?'); arr.push(options.employeeCode); }
+        if (options.customerCode) { where.push('dc.customer_code = ?'); arr.push(options.customerCode); }
+        const parts = ranges.map((r) => {
+          const cond = r.max == null ? `DATEDIFF(?, d.pay_later) >= ${r.min}` : `DATEDIFF(?, d.pay_later) BETWEEN ${r.min} AND ${r.max}`;
+          return `SUM(CASE WHEN ${cond} THEN 1 ELSE 0 END) AS cnt_${r.label.replace(/[^a-zA-Z0-9_]/g, '_')}, SUM(CASE WHEN ${cond} THEN d.remaining ELSE 0 END) AS amt_${r.label.replace(/[^a-zA-Z0-9_]/g, '_')}`;
+        }).join(',');
+        const query = `SELECT ${parts} FROM (
+          SELECT d.* FROM debts d
+          LEFT JOIN debt_configs dc ON d.debt_config_id = dc.id
+          WHERE ${where.join(' AND ')}
+        ) t`;
+        // There are 2 placeholders (count/amount) per bucket in 'parts'
+        const diffParams = new Array(ranges.length * 2).fill(D);
+        const row = (await this.debtRepository.query(query, [...diffParams, ...arr]))[0] || {};
         for (const r of ranges) {
-          results.push({ date: D, range: r.label, count: 0, amount: 0 });
+          const key = r.label.replace(/[^a-zA-Z0-9_]/g, '_');
+          results.push({ date: D, range: r.label, count: Number(row[`cnt_${key}`]) || 0, amount: Number(row[`amt_${key}`]) || 0 });
         }
       }
+      // D > today: không làm gì, tự động trả về 0
     }
     return results;
   }
@@ -1005,8 +1027,8 @@ export class DebtStatisticService {
 
       if (D < today) {
         // Past days: use events from debt_histories on that day
-        // FIX: Use DATE(created_at) directly like the working query
-        const where = ["DATE(dh.created_at) = ?"] as string[];
+        // FIX: Use DATE(send_at) to reflect actual message send time
+        const where = ["DATE(dh.send_at) = ?"] as string[];
         const arr: any[] = [D];
         if (options.employeeCode) { where.push('u.employee_code = ?'); arr.push(options.employeeCode); }
         if (options.customerCode) { where.push('dc.customer_code = ?'); arr.push(options.customerCode); }
@@ -1021,11 +1043,24 @@ export class DebtStatisticService {
         `;
         const rows = await this.debtHistoriesRepository.query(query, arr);
         for (const r of rows) results.push({ date: D, status: r.status, customers: Number(r.customers) || 0 });
-      } else {
-        // BỎ FALLBACK: Nếu không có snapshot cho ngày hiện tại thì trả về 0
-        // Không lấy từ debt_logs nữa để đảm bảo tính nhất quán
-        // Trả về 0 cho tất cả status
+      } else if (D === today) {
+        // Ngày hiện tại: Lấy từ debt_logs (real-time)
+        const where = ["DATE(dl.send_at) = ?"] as string[];
+        const arr: any[] = [D];
+        if (options.employeeCode) { where.push('u.employee_code = ?'); arr.push(options.employeeCode); }
+        if (options.customerCode) { where.push('dc.customer_code = ?'); arr.push(options.customerCode); }
+        const query = `
+          SELECT dl.remind_status as status, ${selectDistinct} as customers
+          FROM debt_logs dl
+          LEFT JOIN debt_configs dc ON dl.debt_config_id = dc.id
+          LEFT JOIN users u ON dc.employee_id = u.id
+          WHERE ${where.join(' AND ')}
+          GROUP BY dl.remind_status
+        `;
+        const rows = await this.debtLogsRepository.query(query, arr);
+        for (const r of rows) results.push({ date: D, status: r.status, customers: Number(r.customers) || 0 });
       }
+      // D > today: không làm gì, tự động trả về 0
     }
     return results;
   }
