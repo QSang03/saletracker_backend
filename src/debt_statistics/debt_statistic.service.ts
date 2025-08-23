@@ -13,21 +13,17 @@ export class DebtStatisticService {
 
   private getVietnamToday(): string {
     const now = new Date();
-    const vietnamTime = new Date(now.getTime() + 7 * 60 * 60 * 1000);
-    return vietnamTime.toISOString().split('T')[0];
+    return now.toISOString().split('T')[0];
   }
 
   // Format date to Vietnam timezone for MySQL queries (without CONVERT_TZ)
   private formatToVietnamDate(date: Date): string {
-    const vietnamTime = new Date(date.getTime() + 7 * 60 * 60 * 1000);
-    return vietnamTime.toISOString().slice(0, 19).replace('T', ' ');
+    return date.toISOString().slice(0, 19).replace('T', ' ');
   }
 
   // Format date string to Vietnam timezone
   private formatDateStringToVietnam(dateStr: string): string {
-    const date = new Date(dateStr + 'T00:00:00Z');
-    const vietnamTime = new Date(date.getTime() + 7 * 60 * 60 * 1000);
-    return vietnamTime.toISOString().slice(0, 19).replace('T', ' ');
+    return dateStr + ' 00:00:00';
   }
 
   // Helper to format date for MySQL queries (optimized for index usage)
