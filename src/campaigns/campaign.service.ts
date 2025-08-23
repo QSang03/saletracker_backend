@@ -2006,16 +2006,10 @@ export class CampaignService {
     qb.skip(skip).take(pageSize);
     
     // Sort by status first (scheduled -> draft -> running -> paused -> completed), then by creation date
-    qb.orderBy(`
-      CASE 
-        WHEN campaign.status = 'scheduled' THEN 1
-        WHEN campaign.status = 'draft' THEN 2
-        WHEN campaign.status = 'running' THEN 3
-        WHEN campaign.status = 'paused' THEN 4
-        WHEN campaign.status = 'completed' THEN 5
-        ELSE 6
-      END
-    `, 'ASC')
+    qb.orderBy(
+      "CASE WHEN campaign.status = 'scheduled' THEN 1 WHEN campaign.status = 'draft' THEN 2 WHEN campaign.status = 'running' THEN 3 WHEN campaign.status = 'paused' THEN 4 WHEN campaign.status = 'completed' THEN 5 ELSE 6 END",
+      'ASC'
+    )
     .addOrderBy('campaign.created_at', 'DESC');
 
     // ✅ FIXED: Get campaigns without complex joins first
@@ -3466,16 +3460,10 @@ export class CampaignService {
     qb.skip(skip).take(pageSize);
     
     // Sort by status first (scheduled -> draft -> running -> paused -> completed), then by creation date
-    qb.orderBy(`
-      CASE 
-        WHEN campaign.status = 'scheduled' THEN 1
-        WHEN campaign.status = 'draft' THEN 2
-        WHEN campaign.status = 'running' THEN 3
-        WHEN campaign.status = 'paused' THEN 4
-        WHEN campaign.status = 'completed' THEN 5
-        ELSE 6
-      END
-    `, 'ASC')
+    qb.orderBy(
+      "CASE WHEN campaign.status = 'scheduled' THEN 1 WHEN campaign.status = 'draft' THEN 2 WHEN campaign.status = 'running' THEN 3 WHEN campaign.status = 'paused' THEN 4 WHEN campaign.status = 'completed' THEN 5 ELSE 6 END",
+      'ASC'
+    )
     .addOrderBy('campaign.created_at', 'DESC');
 
     const rawResults = await qb.getRawMany();
