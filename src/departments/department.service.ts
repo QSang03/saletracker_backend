@@ -191,7 +191,7 @@ export class DepartmentService {
     });
     const savedDepartment = await this.departmentRepo.save(department);
 
-    // Tạo roles cho phòng ban
+  // Tạo roles cho phòng ban
     const managerRole = new Role();
     managerRole.name = `manager-${slug}`;
     managerRole.display_name = `Quản lý nhóm ${createDepartmentDto.name}`;
@@ -200,8 +200,13 @@ export class DepartmentService {
     userRole.name = `user-${slug}`;
     userRole.display_name = `Nhân viên nhóm ${createDepartmentDto.name}`;
 
+  // Thêm role pm-{slug} để PM có thể truy cập theo từng phòng ban
+  const pmRole = new Role();
+  pmRole.name = `pm-${slug}`;
+  pmRole.display_name = `PM nhóm ${createDepartmentDto.name}`;
+
     // Lưu roles vào DB
-    await this.departmentRepo.manager.save([managerRole, userRole]);
+  await this.departmentRepo.manager.save([managerRole, userRole, pmRole]);
 
     // Tạo permissions cho phòng ban
     const actions = [
@@ -222,7 +227,7 @@ export class DepartmentService {
       permissions.push(permission);
     }
 
-    // Gán tất cả quyền cho manager và user
+    // Gán quyền cho manager, user và pm
     for (const permission of permissions) {
       // Gán cho manager: tất cả quyền đều bật
       const managerRolePermission = new RolePermission();
@@ -237,6 +242,13 @@ export class DepartmentService {
       userRolePermission.permission = permission;
       userRolePermission.isActive = permission.action === 'read';
       await this.departmentRepo.manager.save(userRolePermission);
+
+      // Gán cho pm: tương tự user, mặc định chỉ bật quyền read
+      const pmRolePermission = new RolePermission();
+      pmRolePermission.role = pmRole;
+      pmRolePermission.permission = permission;
+      pmRolePermission.isActive = permission.action === 'read';
+      await this.departmentRepo.manager.save(pmRolePermission);
     }
 
     return savedDepartment;
