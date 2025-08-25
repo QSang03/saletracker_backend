@@ -178,6 +178,47 @@ export class OrderService {
     const isAdmin = roleNames.includes('admin');
     if (isAdmin) return null; // Admin có thể xem tất cả
 
+        /**
+     * Logic xử lý role PM:
+     * - Nếu chỉ có role PM gốc → trả về mảng rỗng (không có dữ liệu)
+     * - Nếu có role pm-{department} → lọc users theo phòng ban đó
+     */
+    const isPM = roleNames.includes('pm');
+    if (isPM) {
+      // Kiểm tra có role pm_{phong_ban} nào không
+      const pmRoles = roleNames.filter((r: string) => r.startsWith('pm-'));
+      if (pmRoles.length === 0) {
+        return []; // Chỉ có PM mà không có pm_{phong_ban} → trả về mảng rỗng
+      }
+
+      // Có role pm_{phong_ban} → lọc theo phòng ban đó
+      const departmentSlugs = pmRoles.map((r: string) => r.replace('pm-', ''));
+      
+      const departments = await this.departmentRepository
+        .find({
+          where: departmentSlugs.map((slug) => ({ slug, deletedAt: IsNull() })),
+        })
+        .then((departments) =>
+          departments.filter(
+            (dep) => dep.server_ip && dep.server_ip.trim() !== '',
+          ),
+        );
+
+      if (departments.length > 0) {
+        const departmentIds = departments.map((d) => d.id);
+
+        const usersInDepartments = await this.userRepository
+          .createQueryBuilder('user')
+          .leftJoin('user.departments', 'dept')
+          .where('dept.id IN (:...departmentIds)', { departmentIds })
+          .andWhere('user.deletedAt IS NULL')
+          .getMany();
+
+        return usersInDepartments.map((u) => u.id);
+      }
+      return []; // PM không có department hợp lệ
+    }
+
     const managerRoles = roleNames.filter((r: string) =>
       r.startsWith('manager-'),
     );

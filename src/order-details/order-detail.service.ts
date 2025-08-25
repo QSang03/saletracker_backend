@@ -47,6 +47,39 @@ export class OrderDetailService {
     const isAdmin = roleNames.includes('admin');
     if (isAdmin) return null; // Admin có thể xem tất cả
 
+    // Kiểm tra role PM
+    const isPM = roleNames.includes('pm');
+    if (isPM) {
+      // Kiểm tra có role pm_{phong_ban} nào không
+      const pmRoles = roleNames.filter((r: string) => r.startsWith('pm-'));
+      if (pmRoles.length === 0) {
+        return []; // Chỉ có PM mà không có pm_{phong_ban} → trả về mảng rỗng
+      }
+      
+      // Có role pm_{phong_ban} → lọc theo phòng ban đó
+      const departmentSlugs = pmRoles.map((r: string) => r.replace('pm-', ''));
+      
+      const departments = await this.departmentRepository
+        .createQueryBuilder('dept')
+        .where('dept.slug IN (:...slugs)', { slugs: departmentSlugs })
+        .andWhere('dept.server_ip IS NOT NULL')
+        .andWhere("TRIM(dept.server_ip) <> ''")
+        .getMany();
+
+      if (departments.length > 0) {
+        const departmentIds = departments.map((d) => d.id);
+
+        const usersInDepartments = await this.userRepository
+          .createQueryBuilder('user')
+          .leftJoin('user.departments', 'dept')
+          .where('dept.id IN (:...departmentIds)', { departmentIds })
+          .getMany();
+
+        return usersInDepartments.map((u) => u.id);
+      }
+      return []; // PM không có department hợp lệ
+    }
+
     const managerRoles = roleNames.filter((r: string) =>
       r.startsWith('manager-'),
     );
