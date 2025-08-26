@@ -10,6 +10,7 @@ import {
   ValidateNested, 
   IsBoolean,
   IsNumber,
+  IsPhoneNumber,
   Matches
 } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -112,9 +113,8 @@ export class EmailReportsDto {
 export class CustomerDto {
   @IsString()
   @IsNotEmpty({ message: 'Số điện thoại không được để trống' })
-  @Matches(/^(0[3|5|7|8|9])+([0-9]{8})$/, {
-    message: 'Số điện thoại không đúng định dạng (VD: 0987654321)',
-  })
+  @Matches(/^\S+$/, { message: 'Số điện thoại không được chứa khoảng trắng' })
+  @IsPhoneNumber('VN', { message: 'Số điện thoại không đúng định dạng (VD: 0987654321)' })
   phone_number: string;
 
   @IsString()

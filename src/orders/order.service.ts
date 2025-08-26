@@ -21,9 +21,9 @@ interface OrderFilters {
   employees?: string;
   departments?: string;
   products?: string;
-  warningLevel?: string;
-  quantity?: string; // <-- add this property
+  quantity?: string;
   conversationType?: string;
+  warningLevel?: string;
   sortField?:
     | 'quantity'
     | 'unit_price'
