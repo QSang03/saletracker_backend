@@ -320,6 +320,7 @@ export class OrderBlacklistService {
         : [];
 
       const isAdmin = userRoles.includes('admin');
+      const isViewRole = userRoles.includes('view');
       const isManager = userRoles.some(
         (role) => role && role.includes('manager'),
       );
@@ -349,7 +350,10 @@ export class OrderBlacklistService {
         .leftJoinAndSelect('user.departments', 'departments');
 
       // ✅ Apply phân quyền với logic đúng
-      if (!isAdmin && !isManager) {
+      if (isViewRole || isAdmin) {
+        // Role view và admin: có thể xem tất cả blacklist
+        // Không cần thêm filter nào
+      } else if (!isAdmin && !isManager) {
         // User thường: chỉ thấy blacklist của mình
         queryBuilder.andWhere('blacklist.userId = :userId', {
           userId: currentUser.id,
@@ -509,11 +513,12 @@ export class OrderBlacklistService {
       ? currentUser.roles.map((role) => role.name)
       : [];
     const isAdmin = userRoles.includes('admin');
+    const isViewRole = userRoles.includes('view');
     const isManager = userRoles.some(
       (role) => role && role.includes('manager'),
     );
 
-    if (isAdmin) {
+    if (isAdmin || isViewRole) {
       // Admin: lấy tất cả departments
       const departments = await this.departmentRepository.find({
         select: ['id', 'name'],
@@ -547,6 +552,7 @@ export class OrderBlacklistService {
       ? currentUser.roles.map((role) => role.name)
       : [];
     const isAdmin = userRoles.includes('admin');
+    const isViewRole = userRoles.includes('view');
     const isManager = userRoles.some(
       (role) => role && role.includes('manager'),
     );
@@ -558,8 +564,8 @@ export class OrderBlacklistService {
       .where('user.deletedAt IS NULL')
       .orderBy('user.fullName', 'ASC');
 
-    if (isAdmin) {
-      // Admin: lấy tất cả users, có thể filter theo departments
+    if (isAdmin || isViewRole) {
+      // Admin và role view: lấy tất cả users, có thể filter theo departments
       if (departmentIds && departmentIds.length > 0) {
         queryBuilder.andWhere('department.id IN (:...departmentIds)', {
           departmentIds,

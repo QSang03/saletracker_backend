@@ -40,8 +40,10 @@ export class OrderBlacklistController {
   ) {
     // ✅ Sửa logic kiểm tra role
     const userRoles = req.user.roles ? req.user.roles.map((r) => r.name) : [];
+    const isViewRole = userRoles.includes('view');
     const isUser =
       !userRoles.includes('admin') &&
+      !userRoles.includes('view') &&
       !userRoles.some((role) => role.includes('manager'));
 
     if (isUser) {
@@ -117,8 +119,10 @@ export class OrderBlacklistController {
 
     // ✅ Sửa logic kiểm tra role
     const userRoles = req.user.roles ? req.user.roles.map((r) => r.name) : [];
+    const isViewRole = userRoles.includes('view');
     const isUser =
       !userRoles.includes('admin') &&
+      !userRoles.includes('view') &&
       !userRoles.some((role) => role.includes('manager'));
 
     if (isUser && blacklist.userId !== req.user.id) {
@@ -134,10 +138,17 @@ export class OrderBlacklistController {
     @Body() updateDto: UpdateOrderBlacklistDto,
     @Request() req: any,
   ) {
+    // ✅ Kiểm tra role "view" - không cho phép chỉnh sửa
+    const userRoles = req.user.roles ? req.user.roles.map((r) => r.name) : [];
+    if (userRoles.includes('view')) {
+      throw new ForbiddenException('Role view không có quyền chỉnh sửa blacklist');
+    }
+
     const blacklist = await this.orderBlacklistService.findOne(+id);
 
     // Nếu là user thường, chỉ được update blacklist của chính mình
-    if (req.user.role === 'user' && blacklist.userId !== req.user.id) {
+    const isUser = !userRoles.includes('admin') && !userRoles.some((role) => role.includes('manager'));
+    if (isUser && blacklist.userId !== req.user.id) {
       throw new ForbiddenException('Unauthorized access to blacklist entry');
     }
 
@@ -147,10 +158,17 @@ export class OrderBlacklistController {
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
   async remove(@Param('id') id: string, @Request() req: any) {
+    // ✅ Kiểm tra role "view" - không cho phép xóa
+    const userRoles = req.user.roles ? req.user.roles.map((r) => r.name) : [];
+    if (userRoles.includes('view')) {
+      throw new ForbiddenException('Role view không có quyền xóa blacklist');
+    }
+
     const blacklist = await this.orderBlacklistService.findOne(+id);
 
     // Nếu là user thường, chỉ được xóa blacklist của chính mình
-    if (req.user.role === 'user' && blacklist.userId !== req.user.id) {
+    const isUser = !userRoles.includes('admin') && !userRoles.some((role) => role.includes('manager'));
+    if (isUser && blacklist.userId !== req.user.id) {
       throw new ForbiddenException('Unauthorized access to blacklist entry');
     }
 
@@ -163,6 +181,12 @@ export class OrderBlacklistController {
     @Body() data: { zaloContactIds: string[]; reason?: string },
     @Request() req: any,
   ) {
+    // ✅ Kiểm tra role "view" - không cho phép thêm mới
+    const userRoles = req.user.roles ? req.user.roles.map((r) => r.name) : [];
+    if (userRoles.includes('view')) {
+      throw new ForbiddenException('Role view không có quyền thêm blacklist');
+    }
+
     const results: BulkAddResult[] = [];
 
     for (const zaloContactId of data.zaloContactIds) {
