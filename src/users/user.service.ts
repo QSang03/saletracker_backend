@@ -607,6 +607,10 @@ export class UserService {
       statuses?: string[];
     },
   ): Promise<{ data: User[]; total: number }> {
+    // Guard: nếu không có departmentIds thì trả về ngay để tránh sinh SQL `IN ()`
+    if (!departmentIds || departmentIds.length === 0) {
+      return { data: [], total: 0 };
+    }
     const qb = this.userRepo
       .createQueryBuilder('user')
       .leftJoinAndSelect('user.departments', 'department')

@@ -10,6 +10,7 @@ import {
   Query,
   UseGuards,
   Req,
+  Logger,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { OrderService } from './order.service';
@@ -25,6 +26,7 @@ import {
 @Controller('orders')
 @UseGuards(AuthGuard('jwt'))
 export class OrderController {
+  private readonly logger = new Logger(OrderController.name);
   constructor(private readonly orderService: OrderService) {}
 
   @Get()
@@ -68,6 +70,7 @@ export class OrderController {
     }
     
     // Truyền cả user xuống service để phân quyền
+  this.logger.debug(`findAll called - page=${pageNum} pageSize=${pageSizeNum} quantity=${quantity} employees=${employees} departments=${departments}`);
     return this.orderService.findAllPaginated({
       page: pageNum,
       pageSize: pageSizeNum,

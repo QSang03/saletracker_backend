@@ -177,12 +177,12 @@ export class OrderService {
       typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
     );
 
-    const isAdmin = roleNames.includes('admin');
-    if (isAdmin) return null; // Admin có thể xem tất cả
+  const isAdmin = roleNames.includes('admin');
+  if (isAdmin) return null; // Admin có thể xem tất cả
 
-    // Kiểm tra role "view" - cho phép xem tất cả dữ liệu như admin
-    const isViewRole = roleNames.includes('view');
-    if (isViewRole) return null; // Role view có thể xem tất cả
+  // Kiểm tra role "view" - cho phép xem tất cả dữ liệu như admin
+  const isViewRole = roleNames.includes('view');
+  if (isViewRole) return null; // Role view có thể xem tất cả
 
         /**
      * Logic xử lý role PM:
@@ -212,6 +212,8 @@ export class OrderService {
 
       if (departments.length > 0) {
         const departmentIds = departments.map((d) => d.id);
+
+        if (departmentIds.length === 0) return [];
 
         const usersInDepartments = await this.userRepository
           .createQueryBuilder('user')
@@ -246,6 +248,8 @@ export class OrderService {
 
       if (departments.length > 0) {
         const departmentIds = departments.map((d) => d.id);
+
+        if (departmentIds.length === 0) return [];
 
         // Lấy users thuộc các department có server_ip
         const usersInDepartments = await this.userRepository
@@ -345,9 +349,11 @@ export class OrderService {
       typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
     );
 
-    const isAdmin = roleNames.includes('admin');
+  const isAdmin = roleNames.includes('admin');
+  const isViewRole = roleNames.includes('view');
 
-    if (isAdmin) {
+  // Treat 'view' role like admin for filter options (show all departments/users)
+  if (isAdmin || isViewRole) {
       // Admin: lấy tất cả departments có server_ip khác null và khác rỗng
       const departments = await this.departmentRepository
         .find({
@@ -822,10 +828,12 @@ export class OrderService {
     }
 
     // Quantity filter (minimum quantity)
-    if (quantity) {
+    if (quantity !== undefined && quantity !== null && String(quantity).trim() !== '') {
       const minQty = parseInt(String(quantity), 10);
       if (!isNaN(minQty) && minQty > 0) {
-        queryBuilder.andWhere('details.quantity >= :minQty', { minQty });
+  // Log for debugging why quantity filter may not appear to work
+  this.logger.debug(`Applying quantity filter: details.quantity >= ${minQty}`);
+  queryBuilder.andWhere('details.quantity >= :minQty', { minQty });
       }
     }
 
@@ -965,6 +973,7 @@ export class OrderService {
     queryBuilder.andWhere('details.hidden_at IS NULL');
 
   const allData = await queryBuilder.getMany();
+  this.logger.debug(`OrderService.findAllPaginated: fetched ${allData.length} rows from DB (after SQL filters).`);
 
     // Tính calcDynamicExtended cho tất cả data
     const dataWithDynamicExtended = allData.map((orderDetail) => ({
