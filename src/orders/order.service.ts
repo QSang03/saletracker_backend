@@ -22,7 +22,7 @@ interface OrderFilters {
   departments?: string;
   products?: string;
   warningLevel?: string;
-  quantity?: string;
+  quantity?: string; // <-- add this property
   conversationType?: string;
   sortField?:
     | 'quantity'
@@ -179,6 +179,10 @@ export class OrderService {
 
     const isAdmin = roleNames.includes('admin');
     if (isAdmin) return null; // Admin có thể xem tất cả
+
+    // Kiểm tra role "view" - cho phép xem tất cả dữ liệu như admin
+    const isViewRole = roleNames.includes('view');
+    if (isViewRole) return null; // Role view có thể xem tất cả
 
         /**
      * Logic xử lý role PM:
@@ -876,8 +880,6 @@ export class OrderService {
       }
     }
 
-    
-
     // ❌ BỎ phần filter warningLevel ở đây vì giờ cần dùng dynamicExtended
     // if (warningLevel) {
     //   const levels = warningLevel
@@ -972,40 +974,6 @@ export class OrderService {
         filteredData = filteredData.filter((orderDetail) => {
           const dynamicExt = orderDetail.dynamicExtended;
           return dynamicExt !== null && levelSet.has(dynamicExt);
-        });
-      }
-    }
-
-    // Filter by minimum quantity if provided (quantity expected as minimum integer)
-    if (filters.quantity) {
-      const minQ = parseInt(filters.quantity, 10);
-      if (!Number.isNaN(minQ)) {
-        filteredData = filteredData.filter((od) => (od.quantity || 0) >= minQ);
-      }
-    }
-
-    // Filter by conversation type if provided. Expect CSV of 'group'|'private' values
-    if (filters.conversationType) {
-      const types = filters.conversationType
-        .split(',')
-        .map((s) => (s || '').trim())
-        .filter((s) => s.length > 0);
-      if (types.length > 0) {
-        const typeSet = new Set(types);
-        filteredData = filteredData.filter((od) => {
-          let md: any = od.metadata || {};
-          if (typeof md === 'string') {
-            try {
-              md = JSON.parse(md);
-            } catch {
-              md = {};
-            }
-          }
-          const legacyType = md?.conversation_type as string | undefined;
-          const newIsGroup = md?.conversation_info?.is_group as boolean | undefined;
-          const type = legacyType ?? (typeof newIsGroup === 'boolean' ? (newIsGroup ? 'group' : 'private') : undefined);
-          if (!type) return false;
-          return typeSet.has(type);
         });
       }
     }

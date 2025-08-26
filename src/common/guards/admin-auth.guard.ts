@@ -20,7 +20,14 @@ export class AdminAuthGuard implements CanActivate {
     }
 
     // Chuẩn hóa lấy role name từ user payload
-    if (!getRoleNames(user).includes('admin')) {
+    const roleNames = getRoleNames(user);
+    
+    // Kiểm tra role "view" - không cho phép truy cập admin functions
+    if (roleNames.includes('view')) {
+      throw new ForbiddenException('Role view không có quyền truy cập chức năng admin');
+    }
+    
+    if (!roleNames.includes('admin')) {
       throw new ForbiddenException('Bạn không có quyền admin');
     }
 

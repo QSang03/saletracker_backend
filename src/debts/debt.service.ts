@@ -4,6 +4,7 @@ import { Repository, Not, In, Raw, DataSource } from 'typeorm';
 import { Debt, DebtStatus } from './debt.entity';
 import { DebtConfig, CustomerType } from '../debt_configs/debt_configs.entity';
 import { User } from '../users/user.entity';
+import { Department } from '../departments/department.entity';
 import { Request } from 'express';
 import { DebtStatistic } from 'src/debt_statistics/debt_statistic.entity';
 import { DebtImportBackup } from './debt_import_backups.entity';
@@ -31,7 +32,7 @@ export class DebtService {
         : (r.code || r.name || '').toLowerCase(),
     );
     const isAdminOrManager =
-      roleNames.includes('admin') || roleNames.includes('manager-cong-no');
+      roleNames.includes('admin') || roleNames.includes('manager-cong-no') || roleNames.includes('view');
     const qb = this.debtRepository
       .createQueryBuilder('debt')
       .leftJoinAndSelect('debt.sale', 'sale')
@@ -44,12 +45,10 @@ export class DebtService {
       filterDate = query.date;
     }
     // Chỉ áp dụng filter ngày khi có giá trị, không mặc định ngày hôm nay
-    if (!filterDate) {
-      const today = new Date();
-      filterDate = today.toISOString().slice(0, 10);
+    if (filterDate) {
+      qb.andWhere('DATE(debt.updated_at) = :filterDate', { filterDate });
     }
-    qb.andWhere('DATE(debt.updated_at) = :filterDate', { filterDate });
-    
+
     // Filter search (áp dụng cho nhiều trường)
     if (query.search) {
       const search = `%${query.search.trim()}%`;
@@ -726,7 +725,7 @@ export class DebtService {
         : (r.code || r.name || '').toLowerCase(),
     );
     const isAdminOrManager =
-      roleNames.includes('admin') || roleNames.includes('manager-cong-no');
+      roleNames.includes('admin') || roleNames.includes('manager-cong-no') || roleNames.includes('view');
 
     // 1. Lấy các debt config hợp lệ theo quyền
     const configs = await this.debtConfigRepository.find({
@@ -793,7 +792,7 @@ export class DebtService {
         : (r.code || r.name || '').toLowerCase(),
     );
     const isAdminOrManager =
-      roleNames.includes('admin') || roleNames.includes('manager-cong-no');
+      roleNames.includes('admin') || roleNames.includes('manager-cong-no') || roleNames.includes('view');
 
     // Lấy employee_code_raw từ bảng debt
     let employeeQuery = this.debtRepository

@@ -6,7 +6,6 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { PERMISSION_KEY } from './permission.decorator';
-import { getRoleNames, hasPMRole } from '../utils/user-permission.helper';
 
 @Injectable()
 export class PermissionGuard implements CanActivate {
@@ -25,7 +24,7 @@ export class PermissionGuard implements CanActivate {
     if (!user) throw new ForbiddenException('User not found');
 
     // Lấy tất cả roles của user (giả sử user.roles là mảng role name)
-      const userRoles: string[] = getRoleNames(user);
+    const userRoles: string[] = user.roles?.map((r) => r.name) || [];
     // Tạo role cần kiểm tra, ví dụ: manager-cong-no, user-cong-no, pm-cong-no
     const requiredRoles = [
       `manager-${departmentSlug}`,
@@ -43,15 +42,35 @@ export class PermissionGuard implements CanActivate {
     );
     // Debug log để kiểm tra user.roles và user.permissions
     // Nếu user có role admin thì cho phép tất cả
-      const isAdmin = userRoles.some((r) => String(r).toLowerCase() === 'admin');
-      if (isAdmin) return true;
+    const isAdmin =
+      Array.isArray(user.roles) &&
+      user.roles.some(
+        (r: any) => (typeof r === 'string' ? r : r.name) === 'admin',
+      );
+    if (isAdmin) return true;
 
     // Nếu user có role PM thì cho phép truy cập
-      const isPM = hasPMRole(user) || userRoles.some((r) => {
-        const v = String(r).toLowerCase();
-        return v === 'pm' || v.startsWith('pm-');
-      });
-      if (isPM) return true;
+    const isPM =
+      Array.isArray(user.roles) &&
+      user.roles.some(
+        (r: any) => (typeof r === 'string' ? r : r.name) === 'PM',
+      );
+    if (isPM) return true;
+
+    // Kiểm tra role "view" - chỉ cho phép action "read" và "export"
+    const isViewRole =
+      Array.isArray(user.roles) &&
+      user.roles.some(
+        (r: any) => (typeof r === 'string' ? r : r.name) === 'view',
+      );
+    if (isViewRole) {
+      // Role view chỉ được phép action "read" và "export"
+      if (action === 'read' || action === 'export') {
+        return true;
+      }
+      throw new ForbiddenException('Role view chỉ có quyền xem và export dữ liệu');
+    }
+
     if (!hasRole || !hasPermission) {
       throw new ForbiddenException(
         `Bạn không có quyền ${action} cho phòng ban ${departmentSlug}`,

@@ -47,6 +47,10 @@ export class OrderDetailService {
     const isAdmin = roleNames.includes('admin');
     if (isAdmin) return null; // Admin có thể xem tất cả
 
+    // Kiểm tra role "view" - cho phép xem tất cả dữ liệu như admin
+    const isViewRole = roleNames.includes('view');
+    if (isViewRole) return null; // Role view có thể xem tất cả
+
     // Kiểm tra role PM
     const isPM = roleNames.includes('pm');
     if (isPM) {

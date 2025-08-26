@@ -64,6 +64,11 @@ export class UserController {
         : [],
     };
 
+    // Kiểm tra role "view" - cho phép xem tất cả users
+    if (getRoleNames(user).includes('view')) {
+      return this.userService.findAll(Number(page), Number(limit), filter);
+    }
+
     if (getRoleNames(user).includes('admin')) {
       return this.userService.findAll(Number(page), Number(limit), filter);
     }

@@ -1829,6 +1829,7 @@ export class CampaignService {
         : (r.code || r.name || '').toLowerCase(),
     );
     const isAdmin = roleNames.includes('admin');
+    const isViewRole = roleNames.includes('view');
     const isManager = roleNames.includes('manager-chien-dich');
 
     const qb = this.campaignRepository
@@ -1837,8 +1838,8 @@ export class CampaignService {
       .leftJoinAndSelect('campaign.department', 'department')
       .where('campaign.id = :id', { id: campaignId });
 
-    if (isAdmin) {
-      // Admin: có thể truy cập tất cả campaign
+    if (isAdmin || isViewRole) {
+      // Admin và role view: có thể truy cập tất cả campaign
     } else if (isManager) {
       // Manager: chỉ truy cập campaign của phòng ban có server_ip
       const userDepartment = user.departments?.find(
@@ -1881,6 +1882,7 @@ export class CampaignService {
     );
 
     const isAdmin = roleNames.includes('admin');
+    const isViewRole = roleNames.includes('view');
     const isManager = roleNames.includes('manager-chien-dich');
 
     // ✅ FIXED: Simplified query to avoid duplicate rows
@@ -1893,7 +1895,8 @@ export class CampaignService {
       });
 
     // Apply user-based filtering first
-    if (isAdmin) {
+    if (isAdmin || isViewRole) {
+      // Admin và role view: có thể truy cập tất cả campaign
     } else if (isManager) {
       const userDepartment = user.departments?.find(
         (dept: any) =>

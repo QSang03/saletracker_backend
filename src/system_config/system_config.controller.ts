@@ -12,13 +12,14 @@ import {
 import { SystemConfigService } from './system_config.service';
 import { AuthGuard } from '../common/guards/auth.guard';
 import { AdminAuthGuard } from '../common/guards/admin-auth.guard';
+import { ViewRoleGuard } from '../common/guards/view-role.guard';
 import { CreateSystemConfigDto } from './dto/create-system-config.dto';
 import { UpdateSystemConfigDto } from './dto/update-system-config.dto';
 import { Permission } from '../common/guards/permission.decorator';
 import { PermissionGuard } from '../common/guards/permission.guard';
 
 @Controller('system-config')
-@UseGuards(AuthGuard, PermissionGuard)
+@UseGuards(AuthGuard, ViewRoleGuard, PermissionGuard)
 export class SystemConfigController {
   constructor(private readonly configService: SystemConfigService) {}
 

@@ -44,6 +44,45 @@ export class DepartmentService {
   }> {
     const roleNames = getRoleNames(user);
 
+    // Kiểm tra role "view" - cho phép xem tất cả departments
+    if (roleNames.includes('view')) {
+      const [departments, total] = await this.departmentRepo.findAndCount({
+        relations: { users: { roles: true } },
+        order: { id: 'ASC' },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      });
+
+      return {
+        data: departments.map((dep) => {
+          const manager = dep.users?.find((u) =>
+            getRoleNames(u).some((r) => r === `manager-${dep.slug}`),
+          );
+          return {
+            id: dep.id,
+            name: dep.name,
+            slug: dep.slug,
+            server_ip: dep.server_ip,
+            createdAt: dep.createdAt,
+            manager: manager
+              ? {
+                  id: manager.id,
+                  fullName:
+                    typeof manager.fullName === 'string' &&
+                    manager.fullName.trim() !== ''
+                      ? manager.fullName
+                      : manager.username || '',
+                  username: manager.username || '',
+                }
+              : undefined,
+          };
+        }),
+        total,
+        page,
+        pageSize,
+      };
+    }
+
     if (roleNames.includes('admin')) {
       const [departments, total] = await this.departmentRepo.findAndCount({
         relations: { users: { roles: true } },
@@ -191,7 +230,7 @@ export class DepartmentService {
     });
     const savedDepartment = await this.departmentRepo.save(department);
 
-  // Tạo roles cho phòng ban
+    // Tạo roles cho phòng ban
     const managerRole = new Role();
     managerRole.name = `manager-${slug}`;
     managerRole.display_name = `Quản lý nhóm ${createDepartmentDto.name}`;
@@ -200,13 +239,8 @@ export class DepartmentService {
     userRole.name = `user-${slug}`;
     userRole.display_name = `Nhân viên nhóm ${createDepartmentDto.name}`;
 
-  // Thêm role pm-{slug} để PM có thể truy cập theo từng phòng ban
-  const pmRole = new Role();
-  pmRole.name = `pm-${slug}`;
-  pmRole.display_name = `PM nhóm ${createDepartmentDto.name}`;
-
     // Lưu roles vào DB
-  await this.departmentRepo.manager.save([managerRole, userRole, pmRole]);
+    await this.departmentRepo.manager.save([managerRole, userRole]);
 
     // Tạo permissions cho phòng ban
     const actions = [
@@ -227,7 +261,7 @@ export class DepartmentService {
       permissions.push(permission);
     }
 
-    // Gán quyền cho manager, user và pm
+    // Gán tất cả quyền cho manager và user
     for (const permission of permissions) {
       // Gán cho manager: tất cả quyền đều bật
       const managerRolePermission = new RolePermission();
@@ -242,13 +276,6 @@ export class DepartmentService {
       userRolePermission.permission = permission;
       userRolePermission.isActive = permission.action === 'read';
       await this.departmentRepo.manager.save(userRolePermission);
-
-      // Gán cho pm: tương tự user, mặc định chỉ bật quyền read
-      const pmRolePermission = new RolePermission();
-      pmRolePermission.role = pmRole;
-      pmRolePermission.permission = permission;
-      pmRolePermission.isActive = permission.action === 'read';
-      await this.departmentRepo.manager.save(pmRolePermission);
     }
 
     return savedDepartment;

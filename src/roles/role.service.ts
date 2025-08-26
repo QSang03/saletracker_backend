@@ -22,6 +22,14 @@ export class RoleService {
   }
 
   async findAll(user: any): Promise<{ id: number; name: string }[]> {
+    // Kiểm tra role "view" - cho phép xem tất cả roles
+    if (getRoleNames(user).includes('view')) {
+      return this.roleRepo.find({
+        select: { id: true, name: true },
+        order: { id: 'ASC' },
+      });
+    }
+
     if (getRoleNames(user).includes('admin')) {
       return this.roleRepo.find({
         select: { id: true, name: true },
