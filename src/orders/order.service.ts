@@ -369,6 +369,7 @@ export class OrderService {
       result.departments = departments.map((dept) => ({
         value: dept.id,
         label: dept.name,
+        slug: dept.slug,
         users: (dept.users || []).map((u) => ({
           value: u.id,
           label: u.fullName || u.username,
@@ -404,6 +405,7 @@ export class OrderService {
         result.departments = departments.map((dept) => ({
           value: dept.id,
           label: dept.name,
+          slug: dept.slug,
           users: (dept.users || []).map((u) => ({
             value: u.id,
             label: u.fullName || u.username,
@@ -435,6 +437,7 @@ export class OrderService {
         result.departments = departments.map((dept) => ({
           value: dept.id,
           label: dept.name,
+          slug: dept.slug,
           users: (dept.users || []).map((u) => ({
             value: u.id,
             label: u.fullName || u.username,
@@ -458,6 +461,7 @@ export class OrderService {
           result.departments = validDepartments.map((dept) => ({
             value: dept.id,
             label: dept.name,
+            slug: dept.slug,
             users: [
               {
                 value: currentUser.id,
