@@ -375,15 +375,43 @@ export class OrderService {
         })),
       }));
     } else {
-      const managerRoles = roleNames.filter((r: string) =>
-        r.startsWith('manager-'),
-      );
+      const pmRoles = roleNames.filter((r: string) => r.startsWith('pm-'));
+      const managerRoles = roleNames.filter((r: string) => r.startsWith('manager-'));
 
-      if (managerRoles.length > 0) {
+      if (pmRoles.length > 0) {
+        // PM: lấy departments theo pm-{slug} và tất cả users trong đó (có server_ip hợp lệ)
+        const departmentSlugs = pmRoles.map((r: string) => r.replace('pm-', ''));
+
+        const departments = await this.departmentRepository
+          .find({
+            where: departmentSlugs.map((slug) => ({
+              slug,
+              deletedAt: IsNull(),
+              server_ip: Not(IsNull()),
+            })),
+            relations: ['users'],
+            order: { name: 'ASC' },
+          })
+          .then((departments) =>
+            departments
+              .filter((dep) => dep.server_ip && dep.server_ip.trim() !== '')
+              .map((dep) => ({
+                ...dep,
+                users: (dep.users || []).filter((u) => !u.deletedAt),
+              })),
+          );
+
+        result.departments = departments.map((dept) => ({
+          value: dept.id,
+          label: dept.name,
+          users: (dept.users || []).map((u) => ({
+            value: u.id,
+            label: u.fullName || u.username,
+          })),
+        }));
+      } else if (managerRoles.length > 0) {
         // Manager: chỉ lấy department của mình và users trong đó, chỉ lấy department có server_ip hợp lệ
-        const departmentSlugs = managerRoles.map((r: string) =>
-          r.replace('manager-', ''),
-        );
+        const departmentSlugs = managerRoles.map((r: string) => r.replace('manager-', ''));
 
         const departments = await this.departmentRepository
           .find({
@@ -763,6 +791,7 @@ export class OrderService {
       departments,
       products,
       warningLevel,
+  quantity,
       sortField,
       sortDirection,
       user,
@@ -785,6 +814,14 @@ export class OrderService {
         queryBuilder.andWhere('sale_by.id IN (:...userIds)', {
           userIds: allowedUserIds,
         });
+      }
+    }
+
+    // Quantity filter (minimum quantity)
+    if (quantity) {
+      const minQty = parseInt(String(quantity), 10);
+      if (!isNaN(minQty) && minQty > 0) {
+        queryBuilder.andWhere('details.quantity >= :minQty', { minQty });
       }
     }
 
@@ -923,7 +960,7 @@ export class OrderService {
     // Exclude hidden items from active lists
     queryBuilder.andWhere('details.hidden_at IS NULL');
 
-    const allData = await queryBuilder.getMany();
+  const allData = await queryBuilder.getMany();
 
     // Tính calcDynamicExtended cho tất cả data
     const dataWithDynamicExtended = allData.map((orderDetail) => ({
