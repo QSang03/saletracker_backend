@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Like, Between, Not, IsNull } from 'typeorm';
+import { Repository, Like, Between, Not, IsNull, In } from 'typeorm';
 import { Order } from './order.entity';
 import { OrderDetail } from 'src/order-details/order-detail.entity';
 import { Department } from 'src/departments/department.entity';
@@ -180,9 +180,50 @@ export class OrderService {
   const isAdmin = roleNames.includes('admin');
   if (isAdmin) return null; // Admin có thể xem tất cả
 
-  // Kiểm tra role "view" - cho phép xem tất cả dữ liệu như admin
+  // Kiểm tra role "view" - chỉ cho phép xem phòng ban được phân quyền
   const isViewRole = roleNames.includes('view');
-  if (isViewRole) return null; // Role view có thể xem tất cả
+  if (isViewRole) {
+    // Role view cần check phòng ban được phân quyền
+    let departmentIds: number[] = [];
+    
+    // Thử lấy từ user.departments trước
+    if (user.departments && user.departments.length > 0) {
+      departmentIds = user.departments.map((dept: any) => dept.id);
+    }
+    
+    // Nếu không có departments, thử lấy từ permissions
+    if (departmentIds.length === 0 && user.permissions) {
+      const permissionNames = user.permissions.map((p: any) => p.name);
+      const departmentSlugs = permissionNames.filter((name: string) => 
+        !name.includes('thong-ke') && !name.includes('thong_ke')
+      );
+      
+      if (departmentSlugs.length > 0) {
+        const departments = await this.departmentRepository
+          .createQueryBuilder('dept')
+          .where('dept.slug IN (:...slugs)', { slugs: departmentSlugs })
+          .andWhere('dept.server_ip IS NOT NULL')
+          .andWhere("TRIM(dept.server_ip) <> ''")
+          .getMany();
+        
+        departmentIds = departments.map((d) => d.id);
+      }
+    }
+    
+    if (departmentIds.length === 0) {
+      return []; // Không có phòng ban nào được phân quyền
+    }
+    
+    // Lấy tất cả user trong các phòng ban được phân quyền
+    const usersInDepartments = await this.userRepository
+      .createQueryBuilder('user')
+      .leftJoin('user.departments', 'dept')
+      .where('dept.id IN (:...departmentIds)', { departmentIds })
+      .andWhere('user.deletedAt IS NULL')
+      .getMany();
+
+    return usersInDepartments.map((u) => u.id);
+  }
 
         /**
      * Logic xử lý role PM:
@@ -352,8 +393,7 @@ export class OrderService {
   const isAdmin = roleNames.includes('admin');
   const isViewRole = roleNames.includes('view');
 
-  // Treat 'view' role like admin for filter options (show all departments/users)
-  if (isAdmin || isViewRole) {
+  if (isAdmin) {
       // Admin: lấy tất cả departments có server_ip khác null và khác rỗng
       const departments = await this.departmentRepository
         .find({
@@ -381,6 +421,64 @@ export class OrderService {
           label: u.fullName || u.username,
         })),
       }));
+  } else if (isViewRole) {
+      // Role view: chỉ lấy departments được phân quyền
+      let departmentIds: number[] = [];
+      
+      // Thử lấy từ user.departments trước
+      if (user.departments && user.departments.length > 0) {
+        departmentIds = user.departments.map((dept: any) => dept.id);
+      }
+      
+      // Nếu không có departments, thử lấy từ permissions
+      if (departmentIds.length === 0 && user.permissions) {
+        const permissionNames = user.permissions.map((p: any) => p.name);
+        const departmentSlugs = permissionNames.filter((name: string) => 
+          !name.includes('thong-ke') && !name.includes('thong_ke')
+        );
+        
+        if (departmentSlugs.length > 0) {
+          const departments = await this.departmentRepository
+            .createQueryBuilder('dept')
+            .where('dept.slug IN (:...slugs)', { slugs: departmentSlugs })
+            .andWhere('dept.server_ip IS NOT NULL')
+            .andWhere("TRIM(dept.server_ip) <> ''")
+            .andWhere('dept.deletedAt IS NULL')
+            .getMany();
+          
+          departmentIds = departments.map((d) => d.id);
+        }
+      }
+      
+      if (departmentIds.length > 0) {
+        const departments = await this.departmentRepository
+          .find({
+            where: {
+              id: In(departmentIds),
+              deletedAt: IsNull(),
+              server_ip: Not(IsNull()),
+            },
+            relations: ['users'],
+            order: { name: 'ASC' },
+          })
+          .then((departments) =>
+            departments
+              .filter((dep) => dep.server_ip && dep.server_ip.trim() !== '')
+              .map((dep) => ({
+                ...dep,
+                users: (dep.users || []).filter((u) => !u.deletedAt),
+              })),
+          );
+        result.departments = departments.map((dept) => ({
+          value: dept.id,
+          label: dept.name,
+          slug: dept.slug,
+          users: (dept.users || []).map((u) => ({
+            value: u.id,
+            label: u.fullName || u.username,
+          })),
+        }));
+      }
     } else {
       const pmRoles = roleNames.filter((r: string) => r.startsWith('pm-'));
       const managerRoles = roleNames.filter((r: string) => r.startsWith('manager-'));

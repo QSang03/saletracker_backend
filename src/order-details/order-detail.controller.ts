@@ -180,6 +180,81 @@ export class OrderDetailController {
     });
   }
 
+  @Get('customer-count')
+  @UseGuards(AuthGuard('jwt'))
+  async getCustomerCount(
+    @Query('fromDate') fromDate?: string,
+    @Query('toDate') toDate?: string,
+    @Query('employeeId') employeeId?: string,
+    @Query('departmentId') departmentId?: string,
+    @Req() req?: any,
+  ) {
+    // Parse và validate employeeId
+    let parsedEmployeeId: number | undefined;
+    if (employeeId && employeeId.trim() !== '') {
+      const parsed = parseInt(employeeId);
+      if (!isNaN(parsed)) {
+        parsedEmployeeId = parsed;
+      }
+    }
+
+    // Parse và validate departmentId
+    let parsedDepartmentId: number | undefined;
+    if (departmentId && departmentId.trim() !== '') {
+      const parsed = parseInt(departmentId);
+      if (!isNaN(parsed)) {
+        parsedDepartmentId = parsed;
+      }
+    }
+
+    const count = await this.orderDetailService.getCustomerCount({
+      fromDate,
+      toDate,
+      employeeId: parsedEmployeeId,
+      departmentId: parsedDepartmentId,
+      user: req?.user,
+    });
+    
+    return { customerCount: count };
+  }
+
+  @Get('customers')
+  @UseGuards(AuthGuard('jwt'))
+  async getCustomers(
+    @Query('fromDate') fromDate?: string,
+    @Query('toDate') toDate?: string,
+    @Query('employeeId') employeeId?: string,
+    @Query('departmentId') departmentId?: string,
+    @Query('page') page: string = '1',
+    @Query('pageSize') pageSize: string = '30',
+    @Req() req?: any,
+  ) {
+    let parsedEmployeeId: number | undefined;
+    if (employeeId && employeeId.trim() !== '') {
+      const parsed = parseInt(employeeId);
+      if (!isNaN(parsed)) parsedEmployeeId = parsed;
+    }
+
+    let parsedDepartmentId: number | undefined;
+    if (departmentId && departmentId.trim() !== '') {
+      const parsed = parseInt(departmentId);
+      if (!isNaN(parsed)) parsedDepartmentId = parsed;
+    }
+
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const pageSizeNum = Math.max(1, Math.min(parseInt(pageSize, 10) || 30, 200));
+
+    return this.orderDetailService.getDistinctCustomers({
+      fromDate,
+      toDate,
+      employeeId: parsedEmployeeId,
+      departmentId: parsedDepartmentId,
+      page: pageNum,
+      pageSize: pageSizeNum,
+      user: req?.user,
+    });
+  }
+
   @Get(':id')
   async findById(
     @Param('id', ParseIntPipe) id: number,
@@ -355,4 +430,5 @@ export class OrderDetailController {
       blacklistEntry,
     };
   }
+
 }

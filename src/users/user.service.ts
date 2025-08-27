@@ -806,6 +806,7 @@ export class UserService {
       permissionId: number;
       isActive: boolean;
     }[],
+    viewSubRoleName?: string, // Thêm thông tin để tạo role "view con"
   ) {
     const user = await this.userRepo.findOne({
       where: { id: userId },
@@ -839,10 +840,103 @@ export class UserService {
       .of(userId)
       .addAndRemove(newRoleIds, oldRoleIds);
 
-    // Nếu có rolePermissions thì gọi RolesPermissionsService.bulkUpdate
+    // Khai báo biến viewSubRole ở scope rộng hơn
+    let viewSubRole: any = null;
+    
+    // Xử lý tạo role "view con" nếu có viewSubRoleName
+    if (viewSubRoleName) {
+      console.log('🔧 Tạo role "view con":', viewSubRoleName);
+      
+      // Tìm hoặc tạo role "view con"
+      viewSubRole = await this.roleRepo.findOne({
+        where: { name: viewSubRoleName }
+      });
+      
+      if (!viewSubRole) {
+        // Tạo role "view con" mới
+        viewSubRole = this.roleRepo.create({
+          name: viewSubRoleName,
+          display_name: `View Role for ${user.username}`,
+        });
+        viewSubRole = await this.roleRepo.save(viewSubRole);
+        console.log('✅ Đã tạo role "view con":', viewSubRole);
+      }
+      
+      // Thêm role "view con" vào roleIds nếu chưa có
+      if (viewSubRole && !roleIds.includes(viewSubRole.id)) {
+        roleIds.push(viewSubRole.id);
+      }
+      
+      // Xử lý permissions cho role "view con"
+      if (rolePermissions && Array.isArray(rolePermissions) && viewSubRole) {
+        // Lọc ra permissions của role "view con" (có roleId = 0 hoặc viewSubRole.id)
+        const viewSubRolePermissions = rolePermissions.filter(rp => 
+          rp.roleId === 0 || rp.roleId === viewSubRole.id
+        ).map(rp => ({
+          ...rp,
+          roleId: viewSubRole.id // Đảm bảo roleId đúng
+        }));
+        
+        if (viewSubRolePermissions.length > 0) {
+          console.log('🔧 Tạo permissions cho role "view con":', {
+            roleId: viewSubRole.id,
+            permissionsCount: viewSubRolePermissions.length,
+            permissions: viewSubRolePermissions
+          });
+          
+          // Gán permissions cho role "view con"
+          await this.rolesPermissionsService.bulkUpdate(viewSubRolePermissions);
+          console.log('✅ Đã tạo permissions cho role "view con"');
+        }
+        
+        // Xử lý xóa permissions bị bỏ chọn cho role "view con"
+        // Lấy tất cả permissions hiện tại của role "view con"
+        const currentViewSubRolePermissions = await this.rolesPermissionsService.findByRoleIds([viewSubRole.id]);
+        const currentPermissionIds = currentViewSubRolePermissions.map(rp => rp.permission?.id).filter(Boolean);
+        
+        // Lấy permissionIds được chọn từ rolePermissions
+        const selectedPermissionIds = rolePermissions
+          .filter(rp => rp.roleId === 0 || rp.roleId === viewSubRole.id)
+          .map(rp => rp.permissionId);
+        
+        // Tìm permissions cần xóa (có trong current nhưng không có trong selected)
+        const permissionsToDelete = currentPermissionIds.filter(permissionId => 
+          !selectedPermissionIds.includes(permissionId)
+        );
+        
+        if (permissionsToDelete.length > 0) {
+          console.log('🗑️ Xóa permissions bị bỏ chọn cho role "view con":', {
+            roleId: viewSubRole.id,
+            permissionsToDelete: permissionsToDelete
+          });
+          
+          // Xóa permissions bị bỏ chọn khỏi database hoàn toàn
+          for (const permissionId of permissionsToDelete) {
+            const rolePermissionToUpdate = currentViewSubRolePermissions.find(rp => rp.permission?.id === permissionId);
+            if (rolePermissionToUpdate) {
+              // Xóa hẳn khỏi database thay vì chỉ set isActive = false
+              await this.rolesPermissionsService.remove(rolePermissionToUpdate.id);
+              console.log(`🗑️ Đã xóa hẳn permission ${permissionId} của role ${viewSubRole.id} khỏi database`);
+            }
+          }
+          console.log('✅ Đã xóa permissions bị bỏ chọn cho role "view con"');
+        }
+      }
+    }
+    
+    // Nếu có rolePermissions thì gọi RolesPermissionsService.bulkUpdate (chỉ cho các role khác, không phải role "view con")
     if (rolePermissions && Array.isArray(rolePermissions)) {
-      // Inject RolesPermissionsService vào service này hoặc gọi qua controller
-      await this.rolesPermissionsService.bulkUpdate(rolePermissions);
+      // Lọc ra permissions không phải của role "view con"
+      const nonViewSubRolePermissions = rolePermissions.filter(rp => {
+        if (viewSubRoleName && viewSubRole) {
+          return rp.roleId !== 0 && rp.roleId !== viewSubRole.id;
+        }
+        return true; // Nếu không có viewSubRoleName thì xử lý tất cả
+      });
+      
+      if (nonViewSubRolePermissions.length > 0) {
+        await this.rolesPermissionsService.bulkUpdate(nonViewSubRolePermissions);
+      }
     }
     this.wsGateway.emitToRoom(`user_${userId}`, 'force_token_refresh', {
       userId,
@@ -850,6 +944,57 @@ export class UserService {
       message: 'Quyền của bạn đã thay đổi, vui lòng làm mới phiên đăng nhập.',
     });
     return { success: true };
+  }
+
+  async getUserPermissions(userId: number) {
+    const user = await this.findOneWithDetails(userId);
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    // Kiểm tra nếu user có role "view"
+    const hasViewRole = user.roles?.some(role => role.name === 'view');
+    
+    if (hasViewRole) {
+      // Tìm role con "view_username"
+      const viewSubRoleName = `view_${user.username}`;
+      const viewSubRole = user.roles?.find(role => role.name === viewSubRoleName);
+      
+      if (viewSubRole) {
+        // Lấy permissions từ role con
+        const permissions = viewSubRole.rolePermissions
+          ?.filter(rp => rp.isActive)
+          .map(rp => ({
+            name: rp.permission.name,
+            action: rp.permission.action,
+          })) || [];
+        
+        return {
+          userId: user.id,
+          username: user.username,
+          hasViewRole: true,
+          viewSubRoleName,
+          permissions,
+        };
+      }
+    }
+
+    // Nếu không có role "view", trả về permissions từ tất cả roles
+    const permissions = user.roles?.flatMap(role =>
+      role.rolePermissions
+        ?.filter(rp => rp.isActive)
+        .map(rp => ({
+          name: rp.permission.name,
+          action: rp.permission.action,
+        })) || []
+    ) || [];
+
+    return {
+      userId: user.id,
+      username: user.username,
+      hasViewRole: false,
+      permissions,
+    };
   }
 
   async updateZaloLinkStatus(userId: number, status: number): Promise<User> {

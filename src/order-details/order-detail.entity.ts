@@ -24,6 +24,11 @@ export enum ExtendReason {
 }
 @Index('idx_order_details_order_status', ['order_id', 'status'])
 @Index('idx_order_details_product_status', ['product_id', 'status'])
+@Index('idx_order_details_customer_name', ['customer_name'])
+@Index('idx_order_details_created_at', ['created_at'])
+@Index('idx_order_details_deleted_at', ['deleted_at'])
+@Index('idx_order_details_customer_created', ['customer_name', 'created_at'])
+@Index('idx_order_details_customer_created_deleted', ['customer_name', 'created_at', 'deleted_at'])
 @Entity('order_details')
 export class OrderDetail {
   @PrimaryGeneratedColumn('increment', { type: 'bigint' })

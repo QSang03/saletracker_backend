@@ -47,9 +47,51 @@ export class OrderDetailService {
     const isAdmin = roleNames.includes('admin');
     if (isAdmin) return null; // Admin có thể xem tất cả
 
-    // Kiểm tra role "view" - cho phép xem tất cả dữ liệu như admin
+    // Kiểm tra role "view" - chỉ cho phép xem phòng ban được phân quyền
     const isViewRole = roleNames.includes('view');
-    if (isViewRole) return null; // Role view có thể xem tất cả
+    if (isViewRole) {
+      // Role view cần check phòng ban được phân quyền
+      // Lấy departments từ user.departments hoặc từ permissions
+      let departmentIds: number[] = [];
+      
+      // Thử lấy từ user.departments trước
+      if (user.departments && user.departments.length > 0) {
+        departmentIds = user.departments.map((dept: any) => dept.id);
+      }
+      
+      // Nếu không có departments, thử lấy từ permissions
+      if (departmentIds.length === 0 && user.permissions) {
+        const permissionNames = user.permissions.map((p: any) => p.name);
+        const departmentSlugs = permissionNames.filter((name: string) => 
+          !name.includes('thong-ke') && !name.includes('thong_ke')
+        );
+        
+        if (departmentSlugs.length > 0) {
+          const departments = await this.departmentRepository
+            .createQueryBuilder('dept')
+            .where('dept.slug IN (:...slugs)', { slugs: departmentSlugs })
+            .andWhere('dept.server_ip IS NOT NULL')
+            .andWhere("TRIM(dept.server_ip) <> ''")
+            .getMany();
+          
+          departmentIds = departments.map((d) => d.id);
+        }
+      }
+      
+      if (departmentIds.length === 0) {
+        return []; // Không có phòng ban nào được phân quyền
+      }
+      
+      // Lấy tất cả user trong các phòng ban được phân quyền
+      const usersInDepartments = await this.userRepository
+        .createQueryBuilder('user')
+        .leftJoin('user.departments', 'dept')
+        .where('dept.id IN (:...departmentIds)', { departmentIds })
+        .andWhere('user.deletedAt IS NULL')
+        .getMany();
+
+      return usersInDepartments.map((u) => u.id);
+    }
 
     // Kiểm tra role PM
     const isPM = roleNames.includes('pm');
@@ -1311,5 +1353,151 @@ export class OrderDetailService {
     }
 
     return { data: filtered, total, page, pageSize };
+  }
+
+  /**
+   * Đếm số lượng khách hàng unique từ order_details
+   * Sử dụng Set để loại bỏ trùng lặp hiệu quả
+   */
+  async getCustomerCount(filters?: {
+    fromDate?: string;
+    toDate?: string;
+    employeeId?: number;
+    departmentId?: number;
+    user?: any;
+  }): Promise<number> {
+    const qb = this.orderDetailRepository
+      .createQueryBuilder('details')
+      .leftJoin('details.order', 'order')
+      .leftJoin('order.sale_by', 'sale_by')
+      .leftJoin('sale_by.departments', 'departments')
+      .select('details.customer_name', 'customer_name')
+      .where('details.customer_name IS NOT NULL')
+      .andWhere('details.customer_name != :empty', { empty: '' })
+      .andWhere('details.deleted_at IS NULL');
+
+    // Thêm logic phân quyền cho role "view"
+    if (filters?.user) {
+      const allowedUserIds = await this.getUserIdsByRole(filters.user);
+      if (allowedUserIds !== null) {
+        if (allowedUserIds.length === 0) {
+          return 0; // Không có quyền xem dữ liệu nào
+        }
+        qb.andWhere('sale_by.id IN (:...allowedUserIds)', { allowedUserIds });
+      }
+    }
+
+    // Filter theo thời gian
+    if (filters?.fromDate) {
+      qb.andWhere('details.created_at >= :fromDate', { fromDate: filters.fromDate });
+    }
+    if (filters?.toDate) {
+      qb.andWhere('details.created_at <= :toDate', { toDate: filters.toDate });
+    }
+
+    // Filter theo nhân viên
+    if (filters?.employeeId) {
+      qb.andWhere('sale_by.id = :employeeId', { employeeId: filters.employeeId });
+    }
+
+    // Filter theo phòng ban
+    if (filters?.departmentId) {
+      qb.andWhere('departments.id = :departmentId', { departmentId: filters.departmentId });
+    }
+
+    const customerNames = await qb.getRawMany();
+
+    // Sử dụng Set để đếm unique customers
+    const uniqueCustomers = new Set(
+      customerNames
+        .map(item => item.customer_name)
+        .filter(name => name && name.trim() !== '')
+    );
+
+    return uniqueCustomers.size;
+  }
+
+  /**
+   * Lấy danh sách khách hàng unique có phân trang
+   */
+  async getDistinctCustomers(params: {
+    fromDate?: string;
+    toDate?: string;
+    employeeId?: number;
+    departmentId?: number;
+    page: number;
+    pageSize: number;
+    user?: any;
+  }): Promise<{ data: { customer_name: string; orders: number }[]; total: number; page: number; pageSize: number }> {
+    const qb = this.orderDetailRepository
+      .createQueryBuilder('details')
+      .leftJoin('details.order', 'order')
+      .leftJoin('order.sale_by', 'sale_by')
+      .leftJoin('sale_by.departments', 'departments')
+      .select('details.customer_name', 'customer_name')
+      .addSelect('COUNT(details.id)', 'orders')
+      .where('details.customer_name IS NOT NULL')
+      .andWhere('details.customer_name != :empty', { empty: '' })
+      .andWhere('details.deleted_at IS NULL')
+      .groupBy('details.customer_name');
+
+    // Thêm logic phân quyền cho role "view"
+    if (params.user) {
+      const allowedUserIds = await this.getUserIdsByRole(params.user);
+      if (allowedUserIds !== null) {
+        if (allowedUserIds.length === 0) {
+          return { data: [], total: 0, page: params.page, pageSize: params.pageSize }; // Không có quyền xem dữ liệu nào
+        }
+        qb.andWhere('sale_by.id IN (:...allowedUserIds)', { allowedUserIds });
+      }
+    }
+
+    if (params.fromDate) qb.andWhere('details.created_at >= :fromDate', { fromDate: params.fromDate });
+    if (params.toDate) qb.andWhere('details.created_at <= :toDate', { toDate: params.toDate });
+    if (params.employeeId) qb.andWhere('sale_by.id = :employeeId', { employeeId: params.employeeId });
+    if (params.departmentId) qb.andWhere('departments.id = :departmentId', { departmentId: params.departmentId });
+
+    // Tổng số khách (distinct) - đếm chính xác số unique customer_name
+    const totalQb = this.orderDetailRepository
+      .createQueryBuilder('details')
+      .leftJoin('details.order', 'order')
+      .leftJoin('order.sale_by', 'sale_by')
+      .leftJoin('sale_by.departments', 'departments')
+      .select('COUNT(DISTINCT details.customer_name)', 'cnt')
+      .where('details.customer_name IS NOT NULL')
+      .andWhere('details.customer_name != :empty', { empty: '' })
+      .andWhere('details.deleted_at IS NULL');
+
+    // Thêm logic phân quyền cho totalQb
+    if (params.user) {
+      const allowedUserIds = await this.getUserIdsByRole(params.user);
+      if (allowedUserIds !== null) {
+        if (allowedUserIds.length === 0) {
+          return { data: [], total: 0, page: params.page, pageSize: params.pageSize }; // Không có quyền xem dữ liệu nào
+        }
+        totalQb.andWhere('sale_by.id IN (:...allowedUserIds)', { allowedUserIds });
+      }
+    }
+
+    if (params.fromDate) totalQb.andWhere('details.created_at >= :fromDate', { fromDate: params.fromDate });
+    if (params.toDate) totalQb.andWhere('details.created_at <= :toDate', { toDate: params.toDate });
+    if (params.employeeId) totalQb.andWhere('sale_by.id = :employeeId', { employeeId: params.employeeId });
+    if (params.departmentId) totalQb.andWhere('departments.id = :departmentId', { departmentId: params.departmentId });
+
+    const totalRaw = await totalQb.getRawOne<{ cnt: string | number }>();
+    const totalRows = Number(totalRaw?.cnt || 0);
+
+    // Phân trang theo nhóm distinct
+    const offset = (params.page - 1) * params.pageSize;
+    // Stable ordering: first by orders desc, then by name asc to avoid flicker across pages when counts tie
+    qb.orderBy('orders', 'DESC')
+      .addOrderBy('details.customer_name', 'ASC')
+      .offset(offset)
+      .limit(params.pageSize);
+
+    const rows = await qb.getRawMany();
+    const data = rows.map(r => ({ customer_name: r.customer_name, orders: Number(r.orders) || 0 }));
+
+    return { data, total: totalRows, page: params.page, pageSize: params.pageSize };
   }
 }

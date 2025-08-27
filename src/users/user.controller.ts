@@ -174,6 +174,7 @@ export class UserController {
         permissionId: number;
         isActive: boolean;
       }[];
+      viewSubRoleName?: string; // Thêm thông tin để tạo role "view con"
     },
   ) {
     // Gọi service cập nhật roles, departments, permissions, role-permissions cho user
@@ -183,8 +184,14 @@ export class UserController {
       body.roleIds,
       body.permissionIds,
       body.rolePermissions,
+      body.viewSubRoleName, // Truyền thông tin tạo role "view con"
     );
     return { success: true };
+  }
+
+  @Get(':id/permissions')
+  async getUserPermissions(@Param('id', ParseIntPipe) id: number) {
+    return this.userService.getUserPermissions(id);
   }
 
   @Post()

@@ -41,6 +41,10 @@ export class RoleService {
       // Lấy danh sách slug phòng ban của manager
       const managerDepartments = user.departments ?? [];
       const departmentSlugs = managerDepartments.map((d: any) => d.slug);
+      // Nếu manager không có phòng ban được gán thì không trả về role nào
+      if (!departmentSlugs || departmentSlugs.length === 0) {
+        return [];
+      }
 
       // Lấy các role có permission.name thuộc departmentSlugs (qua bảng nối)
       return this.roleRepo
