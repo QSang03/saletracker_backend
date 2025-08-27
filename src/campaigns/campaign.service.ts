@@ -1998,58 +1998,59 @@ export class CampaignService {
       }
     }
 
-    // ✅ FIXED: Get total count before pagination
+    // ✅ Get total count before pagination
     const total = await qb.getCount();
 
-    // Sort by creation date first, then we'll sort by status in JavaScript
-    qb.orderBy('campaign.created_at', 'DESC');
-
-    // Get all campaigns first (without pagination) to sort properly
+    // ✅ Load all campaigns (without pagination) for proper sort by status, then created_at
     const allCampaigns = await qb.getMany();
-    const allCampaignIds = allCampaigns.map((c) => c.id);
-
-    if (allCampaignIds.length === 0) {
+    if (allCampaigns.length === 0) {
       const stats = await this.getStats(user);
       return { data: [], total: 0, stats };
     }
 
-    // Apply pagination after getting all data
+    // ✅ Sort in-memory by status first, then by created_at desc
+    const statusOrder: Record<string, number> = {
+      scheduled: 1,
+      running: 2,
+      draft: 3,
+      paused: 4,
+      completed: 5,
+    };
+
+    const sortedCampaigns = allCampaigns.sort((a, b) => {
+      const sa = statusOrder[a.status] ?? 999;
+      const sb = statusOrder[b.status] ?? 999;
+      if (sa !== sb) return sa - sb;
+      return (
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      );
+    });
+
+    // ✅ Apply pagination on the sorted list
     const page = Math.max(1, parseInt(query.page) || 1);
     const pageSize = Math.max(1, parseInt(query.pageSize) || 10);
     const skip = (page - 1) * pageSize;
-    const campaigns = allCampaigns.slice(skip, skip + pageSize);
-    const campaignIds = campaigns.map((c) => c.id);
+    const pagedCampaigns = sortedCampaigns.slice(skip, skip + pageSize);
+    const campaignIds = pagedCampaigns.map((c) => c.id);
 
-    if (campaignIds.length === 0) {
-      const stats = await this.getStats(user);
-      return { data: [], total: 0, stats };
-    }
-
-    // ✅ FIXED: Get related data separately to avoid duplicates
-    const [contents, schedules, emailReports, customerCounts] =
+    // ✅ Fetch related data only for the paged campaigns
+    const [contents, schedules, emailReports, customerCounts, allCustomerMaps] =
       await Promise.all([
-        // Get campaign contents
         this.campaignContentRepository
           .createQueryBuilder('content')
           .leftJoinAndSelect('content.campaign', 'campaign')
           .where('content.campaign_id IN (:...campaignIds)', { campaignIds })
           .getMany(),
-
-        // Get campaign schedules
         this.campaignScheduleRepository
           .createQueryBuilder('schedule')
           .leftJoinAndSelect('schedule.campaign', 'campaign')
           .where('schedule.campaign_id IN (:...campaignIds)', { campaignIds })
           .getMany(),
-
-        // Get email reports
         this.campaignEmailReportRepository
           .createQueryBuilder('email')
           .leftJoinAndSelect('email.campaign', 'campaign')
           .where('email.campaign_id IN (:...campaignIds)', { campaignIds })
           .getMany(),
-
-        // Get customer counts
         this.campaignCustomerMapRepository
           .createQueryBuilder('map')
           .select('map.campaign_id', 'campaign_id')
@@ -2057,23 +2058,20 @@ export class CampaignService {
           .where('map.campaign_id IN (:...campaignIds)', { campaignIds })
           .groupBy('map.campaign_id')
           .getRawMany(),
+        this.campaignCustomerMapRepository
+          .createQueryBuilder('map')
+          .leftJoinAndSelect('map.campaign_customer', 'customer')
+          .where('map.campaign_id IN (:...campaignIds)', { campaignIds })
+          .getMany(),
       ]);
 
-    // ✅ FIXED: Get customers for campaigns
-    const allCustomerMaps = await this.campaignCustomerMapRepository
-      .createQueryBuilder('map')
-      .leftJoinAndSelect('map.campaign_customer', 'customer')
-      .where('map.campaign_id IN (:...campaignIds)', { campaignIds })
-      .getMany();
-
-    // ✅ FIXED: Create lookup maps using proper entity structure
+    // ✅ Build lookup maps
     const contentMap = new Map(contents.map((c) => [c.campaign.id, c]));
     const scheduleMap = new Map(schedules.map((s) => [s.campaign.id, s]));
     const emailMap = new Map(emailReports.map((e) => [e.campaign.id, e]));
     const countMap = new Map(
       customerCounts.map((c) => [c.campaign_id, parseInt(c.customer_count)]),
     );
-
     const customersByCampaign = allCustomerMaps.reduce(
       (acc, map) => {
         if (!acc[map.campaign_id]) acc[map.campaign_id] = [];
@@ -2094,94 +2092,65 @@ export class CampaignService {
       >,
     );
 
-    // ✅ FIXED: Build response data for all campaigns first
-    const allData: CampaignWithDetails[] = allCampaigns.map((campaign: Campaign) => {
-      const content = contentMap.get(campaign.id);
-      const schedule = scheduleMap.get(campaign.id);
-      const emailReport = emailMap.get(campaign.id);
-      const customerCount = countMap.get(campaign.id) || 0;
+    // ✅ Build final page data with details
+    const data: CampaignWithDetails[] = pagedCampaigns.map(
+      (campaign: Campaign) => {
+        const content = contentMap.get(campaign.id);
+        const schedule = scheduleMap.get(campaign.id);
+        const emailReport = emailMap.get(campaign.id);
+        const customerCount = countMap.get(campaign.id) || 0;
 
-      const messages = content?.messages || [];
-      const initialMessage = Array.isArray(messages)
-        ? messages.find((msg) => msg.type === 'initial') || messages[0]
-        : null;
+        const messages = content?.messages || [];
+        const initialMessage = Array.isArray(messages)
+          ? messages.find((msg) => msg.type === 'initial') || messages[0]
+          : null;
 
-      const reminderMessages = Array.isArray(messages)
-        ? messages.filter((msg) => msg.type === 'reminder')
-        : [];
+        const reminderMessages = Array.isArray(messages)
+          ? messages.filter((msg) => msg.type === 'reminder')
+          : [];
 
-      const scheduleConfig = schedule?.schedule_config || {};
+        const scheduleConfig = schedule?.schedule_config || {};
 
-      let start_date: string | undefined = undefined;
-      let end_date: string | undefined = undefined;
+        let start_date: string | undefined = undefined;
+        let end_date: string | undefined = undefined;
 
-      if (schedule?.start_date) {
-        start_date = new Date(schedule.start_date).toISOString();
-      }
-      if (schedule?.end_date) {
-        end_date = new Date(schedule.end_date).toISOString();
-      }
+        if (schedule?.start_date) {
+          start_date = new Date(schedule.start_date).toISOString();
+        }
+        if (schedule?.end_date) {
+          end_date = new Date(schedule.end_date).toISOString();
+        }
 
-      return {
-        ...campaign,
-        customer_count: customerCount,
-        messages: initialMessage || {
-          type: 'initial',
-          text: '',
-          attachment: null,
-        },
-        schedule_config: scheduleConfig,
-        reminders: reminderMessages.map((msg: any) => ({
-          content: msg.text || '',
-          minutes: msg.offset_minutes || 0,
-        })),
-        email_reports: emailReport
-          ? {
-              recipients_to: emailReport.recipient_to || '',
-              recipients_cc: emailReport.recipients_cc || [],
-              report_interval_minutes: emailReport.report_interval_minutes,
-              stop_sending_at_time: emailReport.stop_sending_at_time,
-              is_active: emailReport.is_active || false,
-              send_when_campaign_completed:
-                emailReport.send_when_campaign_completed || false,
-            }
-          : undefined,
-        customers: customersByCampaign[campaign.id] || [],
-        start_date,
-        end_date,
-      } as CampaignWithDetails;
-    });
-
-    // Sort by status first (scheduled -> draft -> running -> paused -> completed), then by creation date
-    const statusOrder = {
-      'scheduled': 1,
-      'draft': 2,
-      'running': 3,
-      'paused': 4,
-      'completed': 5,
-    };
-
-    // Debug: Log the data before sorting
-    console.log('Before sorting - First 5 campaigns:', allData.slice(0, 5).map(c => ({ name: c.name, status: c.status, created_at: c.created_at })));
-
-    // Sort all data by status first, then by creation date
-    allData.sort((a, b) => {
-      const statusA = statusOrder[a.status] || 6;
-      const statusB = statusOrder[b.status] || 6;
-      
-      if (statusA !== statusB) {
-        return statusA - statusB;
-      }
-      
-      // If status is the same, sort by creation date (newest first)
-      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-    });
-
-    // Debug: Log the data after sorting
-    console.log('After sorting - First 5 campaigns:', allData.slice(0, 5).map(c => ({ name: c.name, status: c.status, created_at: c.created_at })));
-
-    // Apply pagination to sorted data
-    const data = allData.slice(skip, skip + pageSize);
+        return {
+          ...campaign,
+          customer_count: customerCount,
+          messages: initialMessage || {
+            type: 'initial',
+            text: '',
+            attachment: null,
+          },
+          schedule_config: scheduleConfig,
+          reminders: reminderMessages.map((msg: any) => ({
+            content: msg.text || '',
+            minutes: msg.offset_minutes || 0,
+          })),
+          email_reports: emailReport
+            ? {
+                recipients_to: emailReport.recipient_to || '',
+                recipients_cc: emailReport.recipients_cc || [],
+                report_interval_minutes: emailReport.report_interval_minutes,
+                stop_sending_at_time: emailReport.stop_sending_at_time,
+                is_active: emailReport.is_active || false,
+                send_when_campaign_completed:
+                  emailReport.send_when_campaign_completed || false,
+              }
+            : undefined,
+          customers: customersByCampaign[campaign.id] || [],
+          start_date,
+          end_date,
+        } as CampaignWithDetails;
+      },
+    );
 
     const stats = await this.getStats(user);
     return { data, total, stats };
@@ -3487,11 +3456,8 @@ export class CampaignService {
       }
     }
 
-    // Sort by creation date first, then we'll sort by status in JavaScript
-    qb.orderBy('campaign.created_at', 'DESC');
-
-    // Get all archived campaigns first (without pagination) to sort properly
-    const allRawResults = await qb.getRawMany();
+  // Load all archived campaigns first (without pagination) to sort properly
+  const allRawResults = await qb.getRawMany();
 
     if (allRawResults.length === 0) {
       const stats = {
@@ -3509,7 +3475,23 @@ export class CampaignService {
     const page = Math.max(1, parseInt(query.page) || 1);
     const pageSize = Math.max(1, parseInt(query.pageSize) || 10);
     const skip = (page - 1) * pageSize;
-    const rawResults = allRawResults.slice(skip, skip + pageSize);
+    const statusOrder: Record<string, number> = {
+      scheduled: 1,
+      running: 2,
+      draft: 3,
+      paused: 4,
+      completed: 5,
+    };
+    const sortedAll = allRawResults.sort((a: any, b: any) => {
+      const sa = statusOrder[a.campaign_status] ?? 999;
+      const sb = statusOrder[b.campaign_status] ?? 999;
+      if (sa !== sb) return sa - sb;
+      return (
+        new Date(b.campaign_created_at).getTime() -
+        new Date(a.campaign_created_at).getTime()
+      );
+    });
+    const rawResults = sortedAll.slice(skip, skip + pageSize);
 
     // Count query with same logic
     const countQb = this.campaignRepository
@@ -3640,8 +3622,8 @@ export class CampaignService {
       >,
     );
 
-    // Build all data first, then sort, then paginate
-    const allData: CampaignWithDetails[] = allRawResults.map((result: any) => {
+  // Build page data only
+  const data: CampaignWithDetails[] = rawResults.map((result: any) => {
       const messages = result.content_messages || [];
       const initialMessage = Array.isArray(messages)
         ? messages.find((msg) => msg.type === 'initial') || messages[0]
@@ -3742,37 +3724,6 @@ export class CampaignService {
       } as CampaignWithDetails;
     });
 
-    // Sort by status first (scheduled -> draft -> running -> paused -> completed), then by creation date
-    const statusOrder = {
-      'scheduled': 1,
-      'draft': 2,
-      'running': 3,
-      'paused': 4,
-      'completed': 5,
-    };
-
-    // Debug: Log the data before sorting
-    console.log('Before sorting archived - First 5 campaigns:', allData.slice(0, 5).map(c => ({ name: c.name, status: c.status, created_at: c.created_at })));
-
-    // Sort all data by status first, then by creation date
-    allData.sort((a, b) => {
-      const statusA = statusOrder[a.status] || 6;
-      const statusB = statusOrder[b.status] || 6;
-      
-      if (statusA !== statusB) {
-        return statusA - statusB;
-      }
-      
-      // If status is the same, sort by creation date (newest first)
-      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-    });
-
-    // Debug: Log the data after sorting
-    console.log('After sorting archived - First 5 campaigns:', allData.slice(0, 5).map(c => ({ name: c.name, status: c.status, created_at: c.created_at })));
-
-    // Apply pagination to sorted data
-    const data = allData.slice(skip, skip + pageSize);
-
     // Generate stats for archived campaigns only
     const stats = {
       totalCampaigns: total,
@@ -3783,7 +3734,7 @@ export class CampaignService {
       archivedCampaigns: total,
     };
 
-    return { data, total, stats };
+  return { data, total, stats };
   }
 
   async getCopyData(id: string, user: User): Promise<CreateCampaignDto> {
