@@ -1375,7 +1375,8 @@ export class OrderDetailService {
       .addSelect('sale_by.id', 'sale_id')
       .where('details.customer_name IS NOT NULL')
       .andWhere('details.customer_name != :empty', { empty: '' })
-      .andWhere('details.deleted_at IS NULL');
+      .andWhere('details.deleted_at IS NULL')
+      .andWhere('details.hidden_at IS NULL');
 
     // Thêm logic phân quyền cho role "view"
     if (filters?.user) {
@@ -1443,6 +1444,7 @@ export class OrderDetailService {
       .where('details.customer_name IS NOT NULL')
       .andWhere('details.customer_name != :empty', { empty: '' })
       .andWhere('details.deleted_at IS NULL')
+      .andWhere('details.hidden_at IS NULL')
       .groupBy('details.customer_name, sale_by.id, sale_by.fullName');
 
     // Thêm logic phân quyền cho role "view"
@@ -1470,7 +1472,8 @@ export class OrderDetailService {
       .select('COUNT(DISTINCT CONCAT(details.customer_name, \'_\', sale_by.id))', 'cnt')
       .where('details.customer_name IS NOT NULL')
       .andWhere('details.customer_name != :empty', { empty: '' })
-      .andWhere('details.deleted_at IS NULL');
+      .andWhere('details.deleted_at IS NULL')
+      .andWhere('details.hidden_at IS NULL');
 
     // Thêm logic phân quyền cho totalQb
     if (params.user) {
