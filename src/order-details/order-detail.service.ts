@@ -1357,7 +1357,7 @@ export class OrderDetailService {
 
   /**
    * Đếm số lượng khách hàng unique từ order_details
-   * Sử dụng Set để loại bỏ trùng lặp hiệu quả
+   * Đếm theo cặp (customer_name + sale_id) - cùng khách hàng với sale khác nhau = khách hàng khác nhau
    */
   async getCustomerCount(filters?: {
     fromDate?: string;
@@ -1372,6 +1372,7 @@ export class OrderDetailService {
       .leftJoin('order.sale_by', 'sale_by')
       .leftJoin('sale_by.departments', 'departments')
       .select('details.customer_name', 'customer_name')
+      .addSelect('sale_by.id', 'sale_id')
       .where('details.customer_name IS NOT NULL')
       .andWhere('details.customer_name != :empty', { empty: '' })
       .andWhere('details.deleted_at IS NULL');
@@ -1405,20 +1406,21 @@ export class OrderDetailService {
       qb.andWhere('departments.id = :departmentId', { departmentId: filters.departmentId });
     }
 
-    const customerNames = await qb.getRawMany();
+    const customerData = await qb.getRawMany();
 
-    // Sử dụng Set để đếm unique customers
-    const uniqueCustomers = new Set(
-      customerNames
-        .map(item => item.customer_name)
-        .filter(name => name && name.trim() !== '')
+    // Sử dụng Set để đếm unique customer-sale pairs
+    const uniqueCustomerSalePairs = new Set(
+      customerData
+        .filter(item => item.customer_name && item.customer_name.trim() !== '' && item.sale_id)
+        .map(item => `${item.customer_name}_${item.sale_id}`)
     );
 
-    return uniqueCustomers.size;
+    return uniqueCustomerSalePairs.size;
   }
 
   /**
    * Lấy danh sách khách hàng unique có phân trang
+   * Group theo cặp (customer_name + sale_id) - cùng khách hàng với sale khác nhau = khách hàng khác nhau
    */
   async getDistinctCustomers(params: {
     fromDate?: string;
@@ -1428,18 +1430,20 @@ export class OrderDetailService {
     page: number;
     pageSize: number;
     user?: any;
-  }): Promise<{ data: { customer_name: string; orders: number }[]; total: number; page: number; pageSize: number }> {
+  }): Promise<{ data: { customer_name: string; sale_id: number; sale_name: string; orders: number }[]; total: number; page: number; pageSize: number }> {
     const qb = this.orderDetailRepository
       .createQueryBuilder('details')
       .leftJoin('details.order', 'order')
       .leftJoin('order.sale_by', 'sale_by')
       .leftJoin('sale_by.departments', 'departments')
       .select('details.customer_name', 'customer_name')
+      .addSelect('sale_by.id', 'sale_id')
+      .addSelect('sale_by.fullName', 'sale_name')
       .addSelect('COUNT(details.id)', 'orders')
       .where('details.customer_name IS NOT NULL')
       .andWhere('details.customer_name != :empty', { empty: '' })
       .andWhere('details.deleted_at IS NULL')
-      .groupBy('details.customer_name');
+      .groupBy('details.customer_name, sale_by.id, sale_by.fullName');
 
     // Thêm logic phân quyền cho role "view"
     if (params.user) {
@@ -1457,13 +1461,13 @@ export class OrderDetailService {
     if (params.employeeId) qb.andWhere('sale_by.id = :employeeId', { employeeId: params.employeeId });
     if (params.departmentId) qb.andWhere('departments.id = :departmentId', { departmentId: params.departmentId });
 
-    // Tổng số khách (distinct) - đếm chính xác số unique customer_name
+    // Tổng số khách (distinct) - đếm chính xác số unique customer-sale pairs
     const totalQb = this.orderDetailRepository
       .createQueryBuilder('details')
       .leftJoin('details.order', 'order')
       .leftJoin('order.sale_by', 'sale_by')
       .leftJoin('sale_by.departments', 'departments')
-      .select('COUNT(DISTINCT details.customer_name)', 'cnt')
+      .select('COUNT(DISTINCT CONCAT(details.customer_name, \'_\', sale_by.id))', 'cnt')
       .where('details.customer_name IS NOT NULL')
       .andWhere('details.customer_name != :empty', { empty: '' })
       .andWhere('details.deleted_at IS NULL');
@@ -1496,7 +1500,12 @@ export class OrderDetailService {
       .limit(params.pageSize);
 
     const rows = await qb.getRawMany();
-    const data = rows.map(r => ({ customer_name: r.customer_name, orders: Number(r.orders) || 0 }));
+    const data = rows.map(r => ({ 
+      customer_name: r.customer_name, 
+      sale_id: Number(r.sale_id) || 0,
+      sale_name: r.sale_name || '',
+      orders: Number(r.orders) || 0 
+    }));
 
     return { data, total: totalRows, page: params.page, pageSize: params.pageSize };
   }
