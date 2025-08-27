@@ -30,6 +30,27 @@ export class OrderDetailService {
     private orderBlacklistService: OrderBlacklistService,
   ) {}
 
+  // Normalize a date-only string (YYYY-MM-DD) into safe bounds for SQL comparisons.
+  // We keep using date strings to avoid timezone surprises from JS Date -> DB conversions.
+  // Strategy:
+  // - If input looks like YYYY-MM-DD, we treat it as a date-only value at local midnight.
+  // - For upper bound, we use an exclusive end: created_at < nextDay(YYYY-MM-DD)
+  // - If input already contains time, we use it as-is with inclusive logic from callers.
+  private isDateOnly(value?: string | null): boolean {
+    if (!value) return false;
+    return /^\d{4}-\d{2}-\d{2}$/.test(value.trim());
+  }
+
+  private addOneDayDateOnly(value: string): string {
+    const [y, m, d] = value.split('-').map((n) => parseInt(n, 10));
+    const dt = new Date(Date.UTC(y, (m || 1) - 1, d || 1));
+    dt.setUTCDate(dt.getUTCDate() + 1);
+    const y2 = dt.getUTCFullYear();
+    const m2 = String(dt.getUTCMonth() + 1).padStart(2, '0');
+    const d2 = String(dt.getUTCDate()).padStart(2, '0');
+    return `${y2}-${m2}-${d2}`;
+  }
+
   async findAll(): Promise<OrderDetail[]> {
     return this.orderDetailRepository.find({
       relations: ['order', 'order.sale_by', 'product'],
@@ -1357,7 +1378,9 @@ export class OrderDetailService {
 
   /**
    * Đếm số lượng khách hàng unique từ order_details
-   * Đếm theo cặp (customer_name + sale_id) - cùng khách hàng với sale khác nhau = khách hàng khác nhau
+  * Quy tắc: Khách A có nhiều đơn với cùng Sale A -> tính 1 khách hàng.
+  * Khi Khách A mua với Sale B -> tính thêm 1 khách hàng nữa.
+  * => Đếm theo cặp (customer_name, sale_id).
    */
   async getCustomerCount(filters?: {
     fromDate?: string;
@@ -1373,10 +1396,9 @@ export class OrderDetailService {
       .leftJoin('sale_by.departments', 'departments')
       .select('details.customer_name', 'customer_name')
       .addSelect('sale_by.id', 'sale_id')
-      .where('details.customer_name IS NOT NULL')
-      .andWhere('details.customer_name != :empty', { empty: '' })
-      .andWhere('details.deleted_at IS NULL')
-      .andWhere('details.hidden_at IS NULL');
+      .where('details.deleted_at IS NULL')
+      .andWhere('details.hidden_at IS NULL')
+      .andWhere('(details.customer_name IS NOT NULL AND details.customer_name != :empty)', { empty: '' });
 
     // Thêm logic phân quyền cho role "view"
     if (filters?.user) {
@@ -1394,7 +1416,13 @@ export class OrderDetailService {
       qb.andWhere('details.created_at >= :fromDate', { fromDate: filters.fromDate });
     }
     if (filters?.toDate) {
-      qb.andWhere('details.created_at <= :toDate', { toDate: filters.toDate });
+      // If date-only provided, use exclusive end bound of next day to include the full "to" day
+      if (this.isDateOnly(filters.toDate)) {
+        const toDateExclusive = this.addOneDayDateOnly(filters.toDate);
+        qb.andWhere('details.created_at < :toDateExclusive', { toDateExclusive });
+      } else {
+        qb.andWhere('details.created_at <= :toDate', { toDate: filters.toDate });
+      }
     }
 
     // Filter theo nhân viên
@@ -1409,19 +1437,38 @@ export class OrderDetailService {
 
     const customerData = await qb.getRawMany();
 
-    // Sử dụng Set để đếm unique customer-sale pairs
-    const uniqueCustomerSalePairs = new Set(
+    // Debug: Log để kiểm tra dữ liệu
+    console.log('🔍 Customer Count Debug:', {
+      totalRecords: customerData.length,
+      withCustomerName: customerData.filter(item => item.customer_name && item.customer_name.trim() !== '').length,
+      withSaleId: customerData.filter(item => item.sale_id).length,
+      sampleData: customerData.slice(0, 3).map(item => ({
+        customer_name: item.customer_name,
+        sale_id: item.sale_id,
+        hasCustomerName: !!(item.customer_name && item.customer_name.trim() !== ''),
+        hasSaleId: !!item.sale_id
+      }))
+    });
+
+    // Đếm unique theo cặp (customer_name + sale_id)
+    const uniquePairs = new Set(
       customerData
-        .filter(item => item.customer_name && item.customer_name.trim() !== '' && item.sale_id)
-        .map(item => `${item.customer_name}_${item.sale_id}`)
+        .filter(item => item.customer_name && item.customer_name.trim() !== '')
+        .map(item => {
+          const name = item.customer_name.trim();
+          const saleId = item.sale_id ?? 'null';
+          return `${name}__${saleId}`;
+        })
     );
 
-    return uniqueCustomerSalePairs.size;
+    console.log('🔍 Unique customer-sale pairs:', uniquePairs.size);
+    console.log('🔍 Sample pairs:', Array.from(uniquePairs).slice(0, 5));
+    return uniquePairs.size;
   }
 
   /**
    * Lấy danh sách khách hàng unique có phân trang
-   * Group theo cặp (customer_name + sale_id) - cùng khách hàng với sale khác nhau = khách hàng khác nhau
+   * Group theo cặp (customer_name, sale_id).
    */
   async getDistinctCustomers(params: {
     fromDate?: string;
@@ -1445,7 +1492,10 @@ export class OrderDetailService {
       .andWhere('details.customer_name != :empty', { empty: '' })
       .andWhere('details.deleted_at IS NULL')
       .andWhere('details.hidden_at IS NULL')
-      .groupBy('details.customer_name, sale_by.id, sale_by.fullName');
+      // FULL GROUP BY yêu cầu tất cả cột được select (không aggregate) phải có trong GROUP BY
+      .groupBy('details.customer_name')
+      .addGroupBy('sale_by.id')
+      .addGroupBy('sale_by.fullName');
 
     // Thêm logic phân quyền cho role "view"
     if (params.user) {
@@ -1459,17 +1509,25 @@ export class OrderDetailService {
     }
 
     if (params.fromDate) qb.andWhere('details.created_at >= :fromDate', { fromDate: params.fromDate });
-    if (params.toDate) qb.andWhere('details.created_at <= :toDate', { toDate: params.toDate });
+    if (params.toDate) {
+      if (this.isDateOnly(params.toDate)) {
+        const toDateExclusive = this.addOneDayDateOnly(params.toDate);
+        qb.andWhere('details.created_at < :toDateExclusive', { toDateExclusive });
+      } else {
+        qb.andWhere('details.created_at <= :toDate', { toDate: params.toDate });
+      }
+    }
     if (params.employeeId) qb.andWhere('sale_by.id = :employeeId', { employeeId: params.employeeId });
     if (params.departmentId) qb.andWhere('departments.id = :departmentId', { departmentId: params.departmentId });
 
-    // Tổng số khách (distinct) - đếm chính xác số unique customer-sale pairs
+    // Tổng số nhóm (customer_name, sale_id) distinct
     const totalQb = this.orderDetailRepository
       .createQueryBuilder('details')
       .leftJoin('details.order', 'order')
       .leftJoin('order.sale_by', 'sale_by')
       .leftJoin('sale_by.departments', 'departments')
-      .select('COUNT(DISTINCT CONCAT(details.customer_name, \'_\', sale_by.id))', 'cnt')
+      // MySQL: COUNT(DISTINCT expr1, expr2) đếm distinct theo nhiều cột; sử dụng CONCAT để tương thích rộng rãi
+      .select("COUNT(DISTINCT CONCAT(details.customer_name, '__', IFNULL(sale_by.id, 'null')))", 'cnt')
       .where('details.customer_name IS NOT NULL')
       .andWhere('details.customer_name != :empty', { empty: '' })
       .andWhere('details.deleted_at IS NULL')
@@ -1487,7 +1545,14 @@ export class OrderDetailService {
     }
 
     if (params.fromDate) totalQb.andWhere('details.created_at >= :fromDate', { fromDate: params.fromDate });
-    if (params.toDate) totalQb.andWhere('details.created_at <= :toDate', { toDate: params.toDate });
+    if (params.toDate) {
+      if (this.isDateOnly(params.toDate)) {
+        const toDateExclusive = this.addOneDayDateOnly(params.toDate);
+        totalQb.andWhere('details.created_at < :toDateExclusive', { toDateExclusive });
+      } else {
+        totalQb.andWhere('details.created_at <= :toDate', { toDate: params.toDate });
+      }
+    }
     if (params.employeeId) totalQb.andWhere('sale_by.id = :employeeId', { employeeId: params.employeeId });
     if (params.departmentId) totalQb.andWhere('departments.id = :departmentId', { departmentId: params.departmentId });
 
@@ -1503,11 +1568,11 @@ export class OrderDetailService {
       .limit(params.pageSize);
 
     const rows = await qb.getRawMany();
-    const data = rows.map(r => ({ 
-      customer_name: r.customer_name, 
+    const data = rows.map(r => ({
+      customer_name: r.customer_name,
       sale_id: Number(r.sale_id) || 0,
       sale_name: r.sale_name || '',
-      orders: Number(r.orders) || 0 
+      orders: Number(r.orders) || 0,
     }));
 
     return { data, total: totalRows, page: params.page, pageSize: params.pageSize };
