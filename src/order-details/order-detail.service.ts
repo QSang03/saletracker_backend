@@ -1385,85 +1385,193 @@ export class OrderDetailService {
   async getCustomerCount(filters?: {
     fromDate?: string;
     toDate?: string;
+    date?: string;
+    dateRange?: { start: string; end: string };
+    search?: string;
+    status?: string;
+    employee?: string;
+    employees?: string;
+    departments?: string;
+    products?: string;
+    warningLevel?: string;
+    quantity?: string;
     employeeId?: number;
     departmentId?: number;
     user?: any;
   }): Promise<number> {
+    // Lấy toàn bộ bản ghi chi tiết theo các filter cơ bản bằng SQL
     const qb = this.orderDetailRepository
       .createQueryBuilder('details')
-      .leftJoin('details.order', 'order')
-      .leftJoin('order.sale_by', 'sale_by')
-      .leftJoin('sale_by.departments', 'departments')
-      .select('details.customer_name', 'customer_name')
-      .addSelect('sale_by.id', 'sale_id')
+      .leftJoinAndSelect('details.order', 'order')
+      .leftJoinAndSelect('order.sale_by', 'sale_by')
+      .leftJoinAndSelect('sale_by.departments', 'sale_by_departments')
       .where('details.deleted_at IS NULL')
       .andWhere('details.hidden_at IS NULL')
       .andWhere('(details.customer_name IS NOT NULL AND details.customer_name != :empty)', { empty: '' });
 
-    // Thêm logic phân quyền cho role "view"
+    // Phân quyền theo role "view"
     if (filters?.user) {
       const allowedUserIds = await this.getUserIdsByRole(filters.user);
       if (allowedUserIds !== null) {
-        if (allowedUserIds.length === 0) {
-          return 0; // Không có quyền xem dữ liệu nào
-        }
+        if (allowedUserIds.length === 0) return 0;
         qb.andWhere('sale_by.id IN (:...allowedUserIds)', { allowedUserIds });
       }
     }
 
-    // Filter theo thời gian
-    if (filters?.fromDate) {
-      qb.andWhere('details.created_at >= :fromDate', { fromDate: filters.fromDate });
-    }
-    if (filters?.toDate) {
-      // If date-only provided, use exclusive end bound of next day to include the full "to" day
-      if (this.isDateOnly(filters.toDate)) {
-        const toDateExclusive = this.addOneDayDateOnly(filters.toDate);
-        qb.andWhere('details.created_at < :toDateExclusive', { toDateExclusive });
-      } else {
-        qb.andWhere('details.created_at <= :toDate', { toDate: filters.toDate });
+    // Date filter: ưu tiên dateRange -> date -> fromDate/toDate, áp dụng trên order.created_at để khớp trang quản lý đơn
+    if (filters?.dateRange?.start && filters?.dateRange?.end) {
+      const startDate = new Date(filters.dateRange.start);
+      const endDate = new Date(filters.dateRange.end);
+      endDate.setHours(23, 59, 59, 999);
+      qb.andWhere('order.created_at BETWEEN :rangeStart AND :rangeEnd', {
+        rangeStart: startDate,
+        rangeEnd: endDate,
+      });
+    } else if (filters?.date) {
+      const startDate = new Date(filters.date);
+      const endDate = new Date(filters.date);
+      endDate.setHours(23, 59, 59, 999);
+      qb.andWhere('order.created_at BETWEEN :startDate AND :endDate', {
+        startDate,
+        endDate,
+      });
+    } else {
+      if (filters?.fromDate)
+        qb.andWhere('order.created_at >= :fromDate', { fromDate: filters.fromDate });
+      if (filters?.toDate) {
+        const end = new Date(filters.toDate);
+        end.setHours(23, 59, 59, 999);
+        qb.andWhere('order.created_at <= :toDate', { toDate: end });
       }
     }
 
-    // Filter theo nhân viên
-    if (filters?.employeeId) {
-      qb.andWhere('sale_by.id = :employeeId', { employeeId: filters.employeeId });
+    // Search filter
+    if (filters?.search) {
+      qb.andWhere(
+        '(CAST(details.id AS CHAR) LIKE :search OR details.customer_name LIKE :search OR details.raw_item LIKE :search)',
+        { search: `%${filters.search}%` },
+      );
     }
 
-    // Filter theo phòng ban
+    // Status filter (CSV hoặc single)
+    if (filters?.status && filters.status.trim()) {
+      if (filters.status.includes(',')) {
+        const sts = this.parseCsvStrings(filters.status);
+        if (sts.length > 0) qb.andWhere('details.status IN (:...sts)', { sts });
+      } else {
+        qb.andWhere('details.status = :status', { status: filters.status });
+      }
+    }
+
+    // Employee filter (single or CSV)
+    if (filters?.employee) qb.andWhere('sale_by.id = :employee', { employee: filters.employee });
+    if (filters?.employees) {
+      const empIds = this.parseCsvNumbers(filters.employees);
+      if (empIds.length > 0)
+        qb.andWhere('sale_by.id IN (:...empIds)', { empIds });
+    }
+    if (filters?.employeeId)
+      qb.andWhere('sale_by.id = :empIdSingle', { empIdSingle: filters.employeeId });
+
+    // Department filter (CSV hoặc single) với điều kiện server_ip như trang quản lý
+    if (filters?.departments) {
+      const deptIds = this.parseCsvNumbers(filters.departments);
+      if (deptIds.length > 0) {
+        qb.andWhere(
+          `sale_by_departments.id IN (:...deptIds)
+           AND sale_by_departments.server_ip IS NOT NULL
+           AND TRIM(sale_by_departments.server_ip) <> ''`,
+          { deptIds },
+        );
+      }
+    }
     if (filters?.departmentId) {
-      qb.andWhere('departments.id = :departmentId', { departmentId: filters.departmentId });
+      qb.andWhere(
+        `sale_by_departments.id = :deptId
+         AND sale_by_departments.server_ip IS NOT NULL
+         AND TRIM(sale_by_departments.server_ip) <> ''`,
+        { deptId: filters.departmentId },
+      );
     }
 
-    const customerData = await qb.getRawMany();
+    // Products filter
+    if (filters?.products) {
+      const productIds = this.parseCsvNumbers(filters.products);
+      if (productIds.length > 0)
+        qb.andWhere('details.product_id IN (:...productIds)', { productIds });
+    }
+
+    // Quantity minimum
+    if (filters?.quantity !== undefined && String(filters.quantity).trim() !== '') {
+      const minQty = parseInt(String(filters.quantity), 10);
+      if (!isNaN(minQty) && minQty > 0)
+        qb.andWhere('details.quantity >= :minQty', { minQty });
+    }
+
+    const rows = await qb.getMany();
+
+    // Blacklist filtering giống trang quản lý đơn
+    let filtered = rows as any[];
+    const roleNames = (filters?.user?.roles || []).map((r: any) =>
+      typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
+    );
+    const isAdmin = roleNames.includes('admin');
+    if (!isAdmin) {
+      const allowedIds = await this.getUserIdsByRole(filters?.user);
+      const isManager = roleNames.some((r: string) => r.startsWith('manager-'));
+      if (isManager) {
+        const map = await this.orderBlacklistService.getBlacklistedContactsForUsers(
+          allowedIds || [filters?.user?.id],
+        );
+        const bl = new Set<string>();
+        for (const set of map.values()) for (const id of set) bl.add(id);
+        filtered = filtered.filter((od) => {
+          const cid = this.extractCustomerIdFromMetadata(od.metadata);
+          return !cid || !bl.has(cid);
+        });
+      } else {
+        const list = await this.orderBlacklistService.getBlacklistedContactsForUser(
+          filters?.user?.id,
+        );
+        const bl = new Set(list);
+        filtered = filtered.filter((od) => {
+          const cid = this.extractCustomerIdFromMetadata(od.metadata);
+          return !cid || !bl.has(cid);
+        });
+      }
+    }
+
+    // Warning level filter dựa trên dynamicExtended
+    if (filters?.warningLevel) {
+      const levels = this.parseCsvNumbers(filters.warningLevel).filter((n) => !isNaN(n));
+      if (levels.length > 0) {
+        const levelSet = new Set(levels);
+        filtered = filtered.filter((od) => {
+          const dyn = this.calcDynamicExtended(od.created_at || null, od.extended);
+          return dyn !== null && levelSet.has(dyn);
+        });
+      }
+    }
+
+    // Đếm unique theo cặp (customer_name + sale_id)
+    const uniquePairs = new Set<string>();
+    for (const od of filtered) {
+      const name = (od.customer_name || '').trim();
+      if (!name) continue;
+      const saleId = od.order?.sale_by?.id ?? 'null';
+      uniquePairs.add(`${name}__${saleId}`);
+    }
+
+    const count = uniquePairs.size;
 
     // Debug: Log để kiểm tra dữ liệu
     console.log('🔍 Customer Count Debug:', {
-      totalRecords: customerData.length,
-      withCustomerName: customerData.filter(item => item.customer_name && item.customer_name.trim() !== '').length,
-      withSaleId: customerData.filter(item => item.sale_id).length,
-      sampleData: customerData.slice(0, 3).map(item => ({
-        customer_name: item.customer_name,
-        sale_id: item.sale_id,
-        hasCustomerName: !!(item.customer_name && item.customer_name.trim() !== ''),
-        hasSaleId: !!item.sale_id
-      }))
+      totalRecords: rows.length,
+      afterBlacklistAndFilters: filtered.length,
+      uniquePairs: count,
+      sampleCustomers: Array.from(uniquePairs).slice(0, 5),
     });
-
-    // Đếm unique theo cặp (customer_name + sale_id)
-    const uniquePairs = new Set(
-      customerData
-        .filter(item => item.customer_name && item.customer_name.trim() !== '')
-        .map(item => {
-          const name = item.customer_name.trim();
-          const saleId = item.sale_id ?? 'null';
-          return `${name}__${saleId}`;
-        })
-    );
-
-    console.log('🔍 Unique customer-sale pairs:', uniquePairs.size);
-    console.log('🔍 Sample pairs:', Array.from(uniquePairs).slice(0, 5));
-    return uniquePairs.size;
+    return count;
   }
 
   /**
@@ -1473,108 +1581,203 @@ export class OrderDetailService {
   async getDistinctCustomers(params: {
     fromDate?: string;
     toDate?: string;
+    date?: string;
+    dateRange?: { start: string; end: string };
+    search?: string;
+    status?: string;
+    employee?: string;
+    employees?: string;
+    departments?: string;
+    products?: string;
+    warningLevel?: string;
+    quantity?: string;
     employeeId?: number;
     departmentId?: number;
     page: number;
     pageSize: number;
     user?: any;
   }): Promise<{ data: { customer_name: string; sale_id: number; sale_name: string; orders: number }[]; total: number; page: number; pageSize: number }> {
+    // Tải dữ liệu ở mức chi tiết để có thể áp dụng warningLevel sau đó
     const qb = this.orderDetailRepository
       .createQueryBuilder('details')
-      .leftJoin('details.order', 'order')
-      .leftJoin('order.sale_by', 'sale_by')
-      .leftJoin('sale_by.departments', 'departments')
-      .select('details.customer_name', 'customer_name')
-      .addSelect('sale_by.id', 'sale_id')
-      .addSelect('sale_by.fullName', 'sale_name')
-      .addSelect('COUNT(details.id)', 'orders')
-      .where('details.customer_name IS NOT NULL')
-      .andWhere('details.customer_name != :empty', { empty: '' })
-      .andWhere('details.deleted_at IS NULL')
-      .andWhere('details.hidden_at IS NULL')
-      // FULL GROUP BY yêu cầu tất cả cột được select (không aggregate) phải có trong GROUP BY
-      .groupBy('details.customer_name')
-      .addGroupBy('sale_by.id')
-      .addGroupBy('sale_by.fullName');
-
-    // Thêm logic phân quyền cho role "view"
-    if (params.user) {
-      const allowedUserIds = await this.getUserIdsByRole(params.user);
-      if (allowedUserIds !== null) {
-        if (allowedUserIds.length === 0) {
-          return { data: [], total: 0, page: params.page, pageSize: params.pageSize }; // Không có quyền xem dữ liệu nào
-        }
-        qb.andWhere('sale_by.id IN (:...allowedUserIds)', { allowedUserIds });
-      }
-    }
-
-    if (params.fromDate) qb.andWhere('details.created_at >= :fromDate', { fromDate: params.fromDate });
-    if (params.toDate) {
-      if (this.isDateOnly(params.toDate)) {
-        const toDateExclusive = this.addOneDayDateOnly(params.toDate);
-        qb.andWhere('details.created_at < :toDateExclusive', { toDateExclusive });
-      } else {
-        qb.andWhere('details.created_at <= :toDate', { toDate: params.toDate });
-      }
-    }
-    if (params.employeeId) qb.andWhere('sale_by.id = :employeeId', { employeeId: params.employeeId });
-    if (params.departmentId) qb.andWhere('departments.id = :departmentId', { departmentId: params.departmentId });
-
-    // Tổng số nhóm (customer_name, sale_id) distinct
-    const totalQb = this.orderDetailRepository
-      .createQueryBuilder('details')
-      .leftJoin('details.order', 'order')
-      .leftJoin('order.sale_by', 'sale_by')
-      .leftJoin('sale_by.departments', 'departments')
-      // MySQL: COUNT(DISTINCT expr1, expr2) đếm distinct theo nhiều cột; sử dụng CONCAT để tương thích rộng rãi
-      .select("COUNT(DISTINCT CONCAT(details.customer_name, '__', IFNULL(sale_by.id, 'null')))", 'cnt')
+      .leftJoinAndSelect('details.order', 'order')
+      .leftJoinAndSelect('order.sale_by', 'sale_by')
+      .leftJoinAndSelect('sale_by.departments', 'sale_by_departments')
       .where('details.customer_name IS NOT NULL')
       .andWhere('details.customer_name != :empty', { empty: '' })
       .andWhere('details.deleted_at IS NULL')
       .andWhere('details.hidden_at IS NULL');
 
-    // Thêm logic phân quyền cho totalQb
+    // Phân quyền
     if (params.user) {
       const allowedUserIds = await this.getUserIdsByRole(params.user);
       if (allowedUserIds !== null) {
-        if (allowedUserIds.length === 0) {
-          return { data: [], total: 0, page: params.page, pageSize: params.pageSize }; // Không có quyền xem dữ liệu nào
-        }
-        totalQb.andWhere('sale_by.id IN (:...allowedUserIds)', { allowedUserIds });
+        if (allowedUserIds.length === 0)
+          return { data: [], total: 0, page: params.page, pageSize: params.pageSize };
+        qb.andWhere('sale_by.id IN (:...allowedUserIds)', { allowedUserIds });
       }
     }
 
-    if (params.fromDate) totalQb.andWhere('details.created_at >= :fromDate', { fromDate: params.fromDate });
-    if (params.toDate) {
-      if (this.isDateOnly(params.toDate)) {
-        const toDateExclusive = this.addOneDayDateOnly(params.toDate);
-        totalQb.andWhere('details.created_at < :toDateExclusive', { toDateExclusive });
+    // Date filter trên order.created_at
+    if (params.dateRange?.start && params.dateRange?.end) {
+      const startDate = new Date(params.dateRange.start);
+      const endDate = new Date(params.dateRange.end);
+      endDate.setHours(23, 59, 59, 999);
+      qb.andWhere('order.created_at BETWEEN :rangeStart AND :rangeEnd', {
+        rangeStart: startDate,
+        rangeEnd: endDate,
+      });
+    } else if (params.date) {
+      const startDate = new Date(params.date);
+      const endDate = new Date(params.date);
+      endDate.setHours(23, 59, 59, 999);
+      qb.andWhere('order.created_at BETWEEN :startDate AND :endDate', {
+        startDate,
+        endDate,
+      });
+    } else {
+      if (params.fromDate)
+        qb.andWhere('order.created_at >= :fromDate', { fromDate: params.fromDate });
+      if (params.toDate) {
+        const end = new Date(params.toDate);
+        end.setHours(23, 59, 59, 999);
+        qb.andWhere('order.created_at <= :toDate', { toDate: end });
+      }
+    }
+
+    // Search
+    if (params.search) {
+      qb.andWhere(
+        '(CAST(details.id AS CHAR) LIKE :search OR details.customer_name LIKE :search OR details.raw_item LIKE :search)',
+        { search: `%${params.search}%` },
+      );
+    }
+
+    // Status
+    if (params.status && params.status.trim()) {
+      if (params.status.includes(',')) {
+        const sts = this.parseCsvStrings(params.status);
+        if (sts.length > 0) qb.andWhere('details.status IN (:...sts)', { sts });
       } else {
-        totalQb.andWhere('details.created_at <= :toDate', { toDate: params.toDate });
+        qb.andWhere('details.status = :status', { status: params.status });
       }
     }
-    if (params.employeeId) totalQb.andWhere('sale_by.id = :employeeId', { employeeId: params.employeeId });
-    if (params.departmentId) totalQb.andWhere('departments.id = :departmentId', { departmentId: params.departmentId });
 
-    const totalRaw = await totalQb.getRawOne<{ cnt: string | number }>();
-    const totalRows = Number(totalRaw?.cnt || 0);
+    // Employee filters
+    if (params.employee) qb.andWhere('sale_by.id = :employee', { employee: params.employee });
+    if (params.employees) {
+      const empIds = this.parseCsvNumbers(params.employees);
+      if (empIds.length > 0)
+        qb.andWhere('sale_by.id IN (:...empIds)', { empIds });
+    }
+    if (params.employeeId)
+      qb.andWhere('sale_by.id = :empIdSingle', { empIdSingle: params.employeeId });
 
-    // Phân trang theo nhóm distinct
-    const offset = (params.page - 1) * params.pageSize;
-    // Stable ordering: first by orders desc, then by name asc to avoid flicker across pages when counts tie
-    qb.orderBy('orders', 'DESC')
-      .addOrderBy('details.customer_name', 'ASC')
-      .offset(offset)
-      .limit(params.pageSize);
+    // Departments with server_ip condition
+    if (params.departments) {
+      const deptIds = this.parseCsvNumbers(params.departments);
+      if (deptIds.length > 0) {
+        qb.andWhere(
+          `sale_by_departments.id IN (:...deptIds)
+           AND sale_by_departments.server_ip IS NOT NULL
+           AND TRIM(sale_by_departments.server_ip) <> ''`,
+          { deptIds },
+        );
+      }
+    }
+    if (params.departmentId) {
+      qb.andWhere(
+        `sale_by_departments.id = :deptId
+         AND sale_by_departments.server_ip IS NOT NULL
+         AND TRIM(sale_by_departments.server_ip) <> ''`,
+        { deptId: params.departmentId },
+      );
+    }
 
-    const rows = await qb.getRawMany();
-    const data = rows.map(r => ({
-      customer_name: r.customer_name,
-      sale_id: Number(r.sale_id) || 0,
-      sale_name: r.sale_name || '',
-      orders: Number(r.orders) || 0,
-    }));
+    // Products
+    if (params.products) {
+      const productIds = this.parseCsvNumbers(params.products);
+      if (productIds.length > 0)
+        qb.andWhere('details.product_id IN (:...productIds)', { productIds });
+    }
 
-    return { data, total: totalRows, page: params.page, pageSize: params.pageSize };
+    // Quantity minimum
+    if (params.quantity !== undefined && String(params.quantity).trim() !== '') {
+      const minQty = parseInt(String(params.quantity), 10);
+      if (!isNaN(minQty) && minQty > 0)
+        qb.andWhere('details.quantity >= :minQty', { minQty });
+    }
+
+    const rows = await qb.getMany();
+
+    // Blacklist filtering
+    let filtered = rows as any[];
+    const roleNames = (params?.user?.roles || []).map((r: any) =>
+      typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
+    );
+    const isAdmin = roleNames.includes('admin');
+    if (!isAdmin) {
+      const allowedIds = await this.getUserIdsByRole(params?.user);
+      const isManager = roleNames.some((r: string) => r.startsWith('manager-'));
+      if (isManager) {
+        const map = await this.orderBlacklistService.getBlacklistedContactsForUsers(
+          allowedIds || [params?.user?.id],
+        );
+        const bl = new Set<string>();
+        for (const set of map.values()) for (const id of set) bl.add(id);
+        filtered = filtered.filter((od) => {
+          const cid = this.extractCustomerIdFromMetadata(od.metadata);
+          return !cid || !bl.has(cid);
+        });
+      } else {
+        const list = await this.orderBlacklistService.getBlacklistedContactsForUser(
+          params?.user?.id,
+        );
+        const bl = new Set(list);
+        filtered = filtered.filter((od) => {
+          const cid = this.extractCustomerIdFromMetadata(od.metadata);
+          return !cid || !bl.has(cid);
+        });
+      }
+    }
+
+    // Warning level filter
+    if (params.warningLevel) {
+      const levels = this.parseCsvNumbers(params.warningLevel).filter((n) => !isNaN(n));
+      if (levels.length > 0) {
+        const levelSet = new Set(levels);
+        filtered = filtered.filter((od) => {
+          const dyn = this.calcDynamicExtended(od.created_at || null, od.extended);
+          return dyn !== null && levelSet.has(dyn);
+        });
+      }
+    }
+
+    // Group theo (customer_name, sale_id) và đếm số đơn
+    const map = new Map<string, { customer_name: string; sale_id: number; sale_name: string; orders: number }>();
+    for (const od of filtered) {
+      const name = (od.customer_name || '').trim();
+      if (!name) continue;
+      const saleId = od.order?.sale_by?.id ?? 0;
+      const saleName = od.order?.sale_by?.fullName || od.order?.sale_by?.username || '';
+      const key = `${name}__${saleId}`;
+      const cur = map.get(key) || { customer_name: name, sale_id: saleId, sale_name: saleName, orders: 0 };
+      cur.orders += 1;
+      map.set(key, cur);
+    }
+
+    const groups = Array.from(map.values());
+    // Sort: orders desc, name asc
+    groups.sort((a, b) => {
+      const diff = b.orders - a.orders;
+      if (diff !== 0) return diff;
+      return a.customer_name.localeCompare(b.customer_name);
+    });
+
+    const total = groups.length;
+    const start = (params.page - 1) * params.pageSize;
+    const data = groups.slice(start, start + params.pageSize);
+
+    return { data, total, page: params.page, pageSize: params.pageSize };
   }
 }

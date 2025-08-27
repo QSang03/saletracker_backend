@@ -185,8 +185,19 @@ export class OrderDetailController {
   async getCustomerCount(
     @Query('fromDate') fromDate?: string,
     @Query('toDate') toDate?: string,
-    @Query('employeeId') employeeId?: string,
-    @Query('departmentId') departmentId?: string,
+  @Query('employeeId') employeeId?: string,
+  @Query('departmentId') departmentId?: string,
+  // Apply full order filters
+  @Query('search') search?: string,
+  @Query('status') status?: string,
+  @Query('date') date?: string,
+  @Query('dateRange') dateRange?: string,
+  @Query('employee') employee?: string,
+  @Query('employees') employees?: string,
+  @Query('departments') departments?: string,
+  @Query('products') products?: string,
+  @Query('warningLevel') warningLevel?: string,
+  @Query('quantity') quantity?: string,
     @Req() req?: any,
   ) {
     // Parse và validate employeeId
@@ -207,9 +218,29 @@ export class OrderDetailController {
       }
     }
 
+    // Parse dateRange if provided
+    let parsedDateRange: any = undefined;
+    if (dateRange) {
+      try {
+        parsedDateRange = JSON.parse(dateRange);
+      } catch {
+        parsedDateRange = undefined;
+      }
+    }
+
     const count = await this.orderDetailService.getCustomerCount({
       fromDate,
       toDate,
+      date,
+      dateRange: parsedDateRange,
+      search: search?.trim(),
+      status,
+      employee,
+      employees,
+      departments,
+      products,
+      warningLevel,
+      quantity,
       employeeId: parsedEmployeeId,
       departmentId: parsedDepartmentId,
       user: req?.user,
@@ -223,8 +254,19 @@ export class OrderDetailController {
   async getCustomers(
     @Query('fromDate') fromDate?: string,
     @Query('toDate') toDate?: string,
-    @Query('employeeId') employeeId?: string,
-    @Query('departmentId') departmentId?: string,
+  @Query('employeeId') employeeId?: string,
+  @Query('departmentId') departmentId?: string,
+  // Apply full order filters
+  @Query('search') search?: string,
+  @Query('status') status?: string,
+  @Query('date') date?: string,
+  @Query('dateRange') dateRange?: string,
+  @Query('employee') employee?: string,
+  @Query('employees') employees?: string,
+  @Query('departments') departments?: string,
+  @Query('products') products?: string,
+  @Query('warningLevel') warningLevel?: string,
+  @Query('quantity') quantity?: string,
     @Query('page') page: string = '1',
     @Query('pageSize') pageSize: string = '30',
     @Req() req?: any,
@@ -244,9 +286,29 @@ export class OrderDetailController {
     const pageNum = Math.max(1, parseInt(page, 10) || 1);
     const pageSizeNum = Math.max(1, Math.min(parseInt(pageSize, 10) || 30, 200));
 
+    // Parse dateRange if provided
+    let parsedDateRange: any = undefined;
+    if (dateRange) {
+      try {
+        parsedDateRange = JSON.parse(dateRange);
+      } catch {
+        parsedDateRange = undefined;
+      }
+    }
+
     return this.orderDetailService.getDistinctCustomers({
       fromDate,
       toDate,
+      date,
+      dateRange: parsedDateRange,
+      search: search?.trim(),
+      status,
+      employee,
+      employees,
+      departments,
+      products,
+      warningLevel,
+      quantity,
       employeeId: parsedEmployeeId,
       departmentId: parsedDepartmentId,
       page: pageNum,
