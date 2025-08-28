@@ -328,27 +328,11 @@ export class AuthService {
       expiresIn: '30d',
     });
 
-    // Tạo refresh token mới để tăng bảo mật
-    const newRefreshToken = this.jwtService.sign(
-      { sub: user.id },
-      {
-        secret:
-          this.configService.get<string>('JWT_REFRESH_SECRET') ||
-          this.configService.get<string>('JWT_SECRET'),
-        expiresIn: '30d',
-      },
-    );
-
-    // Cập nhật refresh token mới vào DB
-    await this.usersService.updateUser(user.id, {
-      refreshToken: newRefreshToken,
-    });
-
-    const response = {
+    // KHÔNG rotate refresh token khi refresh để tránh token mismatch giữa nhiều tab/thiết bị
+    // Giữ nguyên refresh token hiện tại trong DB và không trả refresh_token mới về FE
+    return {
       access_token: accessToken,
-      refresh_token: newRefreshToken,
     };
-    return response;
   }
 
   // Logout method - clear refresh token
