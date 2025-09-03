@@ -19,14 +19,34 @@ export const typeOrmConfig: TypeOrmModuleOptions = {
   synchronize: true,
   charset: 'utf8mb4_general_ci',
   logging: false,
+  // Performance optimizations
+  cache: {
+    duration: 30000, // 30 seconds cache
+  },
+  // Connection pooling optimization
   extra: {
-    connectionLimit: 10,
+    connectionLimit: 20, // Tăng connection limit
+    acquireTimeout: 60000, // 60 seconds timeout
+    timeout: 60000, // Query timeout
     typeCast: (field, next) => {
       if (field.type === 'TIMESTAMP') {
         return field.string();
       }
       return next();
     },
+    // Connection pool settings
+    queueLimit: 0,
+    waitForConnections: true,
+    // Performance settings
+    charset: 'utf8mb4',
+    supportBigNumbers: true,
+    bigNumberStrings: true,
+    dateStrings: true,
+    // Query optimization
+    multipleStatements: false,
+    trace: false,
   },
+  // Query optimization
+  maxQueryExecutionTime: 10000, // Log slow queries > 10s
   timezone: '+07:00',
 };

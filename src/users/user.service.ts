@@ -1156,6 +1156,18 @@ export class UserService {
       return [];
     }
 
+    // Exclude users who have role 'view' for non-admin requesters
+    if (!isAdmin) {
+      qb.andWhere(
+        `NOT EXISTS (
+          SELECT 1 FROM users_roles ur
+          JOIN roles r ON ur.role_id = r.id
+          WHERE ur.user_id = user.id AND LOWER(r.name) = :viewRoleName
+        )`,
+        { viewRoleName: 'view' },
+      );
+    }
+
     const users = await qb.getMany();
 
     return users.map((u) => ({
@@ -1204,6 +1216,17 @@ export class UserService {
       } else {
         qb.andWhere('1 = 0');
       }
+    }
+    // Exclude users who have role 'view' for non-admin requesters
+    if (!isAdmin) {
+      qb.andWhere(
+        `NOT EXISTS (
+          SELECT 1 FROM users_roles ur
+          JOIN roles r ON ur.role_id = r.id
+          WHERE ur.user_id = user.id AND LOWER(r.name) = :viewRoleName
+        )`,
+        { viewRoleName: 'view' },
+      );
     }
     const users = await qb.getMany();
     const transformedResult = users.map((u) => {

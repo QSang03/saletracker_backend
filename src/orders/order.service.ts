@@ -33,6 +33,7 @@ interface OrderFilters {
     | null;
   sortDirection?: 'asc' | 'desc' | null;
   user?: any; // truyền cả user object
+  includeHidden?: string; // '1' | 'true' to include hidden items (admin only)
 }
 
 @Injectable()
@@ -393,6 +394,25 @@ export class OrderService {
   const isAdmin = roleNames.includes('admin');
   const isViewRole = roleNames.includes('view');
 
+  // Nếu không phải admin, lấy danh sách user ids có role 'view' để loại bỏ khỏi kết quả
+  let viewUserIds = new Set<number>();
+  if (!isAdmin) {
+    try {
+      const raw = await this.userRepository
+        .createQueryBuilder('u')
+        .innerJoin('u.roles', 'r')
+        .where('LOWER(r.name) = :v', { v: 'view' })
+        .select('u.id', 'id')
+        .getRawMany();
+      raw.forEach((r: any) => {
+        const id = Number(r.id ?? r.u_id ?? r.uId ?? r.user_id ?? r.userId);
+        if (!isNaN(id)) viewUserIds.add(id);
+      });
+    } catch (e) {
+      // ignore errors - fallback to empty set
+    }
+  }
+
   if (isAdmin) {
       // Admin: lấy tất cả departments có server_ip khác null và khác rỗng
       const departments = await this.departmentRepository
@@ -416,10 +436,15 @@ export class OrderService {
         value: dept.id,
         label: dept.name,
         slug: dept.slug,
-        users: (dept.users || []).map((u) => ({
-          value: u.id,
-          label: u.fullName || u.username,
-        })),
+        users: (dept.users || [])
+          .filter((u) => {
+            const uid = Number(u.id);
+            return !u.deletedAt && (isAdmin || !viewUserIds.has(uid) || uid === Number(user.id));
+          })
+          .map((u) => ({
+            value: u.id,
+            label: u.fullName || u.username,
+          })),
       }));
   } else if (isViewRole) {
       // Role view: chỉ lấy departments được phân quyền
@@ -473,10 +498,15 @@ export class OrderService {
           value: dept.id,
           label: dept.name,
           slug: dept.slug,
-          users: (dept.users || []).map((u) => ({
-            value: u.id,
-            label: u.fullName || u.username,
-          })),
+          users: (dept.users || [])
+            .filter((u) => {
+              const uid = Number(u.id);
+              return !u.deletedAt && (isAdmin || !viewUserIds.has(uid) || uid === Number(user.id));
+            })
+            .map((u) => ({
+              value: u.id,
+              label: u.fullName || u.username,
+            })),
         }));
       }
     } else {
@@ -510,10 +540,15 @@ export class OrderService {
           value: dept.id,
           label: dept.name,
           slug: dept.slug,
-          users: (dept.users || []).map((u) => ({
-            value: u.id,
-            label: u.fullName || u.username,
-          })),
+          users: (dept.users || [])
+            .filter((u) => {
+              const uid = Number(u.id);
+              return !u.deletedAt && (isAdmin || !viewUserIds.has(uid) || uid === Number(user.id));
+            })
+            .map((u) => ({
+              value: u.id,
+              label: u.fullName || u.username,
+            })),
         }));
       } else if (managerRoles.length > 0) {
         // Manager: chỉ lấy department của mình và users trong đó, chỉ lấy department có server_ip hợp lệ
@@ -542,10 +577,15 @@ export class OrderService {
           value: dept.id,
           label: dept.name,
           slug: dept.slug,
-          users: (dept.users || []).map((u) => ({
-            value: u.id,
-            label: u.fullName || u.username,
-          })),
+          users: (dept.users || [])
+            .filter((u) => {
+              const uid = Number(u.id);
+              return !u.deletedAt && (isAdmin || !viewUserIds.has(uid) || uid === Number(user.id));
+            })
+            .map((u) => ({
+              value: u.id,
+              label: u.fullName || u.username,
+            })),
         }));
       } else {
         // User thường: chỉ thấy chính mình và department của mình, chỉ lấy department có server_ip hợp lệ
@@ -571,7 +611,10 @@ export class OrderService {
                 value: currentUser.id,
                 label: currentUser.fullName || currentUser.username,
               },
-            ],
+            ].filter((u) => {
+              const uid = Number(u.value);
+              return isAdmin || !viewUserIds.has(uid) || uid === Number(user.id);
+            }),
           }));
         }
       }
@@ -902,7 +945,8 @@ export class OrderService {
   quantity,
       sortField,
       sortDirection,
-      user,
+  user,
+  includeHidden,
     } = filters;
     const skip = (page - 1) * pageSize;
 
@@ -1067,8 +1111,13 @@ export class OrderService {
     }
 
     // LUÔN lấy tất cả data để áp dụng unified sorting
-    // Exclude hidden items from active lists
-    queryBuilder.andWhere('details.hidden_at IS NULL');
+    // Exclude hidden items from active lists unless admin explicitly requests includeHidden
+    const wantsHidden = (includeHidden || '').toString().toLowerCase();
+    const includeHiddenFlag = wantsHidden === '1' || wantsHidden === 'true';
+    const isAdmin = this.isAdmin(user);
+    if (!(includeHiddenFlag && isAdmin)) {
+      queryBuilder.andWhere('details.hidden_at IS NULL');
+    }
 
   const allData = await queryBuilder.getMany();
   this.logger.debug(`OrderService.findAllPaginated: fetched ${allData.length} rows from DB (after SQL filters).`);

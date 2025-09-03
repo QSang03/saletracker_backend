@@ -38,6 +38,7 @@ import { CampaignContentModule } from './campaign_contents/campaign_content.modu
 import { CampaignDepartmentsSchedulesModule } from './campaign_departments_schedules/campaign_departments_schedules.module';
 import { OrderBlacklistModule } from './order-blacklist/order-blacklist.module';
 import { AutoReplyModule } from './auto_reply/auto_reply.module';
+import { CommonModule } from './common/common.module';
 
 @Module({
   imports: [
@@ -79,7 +80,8 @@ import { AutoReplyModule } from './auto_reply/auto_reply.module';
     CampaignScheduleModule,
     CampaignContentModule,
     CampaignDepartmentsSchedulesModule,
-  AutoReplyModule,
+    AutoReplyModule,
+    CommonModule,
   ],
   controllers: [AppController],
   providers: [AppService],

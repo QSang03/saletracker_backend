@@ -46,6 +46,7 @@ export class OrderController {
     @Query('sortDirection') sortDirection?: 'asc' | 'desc',
   @Query('quantity') quantity?: string,
   @Query('conversationType') conversationType?: string,
+  @Query('includeHidden') includeHidden?: string,
     @Req() req?: any,
   ): Promise<{
     data: OrderDetail[];
@@ -87,6 +88,7 @@ export class OrderController {
   conversationType,
       sortField: sortField || null,
       sortDirection: sortDirection || null,
+  includeHidden,
       user: req.user,
     });
   }
