@@ -46,8 +46,10 @@ export class DepartmentService {
     const roleNames = getRoleNames(user);
 
     // Kiểm tra role "view" - cho phép xem tất cả departments
-    // Normalize search
-    const q = typeof search === 'string' && search.trim() !== '' ? search.trim() : undefined;
+  // Normalize search
+  const q = typeof search === 'string' && search.trim() !== '' ? search.trim() : undefined;
+  // For MySQL use case-insensitive match via LOWER(...) LIKE
+  const qLower = q ? `%${q.toLowerCase()}%` : undefined;
 
     if (roleNames.includes('view')) {
       // If search present, apply WHERE LIKE on name or slug
@@ -56,7 +58,7 @@ export class DepartmentService {
           .createQueryBuilder('dept')
           .leftJoinAndSelect('dept.users', 'users')
           .leftJoinAndSelect('users.roles', 'roles')
-          .where('dept.name ILIKE :q OR dept.slug ILIKE :q', { q: `%${q}%` })
+          .where('LOWER(dept.name) LIKE :q OR LOWER(dept.slug) LIKE :q', { q: qLower })
           .orderBy('dept.id', 'ASC')
           .skip((page - 1) * pageSize)
           .take(pageSize)
@@ -135,7 +137,7 @@ export class DepartmentService {
           .createQueryBuilder('dept')
           .leftJoinAndSelect('dept.users', 'users')
           .leftJoinAndSelect('users.roles', 'roles')
-          .where('dept.name ILIKE :q OR dept.slug ILIKE :q', { q: `%${q}%` })
+          .where('LOWER(dept.name) LIKE :q OR LOWER(dept.slug) LIKE :q', { q: qLower })
           .orderBy('dept.id', 'ASC')
           .skip((page - 1) * pageSize)
           .take(pageSize)
@@ -222,7 +224,7 @@ export class DepartmentService {
           .leftJoinAndSelect('dept.users', 'users')
           .leftJoinAndSelect('users.roles', 'roles')
           .where('dept.id IN (:...ids)', { ids: departmentIds })
-          .andWhere('(dept.name ILIKE :q OR dept.slug ILIKE :q)', { q: `%${q}%` })
+          .andWhere('(LOWER(dept.name) LIKE :q OR LOWER(dept.slug) LIKE :q)', { q: qLower })
           .orderBy('dept.id', 'ASC')
           .skip((page - 1) * pageSize)
           .take(pageSize)
