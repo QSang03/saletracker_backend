@@ -56,7 +56,7 @@ export class OrderController {
   }> {
     const pageNum = Math.max(1, parseInt(page, 10) || 1);
     const pageSizeNum = Math.min(
-      10000,
+      1000000,
       Math.max(1, parseInt(pageSize, 10) || 10),
     );
     
