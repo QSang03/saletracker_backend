@@ -27,12 +27,14 @@ export class DepartmentController {
     @Req() req: Request,
     @Query('page') page?: string,
     @Query('pageSize') pageSize?: string,
+    @Query('search') search?: string,
   ) {
     const user = req.user;
     return this.departmentService.findAll(
       user,
       page ? parseInt(page, 10) : 1,
       pageSize ? parseInt(pageSize, 10) : 10,
+      search,
     );
   }
 

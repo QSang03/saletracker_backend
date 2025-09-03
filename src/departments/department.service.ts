@@ -29,6 +29,7 @@ export class DepartmentService {
     user: any,
     page = 1,
     pageSize = 10,
+    search?: string,
   ): Promise<{
     data: {
       id: number;
@@ -45,7 +46,52 @@ export class DepartmentService {
     const roleNames = getRoleNames(user);
 
     // Kiểm tra role "view" - cho phép xem tất cả departments
+    // Normalize search
+    const q = typeof search === 'string' && search.trim() !== '' ? search.trim() : undefined;
+
     if (roleNames.includes('view')) {
+      // If search present, apply WHERE LIKE on name or slug
+      if (q) {
+        const [departments, total] = await this.departmentRepo
+          .createQueryBuilder('dept')
+          .leftJoinAndSelect('dept.users', 'users')
+          .leftJoinAndSelect('users.roles', 'roles')
+          .where('dept.name ILIKE :q OR dept.slug ILIKE :q', { q: `%${q}%` })
+          .orderBy('dept.id', 'ASC')
+          .skip((page - 1) * pageSize)
+          .take(pageSize)
+          .getManyAndCount();
+
+        return {
+          data: departments.map((dep) => {
+            const manager = dep.users?.find((u) =>
+              getRoleNames(u).some((r) => r === `manager-${dep.slug}`),
+            );
+            return {
+              id: dep.id,
+              name: dep.name,
+              slug: dep.slug,
+              server_ip: dep.server_ip,
+              createdAt: dep.createdAt,
+              manager: manager
+                ? {
+                    id: manager.id,
+                    fullName:
+                      typeof manager.fullName === 'string' &&
+                      manager.fullName.trim() !== ''
+                        ? manager.fullName
+                        : manager.username || '',
+                    username: manager.username || '',
+                  }
+                : undefined,
+            };
+          }),
+          total,
+          page,
+          pageSize,
+        };
+      }
+
       const [departments, total] = await this.departmentRepo.findAndCount({
         relations: { users: { roles: true } },
         order: { id: 'ASC' },
@@ -84,6 +130,47 @@ export class DepartmentService {
     }
 
     if (roleNames.includes('admin')) {
+      if (q) {
+        const [departments, total] = await this.departmentRepo
+          .createQueryBuilder('dept')
+          .leftJoinAndSelect('dept.users', 'users')
+          .leftJoinAndSelect('users.roles', 'roles')
+          .where('dept.name ILIKE :q OR dept.slug ILIKE :q', { q: `%${q}%` })
+          .orderBy('dept.id', 'ASC')
+          .skip((page - 1) * pageSize)
+          .take(pageSize)
+          .getManyAndCount();
+
+        return {
+          data: departments.map((dep) => {
+            const manager = dep.users?.find((u) =>
+              getRoleNames(u).some((r) => r === `manager-${dep.slug}`),
+            );
+            return {
+              id: dep.id,
+              name: dep.name,
+              slug: dep.slug,
+              server_ip: dep.server_ip,
+              createdAt: dep.createdAt,
+              manager: manager
+                ? {
+                    id: manager.id,
+                    fullName:
+                      typeof manager.fullName === 'string' &&
+                      manager.fullName.trim() !== ''
+                        ? manager.fullName
+                        : manager.username || '',
+                    username: manager.username || '',
+                  }
+                : undefined,
+            };
+          }),
+          total,
+          page,
+          pageSize,
+        };
+      }
+
       const [departments, total] = await this.departmentRepo.findAndCount({
         relations: { users: { roles: true } },
         order: { id: 'ASC' },
@@ -125,14 +212,57 @@ export class DepartmentService {
       if (!user.departments || !Array.isArray(user.departments))
         return { data: [], total: 0, page, pageSize };
 
-      // Lấy danh sách id phòng ban manager được xem, đảm bảo đã sort ASC
-      const departmentIds = user.departments
-        .map((d) => d.id)
-        .sort((a, b) => a - b);
-      const total = departmentIds.length;
+      // Lấy danh sách id phòng ban manager được xem
+      const departmentIds = user.departments.map((d) => d.id);
 
-      // Phân trang trên mảng id
-      const pagedIds = departmentIds.slice(
+      // Nếu có search, lọc các phòng ban trong danh sách của manager theo tên/slug
+      if (q) {
+        const [departments, total] = await this.departmentRepo
+          .createQueryBuilder('dept')
+          .leftJoinAndSelect('dept.users', 'users')
+          .leftJoinAndSelect('users.roles', 'roles')
+          .where('dept.id IN (:...ids)', { ids: departmentIds })
+          .andWhere('(dept.name ILIKE :q OR dept.slug ILIKE :q)', { q: `%${q}%` })
+          .orderBy('dept.id', 'ASC')
+          .skip((page - 1) * pageSize)
+          .take(pageSize)
+          .getManyAndCount();
+
+        return {
+          data: departments.map((dep) => {
+            const manager = dep.users?.find((u) =>
+              getRoleNames(u).some((r) => r === `manager-${dep.slug}`),
+            );
+            return {
+              id: dep.id,
+              name: dep.name,
+              slug: dep.slug,
+              server_ip: dep.server_ip,
+              createdAt: dep.createdAt,
+              manager: manager
+                ? {
+                    id: manager.id,
+                    fullName:
+                      typeof manager.fullName === 'string' &&
+                      manager.fullName.trim() !== ''
+                        ? manager.fullName
+                        : manager.username || '',
+                    username: manager.username || '',
+                  }
+                : undefined,
+            };
+          }),
+          total,
+          page,
+          pageSize,
+        };
+      }
+
+      // Nếu không có search, giữ logic phân trang theo danh sách id như trước
+      const sortedIds = departmentIds.slice().sort((a, b) => a - b);
+      const total = sortedIds.length;
+
+      const pagedIds = sortedIds.slice(
         (page - 1) * pageSize,
         (page - 1) * pageSize + pageSize,
       );
@@ -141,13 +271,11 @@ export class DepartmentService {
         return { data: [], total, page, pageSize };
       }
 
-      // Query các phòng ban theo id đã phân trang
       const departments = await this.departmentRepo.find({
         where: { id: In(pagedIds) },
         relations: { users: { roles: true } },
       });
 
-      // Đảm bảo thứ tự đúng như pagedIds và loại bỏ undefined
       const departmentsSorted = pagedIds
         .map((id) => departments.find((dep) => dep.id === id))
         .filter((dep): dep is Department => !!dep);
