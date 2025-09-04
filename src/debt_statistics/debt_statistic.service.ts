@@ -558,23 +558,23 @@ export class DebtStatisticService {
 
         if (mode === 'payLater') {
           if (typeof minDays === 'number') {
-            query += ` AND DATEDIFF(?, ds.pay_later) >= ?`;
-            params.push(D, minDays);
+            query += ` AND DATEDIFF(ds.statistic_date, ds.pay_later) >= ?`;
+            params.push(minDays);
           }
           if (typeof maxDays === 'number') {
-            query += ` AND DATEDIFF(?, ds.pay_later) <= ?`;
-            params.push(D, maxDays);
+            query += ` AND DATEDIFF(ds.statistic_date, ds.pay_later) <= ?`;
+            params.push(maxDays);
           }
           query += ` AND ds.status <> 'paid' AND ds.pay_later IS NOT NULL`;
         }
         if (mode === 'overdue') {
           if (typeof minDays === 'number') {
-            query += ` AND DATEDIFF(?, ds.due_date) >= ?`;
-            params.push(D, minDays);
+            query += ` AND DATEDIFF(ds.statistic_date, ds.due_date) >= ?`;
+            params.push(minDays);
           }
           if (typeof maxDays === 'number') {
-            query += ` AND DATEDIFF(?, ds.due_date) <= ?`;
-            params.push(D, maxDays);
+            query += ` AND DATEDIFF(ds.statistic_date, ds.due_date) <= ?`;
+            params.push(maxDays);
           }
           query += ` AND ds.status <> 'paid'`;
         }
@@ -606,23 +606,23 @@ export class DebtStatisticService {
 
         if (mode === 'payLater') {
           if (typeof minDays === 'number') {
-            countQuery += ` AND DATEDIFF(?, ds.pay_later) >= ?`;
-            countParams.push(D, minDays);
+            countQuery += ` AND DATEDIFF(ds.statistic_date, ds.pay_later) >= ?`;
+            countParams.push(minDays);
           }
           if (typeof maxDays === 'number') {
-            countQuery += ` AND DATEDIFF(?, ds.pay_later) <= ?`;
-            countParams.push(D, maxDays);
+            countQuery += ` AND DATEDIFF(ds.statistic_date, ds.pay_later) <= ?`;
+            countParams.push(maxDays);
           }
           countQuery += ` AND ds.status <> 'paid' AND ds.pay_later IS NOT NULL`;
         }
         if (mode === 'overdue') {
           if (typeof minDays === 'number') {
-            countQuery += ` AND DATEDIFF(?, ds.due_date) >= ?`;
-            countParams.push(D, minDays);
+            countQuery += ` AND DATEDIFF(ds.statistic_date, ds.due_date) >= ?`;
+            countParams.push(minDays);
           }
           if (typeof maxDays === 'number') {
-            countQuery += ` AND DATEDIFF(?, ds.due_date) <= ?`;
-            countParams.push(D, maxDays);
+            countQuery += ` AND DATEDIFF(ds.statistic_date, ds.due_date) <= ?`;
+            countParams.push(maxDays);
           }
           countQuery += ` AND ds.status <> 'paid'`;
         }
@@ -669,23 +669,23 @@ export class DebtStatisticService {
         }
         if (mode === 'payLater') {
           if (typeof minDays === 'number') {
-            query += ` AND DATEDIFF(?, d.pay_later) >= ?`;
-            params.push(D, minDays);
+            query += ` AND DATEDIFF(DATE(d.updated_at), d.pay_later) >= ?`;
+            params.push(minDays);
           }
           if (typeof maxDays === 'number') {
-            query += ` AND DATEDIFF(?, d.pay_later) <= ?`;
-            params.push(D, maxDays);
+            query += ` AND DATEDIFF(DATE(d.updated_at), d.pay_later) <= ?`;
+            params.push(maxDays);
           }
           query += ` AND d.status <> 'paid' AND d.pay_later IS NOT NULL`;
         }
         if (mode === 'overdue') {
           if (typeof minDays === 'number') {
-            query += ` AND DATEDIFF(?, d.due_date) >= ?`;
-            params.push(D, minDays);
+            query += ` AND DATEDIFF(DATE(d.updated_at), d.due_date) >= ?`;
+            params.push(minDays);
           }
           if (typeof maxDays === 'number') {
-            query += ` AND DATEDIFF(?, d.due_date) <= ?`;
-            params.push(D, maxDays);
+            query += ` AND DATEDIFF(DATE(d.updated_at), d.due_date) <= ?`;
+            params.push(maxDays);
           }
           query += ` AND d.status <> 'paid'`;
         }
@@ -721,23 +721,23 @@ export class DebtStatisticService {
         }
         if (mode === 'payLater') {
           if (typeof minDays === 'number') {
-            countQuery += ` AND DATEDIFF(?, d.pay_later) >= ?`;
-            countParams.push(D, minDays);
+            countQuery += ` AND DATEDIFF(DATE(d.updated_at), d.pay_later) >= ?`;
+            countParams.push(minDays);
           }
           if (typeof maxDays === 'number') {
-            countQuery += ` AND DATEDIFF(?, d.pay_later) <= ?`;
-            countParams.push(D, maxDays);
+            countQuery += ` AND DATEDIFF(DATE(d.updated_at), d.pay_later) <= ?`;
+            countParams.push(maxDays);
           }
           countQuery += ` AND d.status <> 'paid' AND d.pay_later IS NOT NULL`;
         }
         if (mode === 'overdue') {
           if (typeof minDays === 'number') {
-            countQuery += ` AND DATEDIFF(?, d.due_date) >= ?`;
-            countParams.push(D, minDays);
+            countQuery += ` AND DATEDIFF(DATE(d.updated_at), d.due_date) >= ?`;
+            countParams.push(minDays);
           }
           if (typeof maxDays === 'number') {
-            countQuery += ` AND DATEDIFF(?, d.due_date) <= ?`;
-            countParams.push(D, maxDays);
+            countQuery += ` AND DATEDIFF(DATE(d.updated_at), d.due_date) <= ?`;
+            countParams.push(maxDays);
           }
           countQuery += ` AND d.status <> 'paid'`;
         }
@@ -962,16 +962,21 @@ export class DebtStatisticService {
     for (const D of dates) {
       if (D < today) {
         // Use exact snapshot for the requested date to match modal
-        const whereClauses: string[] = ["ds.status <> 'paid'", 'ds.pay_later IS NOT NULL'];
-        const params: any[] = [];
+        const whereClauses: string[] = [
+          "ds.status <> 'paid'", 
+          'ds.pay_later IS NOT NULL',
+          'ds.statistic_date = ?'
+        ];
+        const params: any[] = [D];
         if (options.employeeCode) { whereClauses.push('ds.employee_code_raw = ?'); params.push(options.employeeCode); }
         if (options.customerCode) { whereClauses.push('ds.customer_code = ?'); params.push(options.customerCode); }
+        // Use statistic_date in DATEDIFF like aging logic to avoid placeholder proliferation
         const parts = ranges.map((r) => {
-          const cond = r.max == null ? `DATEDIFF(?, ds.pay_later) >= ${r.min}` : `DATEDIFF(?, ds.pay_later) BETWEEN ${r.min} AND ${r.max}`;
+          const cond = r.max == null ? `DATEDIFF(ds.statistic_date, ds.pay_later) >= ${r.min}` : `DATEDIFF(ds.statistic_date, ds.pay_later) BETWEEN ${r.min} AND ${r.max}`;
           return `SUM(CASE WHEN ${cond} THEN 1 ELSE 0 END) AS cnt_${r.label.replace(/[^a-zA-Z0-9_]/g, '_')}, SUM(CASE WHEN ${cond} THEN ds.remaining ELSE 0 END) AS amt_${r.label.replace(/[^a-zA-Z0-9_]/g, '_')}`;
         }).join(',');
         const query = `SELECT ${parts} FROM debt_statistics ds WHERE ${whereClauses.join(' AND ')}`;
-        const row = (await this.debtStatisticRepository.query(query, [...params, D]))[0] || {};
+        const row = (await this.debtStatisticRepository.query(query, params))[0] || {};
         console.debug('[getPayLaterDelayDaily] historical row for', D, row);
         for (const r of ranges) {
           const key = r.label.replace(/[^a-zA-Z0-9_]/g, '_');
@@ -985,11 +990,12 @@ export class DebtStatisticService {
           'd.pay_later IS NOT NULL',
           'DATE(d.updated_at) = DATE(?)', // Thêm filter theo ngày hiện tại
         ];
-        const arr: any[] = [D, D]; // Thêm D cho filter DATE(d.updated_at) = DATE(?)
+        const arr: any[] = [D]; // Chỉ cần một D cho filter DATE(d.updated_at) = DATE(?)
         if (options.employeeCode) { where.push('d.employee_code_raw = ?'); arr.push(options.employeeCode); }
         if (options.customerCode) { where.push('dc.customer_code = ?'); arr.push(options.customerCode); }
+        // Use DATE(updated_at) in DATEDIFF like aging logic
         const parts = ranges.map((r) => {
-          const cond = r.max == null ? `DATEDIFF(?, t.pay_later) >= ${r.min}` : `DATEDIFF(?, t.pay_later) BETWEEN ${r.min} AND ${r.max}`;
+          const cond = r.max == null ? `DATEDIFF(DATE(t.updated_at), t.pay_later) >= ${r.min}` : `DATEDIFF(DATE(t.updated_at), t.pay_later) BETWEEN ${r.min} AND ${r.max}`;
           return `SUM(CASE WHEN ${cond} THEN 1 ELSE 0 END) AS cnt_${r.label.replace(/[^a-zA-Z0-9_]/g, '_')}, SUM(CASE WHEN ${cond} THEN t.remaining ELSE 0 END) AS amt_${r.label.replace(/[^a-zA-Z0-9_]/g, '_')}`;
         }).join(',');
         const query = `SELECT ${parts} FROM (
@@ -997,9 +1003,7 @@ export class DebtStatisticService {
           LEFT JOIN debt_configs dc ON d.debt_config_id = dc.id
           WHERE ${where.join(' AND ')}
         ) t`;
-        // There are 2 placeholders (count/amount) per bucket in 'parts'
-        const diffParams = new Array(ranges.length * 2).fill(D);
-        const row = (await this.debtRepository.query(query, [...diffParams, ...arr]))[0] || {};
+        const row = (await this.debtRepository.query(query, [...arr]))[0] || {};
         console.debug('[getPayLaterDelayDaily] current row for', D, row);
         for (const r of ranges) {
           const key = r.label.replace(/[^a-zA-Z0-9_]/g, '_');
@@ -1069,9 +1073,9 @@ export class DebtStatisticService {
       const filters: string[] = [
         "ds.status <> 'paid'",
         'ds.due_date IS NOT NULL',
-        'DATEDIFF(?, ds.due_date) > 0',
+        'DATEDIFF(ds.statistic_date, ds.due_date) > 0',
       ];
-      const args: any[] = [D];
+      const args: any[] = [];
       if (params.employeeCode) {
         filters.push('ds.employee_code_raw = ?');
         args.push(params.employeeCode);
@@ -1083,9 +1087,9 @@ export class DebtStatisticService {
       const query = `
         SELECT
           CASE
-            WHEN DATEDIFF(?, ds.due_date) BETWEEN 1 AND 30 THEN '1-30'
-            WHEN DATEDIFF(?, ds.due_date) BETWEEN 31 AND 60 THEN '31-60'
-            WHEN DATEDIFF(?, ds.due_date) BETWEEN 61 AND 90 THEN '61-90'
+            WHEN DATEDIFF(ds.statistic_date, ds.due_date) BETWEEN 1 AND 30 THEN '1-30'
+            WHEN DATEDIFF(ds.statistic_date, ds.due_date) BETWEEN 31 AND 60 THEN '31-60'
+            WHEN DATEDIFF(ds.statistic_date, ds.due_date) BETWEEN 61 AND 90 THEN '61-90'
             ELSE '>90'
           END AS bucket,
           COUNT(*) AS count,
@@ -1103,11 +1107,8 @@ export class DebtStatisticService {
         GROUP BY bucket
         ORDER BY CASE bucket WHEN '1-30' THEN 1 WHEN '31-60' THEN 2 WHEN '61-90' THEN 3 ELSE 4 END
       `;
-      // Placeholders:
-      //  - 3 for SELECT DATEDIFF
-      //  - 1 for latest.snap_date (<= ?)
-      //  - remaining placeholders (including one D for WHERE DATEDIFF) come from ...args
-      const rows = await this.debtStatisticRepository.query(query, [D, D, D, D, ...args]);
+      // Placeholders: 1 for latest.snap_date (<= ?), then ...args
+      const rows = await this.debtStatisticRepository.query(query, [D, ...args]);
       return rows.map((r: any) => ({ range: r.bucket, count: Number(r.count) || 0, amount: Number(r.amount) || 0 }));
     } else {
       // Ngày hiện tại: Lấy từ debts (real-time) - BÌNH THƯỜNG
@@ -1115,9 +1116,9 @@ export class DebtStatisticService {
         'd.deleted_at IS NULL',
         "d.status <> 'paid'",
         'd.due_date IS NOT NULL',
-        'DATEDIFF(?, d.due_date) > 0',
+        'DATEDIFF(DATE(d.updated_at), d.due_date) > 0',
       ];
-      const arr: any[] = [D];
+      const arr: any[] = [];
       if (params.employeeCode) {
         where.push('d.employee_code_raw = ?');
         arr.push(params.employeeCode);
@@ -1129,9 +1130,9 @@ export class DebtStatisticService {
       const query = `
         SELECT
           CASE
-            WHEN DATEDIFF(?, d.due_date) BETWEEN 1 AND 30 THEN '1-30'
-            WHEN DATEDIFF(?, d.due_date) BETWEEN 31 AND 60 THEN '31-60'
-            WHEN DATEDIFF(?, d.due_date) BETWEEN 61 AND 90 THEN '61-90'
+            WHEN DATEDIFF(DATE(d.updated_at), d.due_date) BETWEEN 1 AND 30 THEN '1-30'
+            WHEN DATEDIFF(DATE(d.updated_at), d.due_date) BETWEEN 31 AND 60 THEN '31-60'
+            WHEN DATEDIFF(DATE(d.updated_at), d.due_date) BETWEEN 61 AND 90 THEN '61-90'
             ELSE '>90'
           END AS bucket,
           COUNT(*) AS count,
@@ -1142,10 +1143,8 @@ export class DebtStatisticService {
         GROUP BY bucket
         ORDER BY CASE bucket WHEN '1-30' THEN 1 WHEN '31-60' THEN 2 WHEN '61-90' THEN 3 ELSE 4 END
       `;
-      // Placeholders:
-      //  - 3 for SELECT DATEDIFF
-      //  - WHERE DATEDIFF placeholder provided in ...arr (arr starts with D)
-      const rows = await this.debtRepository.query(query, [D, D, D, ...arr]);
+      // Placeholders: provided in ...arr
+      const rows = await this.debtRepository.query(query, [...arr]);
       return rows.map((r: any) => ({ range: r.bucket, count: Number(r.count) || 0, amount: Number(r.amount) || 0 }));
     }
   }
@@ -1309,7 +1308,8 @@ export class DebtStatisticService {
         filters.push('ds.customer_code = ?');
         arr.push(params.customerCode);
       }
-      const caseExpr = buildCase('DATEDIFF(?, ds.pay_later)');
+  // Use statistic_date like aging logic so case expressions reference snapshot date
+  const caseExpr = buildCase('DATEDIFF(ds.statistic_date, ds.pay_later)');
       const query = `
         SELECT rng AS bucket, COUNT(*) AS count, SUM(ds.remaining) AS amount
         FROM (
@@ -1330,7 +1330,8 @@ export class DebtStatisticService {
         ORDER BY CASE rng ${ranges.map((r, idx) => `WHEN '${r.label}' THEN ${idx + 1}`).join(' ')} ELSE 999 END
       `;
       // Placeholders: one for caseExpr (DATEDIFF), one for latest.snap_date compare
-      const rows = await this.debtStatisticRepository.query(query, [D, D, ...arr]);
+  // No extra D placeholders needed because caseExpr uses ds.statistic_date
+  const rows = await this.debtStatisticRepository.query(query, [D, ...arr]);
       return rows.map((r: any) => ({ range: r.bucket, count: Number(r.count) || 0, amount: Number(r.amount) || 0 }));
     } else {
       const where: string[] = [
@@ -1347,7 +1348,8 @@ export class DebtStatisticService {
         where.push('dc.customer_code = ?');
         arr.push(params.customerCode);
       }
-      const caseExpr = buildCase('DATEDIFF(?, d.pay_later)');
+  // Use DATE(updated_at) like aging logic for today's calculation
+  const caseExpr = buildCase('DATEDIFF(DATE(d.updated_at), d.pay_later)');
       const query = `
         SELECT rng AS bucket, COUNT(*) AS count, SUM(d.remaining) AS amount
         FROM (
@@ -1362,8 +1364,8 @@ export class DebtStatisticService {
           .map((r, idx) => `WHEN '${r.label}' THEN ${idx + 1}`)
           .join(' ')} ELSE 999 END
       `;
-      // Placeholders: one for caseExpr (DATEDIFF)
-      const rows = await this.debtRepository.query(query, [D, ...arr]);
+      // No extra D placeholders needed because caseExpr uses DATE(d.updated_at)
+      const rows = await this.debtRepository.query(query, [...arr]);
       return rows.map((r: any) => ({ range: r.bucket, count: Number(r.count) || 0, amount: Number(r.amount) || 0 }));
     }
   }

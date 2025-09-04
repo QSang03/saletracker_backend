@@ -126,8 +126,8 @@ export class DebtStatisticController {
   @Get('pay-later-delay-daily')
   @UseGuards(JwtAuthGuard)
   async getPayLaterDelayDaily(
-    @Query('from') fromDate: string,
-    @Query('to') toDate: string,
+    @Query('from') fromDate?: string,
+    @Query('to') toDate?: string,
     @Query('buckets') buckets: string = '7,14,30',
     @Query('employeeCode') employeeCode?: string,
     @Query('customerCode') customerCode?: string,
@@ -137,6 +137,11 @@ export class DebtStatisticController {
       .map((b) => parseInt(b.trim(), 10))
       .filter((n) => !Number.isNaN(n))
       .sort((a, b) => a - b);
+    if (!fromDate || !toDate) {
+      const today = new Date().toISOString().split('T')[0];
+      fromDate = fromDate || today;
+      toDate = toDate || today;
+    }
     return this.debtStatisticService.getPayLaterDelayDaily(fromDate, toDate, bucketNumbers, { employeeCode, customerCode });
   }
 
