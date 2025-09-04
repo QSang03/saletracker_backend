@@ -885,36 +885,33 @@ export class DebtStatisticService {
     const dates = this.generateDateRange(fromDate, effectiveToDate).filter((d) => new Date(d).getDay() !== 0); // skip Sunday
     const results: Array<{ date: string; range: string; count: number; amount: number }> = [];
     for (const D of dates) {
-      if (D < today) {
+  if (D < today) {
+        // Use exact snapshot for the requested date (match modal behavior)
         const filters: string[] = [
           "ds.status <> 'paid'",
           'ds.due_date IS NOT NULL',
-          'DATEDIFF(?, ds.due_date) > 0',
+          'DATEDIFF(ds.statistic_date, ds.due_date) > 0',
         ];
-        const args: any[] = [D];
+        const args: any[] = [];
         if (opts.employeeCode) { filters.push('ds.employee_code_raw = ?'); args.push(opts.employeeCode); }
         if (opts.customerCode) { filters.push('ds.customer_code = ?'); args.push(opts.customerCode); }
         const query = `
           SELECT
             CASE
-              WHEN DATEDIFF(?, ds.due_date) BETWEEN 1 AND 30 THEN '1-30'
-              WHEN DATEDIFF(?, ds.due_date) BETWEEN 31 AND 60 THEN '31-60'
-              WHEN DATEDIFF(?, ds.due_date) BETWEEN 61 AND 90 THEN '61-90'
+              WHEN DATEDIFF(ds.statistic_date, ds.due_date) BETWEEN 1 AND 30 THEN '1-30'
+              WHEN DATEDIFF(ds.statistic_date, ds.due_date) BETWEEN 31 AND 60 THEN '31-60'
+              WHEN DATEDIFF(ds.statistic_date, ds.due_date) BETWEEN 61 AND 90 THEN '61-90'
               ELSE '>90'
             END AS bucket,
             COUNT(*) AS count,
             SUM(ds.remaining) AS amount
           FROM debt_statistics ds
-          INNER JOIN (
-            SELECT original_debt_id, MAX(statistic_date) AS snap_date
-            FROM debt_statistics
-            WHERE statistic_date <= ?
-            GROUP BY original_debt_id
-          ) latest ON latest.original_debt_id = ds.original_debt_id AND latest.snap_date = ds.statistic_date
-          WHERE ${filters.join(' AND ')}
+          WHERE ds.statistic_date = ?
+            AND ${filters.join(' AND ')}
           GROUP BY bucket`;
-        const rows = await this.debtStatisticRepository.query(query, [D, D, D, D, ...args]);
-        for (const r of rows) results.push({ date: D, range: r.bucket, count: Number(r.count) || 0, amount: Number(r.amount) || 0 });
+  const rows = await this.debtStatisticRepository.query(query, [D, ...args]);
+  console.debug('[getAgingDaily] historical rows for', D, rows);
+  for (const r of rows) results.push({ date: D, range: r.bucket, count: Number(r.count) || 0, amount: Number(r.amount) || 0 });
       } else {
         const where: string[] = [
           'd.deleted_at IS NULL',
@@ -940,8 +937,9 @@ export class DebtStatisticService {
           LEFT JOIN debt_configs dc ON d.debt_config_id = dc.id
           WHERE ${where.join(' AND ')}
           GROUP BY bucket`;
-        const rows = await this.debtRepository.query(query, [D, D, D, ...arr]);
-        for (const r of rows) results.push({ date: D, range: r.bucket, count: Number(r.count) || 0, amount: Number(r.amount) || 0 });
+  const rows = await this.debtRepository.query(query, [D, D, D, ...arr]);
+  console.debug('[getAgingDaily] current rows for', D, rows);
+  for (const r of rows) results.push({ date: D, range: r.bucket, count: Number(r.count) || 0, amount: Number(r.amount) || 0 });
       }
     }
     return results;
@@ -963,22 +961,18 @@ export class DebtStatisticService {
     const results: Array<{ date: string; range: string; count: number; amount: number }> = [];
     for (const D of dates) {
       if (D < today) {
-        const where: string[] = ["ds.status <> 'paid'", 'ds.pay_later IS NOT NULL'];
-        const arr: any[] = [];
-        if (options.employeeCode) { where.push('ds.employee_code_raw = ?'); arr.push(options.employeeCode); }
-        if (options.customerCode) { where.push('ds.customer_code = ?'); arr.push(options.customerCode); }
+        // Use exact snapshot for the requested date to match modal
+        const whereClauses: string[] = ["ds.status <> 'paid'", 'ds.pay_later IS NOT NULL'];
+        const params: any[] = [];
+        if (options.employeeCode) { whereClauses.push('ds.employee_code_raw = ?'); params.push(options.employeeCode); }
+        if (options.customerCode) { whereClauses.push('ds.customer_code = ?'); params.push(options.customerCode); }
         const parts = ranges.map((r) => {
-          const cond = r.max == null ? `DATEDIFF(?, t.pay_later) >= ${r.min}` : `DATEDIFF(?, t.pay_later) BETWEEN ${r.min} AND ${r.max}`;
-          return `SUM(CASE WHEN ${cond} THEN 1 ELSE 0 END) AS cnt_${r.label.replace(/[^a-zA-Z0-9_]/g, '_')}, SUM(CASE WHEN ${cond} THEN t.remaining ELSE 0 END) AS amt_${r.label.replace(/[^a-zA-Z0-9_]/g, '_')}`;
+          const cond = r.max == null ? `DATEDIFF(?, ds.pay_later) >= ${r.min}` : `DATEDIFF(?, ds.pay_later) BETWEEN ${r.min} AND ${r.max}`;
+          return `SUM(CASE WHEN ${cond} THEN 1 ELSE 0 END) AS cnt_${r.label.replace(/[^a-zA-Z0-9_]/g, '_')}, SUM(CASE WHEN ${cond} THEN ds.remaining ELSE 0 END) AS amt_${r.label.replace(/[^a-zA-Z0-9_]/g, '_')}`;
         }).join(',');
-        const query = `SELECT ${parts} FROM (
-          SELECT ds.* FROM debt_statistics ds INNER JOIN (
-            SELECT original_debt_id, MAX(statistic_date) AS snap_date FROM debt_statistics WHERE statistic_date <= ? GROUP BY original_debt_id
-          ) latest ON latest.original_debt_id = ds.original_debt_id AND latest.snap_date = ds.statistic_date WHERE ${where.join(' AND ')}
-        ) t`;
-        // There are 2 placeholders (count/amount) per bucket in 'parts' plus 1 for the inner snapshot <= ?
-        const diffParams = new Array(ranges.length * 2).fill(D);
-        const row = (await this.debtStatisticRepository.query(query, [...diffParams, D, ...arr]))[0] || {};
+        const query = `SELECT ${parts} FROM debt_statistics ds WHERE ${whereClauses.join(' AND ')}`;
+        const row = (await this.debtStatisticRepository.query(query, [...params, D]))[0] || {};
+        console.debug('[getPayLaterDelayDaily] historical row for', D, row);
         for (const r of ranges) {
           const key = r.label.replace(/[^a-zA-Z0-9_]/g, '_');
           results.push({ date: D, range: r.label, count: Number(row[`cnt_${key}`]) || 0, amount: Number(row[`amt_${key}`]) || 0 });
@@ -1006,6 +1000,7 @@ export class DebtStatisticService {
         // There are 2 placeholders (count/amount) per bucket in 'parts'
         const diffParams = new Array(ranges.length * 2).fill(D);
         const row = (await this.debtRepository.query(query, [...diffParams, ...arr]))[0] || {};
+        console.debug('[getPayLaterDelayDaily] current row for', D, row);
         for (const r of ranges) {
           const key = r.label.replace(/[^a-zA-Z0-9_]/g, '_');
           results.push({ date: D, range: r.label, count: Number(row[`cnt_${key}`]) || 0, amount: Number(row[`amt_${key}`]) || 0 });
@@ -1182,17 +1177,18 @@ export class DebtStatisticService {
     }
 
     if (fromDate < today) {
-      const endDateForHistory = effectiveToDate < today
-        ? effectiveToDate
-        : new Date(new Date(today).getTime() - 24 * 60 * 60 * 1000)
-            .toISOString()
-            .split('T')[0];
+      const endHistory =
+        effectiveToDate < today
+          ? effectiveToDate
+          : new Date(new Date(today).getTime() - 24 * 60 * 60 * 1000)
+              .toISOString()
+              .split('T')[0];
 
       const whereClauses: string[] = [
         'statistic_date >= ? AND statistic_date <= ? AND status <> "paid"',
         'pay_later IS NOT NULL',
       ];
-      const params: any[] = [fromDate, endDateForHistory];
+      const params: any[] = [fromDate, endHistory];
       if (options.employeeCode) {
         whereClauses.push('employee_code_raw = ?');
         params.push(options.employeeCode);
@@ -1213,10 +1209,10 @@ export class DebtStatisticService {
         })
         .join(',');
 
-      const query = `SELECT ${selects} FROM debt_statistics WHERE ${whereClauses.join(' AND ')}`;
-      const rows = await this.debtStatisticRepository.query(query, params);
-      if (rows && rows[0]) {
-        const row = rows[0];
+      const aggQuery = `SELECT ${selects} FROM debt_statistics WHERE ${whereClauses.join(' AND ')}`;
+      const aggRows = await this.debtStatisticRepository.query(aggQuery, params);
+      if (aggRows && aggRows[0]) {
+        const row = aggRows[0];
         for (const r of ranges) {
           const key = r.label.replace(/[^a-zA-Z0-9_]/g, '_');
           const cnt = Number(row[`cnt_${key}`]) || 0;

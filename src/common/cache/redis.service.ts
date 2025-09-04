@@ -30,11 +30,24 @@ export class RedisService implements OnModuleDestroy {
     });
   }
 
+  // ✅ THÊM: Hàm helper để xử lý encoding cho Unicode
+  private serializeForRedis(value: any): string {
+    // Sử dụng Buffer để đảm bảo Unicode được xử lý đúng
+    const jsonString = JSON.stringify(value);
+    return Buffer.from(jsonString, 'utf8').toString('utf8');
+  }
+
+  private deserializeFromRedis(value: string): any {
+    // Sử dụng Buffer để đảm bảo Unicode được xử lý đúng
+    const utf8String = Buffer.from(value, 'utf8').toString('utf8');
+    return JSON.parse(utf8String);
+  }
+
   // Basic cache operations
   async get<T>(key: string): Promise<T | null> {
     try {
       const value = await this.redis.get(key);
-      return value ? JSON.parse(value) : null;
+      return value ? this.deserializeFromRedis(value) : null;
     } catch (error) {
       this.logger.error(`Error getting key ${key}:`, error);
       return null;
@@ -43,7 +56,7 @@ export class RedisService implements OnModuleDestroy {
 
   async set(key: string, value: any, ttl?: number): Promise<void> {
     try {
-      const serializedValue = JSON.stringify(value);
+      const serializedValue = this.serializeForRedis(value);
       if (ttl) {
         await this.redis.setex(key, ttl, serializedValue);
       } else {
@@ -76,7 +89,7 @@ export class RedisService implements OnModuleDestroy {
   async hget<T>(key: string, field: string): Promise<T | null> {
     try {
       const value = await this.redis.hget(key, field);
-      return value ? JSON.parse(value) : null;
+      return value ? this.deserializeFromRedis(value) : null;
     } catch (error) {
       this.logger.error(`Error getting hash field ${key}:${field}:`, error);
       return null;
@@ -85,7 +98,7 @@ export class RedisService implements OnModuleDestroy {
 
   async hset(key: string, field: string, value: any): Promise<void> {
     try {
-      await this.redis.hset(key, field, JSON.stringify(value));
+      await this.redis.hset(key, field, this.serializeForRedis(value));
     } catch (error) {
       this.logger.error(`Error setting hash field ${key}:${field}:`, error);
     }
@@ -284,7 +297,7 @@ export class RedisService implements OnModuleDestroy {
   async setCellSelections(userId: string, selections: any, roomId: string): Promise<void> {
     const key = `sched:cellSelections:${roomId}`;
     const dataToStore = { ...selections, userId, updatedAt: new Date().toISOString() };
-    await this.hset(key, `user:${userId}`, dataToStore);     // 👈 đưa OBJECT, wrapper tự stringify
+    await this.hset(key, `user:${userId}`, dataToStore);     // ✅ SỬA: Sử dụng helper function để xử lý Unicode
     await this.getClient().expire(key, 1800);
   }
 
