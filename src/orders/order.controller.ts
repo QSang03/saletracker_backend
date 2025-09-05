@@ -42,7 +42,7 @@ export class OrderController {
     @Query('departments') departments?: string,
     @Query('products') products?: string,
     @Query('warningLevel') warningLevel?: string,
-    @Query('sortField') sortField?: 'quantity' | 'unit_price' | 'created_at',
+  @Query('sortField') sortField?: 'quantity' | 'unit_price' | 'created_at' | 'conversation_start' | 'conversation_end',
     @Query('sortDirection') sortDirection?: 'asc' | 'desc',
   @Query('quantity') quantity?: string,
   @Query('conversationType') conversationType?: string,

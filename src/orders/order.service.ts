@@ -27,9 +27,11 @@ interface OrderFilters {
   sortField?:
     | 'quantity'
     | 'unit_price'
-    | 'extended'
-    | 'dynamicExtended'
-    | 'created_at'
+  | 'extended'
+  | 'dynamicExtended'
+  | 'created_at'
+  | 'conversation_start'
+  | 'conversation_end'
     | null;
   sortDirection?: 'asc' | 'desc' | null;
   user?: any; // truyền cả user object
@@ -981,13 +983,28 @@ export class OrderService {
     // MySQL expression: DATEDIFF(DATE_ADD(DATE(details.created_at), INTERVAL COALESCE(details.extended,0) DAY), CURDATE())
     const dynamicExpr = `DATEDIFF(DATE_ADD(DATE(details.created_at), INTERVAL COALESCE(details.extended,0) DAY), CURDATE())`;
 
+    // Compute conversation_start and conversation_end: try to extract the minimal/maximal timestamp from metadata.messages
+    // We add selected fields 'conversation_start' and 'conversation_end' as DATETIME parsed from JSON timestamps
+    // Robust parsing: strip fractional seconds and trailing Z if present, then parse
+    // Use LEFT(...,19) to get 'YYYY-MM-DDTHH:MM:SS' which STR_TO_DATE can parse
+    const convoStartExpr = `(
+      SELECT MIN(STR_TO_DATE(LEFT(JSON_UNQUOTE(JSON_EXTRACT(m.value, '$.timestamp')), 19), '%Y-%m-%dT%H:%i:%s'))
+      FROM JSON_TABLE(details.metadata, '$.messages[*]' COLUMNS (value JSON PATH '$')) AS m
+    )`;
+    const convoEndExpr = `(
+      SELECT MAX(STR_TO_DATE(LEFT(JSON_UNQUOTE(JSON_EXTRACT(m.value, '$.timestamp')), 19), '%Y-%m-%dT%H:%i:%s'))
+      FROM JSON_TABLE(details.metadata, '$.messages[*]' COLUMNS (value JSON PATH '$')) AS m
+    )`;
+
     const qb = this.orderDetailRepository
       .createQueryBuilder('details')
       .leftJoinAndSelect('details.order', 'order')
       .leftJoinAndSelect('details.product', 'product')
       .leftJoinAndSelect('order.sale_by', 'sale_by')
       .leftJoinAndSelect('sale_by.departments', 'sale_by_departments')
-      .addSelect(`${dynamicExpr}`, 'dynamicExtended');
+  .addSelect(`${dynamicExpr}`, 'dynamicExtended')
+  .addSelect(convoStartExpr, 'conversation_start')
+  .addSelect(convoEndExpr, 'conversation_end');
 
     // Permissions
     const allowedUserIds = await this.getUserIdsByRole(user);
@@ -1082,8 +1099,15 @@ export class OrderService {
 
     // Sorting
     const dir = sortDirection?.toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+    // If no sortField provided, default to conversation_start as requested
     if (sortField === 'created_at') {
       qb.orderBy('details.created_at', dir).addOrderBy('details.id', 'DESC');
+    } else if (sortField === 'conversation_start' || !sortField) {
+      // Order by computed conversation_start; if null, fallback to details.created_at
+      qb.orderBy('conversation_start', dir).addOrderBy('details.created_at', 'DESC');
+    } else if (sortField === 'conversation_end') {
+      // Order by computed conversation_end; if null, fallback to details.created_at
+      qb.orderBy('conversation_end', dir).addOrderBy('details.created_at', 'DESC');
     } else if (sortField === 'quantity') {
       qb.orderBy('details.quantity', dir).addOrderBy('details.created_at', 'DESC');
     } else if (sortField === 'unit_price') {
@@ -1091,6 +1115,13 @@ export class OrderService {
     } else {
       // default: dynamicExtended then created_at desc
       qb.orderBy('dynamicExtended', dir).addOrderBy('details.created_at', 'DESC');
+    }
+
+    // Log generated SQL for debugging filter behavior
+    try {
+      this.logger.debug(`OrderService.findAllPaginated - SQL: ${qb.getSql()}`);
+    } catch (e) {
+      // ignore if getSql fails for some QB configurations
     }
 
     // Pagination with count at DB level
