@@ -198,6 +198,7 @@ export class OrderDetailController {
   @Query('products') products?: string,
   @Query('warningLevel') warningLevel?: string,
   @Query('quantity') quantity?: string,
+  @Query('countMode') countMode?: 'customer' | 'sale',
     @Req() req?: any,
   ) {
     // Parse và validate employeeId
@@ -243,6 +244,7 @@ export class OrderDetailController {
       quantity,
       employeeId: parsedEmployeeId,
       departmentId: parsedDepartmentId,
+  countMode,
       user: req?.user,
     });
     

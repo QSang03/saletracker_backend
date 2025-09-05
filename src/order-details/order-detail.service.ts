@@ -1397,6 +1397,7 @@ export class OrderDetailService {
     quantity?: string;
     employeeId?: number;
     departmentId?: number;
+  countMode?: 'customer' | 'sale';
     user?: any;
   }): Promise<number> {
     // Lấy toàn bộ bản ghi chi tiết theo các filter cơ bản bằng SQL
@@ -1553,23 +1554,38 @@ export class OrderDetailService {
       }
     }
 
-    // Đếm unique theo cặp (customer_name + sale_id)
-    const uniquePairs = new Set<string>();
-    for (const od of filtered) {
-      const name = (od.customer_name || '').trim();
-      if (!name) continue;
-      const saleId = od.order?.sale_by?.id ?? 'null';
-      uniquePairs.add(`${name}__${saleId}`);
+    // Đếm theo chế độ: default là theo cặp (customer_name + sale_id)
+    let count = 0;
+    if (filters?.countMode === 'sale') {
+      // Đếm số sale unique trong tập sau filter (không quan tâm khách hàng)
+      const saleSet = new Set<number>();
+      for (const od of filtered) {
+        const saleId = od.order?.sale_by?.id;
+        if (saleId) saleSet.add(saleId);
+      }
+      count = saleSet.size;
+    } else {
+      // Default: unique pairs (customer_name + sale_id)
+      const uniquePairs = new Set<string>();
+      for (const od of filtered) {
+        const name = (od.customer_name || '').trim();
+        if (!name) continue;
+        const saleId = od.order?.sale_by?.id ?? 'null';
+        uniquePairs.add(`${name}__${saleId}`);
+      }
+      count = uniquePairs.size;
     }
 
-    const count = uniquePairs.size;
-
     // Debug: Log để kiểm tra dữ liệu
+    const sample = filters?.countMode === 'sale' ?
+      Array.from(new Set(filtered.map((od) => od.order?.sale_by?.id))).slice(0, 5) :
+      Array.from(new Set(filtered.map((od) => `${(od.customer_name||'').trim()}__${od.order?.sale_by?.id}`))).slice(0, 5);
     console.log('🔍 Customer Count Debug:', {
       totalRecords: rows.length,
       afterBlacklistAndFilters: filtered.length,
-      uniquePairs: count,
-      sampleCustomers: Array.from(uniquePairs).slice(0, 5),
+      count,
+      sample,
+      mode: filters?.countMode || 'customer',
     });
     return count;
   }

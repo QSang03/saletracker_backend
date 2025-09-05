@@ -942,67 +942,81 @@ export class OrderService {
       departments,
       products,
       warningLevel,
-  quantity,
+      quantity,
       sortField,
       sortDirection,
-  user,
-  includeHidden,
+      user,
+      includeHidden,
     } = filters;
+
     const skip = (page - 1) * pageSize;
 
-    const queryBuilder = this.orderDetailRepository
+    // Precompute blacklist lists (use service methods which are optimized)
+    let blacklistForSql: string[] | undefined;
+    if (user && user.roles) {
+      const roleNames = (user.roles || []).map((r: any) =>
+        typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
+      );
+      const isAdminUser = roleNames.includes('admin');
+      const isManager = roleNames.some((r: string) => r.startsWith('manager-'));
+
+      if (!isAdminUser) {
+        if (isManager) {
+          const allowedUserIds = (await this.getUserIdsByRole(user)) || [];
+          const map = await this.orderBlacklistService.getBlacklistedContactsForUsers(
+            allowedUserIds,
+          );
+          const merged = new Set<string>();
+          for (const set of map.values()) for (const id of set) merged.add(id);
+          blacklistForSql = Array.from(merged);
+        } else {
+          blacklistForSql = await this.orderBlacklistService.getBlacklistedContactsForUser(
+            user.id,
+          );
+        }
+      }
+    }
+
+    // Build query: compute dynamicExtended in SQL to allow filtering/sorting in DB
+    // MySQL expression: DATEDIFF(DATE_ADD(DATE(details.created_at), INTERVAL COALESCE(details.extended,0) DAY), CURDATE())
+    const dynamicExpr = `DATEDIFF(DATE_ADD(DATE(details.created_at), INTERVAL COALESCE(details.extended,0) DAY), CURDATE())`;
+
+    const qb = this.orderDetailRepository
       .createQueryBuilder('details')
       .leftJoinAndSelect('details.order', 'order')
       .leftJoinAndSelect('details.product', 'product')
       .leftJoinAndSelect('order.sale_by', 'sale_by')
-      .leftJoinAndSelect('sale_by.departments', 'sale_by_departments');
+      .leftJoinAndSelect('sale_by.departments', 'sale_by_departments')
+      .addSelect(`${dynamicExpr}`, 'dynamicExtended');
 
-    // Phân quyền xem
+    // Permissions
     const allowedUserIds = await this.getUserIdsByRole(user);
     if (allowedUserIds !== null) {
       if (allowedUserIds.length === 0) {
-        queryBuilder.andWhere('1 = 0');
-      } else {
-        queryBuilder.andWhere('sale_by.id IN (:...userIds)', {
-          userIds: allowedUserIds,
-        });
+        return { data: [], total: 0, page, pageSize };
       }
+      qb.andWhere('sale_by.id IN (:...userIds)', { userIds: allowedUserIds });
     }
 
-    // Quantity filter (minimum quantity)
+    // Basic filters
     if (quantity !== undefined && quantity !== null && String(quantity).trim() !== '') {
       const minQty = parseInt(String(quantity), 10);
-      if (!isNaN(minQty) && minQty > 0) {
-  // Log for debugging why quantity filter may not appear to work
-  this.logger.debug(`Applying quantity filter: details.quantity >= ${minQty}`);
-  queryBuilder.andWhere('details.quantity >= :minQty', { minQty });
-      }
+      if (!isNaN(minQty) && minQty > 0) qb.andWhere('details.quantity >= :minQty', { minQty });
     }
 
-    // Apply filters as before
     if (search) {
-      queryBuilder.andWhere(
-        '(CAST(details.id AS CHAR) LIKE :search OR details.customer_name LIKE :search OR details.raw_item LIKE :search)',
-        { search: `%${search}%` },
+      qb.andWhere(
+        '(CAST(details.id AS CHAR) LIKE :search OR LOWER(details.customer_name) LIKE LOWER(:search) OR LOWER(details.raw_item) LIKE LOWER(:search))',
+        { search: `%${String(search).trim()}%` },
       );
     }
 
     if (status && status.trim()) {
-      // ✅ SỬA: Kiểm tra xem có phải CSV string không
       if (status.includes(',')) {
-        // Multiple statuses - split thành array
-        const statusArray = status
-          .split(',')
-          .map((s) => s.trim())
-          .filter((s) => s);
-        if (statusArray.length > 0) {
-          queryBuilder.andWhere('details.status IN (:...statuses)', {
-            statuses: statusArray,
-          });
-        }
+        const statusArray = status.split(',').map((s) => s.trim()).filter((s) => s);
+        if (statusArray.length > 0) qb.andWhere('details.status IN (:...statuses)', { statuses: statusArray });
       } else {
-        // Single status - giữ logic cũ
-        queryBuilder.andWhere('details.status = :status', { status });
+        qb.andWhere('details.status = :status', { status });
       }
     }
 
@@ -1010,241 +1024,81 @@ export class OrderService {
       const startDate = new Date(date);
       const endDate = new Date(date);
       endDate.setHours(23, 59, 59, 999);
-      queryBuilder.andWhere(
-        'order.created_at BETWEEN :startDate AND :endDate',
-        { startDate, endDate },
-      );
+      qb.andWhere('order.created_at BETWEEN :startDate AND :endDate', { startDate, endDate });
     }
 
     if (dateRange && dateRange.start && dateRange.end) {
       const startDate = new Date(dateRange.start);
       const endDate = new Date(dateRange.end);
       endDate.setHours(23, 59, 59, 999);
-      queryBuilder.andWhere(
-        'order.created_at BETWEEN :rangeStart AND :rangeEnd',
-        { rangeStart: startDate, rangeEnd: endDate },
-      );
+      qb.andWhere('order.created_at BETWEEN :rangeStart AND :rangeEnd', { rangeStart: startDate, rangeEnd: endDate });
     }
 
-    if (employee) {
-      queryBuilder.andWhere('sale_by.id = :employee', { employee });
-    }
+    if (employee) qb.andWhere('sale_by.id = :employee', { employee });
 
     if (employees) {
-      const employeeIds = employees
-        .split(',')
-        .map((id) => parseInt(id.trim(), 10))
-        .filter((id) => !isNaN(id));
-      if (employeeIds.length > 0) {
-        queryBuilder.andWhere('sale_by.id IN (:...employeeIds)', {
-          employeeIds,
-        });
-      }
+      const employeeIds = employees.split(',').map((id) => parseInt(id.trim(), 10)).filter((id) => !isNaN(id));
+      if (employeeIds.length > 0) qb.andWhere('sale_by.id IN (:...employeeIds)', { employeeIds });
     }
 
     if (departments) {
-      const departmentIds = departments
-        .split(',')
-        .map((id) => parseInt(id.trim(), 10))
-        .filter((id) => !isNaN(id));
+      const departmentIds = departments.split(',').map((id) => parseInt(id.trim(), 10)).filter((id) => !isNaN(id));
       if (departmentIds.length > 0) {
-        queryBuilder.andWhere(
-          `
-        sale_by_departments.id IN (:...departmentIds)
-        AND sale_by_departments.server_ip IS NOT NULL
-        AND TRIM(sale_by_departments.server_ip) <> ''
-      `,
+        qb.andWhere(
+          `sale_by_departments.id IN (:...departmentIds) AND sale_by_departments.server_ip IS NOT NULL AND TRIM(sale_by_departments.server_ip) <> ''`,
           { departmentIds },
         );
       }
     }
 
     if (products) {
-      const productIds = products
-        .split(',')
-        .map((id) => parseInt(id.trim(), 10))
-        .filter((id) => !isNaN(id));
-      if (productIds.length > 0) {
-        queryBuilder.andWhere('details.product_id IN (:...productIds)', {
-          productIds,
-        });
-      }
+      const productIds = products.split(',').map((id) => parseInt(id.trim(), 10)).filter((id) => !isNaN(id));
+      if (productIds.length > 0) qb.andWhere('details.product_id IN (:...productIds)', { productIds });
     }
 
-    // ❌ BỎ phần filter warningLevel ở đây vì giờ cần dùng dynamicExtended
-    // if (warningLevel) {
-    //   const levels = warningLevel
-    //     .split(',')
-    //     .map((level) => parseInt(level.trim(), 10))
-    //     .filter((level) => !isNaN(level));
-    //   if (levels.length > 0) {
-    //     queryBuilder.andWhere('details.extended IN (:...levels)', { levels });
-    //   }
-    // }
-
-    // Chuẩn bị data blacklist theo role
-    let managerBlacklistMap: Map<number, Set<string>> | undefined;
-    let userBlacklisted: string[] | undefined;
-
-    if (user && user.roles) {
-      const roleNames = (user.roles || []).map((r: any) =>
-        typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
-      );
-      const isAdmin = roleNames.includes('admin');
-      const isManager = roleNames.some((r: string) => r.startsWith('manager-'));
-
-      if (!isAdmin) {
-        if (isManager) {
-          // Manager: không được thấy các đơn của khách bị blacklist bởi bất kỳ user nào trong phạm vi họ có thể xem (allowedUserIds)
-          managerBlacklistMap =
-            await this.orderBlacklistService.getBlacklistedContactsForUsers(
-              allowedUserIds || [],
-            );
-        } else {
-          // User: ẩn các đơn của khách nằm trong blacklist của chính họ
-          userBlacklisted =
-            await this.orderBlacklistService.getBlacklistedContactsForUser(
-              user.id,
-            );
-        }
-      }
-    }
-
-    // LUÔN lấy tất cả data để áp dụng unified sorting
-    // Exclude hidden items from active lists unless admin explicitly requests includeHidden
+    // Hidden items
     const wantsHidden = (includeHidden || '').toString().toLowerCase();
     const includeHiddenFlag = wantsHidden === '1' || wantsHidden === 'true';
-    const isAdmin = this.isAdmin(user);
-    if (!(includeHiddenFlag && isAdmin)) {
-      queryBuilder.andWhere('details.hidden_at IS NULL');
+    const isAdminUser = this.isAdmin(user);
+    if (!(includeHiddenFlag && isAdminUser)) {
+      qb.andWhere('details.hidden_at IS NULL');
     }
 
-  const allData = await queryBuilder.getMany();
-  this.logger.debug(`OrderService.findAllPaginated: fetched ${allData.length} rows from DB (after SQL filters).`);
-
-    // Tính calcDynamicExtended cho tất cả data
-    const dataWithDynamicExtended = allData.map((orderDetail) => ({
-      ...orderDetail,
-      dynamicExtended: this.calcDynamicExtended(
-        orderDetail.created_at || null,
-        orderDetail.extended,
-      ),
-    }));
-
-    // Áp dụng blacklist filter theo role
-    let filteredData = dataWithDynamicExtended;
-
-    if (user && !roleNamesIncludes(user, 'admin')) {
-      if (roleNamesSome(user, (r) => r.startsWith('manager-'))) {
-        if (managerBlacklistMap && (allowedUserIds?.length || 0) > 0) {
-          const blacklistedSet = new Set<string>();
-          for (const uid of allowedUserIds!) {
-            const set = managerBlacklistMap.get(uid);
-            if (set) for (const cid of set) blacklistedSet.add(cid);
-          }
-          const filterFn = (od: OrderDetail) => {
-            const cid = this.extractCustomerIdFromMetadata(od.metadata);
-            return !cid || !blacklistedSet.has(cid);
-          };
-          filteredData = filteredData.filter(filterFn);
-        }
-      } else {
-        if (userBlacklisted && userBlacklisted.length > 0) {
-          const set = new Set(userBlacklisted);
-          const filterFn = (od: OrderDetail) => {
-            const cid = this.extractCustomerIdFromMetadata(od.metadata);
-            return !cid || !set.has(cid);
-          };
-          filteredData = filteredData.filter(filterFn);
-        }
-      }
+    // Apply blacklist filtering in SQL when available
+    if (blacklistForSql && blacklistForSql.length > 0) {
+      // Use JSON_UNQUOTE to compare JSON value with plain strings
+      qb.andWhere(`(details.metadata IS NULL OR JSON_UNQUOTE(JSON_EXTRACT(details.metadata, '$.customer_id')) NOT IN (:...blacklist))`, {
+        blacklist: blacklistForSql,
+      });
     }
 
-    // ✅ THÊM: Filter theo warningLevel dựa trên dynamicExtended
+    // Warning level filter based on dynamicExtended
     if (warningLevel) {
-      const levels = warningLevel
-        .split(',')
-        .map((level) => parseInt(level.trim(), 10))
-        .filter((level) => !isNaN(level));
+      const levels = warningLevel.split(',').map((l) => parseInt(l.trim(), 10)).filter((n) => !isNaN(n));
       if (levels.length > 0) {
-        const levelSet = new Set(levels);
-        filteredData = filteredData.filter((orderDetail) => {
-          const dynamicExt = orderDetail.dynamicExtended;
-          return dynamicExt !== null && levelSet.has(dynamicExt);
-        });
+        qb.andWhere(`${dynamicExpr} IN (:...levels)`, { levels });
       }
     }
 
-    const actualSortDirection =
-      sortDirection?.toLowerCase() === 'asc' ? 'asc' : 'desc';
-
-    // LUÔN sort theo calcDynamicExtended
+    // Sorting
+    const dir = sortDirection?.toLowerCase() === 'asc' ? 'ASC' : 'DESC';
     if (sortField === 'created_at') {
-      // Sort theo created_at
-      filteredData.sort((a, b) => {
-        const aTime = new Date(a.created_at || 0).getTime();
-        const bTime = new Date(b.created_at || 0).getTime();
-        return actualSortDirection === 'asc' ? aTime - bTime : bTime - aTime;
-      });
+      qb.orderBy('details.created_at', dir).addOrderBy('details.id', 'DESC');
     } else if (sortField === 'quantity') {
-      // ✅ THÊM: Sort theo quantity
-      filteredData.sort((a, b) => {
-        const aQty = a.quantity || 0;
-        const bQty = b.quantity || 0;
-        const qtyDiff =
-          actualSortDirection === 'asc' ? aQty - bQty : bQty - aQty;
-
-        // Nếu quantity bằng nhau, sort theo created_at giảm dần
-        if (qtyDiff === 0) {
-          const aTime = new Date(a.created_at || 0).getTime();
-          const bTime = new Date(b.created_at || 0).getTime();
-          return bTime - aTime;
-        }
-        return qtyDiff;
-      });
+      qb.orderBy('details.quantity', dir).addOrderBy('details.created_at', 'DESC');
     } else if (sortField === 'unit_price') {
-      // ✅ THÊM: Sort theo unit_price
-      filteredData.sort((a, b) => {
-        const aPrice = a.unit_price || 0;
-        const bPrice = b.unit_price || 0;
-        const priceDiff =
-          actualSortDirection === 'asc' ? aPrice - bPrice : bPrice - aPrice;
-
-        // Nếu unit_price bằng nhau, sort theo created_at giảm dần
-        if (priceDiff === 0) {
-          const aTime = new Date(a.created_at || 0).getTime();
-          const bTime = new Date(b.created_at || 0).getTime();
-          return bTime - aTime;
-        }
-        return priceDiff;
-      });
+      qb.orderBy('details.unit_price', dir).addOrderBy('details.created_at', 'DESC');
     } else {
-      // Mặc định: Sort theo dynamicExtended
-      filteredData.sort((a, b) => {
-        const aExtended =
-          a.dynamicExtended !== null ? a.dynamicExtended : -999999;
-        const bExtended =
-          b.dynamicExtended !== null ? b.dynamicExtended : -999999;
-
-        const extendedDiff =
-          actualSortDirection === 'asc'
-            ? aExtended - bExtended
-            : bExtended - aExtended;
-
-        if (extendedDiff === 0) {
-          const aTime = new Date(a.created_at || 0).getTime();
-          const bTime = new Date(b.created_at || 0).getTime();
-          return bTime - aTime;
-        }
-        return extendedDiff;
-      });
+      // default: dynamicExtended then created_at desc
+      qb.orderBy('dynamicExtended', dir).addOrderBy('details.created_at', 'DESC');
     }
 
-    // Áp dụng pagination sau khi sort và filter
-    const data = filteredData.slice(skip, skip + pageSize);
-    const actualTotal = filteredData.length;
+    // Pagination with count at DB level
+    const [data, total] = await qb.skip(skip).take(pageSize).getManyAndCount();
 
-    return { data, total: actualTotal, page, pageSize };
+    this.logger.debug(`OrderService.findAllPaginated: fetched ${data.length} rows (page ${page}) total ${total}`);
+
+    return { data, total, page, pageSize };
   }
 
   async findByIdWithPermission(id: number, user?: any): Promise<Order | null> {

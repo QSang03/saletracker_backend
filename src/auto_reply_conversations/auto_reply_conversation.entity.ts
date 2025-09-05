@@ -27,6 +27,15 @@ export class AutoReplyConversation {
     @Column({ type: 'tinyint', name: 'followup_stage', default: 0, comment: '0: chưa nhắc, 1: đã nhắc lần 1, 2: đã nhắc lần 2' })
     followupStage: number;
 
+    @Column({ type: 'int', name: 'ar_session_gen', default: 0 })
+    arSessionGen: number;
+
+    @Column({ type: 'varchar', name: 'ar_active_task_id', length: 64, nullable: true })
+    arActiveTaskId: string | null;
+
+    @Column({ type: 'bigint', name: 'last_processed_msg_id', nullable: true })
+    lastProcessedMsgId: number | null;
+
     @Column({ type: 'timestamp', name: 'last_user_msg_at', nullable: true })
     lastUserMsgAt: Date | null;
 
