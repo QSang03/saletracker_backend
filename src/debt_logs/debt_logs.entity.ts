@@ -23,6 +23,7 @@ export enum ReminderStatus {
 }
 
 @Entity({ name: 'debt_logs' })
+@Index('idx_debt_config_id', ['debt_config_id'])
 @Index('idx_remind_status', ['remind_status'])
 @Index('idx_send_at', ['send_at'])
 export class DebtLogs {
