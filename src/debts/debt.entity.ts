@@ -6,7 +6,6 @@ import {
   UpdateDateColumn,
   DeleteDateColumn,
   ManyToOne,
-  JoinColumn,
   Index, 
 } from 'typeorm';
 import { DebtConfig } from '../debt_configs/debt_configs.entity';
@@ -89,7 +88,6 @@ export class Debt {
     onDelete: 'SET NULL',
     nullable: true 
   })
-  @JoinColumn({ name: 'debt_config_id' })
   debt_config: DebtConfig;
 
   @Column({
