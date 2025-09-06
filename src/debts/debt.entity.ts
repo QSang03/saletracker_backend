@@ -23,8 +23,10 @@ export enum DebtStatus {
 @Index('idx_bill_code', ['bill_code'])
 @Index('idx_status', ['status'])
 @Index('idx_employee_code_raw', ['employee_code_raw'])
-@Index('idx_debt_config_id', ['debt_config'])
+@Index('idx_debt_config_id', ['debt_config', 'status', 'deleted_at'])
 @Index('idx_due_date', ['due_date'])
+@Index('idx_debts_updated_status', ['updated_at', 'status', 'deleted_at'])
+@Index('idx_debts_employee_status', ['employee_code_raw', 'status', 'deleted_at'])
 export class Debt {
   @PrimaryGeneratedColumn()
   id: number;
