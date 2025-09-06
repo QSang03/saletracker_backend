@@ -396,23 +396,21 @@ export class OrderService {
   const isAdmin = roleNames.includes('admin');
   const isViewRole = roleNames.includes('view');
 
-  // Nếu không phải admin, lấy danh sách user ids có role 'view' để loại bỏ khỏi kết quả
-  let viewUserIds = new Set<number>();
-  if (!isAdmin) {
-    try {
-      const raw = await this.userRepository
-        .createQueryBuilder('u')
-        .innerJoin('u.roles', 'r')
-        .where('LOWER(r.name) = :v', { v: 'view' })
-        .select('u.id', 'id')
-        .getRawMany();
-      raw.forEach((r: any) => {
-        const id = Number(r.id ?? r.u_id ?? r.uId ?? r.user_id ?? r.userId);
-        if (!isNaN(id)) viewUserIds.add(id);
-      });
-    } catch (e) {
-      // ignore errors - fallback to empty set
-    }
+  // Luôn lấy danh sách user ids có role 'view' để loại bỏ khỏi kết quả (áp dụng cho mọi role)
+  const viewUserIds = new Set<number>();
+  try {
+    const raw = await this.userRepository
+      .createQueryBuilder('u')
+      .innerJoin('u.roles', 'r')
+      .where('LOWER(r.name) = :v', { v: 'view' })
+      .select('u.id', 'id')
+      .getRawMany();
+    raw.forEach((r: any) => {
+      const id = Number(r.id ?? r.u_id ?? r.uId ?? r.user_id ?? r.userId);
+      if (!isNaN(id)) viewUserIds.add(id);
+    });
+  } catch (e) {
+    // ignore errors - fallback to empty set
   }
 
   if (isAdmin) {
@@ -434,14 +432,15 @@ export class OrderService {
               users: (dep.users || []).filter((u) => !u.deletedAt),
             })),
         );
-      result.departments = departments.map((dept) => ({
+  result.departments = departments.map((dept) => ({
         value: dept.id,
         label: dept.name,
         slug: dept.slug,
         users: (dept.users || [])
           .filter((u) => {
             const uid = Number(u.id);
-            return !u.deletedAt && (isAdmin || !viewUserIds.has(uid) || uid === Number(user.id));
+    // Loại hoàn toàn user có role 'view' khỏi danh sách filter nhân viên
+    return !u.deletedAt && !viewUserIds.has(uid);
           })
           .map((u) => ({
             value: u.id,
@@ -496,14 +495,14 @@ export class OrderService {
                 users: (dep.users || []).filter((u) => !u.deletedAt),
               })),
           );
-        result.departments = departments.map((dept) => ({
+    result.departments = departments.map((dept) => ({
           value: dept.id,
           label: dept.name,
           slug: dept.slug,
           users: (dept.users || [])
             .filter((u) => {
               const uid = Number(u.id);
-              return !u.deletedAt && (isAdmin || !viewUserIds.has(uid) || uid === Number(user.id));
+      return !u.deletedAt && !viewUserIds.has(uid);
             })
             .map((u) => ({
               value: u.id,
@@ -538,14 +537,14 @@ export class OrderService {
               })),
           );
 
-        result.departments = departments.map((dept) => ({
+    result.departments = departments.map((dept) => ({
           value: dept.id,
           label: dept.name,
           slug: dept.slug,
           users: (dept.users || [])
             .filter((u) => {
               const uid = Number(u.id);
-              return !u.deletedAt && (isAdmin || !viewUserIds.has(uid) || uid === Number(user.id));
+      return !u.deletedAt && !viewUserIds.has(uid);
             })
             .map((u) => ({
               value: u.id,
@@ -575,14 +574,14 @@ export class OrderService {
               })),
           );
 
-        result.departments = departments.map((dept) => ({
+    result.departments = departments.map((dept) => ({
           value: dept.id,
           label: dept.name,
           slug: dept.slug,
           users: (dept.users || [])
             .filter((u) => {
               const uid = Number(u.id);
-              return !u.deletedAt && (isAdmin || !viewUserIds.has(uid) || uid === Number(user.id));
+      return !u.deletedAt && !viewUserIds.has(uid);
             })
             .map((u) => ({
               value: u.id,
@@ -613,10 +612,7 @@ export class OrderService {
                 value: currentUser.id,
                 label: currentUser.fullName || currentUser.username,
               },
-            ].filter((u) => {
-              const uid = Number(u.value);
-              return isAdmin || !viewUserIds.has(uid) || uid === Number(user.id);
-            }),
+            ].filter((u) => !viewUserIds.has(Number(u.value))),
           }));
         }
       }
