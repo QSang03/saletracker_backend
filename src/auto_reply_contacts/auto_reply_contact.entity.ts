@@ -19,6 +19,7 @@ export enum ContactRole {
 }
 
 @Entity('auto_reply_contacts')
+@Index('idx_arc_contact', ['contactId'], { where: '"auto_reply_on" = true' })
 @Index('uq_user_zalo_contact', ['user', 'zaloContactId'], { unique: true })
 export class AutoReplyContact {
   @PrimaryGeneratedColumn({ name: 'contact_id' })

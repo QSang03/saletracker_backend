@@ -37,7 +37,10 @@ export class DepartmentService {
       slug: string;
       server_ip: string;
       createdAt: Date;
-      manager?: { id: number; fullName: string; username: string };
+  // Backward-compat single manager (first in list). Prefer using `managers`.
+  manager?: { id: number; fullName: string; username: string };
+  // New: list of all managers for the department
+  managers?: { id: number; fullName: string; username: string }[];
     }[];
     total: number;
     page: number;
@@ -66,26 +69,26 @@ export class DepartmentService {
 
         return {
           data: departments.map((dep) => {
-            const manager = dep.users?.find((u) =>
-              getRoleNames(u).some((r) => r === `manager-${dep.slug}`),
-            );
+            const managersList = (dep.users || [])
+              .filter((u) => getRoleNames(u).some((r) => r === `manager-${dep.slug}`))
+              .map((m) => ({
+                id: m.id,
+                fullName:
+                  typeof m.fullName === 'string' && m.fullName.trim() !== ''
+                    ? m.fullName
+                    : m.username || '',
+                username: m.username || '',
+              }));
+
+            const manager = managersList[0];
             return {
               id: dep.id,
               name: dep.name,
               slug: dep.slug,
               server_ip: dep.server_ip,
               createdAt: dep.createdAt,
-              manager: manager
-                ? {
-                    id: manager.id,
-                    fullName:
-                      typeof manager.fullName === 'string' &&
-                      manager.fullName.trim() !== ''
-                        ? manager.fullName
-                        : manager.username || '',
-                    username: manager.username || '',
-                  }
-                : undefined,
+              manager: manager || undefined,
+              managers: managersList,
             };
           }),
           total,
@@ -103,26 +106,25 @@ export class DepartmentService {
 
       return {
         data: departments.map((dep) => {
-          const manager = dep.users?.find((u) =>
-            getRoleNames(u).some((r) => r === `manager-${dep.slug}`),
-          );
+          const managersList = (dep.users || [])
+            .filter((u) => getRoleNames(u).some((r) => r === `manager-${dep.slug}`))
+            .map((m) => ({
+              id: m.id,
+              fullName:
+                typeof m.fullName === 'string' && m.fullName.trim() !== ''
+                  ? m.fullName
+                  : m.username || '',
+              username: m.username || '',
+            }));
+          const manager = managersList[0];
           return {
             id: dep.id,
             name: dep.name,
             slug: dep.slug,
             server_ip: dep.server_ip,
             createdAt: dep.createdAt,
-            manager: manager
-              ? {
-                  id: manager.id,
-                  fullName:
-                    typeof manager.fullName === 'string' &&
-                    manager.fullName.trim() !== ''
-                      ? manager.fullName
-                      : manager.username || '',
-                  username: manager.username || '',
-                }
-              : undefined,
+            manager: manager || undefined,
+            managers: managersList,
           };
         }),
         total,
@@ -145,26 +147,25 @@ export class DepartmentService {
 
         return {
           data: departments.map((dep) => {
-            const manager = dep.users?.find((u) =>
-              getRoleNames(u).some((r) => r === `manager-${dep.slug}`),
-            );
+            const managersList = (dep.users || [])
+              .filter((u) => getRoleNames(u).some((r) => r === `manager-${dep.slug}`))
+              .map((m) => ({
+                id: m.id,
+                fullName:
+                  typeof m.fullName === 'string' && m.fullName.trim() !== ''
+                    ? m.fullName
+                    : m.username || '',
+                username: m.username || '',
+              }));
+            const manager = managersList[0];
             return {
               id: dep.id,
               name: dep.name,
               slug: dep.slug,
               server_ip: dep.server_ip,
               createdAt: dep.createdAt,
-              manager: manager
-                ? {
-                    id: manager.id,
-                    fullName:
-                      typeof manager.fullName === 'string' &&
-                      manager.fullName.trim() !== ''
-                        ? manager.fullName
-                        : manager.username || '',
-                    username: manager.username || '',
-                  }
-                : undefined,
+              manager: manager || undefined,
+              managers: managersList,
             };
           }),
           total,
@@ -182,26 +183,25 @@ export class DepartmentService {
 
       return {
         data: departments.map((dep) => {
-          const manager = dep.users?.find((u) =>
-            getRoleNames(u).some((r) => r === `manager-${dep.slug}`),
-          );
+          const managersList = (dep.users || [])
+            .filter((u) => getRoleNames(u).some((r) => r === `manager-${dep.slug}`))
+            .map((m) => ({
+              id: m.id,
+              fullName:
+                typeof m.fullName === 'string' && m.fullName.trim() !== ''
+                  ? m.fullName
+                  : m.username || '',
+              username: m.username || '',
+            }));
+          const manager = managersList[0];
           return {
             id: dep.id,
             name: dep.name,
             slug: dep.slug,
             server_ip: dep.server_ip,
             createdAt: dep.createdAt,
-            manager: manager
-              ? {
-                  id: manager.id,
-                  fullName:
-                    typeof manager.fullName === 'string' &&
-                    manager.fullName.trim() !== ''
-                      ? manager.fullName
-                      : manager.username || '',
-                  username: manager.username || '',
-                }
-              : undefined,
+            manager: manager || undefined,
+            managers: managersList,
           };
         }),
         total,
@@ -232,26 +232,25 @@ export class DepartmentService {
 
         return {
           data: departments.map((dep) => {
-            const manager = dep.users?.find((u) =>
-              getRoleNames(u).some((r) => r === `manager-${dep.slug}`),
-            );
+            const managersList = (dep.users || [])
+              .filter((u) => getRoleNames(u).some((r) => r === `manager-${dep.slug}`))
+              .map((m) => ({
+                id: m.id,
+                fullName:
+                  typeof m.fullName === 'string' && m.fullName.trim() !== ''
+                    ? m.fullName
+                    : m.username || '',
+                username: m.username || '',
+              }));
+            const manager = managersList[0];
             return {
               id: dep.id,
               name: dep.name,
               slug: dep.slug,
               server_ip: dep.server_ip,
               createdAt: dep.createdAt,
-              manager: manager
-                ? {
-                    id: manager.id,
-                    fullName:
-                      typeof manager.fullName === 'string' &&
-                      manager.fullName.trim() !== ''
-                        ? manager.fullName
-                        : manager.username || '',
-                    username: manager.username || '',
-                  }
-                : undefined,
+              manager: manager || undefined,
+              managers: managersList,
             };
           }),
           total,
@@ -284,26 +283,25 @@ export class DepartmentService {
 
       return {
         data: departmentsSorted.map((dep) => {
-          const manager = dep.users?.find((u) =>
-            getRoleNames(u).some((r) => r === `manager-${dep.slug}`),
-          );
+          const managersList = (dep.users || [])
+            .filter((u) => getRoleNames(u).some((r) => r === `manager-${dep.slug}`))
+            .map((m) => ({
+              id: m.id,
+              fullName:
+                typeof m.fullName === 'string' && m.fullName.trim() !== ''
+                  ? m.fullName
+                  : m.username || '',
+              username: m.username || '',
+            }));
+          const manager = managersList[0];
           return {
             id: dep.id,
             name: dep.name,
             slug: dep.slug,
             server_ip: dep.server_ip,
             createdAt: dep.createdAt,
-            manager: manager
-              ? {
-                  id: manager.id,
-                  fullName:
-                    typeof manager.fullName === 'string' &&
-                    manager.fullName.trim() !== ''
-                      ? manager.fullName
-                      : manager.username || '',
-                  username: manager.username || '',
-                }
-              : undefined,
+            manager: manager || undefined,
+            managers: managersList,
           };
         }),
         total,

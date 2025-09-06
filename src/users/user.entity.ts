@@ -17,6 +17,7 @@ import { Notification } from '../notifications/notification.entity';
 import { AutoReplySalesPersona } from 'src/auto_reply_sales_personas/auto_reply_sales_persona.entity';
 import { AutoReplyContact } from 'src/auto_reply_contacts/auto_reply_contact.entity';
 
+@Index('idx_users_ar', ['id', 'isAutoReplyEnabled'], { where: '"is_auto_reply_enabled" = true' })
 @Entity('users')
 export class User {
   toJSON() {
