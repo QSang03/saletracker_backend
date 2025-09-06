@@ -133,16 +133,42 @@ export class DebtStatisticService {
     // Nếu toDate là tương lai, chỉ tính đến ngày hiện tại
     const effectiveToDate = toDate > today ? today : toDate;
 
-    const results = {
-      total: 0,
-      paid: 0,
-      payLater: 0,
-      noInfo: 0,
-      totalAmount: 0,
-      collectedAmount: 0, // Changed from paidAmount to collectedAmount to match frontend
-      remainingAmount: 0,
-      collectionRate: 0,
+    // Phase 1.2: Tối ưu hóa - Gộp logic phức tạp bằng UNION ALL
+    const buildUnionQuery = () => {
+      const historyPart = `
+        SELECT 
+          COUNT(*) as total,
+          SUM(CASE WHEN status = 'paid' THEN 1 ELSE 0 END) as paid,
+          SUM(CASE WHEN status = 'pay_later' THEN 1 ELSE 0 END) as payLater,
+          SUM(CASE WHEN status = 'no_information_available' THEN 1 ELSE 0 END) as noInfo,
+          SUM(total_amount) as totalAmount,
+          SUM(total_amount - remaining) as collectedAmount,
+          SUM(remaining) as remainingAmount,
+          'history' as source
+        FROM debt_statistics
+        WHERE statistic_date >= ? AND statistic_date <= ?
+      `;
+
+      const todayPart = `
+        SELECT 
+          COUNT(*) as total,
+          SUM(CASE WHEN status = 'paid' THEN 1 ELSE 0 END) as paid,
+          SUM(CASE WHEN status = 'pay_later' THEN 1 ELSE 0 END) as payLater,
+          SUM(CASE WHEN status = 'no_information_available' THEN 1 ELSE 0 END) as noInfo,
+          SUM(total_amount) as totalAmount,
+          SUM(total_amount - remaining) as collectedAmount,
+          SUM(remaining) as remainingAmount,
+          'today' as source
+        FROM debts
+        WHERE deleted_at IS NULL AND DATE(updated_at) = DATE(?)
+      `;
+
+      return { historyPart, todayPart };
     };
+
+    const { historyPart, todayPart } = buildUnionQuery();
+    const params: any[] = [];
+    let unionQuery = '';
 
     // Xử lý các ngày trong quá khứ từ debt_statistics
     if (fromDate < today) {
@@ -153,92 +179,73 @@ export class DebtStatisticService {
               .toISOString()
               .split('T')[0];
 
-      let historyQuery = `
-        SELECT 
-          COUNT(*) as total,
-          SUM(CASE WHEN status = 'paid' THEN 1 ELSE 0 END) as paid,
-          SUM(CASE WHEN status = 'pay_later' THEN 1 ELSE 0 END) as payLater,
-          SUM(CASE WHEN status = 'no_information_available' THEN 1 ELSE 0 END) as noInfo,
-          SUM(total_amount) as totalAmount,
-          SUM(total_amount - remaining) as paidAmount,
-          SUM(remaining) as remainingAmount
-        FROM debt_statistics
-        WHERE statistic_date >= ? AND statistic_date <= ?
-      `;
-      
-      const historyParams = [fromDate, endDateForHistory];
+      let historyQuery = historyPart;
+      params.push(fromDate, endDateForHistory);
       
       if (filters?.employeeCode) {
         historyQuery += ` AND employee_code_raw = ?`;
-        historyParams.push(filters.employeeCode);
+        params.push(filters.employeeCode);
       }
       
       if (filters?.customerCode) {
         historyQuery += ` AND customer_code = ?`;
-        historyParams.push(filters.customerCode);
+        params.push(filters.customerCode);
       }
 
-      const historyStats = await this.debtStatisticRepository.query(
-        historyQuery,
-        historyParams,
-      );
-
-      if (historyStats[0]) {
-        const stats = historyStats[0];
-        results.total += Number(stats.total) || 0;
-        results.paid += Number(stats.paid) || 0;
-        results.payLater += Number(stats.payLater) || 0;
-        results.noInfo += Number(stats.noInfo) || 0;
-        results.totalAmount += Number(stats.totalAmount) || 0;
-        results.collectedAmount += Number(stats.paidAmount) || 0;
-        results.remainingAmount += Number(stats.remainingAmount) || 0;
-      }
+      unionQuery = historyQuery;
     }
 
     // Xử lý ngày hôm nay từ debts
     if (effectiveToDate >= today) {
-      // Format today to Vietnam timezone for MySQL query
       const todayVietnam = this.formatDateStringToVietnam(today);
-      let todayQuery = `
-        SELECT 
-          COUNT(*) as total,
-          SUM(CASE WHEN status = 'paid' THEN 1 ELSE 0 END) as paid,
-          SUM(CASE WHEN status = 'pay_later' THEN 1 ELSE 0 END) as payLater,
-          SUM(CASE WHEN status = 'no_information_available' THEN 1 ELSE 0 END) as noInfo,
-          SUM(total_amount) as totalAmount,
-          SUM(total_amount - remaining) as paidAmount,
-          SUM(remaining) as remainingAmount
-        FROM debts
-        WHERE deleted_at IS NULL AND DATE(updated_at) = DATE(?)
-      `;
-      
-      const todayParams = [todayVietnam];
+      let todayQuery = todayPart;
+      params.push(todayVietnam);
       
       if (filters?.employeeCode) {
         todayQuery += ` AND employee_code_raw = ?`;
-        todayParams.push(filters.employeeCode);
+        params.push(filters.employeeCode);
       }
       
       if (filters?.customerCode) {
         todayQuery += ` AND customer_code = ?`;
-        todayParams.push(filters.customerCode);
+        params.push(filters.customerCode);
       }
 
-      const todayStats = await this.debtRepository.query(todayQuery, todayParams);
-
-      if (todayStats[0]) {
-        const stats = todayStats[0];
-        results.total += Number(stats.total) || 0;
-        results.paid += Number(stats.paid) || 0;
-        results.payLater += Number(stats.payLater) || 0;
-        results.noInfo += Number(stats.noInfo) || 0;
-        results.totalAmount += Number(stats.totalAmount) || 0;
-        results.collectedAmount += Number(stats.paidAmount) || 0;
-        results.remainingAmount += Number(stats.remainingAmount) || 0;
+      if (unionQuery) {
+        unionQuery += ' UNION ALL ' + todayQuery;
+      } else {
+        unionQuery = todayQuery;
       }
     }
 
-    // Tính collection rate
+    // Phase 1.2: Tối ưu hóa - Gộp dữ liệu từ debt_statistics và debts trong 1 query
+    const finalQuery = `
+      SELECT 
+        SUM(total) as total,
+        SUM(paid) as paid,
+        SUM(payLater) as payLater,
+        SUM(noInfo) as noInfo,
+        SUM(totalAmount) as totalAmount,
+        SUM(collectedAmount) as collectedAmount,
+        SUM(remainingAmount) as remainingAmount
+      FROM (${unionQuery}) as combined_data
+    `;
+
+    const stats = await this.debtStatisticRepository.query(finalQuery, params);
+    const result = stats[0] || {};
+
+    const results = {
+      total: Number(result.total) || 0,
+      paid: Number(result.paid) || 0,
+      payLater: Number(result.payLater) || 0,
+      noInfo: Number(result.noInfo) || 0,
+      totalAmount: Number(result.totalAmount) || 0,
+      collectedAmount: Number(result.collectedAmount) || 0,
+      remainingAmount: Number(result.remainingAmount) || 0,
+      collectionRate: 0,
+    };
+
+    // Phase 1.2: Tối ưu hóa - Chuyển aggregation từ application layer sang database
     if (results.totalAmount > 0) {
       results.collectionRate = (results.collectedAmount / results.totalAmount) * 100;
     }
@@ -791,24 +798,15 @@ export class DebtStatisticService {
   }
 
   async getAgingAnalysis(fromDate: string, toDate: string) {
-    // Logic hybrid theo snapshot: quá khứ theo statistic_date, hôm nay theo DATE(updated_at)
+    // Phase 1.3: Tối ưu hóa - Sử dụng CASE WHEN để phân nhóm trực tiếp trong SQL
     const today = this.getVietnamToday();
     
     // Nếu toDate là tương lai, chỉ tính đến ngày hiện tại
     const effectiveToDate = toDate > today ? today : toDate;
     
-    const results: any[] = [];
-
-    // Quá khứ: dùng debt_statistics, tính DATEDIFF(statistic_date, due_date) và chỉ lấy khoản nợ đã quá hạn (>0)
-    if (fromDate < today) {
-      const endDateForHistory =
-        effectiveToDate < today
-          ? effectiveToDate
-          : new Date(new Date(today).getTime() - 24 * 60 * 60 * 1000)
-              .toISOString()
-              .split('T')[0];
-
-      const agingQuery = `
+    // Phase 1.3: Tối ưu hóa - Gộp logic xử lý ngày quá khứ và hiện tại
+    const buildAgingUnionQuery = () => {
+      const historyPart = `
         SELECT 
           CASE 
             WHEN DATEDIFF(ds.statistic_date, ds.due_date) BETWEEN 1 AND 30 THEN '1-30'
@@ -830,15 +828,7 @@ export class DebtStatisticService {
         GROUP BY age_range
       `;
 
-      const historyAging = await this.debtStatisticRepository.query(agingQuery, [fromDate, endDateForHistory]);
-      results.push(...historyAging);
-    }
-
-    // Hôm nay: dùng debts, tính DATEDIFF(DATE(updated_at), due_date) và chỉ lấy quá hạn (>0)
-    if (effectiveToDate >= today) {
-      // Format today to Vietnam timezone for MySQL query (optimized for index)
-      const todayVietnam = this.formatDateStringToVietnam(today);
-      const currentAgingQuery = `
+      const todayPart = `
         SELECT 
           CASE 
             WHEN DATEDIFF(DATE(updated_at), due_date) BETWEEN 1 AND 30 THEN '1-30'
@@ -855,18 +845,55 @@ export class DebtStatisticService {
         GROUP BY age_range
       `;
 
-      const currentAging = await this.debtRepository.query(currentAgingQuery, [todayVietnam]);
+      return { historyPart, todayPart };
+    };
 
-      for (const current of currentAging) {
-        const existing = results.find((r) => r.age_range === current.age_range);
-        if (existing) {
-          existing.count = Number(existing.count) + Number(current.count);
-          existing.amount = Number(existing.amount) + Number(current.amount);
-        } else {
-          results.push(current);
-        }
+    const { historyPart, todayPart } = buildAgingUnionQuery();
+    const params: any[] = [];
+    let unionQuery = '';
+
+    // Xử lý các ngày trong quá khứ từ debt_statistics
+    if (fromDate < today) {
+      const endDateForHistory =
+        effectiveToDate < today
+          ? effectiveToDate
+          : new Date(new Date(today).getTime() - 24 * 60 * 60 * 1000)
+              .toISOString()
+              .split('T')[0];
+
+      params.push(fromDate, endDateForHistory);
+      unionQuery = historyPart;
+    }
+
+    // Xử lý ngày hôm nay từ debts
+    if (effectiveToDate >= today) {
+      const todayVietnam = this.formatDateStringToVietnam(today);
+      params.push(todayVietnam);
+
+      if (unionQuery) {
+        unionQuery += ' UNION ALL ' + todayPart;
+      } else {
+        unionQuery = todayPart;
       }
     }
+
+    // Phase 1.3: Tối ưu hóa - Gộp kết quả trong database thay vì application layer
+    const finalQuery = `
+      SELECT 
+        age_range,
+        SUM(count) as count,
+        SUM(amount) as amount
+      FROM (${unionQuery}) as combined_aging
+      GROUP BY age_range
+      ORDER BY CASE age_range 
+        WHEN '1-30' THEN 1 
+        WHEN '31-60' THEN 2 
+        WHEN '61-90' THEN 3 
+        ELSE 4 
+      END
+    `;
+
+    const results = await this.debtStatisticRepository.query(finalQuery, params);
 
     return results.map((item) => ({
       range: item.age_range,
@@ -1149,7 +1176,7 @@ export class DebtStatisticService {
     }
   }
 
-  // New aggregate: pay-later delay and contact responses and details
+  // Phase 1.4: Tối ưu hóa - Sử dụng dynamic bucket generation và loại bỏ nested loops
   async getPayLaterDelay(
     fromDate: string,
     toDate: string,
@@ -1161,6 +1188,7 @@ export class DebtStatisticService {
     // Nếu toDate là tương lai, chỉ tính đến ngày hiện tại
     const effectiveToDate = toDate > today ? today : toDate;
     
+    // Phase 1.4: Tối ưu hóa - Dynamic bucket generation
     const sortedBuckets = [...buckets].sort((a, b) => a - b);
     const ranges: Array<{ label: string; min: number; max: number | null }> = [];
     let previous = 0;
@@ -1170,11 +1198,55 @@ export class DebtStatisticService {
     }
     ranges.push({ label: `>${previous}`, min: previous + 1, max: null });
 
-    const resultsMap = new Map<string, { range: string; count: number; amount: number }>();
-    for (const r of ranges) {
-      resultsMap.set(r.label, { range: r.label, count: 0, amount: 0 });
-    }
+    // Phase 1.4: Tối ưu hóa - Gộp logic xử lý historical và current data
+    const buildPayLaterUnionQuery = () => {
+      const historyPart = `
+        SELECT 
+          CASE 
+            ${ranges.map(r => {
+              const cond = r.max === null 
+                ? `WHEN DATEDIFF(statistic_date, pay_later) >= ${r.min} THEN '${r.label}'`
+                : `WHEN DATEDIFF(statistic_date, pay_later) BETWEEN ${r.min} AND ${r.max} THEN '${r.label}'`;
+              return cond;
+            }).join(' ')}
+            ELSE NULL
+          END as bucket,
+          COUNT(*) as count,
+          SUM(remaining) as amount
+        FROM debt_statistics
+        WHERE statistic_date >= ? AND statistic_date <= ? 
+          AND status <> 'paid' 
+          AND pay_later IS NOT NULL
+      `;
 
+      const todayPart = `
+        SELECT 
+          CASE 
+            ${ranges.map(r => {
+              const cond = r.max === null 
+                ? `WHEN DATEDIFF(DATE(updated_at), pay_later) >= ${r.min} THEN '${r.label}'`
+                : `WHEN DATEDIFF(DATE(updated_at), pay_later) BETWEEN ${r.min} AND ${r.max} THEN '${r.label}'`;
+              return cond;
+            }).join(' ')}
+            ELSE NULL
+          END as bucket,
+          COUNT(*) as count,
+          SUM(remaining) as amount
+        FROM debts
+        WHERE deleted_at IS NULL 
+          AND status <> 'paid' 
+          AND pay_later IS NOT NULL
+          AND DATE(updated_at) = DATE(?)
+      `;
+
+      return { historyPart, todayPart };
+    };
+
+    const { historyPart, todayPart } = buildPayLaterUnionQuery();
+    const params: any[] = [];
+    let unionQuery = '';
+
+    // Xử lý các ngày trong quá khứ từ debt_statistics
     if (fromDate < today) {
       const endHistory =
         effectiveToDate < today
@@ -1183,92 +1255,68 @@ export class DebtStatisticService {
               .toISOString()
               .split('T')[0];
 
-      const whereClauses: string[] = [
-        'statistic_date >= ? AND statistic_date <= ? AND status <> "paid"',
-        'pay_later IS NOT NULL',
-      ];
-      const params: any[] = [fromDate, endHistory];
+      let historyQuery = historyPart;
+      params.push(fromDate, endHistory);
+      
       if (options.employeeCode) {
-        whereClauses.push('employee_code_raw = ?');
+        historyQuery += ` AND employee_code_raw = ?`;
         params.push(options.employeeCode);
       }
       if (options.customerCode) {
-        whereClauses.push('customer_code = ?');
+        historyQuery += ` AND customer_code = ?`;
         params.push(options.customerCode);
       }
 
-      const diffExpr = 'DATEDIFF(statistic_date, pay_later)';
-      const selects = ranges
-        .map((r) => {
-          const cond = r.max === null
-            ? `${diffExpr} >= ${r.min}`
-            : `${diffExpr} BETWEEN ${r.min} AND ${r.max}`;
-          return `SUM(CASE WHEN ${cond} THEN 1 ELSE 0 END) AS cnt_${r.label.replace(/[^a-zA-Z0-9_]/g, '_')},` +
-                 ` SUM(CASE WHEN ${cond} THEN remaining ELSE 0 END) AS amt_${r.label.replace(/[^a-zA-Z0-9_]/g, '_')}`;
-        })
-        .join(',');
-
-      const aggQuery = `SELECT ${selects} FROM debt_statistics WHERE ${whereClauses.join(' AND ')}`;
-      const aggRows = await this.debtStatisticRepository.query(aggQuery, params);
-      if (aggRows && aggRows[0]) {
-        const row = aggRows[0];
-        for (const r of ranges) {
-          const key = r.label.replace(/[^a-zA-Z0-9_]/g, '_');
-          const cnt = Number(row[`cnt_${key}`]) || 0;
-          const amt = Number(row[`amt_${key}`]) || 0;
-          const agg = resultsMap.get(r.label)!;
-          agg.count += cnt;
-          agg.amount += amt;
-        }
-      }
+      historyQuery += ` GROUP BY bucket`;
+      unionQuery = historyQuery;
     }
 
+    // Xử lý ngày hôm nay từ debts
     if (effectiveToDate >= today) {
-      // Format today to Vietnam timezone for MySQL query (optimized for index)
       const todayVietnam = this.formatDateStringToVietnam(today);
-      const whereClauses: string[] = [
-        'd.deleted_at IS NULL',
-        "d.status <> 'paid'",
-        'd.pay_later IS NOT NULL',
-        "DATE(d.updated_at) = DATE(?)",
-      ];
-      const params: any[] = [todayVietnam];
+      let todayQuery = todayPart;
+      params.push(todayVietnam);
+      
       if (options.employeeCode) {
-        whereClauses.push('d.employee_code_raw = ?');
+        todayQuery += ` AND employee_code_raw = ?`;
         params.push(options.employeeCode);
       }
       if (options.customerCode) {
-        whereClauses.push('dc.customer_code = ?');
+        todayQuery += ` AND customer_code = ?`;
         params.push(options.customerCode);
       }
 
-      const diffExpr = "DATEDIFF(DATE(d.updated_at), d.pay_later)";
-      const selects = ranges
-        .map((r) => {
-          const cond = r.max === null
-            ? `${diffExpr} >= ${r.min}`
-            : `${diffExpr} BETWEEN ${r.min} AND ${r.max}`;
-          return `SUM(CASE WHEN ${cond} THEN 1 ELSE 0 END) AS cnt_${r.label.replace(/[^a-zA-Z0-9_]/g, '_')},` +
-                 ` SUM(CASE WHEN ${cond} THEN d.remaining ELSE 0 END) AS amt_${r.label.replace(/[^a-zA-Z0-9_]/g, '_')}`;
-        })
-        .join(',');
+      todayQuery += ` GROUP BY bucket`;
 
-      const query = `SELECT ${selects} FROM debts d LEFT JOIN debt_configs dc ON d.debt_config_id = dc.id WHERE ${whereClauses.join(' AND ')}`;
-      const rows = await this.debtRepository.query(query, params);
-      if (rows && rows[0]) {
-        const row = rows[0];
-        for (const r of ranges) {
-          const key = r.label.replace(/[^a-zA-Z0-9_]/g, '_');
-          const cnt = Number(row[`cnt_${key}`]) || 0;
-          const amt = Number(row[`amt_${key}`]) || 0;
-          const agg = resultsMap.get(r.label)!;
-          agg.count += cnt;
-          agg.amount += amt;
-        }
+      if (unionQuery) {
+        unionQuery += ' UNION ALL ' + todayQuery;
+      } else {
+        unionQuery = todayQuery;
       }
     }
 
-    return Array.from(resultsMap.values());
+    // Phase 1.4: Tối ưu hóa - Gộp kết quả trong database thay vì application layer
+    const finalQuery = `
+      SELECT 
+        bucket as range,
+        SUM(count) as count,
+        SUM(amount) as amount
+      FROM (${unionQuery}) as combined_pay_later
+      WHERE bucket IS NOT NULL
+      GROUP BY bucket
+      ORDER BY CASE bucket 
+        ${ranges.map((r, idx) => `WHEN '${r.label}' THEN ${idx + 1}`).join(' ')}
+        ELSE 999 
+      END
+    `;
+
+    const results = await this.debtStatisticRepository.query(finalQuery, params);
+
+    return results.map((item) => ({
+      range: item.range,
+      count: Number(item.count) || 0,
+      amount: Number(item.amount) || 0,
+    }));
   }
 
   // New as-of implementation for pay-later delay buckets

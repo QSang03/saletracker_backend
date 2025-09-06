@@ -29,6 +29,15 @@ export enum ExtendReason {
 @Index('idx_order_details_deleted_at', ['deleted_at'])
 @Index('idx_order_details_customer_created', ['customer_name', 'created_at'])
 @Index('idx_order_details_customer_created_deleted', ['customer_name', 'created_at', 'deleted_at'])
+// Phase 2.1: Tối ưu hóa index cho order_details table
+@Index('idx_order_details_created_status', ['created_at', 'status', 'deleted_at'])
+@Index('idx_order_details_order_created', ['order_id', 'created_at'])
+@Index('idx_order_details_sale_status', ['order_id', 'status'])
+// Phase 2.6: Index cho hidden orders
+@Index('idx_order_details_hidden_at', ['hidden_at'], { where: 'hidden_at IS NOT NULL' })
+@Index('idx_order_details_hidden_status', ['hidden_at', 'status', 'deleted_at'])
+@Index('idx_order_details_hidden_employee', ['hidden_at', 'order_id'])
+@Index('idx_order_details_hidden_pagination', ['hidden_at', 'id'], { where: 'hidden_at IS NOT NULL' })
 @Entity('order_details')
 export class OrderDetail {
   @PrimaryGeneratedColumn('increment', { type: 'bigint' })

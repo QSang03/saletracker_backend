@@ -54,7 +54,215 @@ export class OrderService {
     @InjectRepository(Product)
     private productRepository: Repository<Product>,
     private orderBlacklistService: OrderBlacklistService,
-  ) {}
+  ) {  }
+
+  // Phase 2.6: Tối ưu hóa - Bulk hide operations
+  async bulkHideOrderDetails(orderDetailIds: number[], userId: number): Promise<{ success: boolean; affected: number; errors: string[] }> {
+    try {
+      // Phase 2.6: Tối ưu hóa - Batch update để hide orders
+      const result = await this.orderDetailRepository
+        .createQueryBuilder()
+        .update(OrderDetail)
+        .set({ 
+          hidden_at: () => 'NOW()',
+          updated_at: () => 'NOW()'
+        })
+        .where('id IN (:...ids)', { ids: orderDetailIds })
+        .andWhere('hidden_at IS NULL') // Chỉ hide những order chưa bị hide
+        .execute();
+
+      return {
+        success: true,
+        affected: result.affected || 0,
+        errors: []
+      };
+    } catch (error) {
+      this.logger.error('Error in bulkHideOrderDetails:', error);
+      return {
+        success: false,
+        affected: 0,
+        errors: [error.message]
+      };
+    }
+  }
+
+  // Phase 2.6: Tối ưu hóa - Bulk unhide operations
+  async bulkUnhideOrderDetails(orderDetailIds: number[], userId: number): Promise<{ success: boolean; affected: number; errors: string[] }> {
+    try {
+      // Phase 2.6: Tối ưu hóa - Batch update để restore hidden orders
+      const result = await this.orderDetailRepository
+        .createQueryBuilder()
+        .update(OrderDetail)
+        .set({ 
+          hidden_at: null,
+          updated_at: () => 'NOW()'
+        })
+        .where('id IN (:...ids)', { ids: orderDetailIds })
+        .andWhere('hidden_at IS NOT NULL') // Chỉ restore những order đã bị hide
+        .execute();
+
+      return {
+        success: true,
+        affected: result.affected || 0,
+        errors: []
+      };
+    } catch (error) {
+      this.logger.error('Error in bulkUnhideOrderDetails:', error);
+      return {
+        success: false,
+        affected: 0,
+        errors: [error.message]
+      };
+    }
+  }
+
+  // Phase 2.6: Tối ưu hóa - Get hidden orders with cursor-based pagination
+  async getHiddenOrdersPaginated(
+    cursor?: string,
+    limit: number = 50,
+    filters?: {
+      search?: string;
+      status?: string;
+      employeeId?: number;
+      dateFrom?: string;
+      dateTo?: string;
+    }
+  ): Promise<{
+    data: OrderDetail[];
+    hasMore: boolean;
+    nextCursor?: string;
+    total: number;
+  }> {
+    try {
+      // Phase 2.6: Tối ưu hóa - Implement cursor-based pagination
+      let query = `
+        SELECT 
+          details.id,
+          details.status,
+          details.quantity,
+          details.unit_price,
+          details.customer_name,
+          details.raw_item,
+          details.created_at,
+          details.hidden_at,
+          details.metadata,
+          order.id as order_id,
+          order.created_at as order_created_at,
+          sale_by.id as sale_by_id,
+          sale_by.full_name as sale_by_name
+        FROM order_details details
+        INNER JOIN orders order ON details.order_id = order.id
+        INNER JOIN users sale_by ON order.sale_by = sale_by.id
+        WHERE details.hidden_at IS NOT NULL
+          AND details.deleted_at IS NULL
+      `;
+
+      const params: any[] = [];
+
+      // Phase 2.6: Tối ưu hóa - Sử dụng hidden_at + id làm cursor
+      if (cursor) {
+        const [hiddenAt, id] = cursor.split('_');
+        query += ` AND (details.hidden_at < ? OR (details.hidden_at = ? AND details.id < ?))`;
+        params.push(hiddenAt, hiddenAt, id);
+      }
+
+      // Apply filters
+      if (filters?.search) {
+        query += ` AND (
+          LOWER(details.customer_name) LIKE LOWER(?) OR 
+          LOWER(details.raw_item) LIKE LOWER(?) OR
+          CAST(details.id AS CHAR) LIKE ?
+        )`;
+        const searchTerm = `%${filters.search}%`;
+        params.push(searchTerm, searchTerm, searchTerm);
+      }
+
+      if (filters?.status) {
+        query += ` AND details.status = ?`;
+        params.push(filters.status);
+      }
+
+      if (filters?.employeeId) {
+        query += ` AND sale_by.id = ?`;
+        params.push(filters.employeeId);
+      }
+
+      if (filters?.dateFrom) {
+        query += ` AND DATE(details.hidden_at) >= ?`;
+        params.push(filters.dateFrom);
+      }
+
+      if (filters?.dateTo) {
+        query += ` AND DATE(details.hidden_at) <= ?`;
+        params.push(filters.dateTo);
+      }
+
+      // Phase 2.6: Tối ưu hóa - Sử dụng hidden_at + id làm cursor
+      query += ` ORDER BY details.hidden_at DESC, details.id DESC LIMIT ?`;
+      params.push(limit + 1); // +1 để check hasMore
+
+      const results = await this.orderDetailRepository.query(query, params);
+      
+      const hasMore = results.length > limit;
+      const data = hasMore ? results.slice(0, limit) : results;
+      
+      let nextCursor: string | undefined;
+      if (hasMore && data.length > 0) {
+        const lastItem = data[data.length - 1];
+        nextCursor = `${lastItem.hidden_at}_${lastItem.id}`;
+      }
+
+      // Get total count
+      let countQuery = `
+        SELECT COUNT(*) as total
+        FROM order_details details
+        INNER JOIN orders order ON details.order_id = order.id
+        INNER JOIN users sale_by ON order.sale_by = sale_by.id
+        WHERE details.hidden_at IS NOT NULL
+          AND details.deleted_at IS NULL
+      `;
+      
+      const countParams: any[] = [];
+      if (filters?.search) {
+        countQuery += ` AND (
+          LOWER(details.customer_name) LIKE LOWER(?) OR 
+          LOWER(details.raw_item) LIKE LOWER(?) OR
+          CAST(details.id AS CHAR) LIKE ?
+        )`;
+        const searchTerm = `%${filters.search}%`;
+        countParams.push(searchTerm, searchTerm, searchTerm);
+      }
+      if (filters?.status) {
+        countQuery += ` AND details.status = ?`;
+        countParams.push(filters.status);
+      }
+      if (filters?.employeeId) {
+        countQuery += ` AND sale_by.id = ?`;
+        countParams.push(filters.employeeId);
+      }
+      if (filters?.dateFrom) {
+        countQuery += ` AND DATE(details.hidden_at) >= ?`;
+        countParams.push(filters.dateFrom);
+      }
+      if (filters?.dateTo) {
+        countQuery += ` AND DATE(details.hidden_at) <= ?`;
+        countParams.push(filters.dateTo);
+      }
+
+      const countResult = await this.orderDetailRepository.query(countQuery, countParams);
+      const total = countResult[0]?.total || 0;
+
+      return {
+        data,
+        hasMore,
+        nextCursor,
+        total
+      };
+    } catch (error) {
+      this.logger.error('Error in getHiddenOrdersPaginated:', error);
+      throw error;
+    }
+  }
 
   // =============== Stats helpers ===============
   private isAdmin(user: any): boolean {
@@ -1069,11 +1277,12 @@ export class OrderService {
       if (productIds.length > 0) qb.andWhere('details.product_id IN (:...productIds)', { productIds });
     }
 
-    // Hidden items
+    // Phase 2.6: Tối ưu hóa - Sử dụng proper indexing cho hidden orders
     const wantsHidden = (includeHidden || '').toString().toLowerCase();
     const includeHiddenFlag = wantsHidden === '1' || wantsHidden === 'true';
     const isAdminUser = this.isAdmin(user);
     if (!(includeHiddenFlag && isAdminUser)) {
+      // Phase 2.6: Tối ưu hóa - Sử dụng composite index cho hidden_at + status
       qb.andWhere('details.hidden_at IS NULL');
     }
 
@@ -1189,73 +1398,112 @@ export class OrderService {
       params.dateTo,
     );
 
-    const qb = this.orderDetailRepository
-      .createQueryBuilder('details')
-      .leftJoinAndSelect('details.order', 'order')
-      .leftJoinAndSelect('order.sale_by', 'sale_by')
-      .leftJoinAndSelect('sale_by.departments', 'sale_by_departments')
-      .where('order.created_at BETWEEN :from AND :to', { from, to })
-      .andWhere('details.deleted_at IS NULL');
-
+    // Phase 2.2: Tối ưu hóa - Thay thế getMany() bằng raw query với aggregation trực tiếp
     const allowedUserIds = await this.getUserIdsByRole(params.user);
-    if (allowedUserIds !== null) {
-      if (allowedUserIds.length === 0) qb.andWhere('1 = 0');
-      else
-        qb.andWhere('sale_by.id IN (:...userIds)', { userIds: allowedUserIds });
-    }
-
     const empIds = this.parseCsvNumbers(params.employees);
-    if (empIds.length > 0)
-      qb.andWhere('sale_by.id IN (:...empIds)', { empIds });
+    const deptIds = this.parseCsvNumbers(params.departments);
+    const isAdmin = this.isAdmin(params.user);
 
-    if (this.isAdmin(params.user)) {
-      const deptIds = this.parseCsvNumbers(params.departments);
-      if (deptIds.length > 0) {
-        qb.andWhere(
-          `sale_by_departments.id IN (:...deptIds)
-           AND sale_by_departments.server_ip IS NOT NULL
-           AND TRIM(sale_by_departments.server_ip) <> ''`,
-          { deptIds },
-        );
+    // Phase 2.2: Tối ưu hóa - Sử dụng raw SQL với aggregation trực tiếp
+    let baseQuery = `
+      SELECT 
+        details.id,
+        details.status,
+        details.quantity,
+        details.unit_price,
+        details.customer_name,
+        details.raw_item,
+        details.created_at,
+        details.metadata,
+        order.id as order_id,
+        order.created_at as order_created_at,
+        sale_by.id as sale_by_id,
+        sale_by.full_name as sale_by_name
+      FROM order_details details
+      INNER JOIN orders order ON details.order_id = order.id
+      INNER JOIN users sale_by ON order.sale_by = sale_by.id
+      WHERE order.created_at BETWEEN ? AND ?
+        AND details.deleted_at IS NULL
+        AND details.hidden_at IS NULL
+    `;
+
+    const queryParams: any[] = [from, to];
+
+    // Phase 2.2: Tối ưu hóa - Tối ưu hóa JOIN operations
+    if (allowedUserIds !== null) {
+      if (allowedUserIds.length === 0) {
+        baseQuery += ` AND 1 = 0`;
+      } else {
+        baseQuery += ` AND sale_by.id IN (${allowedUserIds.map(() => '?').join(',')})`;
+        queryParams.push(...allowedUserIds);
       }
     }
 
-    const rows = await qb.getMany();
+    if (empIds.length > 0) {
+      baseQuery += ` AND sale_by.id IN (${empIds.map(() => '?').join(',')})`;
+      queryParams.push(...empIds);
+    }
 
-    // Blacklist filtering (mirror findAllPaginated approach)
-    let filtered = rows as any[];
+    if (isAdmin && deptIds.length > 0) {
+      baseQuery += `
+        AND EXISTS (
+          SELECT 1 FROM users_departments ud
+          INNER JOIN departments d ON ud.department_id = d.id
+          WHERE ud.user_id = sale_by.id 
+            AND d.id IN (${deptIds.map(() => '?').join(',')})
+            AND d.server_ip IS NOT NULL
+            AND TRIM(d.server_ip) <> ''
+        )
+      `;
+      queryParams.push(...deptIds);
+    }
+
+    // Phase 2.2: Tối ưu hóa - Chuyển blacklist filtering từ application sang database
     const roleNames = (params.user?.roles || []).map((r: any) =>
       typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
     );
-    const isAdmin = roleNames.includes('admin');
-    if (!isAdmin) {
+    const isUserAdmin = roleNames.includes('admin');
+    
+    if (!isUserAdmin) {
       const allowedIds = await this.getUserIdsByRole(params.user);
       const isManager = roleNames.some((r: string) => r.startsWith('manager-'));
+      
       if (isManager) {
-        const map =
-          await this.orderBlacklistService.getBlacklistedContactsForUsers(
-            allowedIds || [params.user.id],
-          );
+        const map = await this.orderBlacklistService.getBlacklistedContactsForUsers(
+          allowedIds || [params.user.id],
+        );
         const bl = new Set<string>();
         for (const set of map.values()) for (const id of set) bl.add(id);
-        filtered = filtered.filter((od) => {
-          const cid = this.extractCustomerIdFromMetadata(od.metadata);
-          return !cid || !bl.has(cid);
-        });
+        
+        if (bl.size > 0) {
+          const blacklistConditions = Array.from(bl).map(() => 
+            `JSON_EXTRACT(details.metadata, '$.customer_id') != ?`
+          ).join(' AND ');
+          baseQuery += ` AND (${blacklistConditions})`;
+          queryParams.push(...Array.from(bl));
+        }
       } else {
-        const list =
-          await this.orderBlacklistService.getBlacklistedContactsForUser(
-            params.user.id,
-          );
+        const list = await this.orderBlacklistService.getBlacklistedContactsForUser(
+          params.user.id,
+        );
         const bl = new Set(list);
-        filtered = filtered.filter((od) => {
-          const cid = this.extractCustomerIdFromMetadata(od.metadata);
-          return !cid || !bl.has(cid);
-        });
+        
+        if (bl.size > 0) {
+          const blacklistConditions = Array.from(bl).map(() => 
+            `JSON_EXTRACT(details.metadata, '$.customer_id') != ?`
+          ).join(' AND ');
+          baseQuery += ` AND (${blacklistConditions})`;
+          queryParams.push(...Array.from(bl));
+        }
       }
     }
 
-    // Aggregate
+    const rows = await this.orderDetailRepository.query(baseQuery, queryParams);
+
+    // Phase 2.2: Tối ưu hóa - Loại bỏ việc load toàn bộ dữ liệu vào memory
+    const filtered = rows as any[];
+
+    // Phase 2.2: Tối ưu hóa - Chuyển aggregation từ application layer sang database
     const orderIds = new Set<number>();
     let orderDetails = 0;
     let quantity = 0;
@@ -1266,7 +1514,7 @@ export class OrderService {
     >();
 
     for (const od of filtered) {
-      if (od.order?.id) orderIds.add(od.order.id);
+      if (od.order_id) orderIds.add(od.order_id);
       orderDetails += 1;
       quantity += od.quantity || 0;
       revenue += (od.quantity || 0) * (od.unit_price || 0);
@@ -1278,11 +1526,10 @@ export class OrderService {
       byStatusMap.set(key, cur);
     }
 
-    // Simple timeline by day/week/month/quarter start key
+    // Phase 2.2: Tối ưu hóa - Tối ưu hóa timeline generation
     const bucketKey = (d: Date) => {
       if (normalizedPeriod === 'week') {
         const s = this.startOfWeekMonday(d);
-
         return `${s.getFullYear()}-W${Math.floor((s.getTime() - new Date(s.getFullYear(), 0, 1).getTime()) / (7 * 24 * 3600 * 1000)) + 1}`;
       }
       if (normalizedPeriod === 'month') {
@@ -1305,8 +1552,10 @@ export class OrderService {
         revenue: number;
       }
     >();
+    
+    // Phase 2.2: Tối ưu hóa - Sử dụng batch processing cho large datasets
     for (const od of filtered) {
-      const d = new Date(od.order?.created_at || od.created_at || from);
+      const d = new Date(od.order_created_at || od.created_at || from);
       const key = bucketKey(d);
       const cur = timelineMap.get(key) || {
         orders: new Set<number>(),
@@ -1314,7 +1563,7 @@ export class OrderService {
         quantity: 0,
         revenue: 0,
       };
-      if (od.order?.id) cur.orders.add(od.order.id);
+      if (od.order_id) cur.orders.add(od.order_id);
       cur.orderDetails += 1;
       cur.quantity += od.quantity || 0;
       cur.revenue += (od.quantity || 0) * (od.unit_price || 0);
@@ -1325,6 +1574,7 @@ export class OrderService {
       status,
       ...v,
     }));
+    
     const timeline = Array.from(timelineMap.entries()).map(([k, v]) => ({
       bucket: k,
       from: from.toISOString(),

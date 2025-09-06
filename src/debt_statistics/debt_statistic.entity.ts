@@ -21,6 +21,12 @@ export enum DebtStatus {
 @Index('idx_status', ['status'])
 @Index('idx_employee_code_raw', ['employee_code_raw'])
 @Index('idx_due_date', ['due_date'])
+// Phase 1.1: Tối ưu hóa index cho debt statistics
+@Index('idx_debt_stats_date_status', ['statistic_date', 'status'])
+@Index('idx_debt_stats_employee_date', ['employee_code_raw', 'statistic_date'])
+@Index('idx_debt_stats_customer_date', ['customer_code', 'statistic_date'])
+@Index('idx_debt_stats_due_date', ['due_date', 'status'])
+@Index('idx_debt_stats_pay_later', ['pay_later', 'status'])
 export class DebtStatistic {
   @PrimaryGeneratedColumn()
   id: number;

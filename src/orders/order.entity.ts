@@ -14,6 +14,9 @@ import { User } from '../users/user.entity';
 import { OrderDetail } from '../order-details/order-detail.entity';
 
 @Entity('orders')
+// Phase 2.1: Tối ưu hóa index cho orders table
+@Index('idx_orders_created_sale', ['created_at', 'sale_by'])
+@Index('idx_orders_sale_created', ['sale_by', 'created_at'])
 export class Order {
   @PrimaryGeneratedColumn('increment', { type: 'bigint' })
   id: number;

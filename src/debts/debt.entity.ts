@@ -6,6 +6,7 @@ import {
   UpdateDateColumn,
   DeleteDateColumn,
   ManyToOne,
+  JoinColumn,
   Index,
 } from 'typeorm';
 import { DebtConfig } from '../debt_configs/debt_configs.entity';
@@ -23,8 +24,11 @@ export enum DebtStatus {
 @Index('idx_bill_code', ['bill_code'])
 @Index('idx_status', ['status'])
 @Index('idx_employee_code_raw', ['employee_code_raw'])
-@Index('idx_debt_config_id', ['debt_config'])
 @Index('idx_due_date', ['due_date'])
+// Phase 1.1: Tối ưu hóa index cho debts table
+@Index('idx_debts_updated_status', ['updated_at', 'status', 'deleted_at'])
+@Index('idx_debts_employee_status', ['employee_code_raw', 'status', 'deleted_at'])
+@Index('idx_debts_customer_status', ['debt_config_id', 'status', 'deleted_at'])
 export class Debt {
   @PrimaryGeneratedColumn()
   id: number;
@@ -85,7 +89,11 @@ export class Debt {
     onDelete: 'SET NULL',
     nullable: true 
   })
+  @JoinColumn({ name: 'debt_config_id' })
   debt_config: DebtConfig;
+
+  @Column({ type: 'int', nullable: true })
+  debt_config_id: number;
 
   @Column({
     type: 'tinyint',

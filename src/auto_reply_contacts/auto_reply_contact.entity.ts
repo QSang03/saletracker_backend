@@ -45,6 +45,12 @@ export class AutoReplyContact {
   @Column({ type: 'boolean', name: 'auto_reply_on', default: false })
   autoReplyOn: boolean;
 
+  @Column({ type: 'timestamp', name: 'auto_reply_enabled_at', nullable: true })
+  autoReplyEnabledAt: Date | null;
+
+  @Column({ type: 'timestamp', name: 'auto_reply_disabled_at', nullable: true })
+  autoReplyDisabledAt: Date | null;
+
   @ManyToOne(() => User, (user) => user.autoReplyContacts, {
     nullable: false,
     onDelete: 'CASCADE',
