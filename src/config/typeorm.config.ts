@@ -16,7 +16,7 @@ export const typeOrmConfig: TypeOrmModuleOptions = {
   migrations: [path.join(__dirname, '/../migrations/*{.ts,.js}')],
   autoLoadEntities: true,
   namingStrategy: new CustomNamingStrategy(),
-  synchronize: false,
+  synchronize: true,
   charset: 'utf8mb4_general_ci',
   logging: false,
   // Performance optimizations
