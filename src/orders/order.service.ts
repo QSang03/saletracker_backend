@@ -27,11 +27,11 @@ interface OrderFilters {
   sortField?:
     | 'quantity'
     | 'unit_price'
-  | 'extended'
-  | 'dynamicExtended'
-  | 'created_at'
-  | 'conversation_start'
-  | 'conversation_end'
+    | 'extended'
+    | 'dynamicExtended'
+    | 'created_at'
+    | 'conversation_start'
+    | 'conversation_end'
     | null;
   sortDirection?: 'asc' | 'desc' | null;
   user?: any; // truyền cả user object
@@ -54,18 +54,21 @@ export class OrderService {
     @InjectRepository(Product)
     private productRepository: Repository<Product>,
     private orderBlacklistService: OrderBlacklistService,
-  ) {  }
+  ) {}
 
   // Phase 2.6: Tối ưu hóa - Bulk hide operations
-  async bulkHideOrderDetails(orderDetailIds: number[], userId: number): Promise<{ success: boolean; affected: number; errors: string[] }> {
+  async bulkHideOrderDetails(
+    orderDetailIds: number[],
+    userId: number,
+  ): Promise<{ success: boolean; affected: number; errors: string[] }> {
     try {
       // Phase 2.6: Tối ưu hóa - Batch update để hide orders
       const result = await this.orderDetailRepository
         .createQueryBuilder()
         .update(OrderDetail)
-        .set({ 
+        .set({
           hidden_at: () => 'NOW()',
-          updated_at: () => 'NOW()'
+          updated_at: () => 'NOW()',
         })
         .where('id IN (:...ids)', { ids: orderDetailIds })
         .andWhere('hidden_at IS NULL') // Chỉ hide những order chưa bị hide
@@ -74,28 +77,31 @@ export class OrderService {
       return {
         success: true,
         affected: result.affected || 0,
-        errors: []
+        errors: [],
       };
     } catch (error) {
       this.logger.error('Error in bulkHideOrderDetails:', error);
       return {
         success: false,
         affected: 0,
-        errors: [error.message]
+        errors: [error.message],
       };
     }
   }
 
   // Phase 2.6: Tối ưu hóa - Bulk unhide operations
-  async bulkUnhideOrderDetails(orderDetailIds: number[], userId: number): Promise<{ success: boolean; affected: number; errors: string[] }> {
+  async bulkUnhideOrderDetails(
+    orderDetailIds: number[],
+    userId: number,
+  ): Promise<{ success: boolean; affected: number; errors: string[] }> {
     try {
       // Phase 2.6: Tối ưu hóa - Batch update để restore hidden orders
       const result = await this.orderDetailRepository
         .createQueryBuilder()
         .update(OrderDetail)
-        .set({ 
+        .set({
           hidden_at: null,
-          updated_at: () => 'NOW()'
+          updated_at: () => 'NOW()',
         })
         .where('id IN (:...ids)', { ids: orderDetailIds })
         .andWhere('hidden_at IS NOT NULL') // Chỉ restore những order đã bị hide
@@ -104,14 +110,14 @@ export class OrderService {
       return {
         success: true,
         affected: result.affected || 0,
-        errors: []
+        errors: [],
       };
     } catch (error) {
       this.logger.error('Error in bulkUnhideOrderDetails:', error);
       return {
         success: false,
         affected: 0,
-        errors: [error.message]
+        errors: [error.message],
       };
     }
   }
@@ -126,7 +132,7 @@ export class OrderService {
       employeeId?: number;
       dateFrom?: string;
       dateTo?: string;
-    }
+    },
   ): Promise<{
     data: OrderDetail[];
     hasMore: boolean;
@@ -146,13 +152,13 @@ export class OrderService {
           details.created_at,
           details.hidden_at,
           details.metadata,
-          order.id as order_id,
-          order.created_at as order_created_at,
+          ord.id as order_id,
+          ord.created_at as order_created_at,
           sale_by.id as sale_by_id,
           sale_by.full_name as sale_by_name
         FROM order_details details
-        INNER JOIN orders order ON details.order_id = order.id
-        INNER JOIN users sale_by ON order.sale_by = sale_by.id
+        INNER JOIN orders ord ON details.order_id = ord.id
+        INNER JOIN users sale_by ON ord.sale_by = sale_by.id
         WHERE details.hidden_at IS NOT NULL
           AND details.deleted_at IS NULL
       `;
@@ -202,10 +208,10 @@ export class OrderService {
       params.push(limit + 1); // +1 để check hasMore
 
       const results = await this.orderDetailRepository.query(query, params);
-      
+
       const hasMore = results.length > limit;
       const data = hasMore ? results.slice(0, limit) : results;
-      
+
       let nextCursor: string | undefined;
       if (hasMore && data.length > 0) {
         const lastItem = data[data.length - 1];
@@ -216,12 +222,12 @@ export class OrderService {
       let countQuery = `
         SELECT COUNT(*) as total
         FROM order_details details
-        INNER JOIN orders order ON details.order_id = order.id
-        INNER JOIN users sale_by ON order.sale_by = sale_by.id
+        INNER JOIN orders ord ON details.order_id = ord.id
+        INNER JOIN users sale_by ON ord.sale_by = sale_by.id
         WHERE details.hidden_at IS NOT NULL
           AND details.deleted_at IS NULL
       `;
-      
+
       const countParams: any[] = [];
       if (filters?.search) {
         countQuery += ` AND (
@@ -249,14 +255,17 @@ export class OrderService {
         countParams.push(filters.dateTo);
       }
 
-      const countResult = await this.orderDetailRepository.query(countQuery, countParams);
+      const countResult = await this.orderDetailRepository.query(
+        countQuery,
+        countParams,
+      );
       const total = countResult[0]?.total || 0;
 
       return {
         data,
         hasMore,
         nextCursor,
-        total
+        total,
       };
     } catch (error) {
       this.logger.error('Error in getHiddenOrdersPaginated:', error);
@@ -388,55 +397,56 @@ export class OrderService {
       typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
     );
 
-  const isAdmin = roleNames.includes('admin');
-  if (isAdmin) return null; // Admin có thể xem tất cả
+    const isAdmin = roleNames.includes('admin');
+    if (isAdmin) return null; // Admin có thể xem tất cả
 
-  // Kiểm tra role "view" - chỉ cho phép xem phòng ban được phân quyền
-  const isViewRole = roleNames.includes('view');
-  if (isViewRole) {
-    // Role view cần check phòng ban được phân quyền
-    let departmentIds: number[] = [];
-    
-    // Thử lấy từ user.departments trước
-    if (user.departments && user.departments.length > 0) {
-      departmentIds = user.departments.map((dept: any) => dept.id);
-    }
-    
-    // Nếu không có departments, thử lấy từ permissions
-    if (departmentIds.length === 0 && user.permissions) {
-      const permissionNames = user.permissions.map((p: any) => p.name);
-      const departmentSlugs = permissionNames.filter((name: string) => 
-        !name.includes('thong-ke') && !name.includes('thong_ke')
-      );
-      
-      if (departmentSlugs.length > 0) {
-        const departments = await this.departmentRepository
-          .createQueryBuilder('dept')
-          .where('dept.slug IN (:...slugs)', { slugs: departmentSlugs })
-          .andWhere('dept.server_ip IS NOT NULL')
-          .andWhere("TRIM(dept.server_ip) <> ''")
-          .getMany();
-        
-        departmentIds = departments.map((d) => d.id);
+    // Kiểm tra role "view" - chỉ cho phép xem phòng ban được phân quyền
+    const isViewRole = roleNames.includes('view');
+    if (isViewRole) {
+      // Role view cần check phòng ban được phân quyền
+      let departmentIds: number[] = [];
+
+      // Thử lấy từ user.departments trước
+      if (user.departments && user.departments.length > 0) {
+        departmentIds = user.departments.map((dept: any) => dept.id);
       }
-    }
-    
-    if (departmentIds.length === 0) {
-      return []; // Không có phòng ban nào được phân quyền
-    }
-    
-    // Lấy tất cả user trong các phòng ban được phân quyền
-    const usersInDepartments = await this.userRepository
-      .createQueryBuilder('user')
-      .leftJoin('user.departments', 'dept')
-      .where('dept.id IN (:...departmentIds)', { departmentIds })
-      .andWhere('user.deletedAt IS NULL')
-      .getMany();
 
-    return usersInDepartments.map((u) => u.id);
-  }
+      // Nếu không có departments, thử lấy từ permissions
+      if (departmentIds.length === 0 && user.permissions) {
+        const permissionNames = user.permissions.map((p: any) => p.name);
+        const departmentSlugs = permissionNames.filter(
+          (name: string) =>
+            !name.includes('thong-ke') && !name.includes('thong_ke'),
+        );
 
-        /**
+        if (departmentSlugs.length > 0) {
+          const departments = await this.departmentRepository
+            .createQueryBuilder('dept')
+            .where('dept.slug IN (:...slugs)', { slugs: departmentSlugs })
+            .andWhere('dept.server_ip IS NOT NULL')
+            .andWhere("TRIM(dept.server_ip) <> ''")
+            .getMany();
+
+          departmentIds = departments.map((d) => d.id);
+        }
+      }
+
+      if (departmentIds.length === 0) {
+        return []; // Không có phòng ban nào được phân quyền
+      }
+
+      // Lấy tất cả user trong các phòng ban được phân quyền
+      const usersInDepartments = await this.userRepository
+        .createQueryBuilder('user')
+        .leftJoin('user.departments', 'dept')
+        .where('dept.id IN (:...departmentIds)', { departmentIds })
+        .andWhere('user.deletedAt IS NULL')
+        .getMany();
+
+      return usersInDepartments.map((u) => u.id);
+    }
+
+    /**
      * Logic xử lý role PM:
      * - Nếu chỉ có role PM gốc → trả về mảng rỗng (không có dữ liệu)
      * - Nếu có role pm-{department} → lọc users theo phòng ban đó
@@ -451,7 +461,7 @@ export class OrderService {
 
       // Có role pm_{phong_ban} → lọc theo phòng ban đó
       const departmentSlugs = pmRoles.map((r: string) => r.replace('pm-', ''));
-      
+
       const departments = await this.departmentRepository
         .find({
           where: departmentSlugs.map((slug) => ({ slug, deletedAt: IsNull() })),
@@ -601,27 +611,27 @@ export class OrderService {
       typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
     );
 
-  const isAdmin = roleNames.includes('admin');
-  const isViewRole = roleNames.includes('view');
+    const isAdmin = roleNames.includes('admin');
+    const isViewRole = roleNames.includes('view');
 
-  // Luôn lấy danh sách user ids có role 'view' để loại bỏ khỏi kết quả (áp dụng cho mọi role)
-  const viewUserIds = new Set<number>();
-  try {
-    const raw = await this.userRepository
-      .createQueryBuilder('u')
-      .innerJoin('u.roles', 'r')
-      .where('LOWER(r.name) = :v', { v: 'view' })
-      .select('u.id', 'id')
-      .getRawMany();
-    raw.forEach((r: any) => {
-      const id = Number(r.id ?? r.u_id ?? r.uId ?? r.user_id ?? r.userId);
-      if (!isNaN(id)) viewUserIds.add(id);
-    });
-  } catch (e) {
-    // ignore errors - fallback to empty set
-  }
+    // Luôn lấy danh sách user ids có role 'view' để loại bỏ khỏi kết quả (áp dụng cho mọi role)
+    const viewUserIds = new Set<number>();
+    try {
+      const raw = await this.userRepository
+        .createQueryBuilder('u')
+        .innerJoin('u.roles', 'r')
+        .where('LOWER(r.name) = :v', { v: 'view' })
+        .select('u.id', 'id')
+        .getRawMany();
+      raw.forEach((r: any) => {
+        const id = Number(r.id ?? r.u_id ?? r.uId ?? r.user_id ?? r.userId);
+        if (!isNaN(id)) viewUserIds.add(id);
+      });
+    } catch (e) {
+      // ignore errors - fallback to empty set
+    }
 
-  if (isAdmin) {
+    if (isAdmin) {
       // Admin: lấy tất cả departments có server_ip khác null và khác rỗng
       const departments = await this.departmentRepository
         .find({
@@ -640,37 +650,38 @@ export class OrderService {
               users: (dep.users || []).filter((u) => !u.deletedAt),
             })),
         );
-  result.departments = departments.map((dept) => ({
+      result.departments = departments.map((dept) => ({
         value: dept.id,
         label: dept.name,
         slug: dept.slug,
         users: (dept.users || [])
           .filter((u) => {
             const uid = Number(u.id);
-    // Loại hoàn toàn user có role 'view' khỏi danh sách filter nhân viên
-    return !u.deletedAt && !viewUserIds.has(uid);
+            // Loại hoàn toàn user có role 'view' khỏi danh sách filter nhân viên
+            return !u.deletedAt && !viewUserIds.has(uid);
           })
           .map((u) => ({
             value: u.id,
             label: u.fullName || u.username,
           })),
       }));
-  } else if (isViewRole) {
+    } else if (isViewRole) {
       // Role view: chỉ lấy departments được phân quyền
       let departmentIds: number[] = [];
-      
+
       // Thử lấy từ user.departments trước
       if (user.departments && user.departments.length > 0) {
         departmentIds = user.departments.map((dept: any) => dept.id);
       }
-      
+
       // Nếu không có departments, thử lấy từ permissions
       if (departmentIds.length === 0 && user.permissions) {
         const permissionNames = user.permissions.map((p: any) => p.name);
-        const departmentSlugs = permissionNames.filter((name: string) => 
-          !name.includes('thong-ke') && !name.includes('thong_ke')
+        const departmentSlugs = permissionNames.filter(
+          (name: string) =>
+            !name.includes('thong-ke') && !name.includes('thong_ke'),
         );
-        
+
         if (departmentSlugs.length > 0) {
           const departments = await this.departmentRepository
             .createQueryBuilder('dept')
@@ -679,11 +690,11 @@ export class OrderService {
             .andWhere("TRIM(dept.server_ip) <> ''")
             .andWhere('dept.deletedAt IS NULL')
             .getMany();
-          
+
           departmentIds = departments.map((d) => d.id);
         }
       }
-      
+
       if (departmentIds.length > 0) {
         const departments = await this.departmentRepository
           .find({
@@ -703,14 +714,14 @@ export class OrderService {
                 users: (dep.users || []).filter((u) => !u.deletedAt),
               })),
           );
-    result.departments = departments.map((dept) => ({
+        result.departments = departments.map((dept) => ({
           value: dept.id,
           label: dept.name,
           slug: dept.slug,
           users: (dept.users || [])
             .filter((u) => {
               const uid = Number(u.id);
-      return !u.deletedAt && !viewUserIds.has(uid);
+              return !u.deletedAt && !viewUserIds.has(uid);
             })
             .map((u) => ({
               value: u.id,
@@ -720,11 +731,15 @@ export class OrderService {
       }
     } else {
       const pmRoles = roleNames.filter((r: string) => r.startsWith('pm-'));
-      const managerRoles = roleNames.filter((r: string) => r.startsWith('manager-'));
+      const managerRoles = roleNames.filter((r: string) =>
+        r.startsWith('manager-'),
+      );
 
       if (pmRoles.length > 0) {
         // PM: lấy departments theo pm-{slug} và tất cả users trong đó (có server_ip hợp lệ)
-        const departmentSlugs = pmRoles.map((r: string) => r.replace('pm-', ''));
+        const departmentSlugs = pmRoles.map((r: string) =>
+          r.replace('pm-', ''),
+        );
 
         const departments = await this.departmentRepository
           .find({
@@ -745,14 +760,14 @@ export class OrderService {
               })),
           );
 
-    result.departments = departments.map((dept) => ({
+        result.departments = departments.map((dept) => ({
           value: dept.id,
           label: dept.name,
           slug: dept.slug,
           users: (dept.users || [])
             .filter((u) => {
               const uid = Number(u.id);
-      return !u.deletedAt && !viewUserIds.has(uid);
+              return !u.deletedAt && !viewUserIds.has(uid);
             })
             .map((u) => ({
               value: u.id,
@@ -761,7 +776,9 @@ export class OrderService {
         }));
       } else if (managerRoles.length > 0) {
         // Manager: chỉ lấy department của mình và users trong đó, chỉ lấy department có server_ip hợp lệ
-        const departmentSlugs = managerRoles.map((r: string) => r.replace('manager-', ''));
+        const departmentSlugs = managerRoles.map((r: string) =>
+          r.replace('manager-', ''),
+        );
 
         const departments = await this.departmentRepository
           .find({
@@ -782,14 +799,14 @@ export class OrderService {
               })),
           );
 
-    result.departments = departments.map((dept) => ({
+        result.departments = departments.map((dept) => ({
           value: dept.id,
           label: dept.name,
           slug: dept.slug,
           users: (dept.users || [])
             .filter((u) => {
               const uid = Number(u.id);
-      return !u.deletedAt && !viewUserIds.has(uid);
+              return !u.deletedAt && !viewUserIds.has(uid);
             })
             .map((u) => ({
               value: u.id,
@@ -1149,6 +1166,7 @@ export class OrderService {
       products,
       warningLevel,
       quantity,
+      conversationType,
       sortField,
       sortDirection,
       user,
@@ -1169,16 +1187,18 @@ export class OrderService {
       if (!isAdminUser) {
         if (isManager) {
           const allowedUserIds = (await this.getUserIdsByRole(user)) || [];
-          const map = await this.orderBlacklistService.getBlacklistedContactsForUsers(
-            allowedUserIds,
-          );
+          const map =
+            await this.orderBlacklistService.getBlacklistedContactsForUsers(
+              allowedUserIds,
+            );
           const merged = new Set<string>();
           for (const set of map.values()) for (const id of set) merged.add(id);
           blacklistForSql = Array.from(merged);
         } else {
-          blacklistForSql = await this.orderBlacklistService.getBlacklistedContactsForUser(
-            user.id,
-          );
+          blacklistForSql =
+            await this.orderBlacklistService.getBlacklistedContactsForUser(
+              user.id,
+            );
         }
       }
     }
@@ -1206,9 +1226,9 @@ export class OrderService {
       .leftJoinAndSelect('details.product', 'product')
       .leftJoinAndSelect('order.sale_by', 'sale_by')
       .leftJoinAndSelect('sale_by.departments', 'sale_by_departments')
-  .addSelect(`${dynamicExpr}`, 'dynamicExtended')
-  .addSelect(convoStartExpr, 'conversation_start')
-  .addSelect(convoEndExpr, 'conversation_end');
+      .addSelect(`${dynamicExpr}`, 'dynamicExtended')
+      .addSelect(convoStartExpr, 'conversation_start')
+      .addSelect(convoEndExpr, 'conversation_end');
 
     // Permissions
     const allowedUserIds = await this.getUserIdsByRole(user);
@@ -1220,9 +1240,14 @@ export class OrderService {
     }
 
     // Basic filters
-    if (quantity !== undefined && quantity !== null && String(quantity).trim() !== '') {
+    if (
+      quantity !== undefined &&
+      quantity !== null &&
+      String(quantity).trim() !== ''
+    ) {
       const minQty = parseInt(String(quantity), 10);
-      if (!isNaN(minQty) && minQty > 0) qb.andWhere('details.quantity >= :minQty', { minQty });
+      if (!isNaN(minQty) && minQty > 0)
+        qb.andWhere('details.quantity >= :minQty', { minQty });
     }
 
     if (search) {
@@ -1234,8 +1259,14 @@ export class OrderService {
 
     if (status && status.trim()) {
       if (status.includes(',')) {
-        const statusArray = status.split(',').map((s) => s.trim()).filter((s) => s);
-        if (statusArray.length > 0) qb.andWhere('details.status IN (:...statuses)', { statuses: statusArray });
+        const statusArray = status
+          .split(',')
+          .map((s) => s.trim())
+          .filter((s) => s);
+        if (statusArray.length > 0)
+          qb.andWhere('details.status IN (:...statuses)', {
+            statuses: statusArray,
+          });
       } else {
         qb.andWhere('details.status = :status', { status });
       }
@@ -1245,25 +1276,38 @@ export class OrderService {
       const startDate = new Date(date);
       const endDate = new Date(date);
       endDate.setHours(23, 59, 59, 999);
-      qb.andWhere('order.created_at BETWEEN :startDate AND :endDate', { startDate, endDate });
+      qb.andWhere('order.created_at BETWEEN :startDate AND :endDate', {
+        startDate,
+        endDate,
+      });
     }
 
     if (dateRange && dateRange.start && dateRange.end) {
       const startDate = new Date(dateRange.start);
       const endDate = new Date(dateRange.end);
       endDate.setHours(23, 59, 59, 999);
-      qb.andWhere('order.created_at BETWEEN :rangeStart AND :rangeEnd', { rangeStart: startDate, rangeEnd: endDate });
+      qb.andWhere('order.created_at BETWEEN :rangeStart AND :rangeEnd', {
+        rangeStart: startDate,
+        rangeEnd: endDate,
+      });
     }
 
     if (employee) qb.andWhere('sale_by.id = :employee', { employee });
 
     if (employees) {
-      const employeeIds = employees.split(',').map((id) => parseInt(id.trim(), 10)).filter((id) => !isNaN(id));
-      if (employeeIds.length > 0) qb.andWhere('sale_by.id IN (:...employeeIds)', { employeeIds });
+      const employeeIds = employees
+        .split(',')
+        .map((id) => parseInt(id.trim(), 10))
+        .filter((id) => !isNaN(id));
+      if (employeeIds.length > 0)
+        qb.andWhere('sale_by.id IN (:...employeeIds)', { employeeIds });
     }
 
     if (departments) {
-      const departmentIds = departments.split(',').map((id) => parseInt(id.trim(), 10)).filter((id) => !isNaN(id));
+      const departmentIds = departments
+        .split(',')
+        .map((id) => parseInt(id.trim(), 10))
+        .filter((id) => !isNaN(id));
       if (departmentIds.length > 0) {
         qb.andWhere(
           `sale_by_departments.id IN (:...departmentIds) AND sale_by_departments.server_ip IS NOT NULL AND TRIM(sale_by_departments.server_ip) <> ''`,
@@ -1273,15 +1317,50 @@ export class OrderService {
     }
 
     if (products) {
-      const productIds = products.split(',').map((id) => parseInt(id.trim(), 10)).filter((id) => !isNaN(id));
-      if (productIds.length > 0) qb.andWhere('details.product_id IN (:...productIds)', { productIds });
+      const productIds = products
+        .split(',')
+        .map((id) => parseInt(id.trim(), 10))
+        .filter((id) => !isNaN(id));
+      if (productIds.length > 0)
+        qb.andWhere('details.product_id IN (:...productIds)', { productIds });
+    }
+
+    // Conversation type filter (group vs personal) based on metadata.conversation_info.is_group
+    // Accept CSV values like 'group', 'personal' (case-insensitive). If both provided, no filter is applied.
+    if (conversationType && conversationType.trim().length > 0) {
+      const tokens = conversationType
+        .split(',')
+        .map((s) => (s || '').trim().toLowerCase())
+        .filter((s) => s.length > 0);
+      const wantsGroup = tokens.includes('group');
+      const wantsPersonal =
+        tokens.includes('personal') ||
+        tokens.includes('private') ||
+        tokens.includes('individual');
+      if (wantsGroup && !wantsPersonal) {
+        qb.andWhere(
+          `JSON_EXTRACT(details.metadata, '$.conversation_info.is_group') = true`,
+        );
+      } else if (wantsPersonal && !wantsGroup) {
+        qb.andWhere(
+          `JSON_EXTRACT(details.metadata, '$.conversation_info.is_group') = false`,
+        );
+      }
+      // if both selected, do not add filter (show all)
     }
 
     // Phase 2.6: Tối ưu hóa - Sử dụng proper indexing cho hidden orders
     const wantsHidden = (includeHidden || '').toString().toLowerCase();
     const includeHiddenFlag = wantsHidden === '1' || wantsHidden === 'true';
-    const isAdminUser = this.isAdmin(user);
-    if (!(includeHiddenFlag && isAdminUser)) {
+    // Determine role-based permission: allow includeHidden for admins or PMs with pm-{dept} roles
+    const roleNamesForHidden = (user?.roles || []).map((r: any) =>
+      typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
+    );
+    const isAdminUser = roleNamesForHidden.includes('admin');
+    const hasPmRole = roleNamesForHidden.some((r: string) => r.startsWith('pm-'));
+    const allowHiddenByRole = isAdminUser || hasPmRole;
+
+    if (!(includeHiddenFlag && allowHiddenByRole)) {
       // Phase 2.6: Tối ưu hóa - Sử dụng composite index cho hidden_at + status
       qb.andWhere('details.hidden_at IS NULL');
     }
@@ -1289,14 +1368,20 @@ export class OrderService {
     // Apply blacklist filtering in SQL when available
     if (blacklistForSql && blacklistForSql.length > 0) {
       // Use JSON_UNQUOTE to compare JSON value with plain strings
-      qb.andWhere(`(details.metadata IS NULL OR JSON_UNQUOTE(JSON_EXTRACT(details.metadata, '$.customer_id')) NOT IN (:...blacklist))`, {
-        blacklist: blacklistForSql,
-      });
+      qb.andWhere(
+        `(details.metadata IS NULL OR JSON_UNQUOTE(JSON_EXTRACT(details.metadata, '$.customer_id')) NOT IN (:...blacklist))`,
+        {
+          blacklist: blacklistForSql,
+        },
+      );
     }
 
     // Warning level filter based on dynamicExtended
     if (warningLevel) {
-      const levels = warningLevel.split(',').map((l) => parseInt(l.trim(), 10)).filter((n) => !isNaN(n));
+      const levels = warningLevel
+        .split(',')
+        .map((l) => parseInt(l.trim(), 10))
+        .filter((n) => !isNaN(n));
       if (levels.length > 0) {
         qb.andWhere(`${dynamicExpr} IN (:...levels)`, { levels });
       }
@@ -1309,17 +1394,32 @@ export class OrderService {
       qb.orderBy('details.created_at', dir).addOrderBy('details.id', 'DESC');
     } else if (sortField === 'conversation_start' || !sortField) {
       // Order by computed conversation_start; if null, fallback to details.created_at
-      qb.orderBy('conversation_start', dir).addOrderBy('details.created_at', 'DESC');
+      qb.orderBy('conversation_start', dir).addOrderBy(
+        'details.created_at',
+        'DESC',
+      );
     } else if (sortField === 'conversation_end') {
       // Order by computed conversation_end; if null, fallback to details.created_at
-      qb.orderBy('conversation_end', dir).addOrderBy('details.created_at', 'DESC');
+      qb.orderBy('conversation_end', dir).addOrderBy(
+        'details.created_at',
+        'DESC',
+      );
     } else if (sortField === 'quantity') {
-      qb.orderBy('details.quantity', dir).addOrderBy('details.created_at', 'DESC');
+      qb.orderBy('details.quantity', dir).addOrderBy(
+        'details.created_at',
+        'DESC',
+      );
     } else if (sortField === 'unit_price') {
-      qb.orderBy('details.unit_price', dir).addOrderBy('details.created_at', 'DESC');
+      qb.orderBy('details.unit_price', dir).addOrderBy(
+        'details.created_at',
+        'DESC',
+      );
     } else {
       // default: dynamicExtended then created_at desc
-      qb.orderBy('dynamicExtended', dir).addOrderBy('details.created_at', 'DESC');
+      qb.orderBy('dynamicExtended', dir).addOrderBy(
+        'details.created_at',
+        'DESC',
+      );
     }
 
     // Log generated SQL for debugging filter behavior
@@ -1332,7 +1432,9 @@ export class OrderService {
     // Pagination with count at DB level
     const [data, total] = await qb.skip(skip).take(pageSize).getManyAndCount();
 
-    this.logger.debug(`OrderService.findAllPaginated: fetched ${data.length} rows (page ${page}) total ${total}`);
+    this.logger.debug(
+      `OrderService.findAllPaginated: fetched ${data.length} rows (page ${page}) total ${total}`,
+    );
 
     return { data, total, page, pageSize };
   }
@@ -1415,14 +1517,14 @@ export class OrderService {
         details.raw_item,
         details.created_at,
         details.metadata,
-        order.id as order_id,
-        order.created_at as order_created_at,
+        ord.id as order_id,
+        ord.created_at as order_created_at,
         sale_by.id as sale_by_id,
         sale_by.full_name as sale_by_name
       FROM order_details details
-      INNER JOIN orders order ON details.order_id = order.id
-      INNER JOIN users sale_by ON order.sale_by = sale_by.id
-      WHERE order.created_at BETWEEN ? AND ?
+      INNER JOIN orders ord ON details.order_id = ord.id
+      INNER JOIN users sale_by ON ord.sale_by = sale_by.id
+      WHERE ord.created_at BETWEEN ? AND ?
         AND details.deleted_at IS NULL
         AND details.hidden_at IS NULL
     `;
@@ -1463,35 +1565,37 @@ export class OrderService {
       typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
     );
     const isUserAdmin = roleNames.includes('admin');
-    
+
     if (!isUserAdmin) {
       const allowedIds = await this.getUserIdsByRole(params.user);
       const isManager = roleNames.some((r: string) => r.startsWith('manager-'));
-      
+
       if (isManager) {
-        const map = await this.orderBlacklistService.getBlacklistedContactsForUsers(
-          allowedIds || [params.user.id],
-        );
+        const map =
+          await this.orderBlacklistService.getBlacklistedContactsForUsers(
+            allowedIds || [params.user.id],
+          );
         const bl = new Set<string>();
         for (const set of map.values()) for (const id of set) bl.add(id);
-        
+
         if (bl.size > 0) {
-          const blacklistConditions = Array.from(bl).map(() => 
-            `JSON_EXTRACT(details.metadata, '$.customer_id') != ?`
-          ).join(' AND ');
+          const blacklistConditions = Array.from(bl)
+            .map(() => `JSON_EXTRACT(details.metadata, '$.customer_id') != ?`)
+            .join(' AND ');
           baseQuery += ` AND (${blacklistConditions})`;
           queryParams.push(...Array.from(bl));
         }
       } else {
-        const list = await this.orderBlacklistService.getBlacklistedContactsForUser(
-          params.user.id,
-        );
+        const list =
+          await this.orderBlacklistService.getBlacklistedContactsForUser(
+            params.user.id,
+          );
         const bl = new Set(list);
-        
+
         if (bl.size > 0) {
-          const blacklistConditions = Array.from(bl).map(() => 
-            `JSON_EXTRACT(details.metadata, '$.customer_id') != ?`
-          ).join(' AND ');
+          const blacklistConditions = Array.from(bl)
+            .map(() => `JSON_EXTRACT(details.metadata, '$.customer_id') != ?`)
+            .join(' AND ');
           baseQuery += ` AND (${blacklistConditions})`;
           queryParams.push(...Array.from(bl));
         }
@@ -1552,7 +1656,7 @@ export class OrderService {
         revenue: number;
       }
     >();
-    
+
     // Phase 2.2: Tối ưu hóa - Sử dụng batch processing cho large datasets
     for (const od of filtered) {
       const d = new Date(od.order_created_at || od.created_at || from);
@@ -1574,7 +1678,7 @@ export class OrderService {
       status,
       ...v,
     }));
-    
+
     const timeline = Array.from(timelineMap.entries()).map(([k, v]) => ({
       bucket: k,
       from: from.toISOString(),

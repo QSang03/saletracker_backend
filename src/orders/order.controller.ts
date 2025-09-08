@@ -42,11 +42,17 @@ export class OrderController {
     @Query('departments') departments?: string,
     @Query('products') products?: string,
     @Query('warningLevel') warningLevel?: string,
-  @Query('sortField') sortField?: 'quantity' | 'unit_price' | 'created_at' | 'conversation_start' | 'conversation_end',
+    @Query('sortField')
+    sortField?:
+      | 'quantity'
+      | 'unit_price'
+      | 'created_at'
+      | 'conversation_start'
+      | 'conversation_end',
     @Query('sortDirection') sortDirection?: 'asc' | 'desc',
-  @Query('quantity') quantity?: string,
-  @Query('conversationType') conversationType?: string,
-  @Query('includeHidden') includeHidden?: string,
+    @Query('quantity') quantity?: string,
+    @Query('conversationType') conversationType?: string,
+    @Query('includeHidden') includeHidden?: string,
     @Req() req?: any,
   ): Promise<{
     data: OrderDetail[];
@@ -59,7 +65,7 @@ export class OrderController {
       1000000,
       Math.max(1, parseInt(pageSize, 10) || 10),
     );
-    
+
     // Parse dateRange if provided
     let parsedDateRange;
     if (dateRange) {
@@ -69,9 +75,6 @@ export class OrderController {
         parsedDateRange = undefined;
       }
     }
-    
-    // Truyền cả user xuống service để phân quyền
-  this.logger.debug(`findAll called - page=${pageNum} pageSize=${pageSizeNum} quantity=${quantity} employees=${employees} departments=${departments}`);
     return this.orderService.findAllPaginated({
       page: pageNum,
       pageSize: pageSizeNum,
@@ -83,12 +86,12 @@ export class OrderController {
       employees,
       departments,
       products,
-  warningLevel,
-  quantity,
-  conversationType,
+      warningLevel,
+      quantity,
+      conversationType,
       sortField: sortField || null,
       sortDirection: sortDirection || null,
-  includeHidden,
+      includeHidden,
       user: req.user,
     });
   }
@@ -100,7 +103,11 @@ export class OrderController {
 
   @Get('filter-options')
   async getFilterOptions(@Req() req?: any): Promise<{
-    departments: Array<{ value: number; label: string; users: Array<{ value: number; label: string }> }>;
+    departments: Array<{
+      value: number;
+      label: string;
+      users: Array<{ value: number; label: string }>;
+    }>;
     products: Array<{ value: number; label: string }>;
   }> {
     return this.orderService.getFilterOptions(req.user);
@@ -199,7 +206,11 @@ export class OrderController {
     @Query('departments') departments?: string,
     @Req() req?: any,
   ): Promise<any> {
-    return this.orderService.getExpiredTodayStats({ employees, departments, user: req.user });
+    return this.orderService.getExpiredTodayStats({
+      employees,
+      departments,
+      user: req.user,
+    });
   }
 
   @Get(':id')
