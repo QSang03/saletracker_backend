@@ -104,7 +104,7 @@ export class OrderController {
 
   @Get('all')
   async findAllWithPermission(@Req() req?: any): Promise<Order[]> {
-    return this.orderService.findAllWithPermission(req.user);
+    return this.orderService.findAll();
   }
 
   @Get('filter-options')

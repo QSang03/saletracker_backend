@@ -15,6 +15,7 @@ import { DatabaseChangeLog } from 'src/observers/change_log.entity';
 import { DepartmentSchedule } from '../campaign_departments_schedules/campaign_departments_schedules.entity';
 import { Campaign } from '../campaigns/campaign.entity';
 import { CampaignSchedule } from '../campaign_schedules/campaign_schedule.entity';
+import { PermissionModule } from '../permissions/permission.module';
 import { ScheduleStatusUpdaterService } from './schedule-status-updater.service';
 import { OrderDetail } from 'src/order-details/order-detail.entity';
 import { SystemConfig } from 'src/system_config/system_config.entity';
@@ -24,14 +25,15 @@ import { OrderCleanupCronjobService } from './order-cleanup.cronjob.service';
   imports: [
     ScheduleModule.forRoot(),
     HttpModule,
+    PermissionModule,
     TypeOrmModule.forFeature([
-  NKCProduct, 
-  Product,
-  Brand,
-      Category, 
-      DebtStatistic, 
-      Debt, 
-      DebtHistory, 
+      NKCProduct,
+      Product,
+      Brand,
+      Category,
+      DebtStatistic,
+      Debt,
+      DebtHistory,
       DatabaseChangeLog,
       DepartmentSchedule,
       Campaign,
@@ -40,7 +42,17 @@ import { OrderCleanupCronjobService } from './order-cleanup.cronjob.service';
       SystemConfig,
     ]),
   ],
-  providers: [CronjobService, ScheduleStatusUpdaterService, OrderCleanupCronjobService, ProductV2CronjobService],
-  exports: [CronjobService, ScheduleStatusUpdaterService, OrderCleanupCronjobService, ProductV2CronjobService],
+  providers: [
+    CronjobService,
+    ScheduleStatusUpdaterService,
+    OrderCleanupCronjobService,
+    ProductV2CronjobService,
+  ],
+  exports: [
+    CronjobService,
+    ScheduleStatusUpdaterService,
+    OrderCleanupCronjobService,
+    ProductV2CronjobService,
+  ],
 })
 export class CronjobModule {}

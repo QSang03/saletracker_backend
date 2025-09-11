@@ -8,14 +8,13 @@ import { Role } from '../roles/role.entity';
 import { RolePermission } from '../roles_permissions/roles-permissions.entity';
 import { Brand } from '../brands/brand.entity';
 import { Category } from '../categories/category.entity';
-import { PermissionSyncService } from './permission.sync.service';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Permission, Role, RolePermission, Brand, Category]),
     forwardRef(() => AuthModule),
   ],
-  providers: [PermissionService, PermissionSyncService],
+  providers: [PermissionService],
   controllers: [PermissionController],
   exports: [PermissionService, TypeOrmModule],
 })

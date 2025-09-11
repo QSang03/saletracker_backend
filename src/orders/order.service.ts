@@ -463,18 +463,6 @@ export class OrderService {
      */
     const isPM = roleNames.includes('pm');
     if (isPM) {
-      // Ưu tiên role pm_<username> (quyền riêng) nếu tồn tại: khi đó bỏ qua pm main để chỉ dựa vào permissions đã attach vào role private
-      const privatePmRole = (user.roles || []).find((r: any) => r.name && r.name.toLowerCase() === `pm_${(user.username || '').toLowerCase()}`);
-      if (privatePmRole) {
-        // Sử dụng permissions hiện có (đã gắn vào role private) để lọc categories/brands; không xét pm-department
-        const permissions = (user.permissions || []).map((p: any) => typeof p === 'string' ? p : (p.name || ''));
-        const pmPrivatePerms = permissions.filter((p: string) => p.toLowerCase().startsWith('pm_'));
-        if (pmPrivatePerms.length === 0) {
-          return []; // không có quyền riêng cụ thể => không thấy đơn hàng nào (an toàn)
-        }
-        // Trả về null để downstream xử lý lọc theo cat/brand dựa trên list permissions này
-        return null;
-      }
       // Kiểm tra có role pm_{phong_ban} nào không
       const pmRoles = roleNames.filter((r: string) => r.startsWith('pm-'));
       
@@ -597,105 +585,97 @@ export class OrderService {
     const permissions = (user.permissions || []).map((p: any) =>
       typeof p === 'string' ? p : (p.name || ''),
     );
-    
-    const pmPermissions = permissions.filter((p: string) => 
-      p.toLowerCase().startsWith('pm_')
+    const pmPermissions = permissions.filter((p: string) =>
+      p.toLowerCase().startsWith('pm_'),
     );
-
-    if (pmPermissions.length === 0) {
-      return { categoryIds: [], brandIds: [] };
-    }
-
-    // Tạo slugs từ permissions (giống ProductService)
+    if (pmPermissions.length === 0) return { categoryIds: [], brandIds: [] };
     const permissionSlugs = pmPermissions
       .map((p: string) => p.toLowerCase().replace('pm_', ''))
       .map((s) => slugify(s, { lower: true, strict: true }));
-
-    // Lấy tất cả categories và brands
     const [allCategories, allBrands] = await Promise.all([
       this.categoryRepository.find({
         select: ['id', 'catName'],
         where: { deletedAt: IsNull() },
       }),
-      this.brandRepository.find({
-        select: ['id', 'name'],
+      this.brandRepository.find({ select: ['id', 'name'] }),
+    ]);
+    const allowedCategoryIds = allCategories
+      .filter((c) =>
+        permissionSlugs.includes(
+          slugify(c.catName || '', { lower: true, strict: true }),
+        ),
+      )
+      .map((c) => c.id);
+    const allowedBrandIds = allBrands
+      .filter((b) =>
+        permissionSlugs.includes(
+          slugify(b.name || '', { lower: true, strict: true }),
+        ),
+      )
+      .map((b) => b.id);
+    return { categoryIds: allowedCategoryIds, brandIds: allowedBrandIds };
+  }
+
+  // New explicit helper (defined earlier in patch, ensure it's present only once)
+  private async getExplicitBrandCategoryIdsFromPrivatePm(
+    user: any,
+  ): Promise<{ brandIds: number[]; categoryIds: number[] }> {
+    const roleNames = (user?.roles || []).map((r: any) =>
+      typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
+    );
+    const isPM = roleNames.includes('pm');
+    const hasPmDept = roleNames.some((r: string) => r.startsWith('pm-'));
+    const isAdmin = roleNames.includes('admin');
+    if (!isPM || hasPmDept || isAdmin) return { brandIds: [], categoryIds: [] };
+    const permNames: string[] = (user.permissions || []).map((p: any) =>
+      typeof p === 'string' ? p.toLowerCase() : (p.name || '').toLowerCase(),
+    );
+    const brandSlugs = permNames
+      .filter((p) => p.startsWith('pm_brand_'))
+      .map((p) => p.replace('pm_brand_', '').trim())
+      .map((s) => slugify(s, { lower: true, strict: true }))
+      .filter(Boolean);
+    const categorySlugs = permNames
+      .filter((p) => p.startsWith('pm_cat_'))
+      .map((p) => p.replace('pm_cat_', '').trim())
+      .map((s) => slugify(s, { lower: true, strict: true }))
+      .filter(Boolean);
+    if (brandSlugs.length === 0 && categorySlugs.length === 0)
+      return { brandIds: [], categoryIds: [] };
+    const [brands, categories] = await Promise.all([
+      this.brandRepository.find({ select: ['id', 'name'] }),
+      this.categoryRepository.find({
+        select: ['id', 'catName'],
+        where: { deletedAt: IsNull() },
       }),
     ]);
-
-    // Lọc categories và brands có slug khớp với permissions
-    const allowedCategoryIds = allCategories
-      .filter((c) => permissionSlugs.includes(slugify(c.catName || '', { lower: true, strict: true })))
-      .map((c) => c.id);
-
-    const allowedBrandIds = allBrands
-      .filter((b) => permissionSlugs.includes(slugify(b.name || '', { lower: true, strict: true })))
+    const brandIds = brands
+      .filter((b) =>
+        brandSlugs.includes(slugify(b.name || '', { lower: true, strict: true })),
+      )
       .map((b) => b.id);
-
-
-    return {
-      categoryIds: allowedCategoryIds,
-      brandIds: allowedBrandIds,
-    };
+    const categoryIds = categories
+      .filter((c) =>
+        categorySlugs.includes(
+          slugify(c.catName || '', { lower: true, strict: true }),
+        ),
+      )
+      .map((c) => c.id);
+    return { brandIds, categoryIds };
   }
 
-  async findAllWithPermission(user?: any): Promise<Order[]> {
-    const queryBuilder = this.orderRepository
-      .createQueryBuilder('order')
-      .leftJoinAndSelect('order.details', 'details')
-      .leftJoinAndSelect('details.product', 'product')
-      .leftJoinAndSelect('product.category', 'category')
-      .leftJoinAndSelect('product.brand', 'brand')
-      .leftJoinAndSelect('order.sale_by', 'sale_by')
-      .leftJoinAndSelect('sale_by.departments', 'sale_by_departments');
-
-    const allowedUserIds = await this.getUserIdsByRole(user);
-
-    if (allowedUserIds !== null) {
-      if (allowedUserIds.length === 0) {
-        queryBuilder.andWhere('1 = 0'); // Không có quyền xem gì
-      } else {
-        queryBuilder.andWhere('order.sale_by IN (:...userIds)', {
-          userIds: allowedUserIds,
-        });
-      }
-    } else if (user && user.roles) {
-      // allowedUserIds === null có nghĩa là PM chỉ có permissions
-      const roleNames = (user.roles || []).map((r: any) =>
-        typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
-      );
-      const isPM = roleNames.includes('pm');
-      const hasPmRoles = roleNames.some((r: string) => r.startsWith('pm-'));
-      
-      if (isPM && !hasPmRoles) {
-        // PM chỉ có permissions, lọc theo categories/brands
-        const { categoryIds, brandIds } = await this.getCategoryAndBrandIdsFromPMPermissions(user);
-
-        if (categoryIds.length > 0 || brandIds.length > 0) {
-          const conditions: string[] = [];
-          const params: any = {};
-
-          if (categoryIds.length > 0) {
-            conditions.push('category.id IN (:...categoryIds)');
-            params.categoryIds = categoryIds;
-          }
-
-          if (brandIds.length > 0) {
-            conditions.push('brand.id IN (:...brandIds)');
-            params.brandIds = brandIds;
-          }
-
-          if (conditions.length > 0) {
-            queryBuilder.andWhere(`(${conditions.join(' OR ')})`, params);
-          }
-        } else {
-          queryBuilder.andWhere('1 = 0'); // Không có categories/brands nào khớp
-        }
-      }
-    }
-    // Admin (allowedUserIds === null và không phải PM) không có điều kiện gì
-
-    return queryBuilder.getMany();
+  private isPrivatePm(user: any): boolean {
+    if (!user) return false;
+    const roleNames = (user.roles || []).map((r: any) =>
+      typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
+    );
+    return (
+      roleNames.includes('pm') &&
+      !roleNames.some((r: string) => r.startsWith('pm-')) &&
+      !roleNames.includes('admin')
+    );
   }
+  // Admin (allowedUserIds === null và không phải PM) không có điều kiện gì (logic áp dụng tại nơi gọi)
 
   async getFilterOptions(user?: any): Promise<{
     departments: Array<{
@@ -1369,38 +1349,34 @@ export class OrderService {
     }
     // allowedUserIds === null có nghĩa là PM chỉ có permissions, sẽ được xử lý ở logic bên dưới
 
-    // Thêm logic phân quyền cho PM permissions (khi PM chỉ có permissions, không có role phụ)
+    // PM private permission scoping (khi allowedUserIds === null): áp dụng logic mới pm_brand_/pm_cat_
     if (allowedUserIds === null && user && user.roles) {
-      const roleNames = (user.roles || []).map((r: any) =>
-        typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
-      );
+      const roleNames = (user.roles || []).map((r: any) => typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase());
       const isPM = roleNames.includes('pm');
-      const hasPmRoles = roleNames.some((r: string) => r.startsWith('pm-'));
-      
-      if (isPM && !hasPmRoles) {
-        // PM chỉ có permissions, không có role phụ
-        const { categoryIds, brandIds } = await this.getCategoryAndBrandIdsFromPMPermissions(user);
-
-        if (categoryIds.length > 0 || brandIds.length > 0) {
-          const conditions: string[] = [];
-          const params: any = {};
-
-          if (categoryIds.length > 0) {
-            conditions.push('category.id IN (:...categoryIds)');
-            params.categoryIds = categoryIds;
-          }
-
-          if (brandIds.length > 0) {
-            conditions.push('brand.id IN (:...brandIds)');
-            params.brandIds = brandIds;
-          }
-
-          if (conditions.length > 0) {
-            qb.andWhere(`(${conditions.join(' OR ')})`, params);
-          }
-        } else {
-          // Không có categories/brands nào khớp → không có dữ liệu
+      const hasPmDeptRole = roleNames.some(r => r.startsWith('pm-'));
+      if (isPM && !hasPmDeptRole) {
+        // Thu thập permission names (kể cả từ role private pm_<username>)
+        const permNames = (user.permissions || []).map((p: any) => typeof p === 'string' ? p.toLowerCase() : (p.name || '').toLowerCase());
+        // Lọc pm_brand_*, pm_cat_*
+        const brandSlugs = permNames.filter(p => p.startsWith('pm_brand_')).map(p => p.replace('pm_brand_', '').trim()).filter(Boolean);
+        const catSlugs = permNames.filter(p => p.startsWith('pm_cat_')).map(p => p.replace('pm_cat_', '').trim()).filter(Boolean);
+        if (brandSlugs.length === 0 && catSlugs.length === 0) {
+          return { data: [], total: 0, page, pageSize }; // Không có quyền riêng rõ ràng
+        }
+        // Map slugs -> ids
+        const allBrands = await this.brandRepository.find({ select: ['id', 'name'] });
+        const allCategories = await this.categoryRepository.find({ select: ['id', 'catName'] });
+        const brandIds = allBrands.filter(b => brandSlugs.includes(slugify(b.name || '', { lower: true, strict: true }))).map(b => b.id);
+        const categoryIds = allCategories.filter(c => catSlugs.includes(slugify(c.catName || '', { lower: true, strict: true }))).map(c => c.id);
+        if (brandIds.length === 0 && categoryIds.length === 0) {
           return { data: [], total: 0, page, pageSize };
+        }
+        if (brandIds.length > 0 && categoryIds.length > 0) {
+          qb.andWhere('brand.id IN (:...brandIds) AND category.id IN (:...categoryIds)', { brandIds, categoryIds });
+        } else if (brandIds.length > 0) {
+          qb.andWhere('brand.id IN (:...brandIds)', { brandIds });
+        } else if (categoryIds.length > 0) {
+          qb.andWhere('category.id IN (:...categoryIds)', { categoryIds });
         }
       }
     }
@@ -1513,17 +1489,66 @@ export class OrderService {
       }
     }
 
-    // Brand Categories filter - filter by both product brands and categories
+    // Brand Categories filter - hỗ trợ cú pháp kết hợp: pm_cat_<slug>+pm_brand_<slug>
     if (brandCategories) {
-      const brandCategoryNames = brandCategories
+      const tokens = brandCategories
         .split(',')
-        .map((name) => name.trim())
-        .filter((name) => name);
-      if (brandCategoryNames.length > 0) {
-        // Lọc theo cả brand name và category name
-        qb.andWhere('(brand.name IN (:...brandCategoryNames) OR category.catName IN (:...brandCategoryNames))', { 
-          brandCategoryNames 
+        .map((t) => t.trim())
+        .filter((t) => t.length > 0);
+      if (tokens.length > 0) {
+        const pairConds: string[] = [];
+        const params: Record<string, any> = {};
+        const brandSlugs: string[] = [];
+        const categorySlugs: string[] = [];
+        let pairIdx = 0;
+        tokens.forEach((tok) => {
+          if (tok.includes('+')) {
+            const parts = tok.split('+').map((p) => p.trim()).filter(Boolean);
+            let bSlug: string | null = null;
+            let cSlug: string | null = null;
+            parts.forEach((p) => {
+              const lower = p.toLowerCase();
+              if (lower.startsWith('pm_brand_')) {
+                bSlug = slugify(lower.replace('pm_brand_', ''), { lower: true, strict: true });
+              } else if (lower.startsWith('pm_cat_')) {
+                cSlug = slugify(lower.replace('pm_cat_', ''), { lower: true, strict: true });
+              }
+            });
+            if (bSlug && cSlug) {
+              pairConds.push(`(brand.slug = :b${pairIdx} AND category.slug = :c${pairIdx})`);
+              params[`b${pairIdx}`] = bSlug;
+              params[`c${pairIdx}`] = cSlug;
+              pairIdx++;
+            }
+          } else {
+            const lower = tok.toLowerCase();
+            if (lower.startsWith('pm_brand_')) {
+              brandSlugs.push(slugify(lower.replace('pm_brand_', ''), { lower: true, strict: true }));
+            } else if (lower.startsWith('pm_cat_')) {
+              categorySlugs.push(slugify(lower.replace('pm_cat_', ''), { lower: true, strict: true }));
+            } else {
+              // Fallback: treat as plain name -> match either brand.name or category.catName case-insensitively
+              // Use simple OR name conditions (added later)
+              const plain = tok;
+              // Store as slugs for attempt matching slug fields too
+              brandSlugs.push(slugify(plain, { lower: true, strict: true }));
+              categorySlugs.push(slugify(plain, { lower: true, strict: true }));
+            }
+          }
         });
+        const orBlocks: string[] = [];
+        if (pairConds.length > 0) orBlocks.push(pairConds.join(' OR '));
+        if (brandSlugs.length > 0) {
+          orBlocks.push('brand.slug IN (:...filterBrandSlugs)');
+          params.filterBrandSlugs = Array.from(new Set(brandSlugs));
+        }
+        if (categorySlugs.length > 0) {
+          orBlocks.push('category.slug IN (:...filterCatSlugs)');
+          params.filterCatSlugs = Array.from(new Set(categorySlugs));
+        }
+        if (orBlocks.length > 0) {
+          qb.andWhere(`(${orBlocks.join(' OR ')})`, params);
+        }
       }
     }
 

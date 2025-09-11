@@ -31,47 +31,48 @@ export class ProductService {
       .leftJoinAndSelect('p.category', 'c')
       .leftJoinAndSelect('p.brand', 'b');
 
-    // PM scoping by permissions (only for PM role, not admin/view)
+    // PM scoping by explicit private permissions: pm_brand_<slug>, pm_cat_<slug>
     if (filter?.user) {
-      const roles = getRoleNames(filter.user).map((r) => String(r).toLowerCase());
+      const roles = getRoleNames(filter.user).map(r => String(r).toLowerCase());
       const isAdmin = roles.includes('admin');
       const isView = roles.includes('view');
-      const isPM = roles.includes('pm') || roles.some((r) => r.startsWith('pm-'));
+      const isPM = roles.includes('pm') || roles.some(r => r.startsWith('pm-') || r.startsWith('pm_'));
       if (isPM && !isAdmin && !isView) {
-        const perms = getPermissions(filter.user)
-          .map((p) => String(p || ''))
-          .filter((name) => /^pm[_-]/i.test(name))
-          .map((name) => name.replace(/^pm[_-]/i, ''))
-          .map((s) => slugify(s, { lower: true, strict: true }));
+        const rawPerms = getPermissions(filter.user).map(p => String(p || '').toLowerCase());
+        const brandSlugs = rawPerms
+          .filter(p => p.startsWith('pm_brand_'))
+            .map(p => p.replace('pm_brand_', '').trim())
+            .map(p => slugify(p, { lower: true, strict: true }))
+            .filter(Boolean);
+        const categorySlugs = rawPerms
+          .filter(p => p.startsWith('pm_cat_'))
+            .map(p => p.replace('pm_cat_', '').trim())
+            .map(p => slugify(p, { lower: true, strict: true }))
+            .filter(Boolean);
 
-        if (perms.length > 0) {
-          // Map perms to allowed brand/category IDs by slugifying names
+        // If no explicit pm_brand_/pm_cat_ permissions => deny (private mode requires explicit grants)
+        if (brandSlugs.length === 0 && categorySlugs.length === 0) {
+          qb.andWhere('1=0');
+        } else {
           const brands = await this.brandRepo.find({ select: ['id', 'name'] });
           const categories = await this.categoryRepo.find({ select: ['id', 'catName'] });
           const allowedBrandIds = brands
-            .filter((b) => perms.includes(slugify(b.name || '', { lower: true, strict: true })))
-            .map((b) => b.id);
+            .filter(b => brandSlugs.includes(slugify(b.name || '', { lower: true, strict: true })))
+            .map(b => b.id);
           const allowedCategoryIds = categories
-            .filter((c) => perms.includes(slugify(c.catName || '', { lower: true, strict: true })))
-            .map((c) => c.id);
+            .filter(c => categorySlugs.includes(slugify(c.catName || '', { lower: true, strict: true })))
+            .map(c => c.id);
 
           if (allowedBrandIds.length === 0 && allowedCategoryIds.length === 0) {
-            // No access
             qb.andWhere('1=0');
           } else if (allowedBrandIds.length > 0 && allowedCategoryIds.length > 0) {
-            // Allow if brand OR category matches
-            qb.andWhere('(b.id IN (:...allowedBrandIds) OR c.id IN (:...allowedCategoryIds))', {
-              allowedBrandIds,
-              allowedCategoryIds,
-            });
+            // Both brand & category permissions: require product matches BOTH (cartesian pairs logic)
+            qb.andWhere('b.id IN (:...allowedBrandIds) AND c.id IN (:...allowedCategoryIds)', { allowedBrandIds, allowedCategoryIds });
           } else if (allowedBrandIds.length > 0) {
             qb.andWhere('b.id IN (:...allowedBrandIds)', { allowedBrandIds });
           } else if (allowedCategoryIds.length > 0) {
             qb.andWhere('c.id IN (:...allowedCategoryIds)', { allowedCategoryIds });
           }
-        } else {
-          // PM without any pm_cat_* or pm_brand_* permissions: no access
-          qb.andWhere('1=0');
         }
       }
     }
