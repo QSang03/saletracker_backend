@@ -463,6 +463,18 @@ export class OrderService {
      */
     const isPM = roleNames.includes('pm');
     if (isPM) {
+      // Ưu tiên role pm_<username> (quyền riêng) nếu tồn tại: khi đó bỏ qua pm main để chỉ dựa vào permissions đã attach vào role private
+      const privatePmRole = (user.roles || []).find((r: any) => r.name && r.name.toLowerCase() === `pm_${(user.username || '').toLowerCase()}`);
+      if (privatePmRole) {
+        // Sử dụng permissions hiện có (đã gắn vào role private) để lọc categories/brands; không xét pm-department
+        const permissions = (user.permissions || []).map((p: any) => typeof p === 'string' ? p : (p.name || ''));
+        const pmPrivatePerms = permissions.filter((p: string) => p.toLowerCase().startsWith('pm_'));
+        if (pmPrivatePerms.length === 0) {
+          return []; // không có quyền riêng cụ thể => không thấy đơn hàng nào (an toàn)
+        }
+        // Trả về null để downstream xử lý lọc theo cat/brand dựa trên list permissions này
+        return null;
+      }
       // Kiểm tra có role pm_{phong_ban} nào không
       const pmRoles = roleNames.filter((r: string) => r.startsWith('pm-'));
       

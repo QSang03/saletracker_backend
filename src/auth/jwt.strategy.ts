@@ -48,6 +48,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       zaloLinkStatus: payload.zaloLinkStatus,
       zaloName: payload.zaloName,
       avatarZalo: payload.avatarZalo,
+      isAdmin: payload.isAdmin || false, // Flag admin từ token
       roles: payload.roles || [],
       departments: payload.departments || [],
       permissions: payload.permissions || [],

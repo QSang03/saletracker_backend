@@ -876,6 +876,9 @@ export class UserService {
     const oldRoleIds = oldRoles.map((r) => r.id);
     const newRoleIds = newRoles.map((r) => r.id);
 
+  // Lấy id role pm chính (nếu user có) để tránh đụng chạm quyền riêng
+  const pmMainRoleId = [...oldRoles, ...newRoles].find(r => r.name === 'pm')?.id;
+
     await this.userRepo
       .createQueryBuilder()
       .relation(User, 'roles')
@@ -954,77 +957,76 @@ export class UserService {
       // Việc gán permissions cho pmPrivateSubRole sẽ xử lý sau ở khối tổng hợp
     }
 
-    // Gom và cập nhật permissions sau khi đã có các dynamic roles
+    // Gom & cập nhật permissions (đơn giản, tách rõ 3 nhóm: thường, view_sub, pm_private)
     if (rolePermissions && Array.isArray(rolePermissions)) {
-      const safeList = rolePermissions.filter(rp => rp && typeof rp.permissionId !== 'undefined');
-      const base: any[] = [];
-      const viewList: any[] = [];
-      const pmPrivateList: any[] = [];
+      const safeList = rolePermissions.filter(rp => rp && typeof rp.permissionId === 'number');
+      const base: { roleId: number; permissionId: number; isActive: boolean }[] = [];
+      const viewList: { roleId: number; permissionId: number; isActive: boolean }[] = [];
+      const pmPrivateList: { roleId: number; permissionId: number; isActive: boolean }[] = [];
 
       for (const rp of safeList) {
-        const ridRaw = rp.roleId;
         const pid = rp.permissionId;
+        const rid = rp.roleId;
         if (!pid) continue;
-        // roleId = 0 => placeholder chuyển sang dynamic tương ứng nếu có
-        if (ridRaw === 0) {
-          if (viewSubRole) {
-            viewList.push({ roleId: viewSubRole.id, permissionId: pid, isActive: rp.isActive });
-          } else if (pmPrivateSubRole) {
+
+        // Placeholder (roleId = 0) chỉ dùng cho dynamic sub roles
+        if (rid === 0) {
+          if (pmPrivateSubRole && pmPrivateRoleName) {
             pmPrivateList.push({ roleId: pmPrivateSubRole.id, permissionId: pid, isActive: rp.isActive });
+          } else if (viewSubRole && viewSubRoleName) {
+            viewList.push({ roleId: viewSubRole.id, permissionId: pid, isActive: rp.isActive });
           }
           continue;
         }
-        // roleId > 0
-        if (viewSubRole && ridRaw === viewSubRole.id) {
+
+        // View sub role
+        if (viewSubRole && rid === viewSubRole.id) {
           viewList.push({ roleId: viewSubRole.id, permissionId: pid, isActive: rp.isActive });
           continue;
         }
-        if (pmPrivateSubRole && ridRaw === pmPrivateSubRole.id) {
+
+        // PM private sub role
+        if (pmPrivateSubRole && rid === pmPrivateSubRole.id) {
           pmPrivateList.push({ roleId: pmPrivateSubRole.id, permissionId: pid, isActive: rp.isActive });
           continue;
         }
-        if (ridRaw && ridRaw > 0) {
-          base.push({ roleId: ridRaw, permissionId: pid, isActive: rp.isActive });
+
+        // Ngăn không cho quyền riêng chảy vào role pm chính nếu đang dùng pmPrivateRoleName
+        if (pmPrivateSubRole && pmPrivateRoleName && pmMainRoleId && rid === pmMainRoleId) {
+          // Bỏ qua hoàn toàn => đảm bảo không leak
+          continue;
         }
+
+        // Các role thường khác
+        if (rid > 0) base.push({ roleId: rid, permissionId: pid, isActive: rp.isActive });
       }
 
-      // Cập nhật permissions cho viewSubRole (và dọn dẹp)
+      // Upsert & cleanup view sub role
       if (viewSubRole) {
-        if (viewList.length > 0) {
-          await this.rolesPermissionsService.bulkUpdate(viewList);
-        }
+        if (viewList.length) await this.rolesPermissionsService.bulkUpdate(viewList);
         const existing = await this.rolesPermissionsService.findByRoleIds([viewSubRole.id]);
-        const keepIds = new Set(viewList.filter(x => x.isActive).map(x => x.permissionId));
+        const keep = new Set(viewList.filter(x => x.isActive).map(x => x.permissionId));
         for (const ex of existing) {
-          const pid = ex.permission?.id;
-            if (pid && !keepIds.has(pid)) {
-            await this.rolesPermissionsService.remove(ex.id);
-          }
+          const exPid = ex.permission?.id;
+          if (exPid && !keep.has(exPid)) await this.rolesPermissionsService.remove(ex.id);
         }
       }
 
-      // Cập nhật permissions cho pmPrivateSubRole (và dọn dẹp)
+      // Upsert & cleanup pm private role
       if (pmPrivateSubRole) {
-        if (pmPrivateList.length > 0) {
-          await this.rolesPermissionsService.bulkUpdate(pmPrivateList);
-        }
+        if (pmPrivateList.length) await this.rolesPermissionsService.bulkUpdate(pmPrivateList);
         const existing = await this.rolesPermissionsService.findByRoleIds([pmPrivateSubRole.id]);
-        const keepIds = new Set(pmPrivateList.filter(x => x.isActive).map(x => x.permissionId));
+        const keep = new Set(pmPrivateList.filter(x => x.isActive).map(x => x.permissionId));
         for (const ex of existing) {
-          const pid = ex.permission?.id;
-          if (pid && !keepIds.has(pid)) {
-            await this.rolesPermissionsService.remove(ex.id);
-          }
+          const exPid = ex.permission?.id;
+          if (exPid && !keep.has(exPid)) await this.rolesPermissionsService.remove(ex.id);
         }
       }
 
-      // Bulk cho các role còn lại
-      if (base.length > 0) {
-        await this.rolesPermissionsService.bulkUpdate(base);
-      }
+      if (base.length) await this.rolesPermissionsService.bulkUpdate(base);
     }
 
-    // 🧹 Cleanup: Xóa role pm_<username> nếu không còn quyền riêng nào được chọn
+  // 🧹 Cleanup: Xóa role pm_<username> nếu không còn quyền riêng nào được chọn
     try {
       const existingPmPrivateRoleName = `pm_${user.username}`;
 
@@ -1047,21 +1049,6 @@ export class UserService {
             await this.roleRepo.delete(existingPmPrivateRole.id);
             console.log('🧹 Đã xóa role pm riêng vì không còn quyền:', existingPmPrivateRoleName);
           }
-        }
-      } else if (pmPrivateRoleName && pmPrivateSubRole) {
-        // Trường hợp 2: Có gửi pmPrivateRoleName nhưng thực tế không có quyền nào active (edge, phòng front-end gửi rỗng)
-        const hasAnyActive = rolePermissions?.some(rp => (rp.roleId === pmPrivateSubRole.id || rp.roleId === 0) && rp.isActive) || false;
-        if (!hasAnyActive) {
-          // Gỡ role khỏi user & xóa
-            await this.userRepo
-              .createQueryBuilder()
-              .relation(User, 'roles')
-              .of(userId)
-              .remove(pmPrivateSubRole.id);
-          const rpList = await this.rolesPermissionsService.findByRoleIds([pmPrivateSubRole.id]);
-          for (const rp of rpList) await this.rolesPermissionsService.remove(rp.id);
-          await this.roleRepo.delete(pmPrivateSubRole.id);
-          console.log('🧹 Đã xóa role pm riêng (edge case rỗng):', pmPrivateRoleName);
         }
       }
     } catch (cleanupErr) {

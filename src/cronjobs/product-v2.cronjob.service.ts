@@ -87,7 +87,13 @@ export class ProductV2CronjobService {
               brand = foundBrand ?? undefined;
               if (!brand) {
                 try {
-                  const slug = String(brandName).toLowerCase().replace(/\s+/g, '-').slice(0, 255);
+                  const slug = String(brandName)
+                    .normalize('NFD')
+                    .replace(/[\u0300-\u036f]/g, '') // remove diacritics
+                    .toLowerCase()
+                    .replace(/[^a-z0-9]+/g, '-') // replace non-alnum with hyphen
+                    .replace(/^-+|-+$/g, '')
+                    .slice(0, 255);
                   brand = await this.brandRepo.save({ name: String(brandName).slice(0, 255), slug } as Brand);
                 } catch (e) {
                   this.logger.debug(`Failed to create brand '${brandName}': ${e?.message || e}`);
@@ -101,7 +107,13 @@ export class ProductV2CronjobService {
               category = foundCategory ?? undefined;
               if (!category) {
                 try {
-                  const slug = String(categoryName).toLowerCase().replace(/\s+/g, '-').slice(0, 255);
+                  const slug = String(categoryName)
+                    .normalize('NFD')
+                    .replace(/[\u0300-\u036f]/g, '') // remove diacritics
+                    .toLowerCase()
+                    .replace(/[^a-z0-9]+/g, '-') // replace non-alnum with hyphen
+                    .replace(/^-+|-+$/g, '')
+                    .slice(0, 255);
                   category = await this.categoryRepo.save({ catName: String(categoryName).slice(0, 255), slug } as Category);
                 } catch (e) {
                   this.logger.debug(`Failed to create category '${categoryName}': ${e?.message || e}`);

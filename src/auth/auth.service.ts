@@ -101,6 +101,7 @@ export class AuthService {
         })) || [];
     }
 
+    // Tạo payload tối giản cho admin để tránh tràn header
     const payload = {
       sub: updatedUser.id,
       id: updatedUser.id,
@@ -114,30 +115,33 @@ export class AuthService {
       zaloLinkStatus: updatedUser.zaloLinkStatus,
       zaloName: updatedUser.zaloName,
       avatarZalo: updatedUser.avatarZalo,
+      isAdmin, // Flag đặc biệt cho admin
       roles:
         updatedUser.roles?.map((role) => ({
           id: role.id,
           name: role.name,
           display_name: role.display_name,
         })) || [],
-      departments, // Sử dụng biến departments đã xử lý ở trên
-      permissions: [
-        // Null-safe flattening of active permissions (skip orphan rolePermissions lacking permission)
-        ...updatedUser.roles?.flatMap((role: Role) => {
-          if (!role?.rolePermissions) return [];
-          return (
-            role.rolePermissions
-              .filter(
-                (rp: RolePermission) =>
-                  !!rp && rp.isActive && !!rp.permission && !!rp.permission.name && !!rp.permission.action,
-              )
-              .map((rp: RolePermission) => ({
-                name: rp.permission!.name,
-                action: rp.permission!.action,
-              })) || []
-          );
-        }) || [],
-      ],
+      // Chỉ chứa departments và permissions nếu không phải admin
+      ...(isAdmin ? {} : {
+        departments,
+        permissions: [
+          ...updatedUser.roles?.flatMap((role: Role) => {
+            if (!role?.rolePermissions) return [];
+            return (
+              role.rolePermissions
+                .filter(
+                  (rp: RolePermission) =>
+                    !!rp && rp.isActive && !!rp.permission && !!rp.permission.name && !!rp.permission.action,
+                )
+                .map((rp: RolePermission) => ({
+                  name: rp.permission!.name,
+                  action: rp.permission!.action,
+                })) || []
+            );
+          }) || [],
+        ],
+      }),
       lastLogin: updatedUser.lastLogin,
     };
 
@@ -166,11 +170,21 @@ export class AuthService {
       last_login: updatedUser.lastLogin,
     });
 
+    const accessToken = this.jwtService.sign(payload, {
+      secret: this.configService.get<string>('JWT_SECRET'),
+      expiresIn: '30d', // Cập nhật thành 30 ngày
+    });
+
+    // In ra console để kiểm tra token admin
+    console.log('🔑 [ADMIN TOKEN] isAdmin:', isAdmin);
+    console.log('🔑 [ADMIN TOKEN] Token payload size:', JSON.stringify(payload).length, 'bytes');
+    console.log('🔑 [ADMIN TOKEN] Token length:', accessToken.length, 'characters');
+    if (isAdmin) {
+      console.log('🔑 [ADMIN TOKEN] Admin token created - departments and permissions excluded from payload');
+    }
+
     return {
-      access_token: this.jwtService.sign(payload, {
-        secret: this.configService.get<string>('JWT_SECRET'),
-        expiresIn: '30d', // Cập nhật thành 30 ngày
-      }),
+      access_token: accessToken,
       refresh_token: refreshToken,
       user: {
         id: updatedUser.id,
@@ -293,7 +307,7 @@ export class AuthService {
       if (found) server_ip = found.server_ip;
     }
     
-    // Tạo access token mới với đầy đủ thông tin
+    // Tạo access token mới với payload tối giản cho admin
     const accessPayload = {
       sub: user.id,
       id: user.id,
@@ -307,30 +321,34 @@ export class AuthService {
       zaloLinkStatus: user.zaloLinkStatus,
       zaloName: user.zaloName,
       avatarZalo: user.avatarZalo,
+      isAdmin, // Flag đặc biệt cho admin
       roles:
         user.roles?.map((role) => ({
           id: role.id,
           name: role.name,
           display_name: role.display_name,
         })) || [],
-      departments,
-      server_ip,
-      permissions: [
-        ...user.roles?.flatMap((role: Role) => {
-          if (!role?.rolePermissions) return [];
-          return (
-            role.rolePermissions
-              .filter(
-                (rp: RolePermission) =>
-                  !!rp && rp.isActive && !!rp.permission && !!rp.permission.name && !!rp.permission.action,
-              )
-              .map((rp: RolePermission) => ({
-                name: rp.permission!.name,
-                action: rp.permission!.action,
-              })) || []
-          );
-        }) || [],
-      ],
+      // Chỉ chứa departments và permissions nếu không phải admin
+      ...(isAdmin ? {} : {
+        departments,
+        server_ip,
+        permissions: [
+          ...user.roles?.flatMap((role: Role) => {
+            if (!role?.rolePermissions) return [];
+            return (
+              role.rolePermissions
+                .filter(
+                  (rp: RolePermission) =>
+                    !!rp && rp.isActive && !!rp.permission && !!rp.permission.name && !!rp.permission.action,
+                )
+                .map((rp: RolePermission) => ({
+                  name: rp.permission!.name,
+                  action: rp.permission!.action,
+                })) || []
+            );
+          }) || [],
+        ],
+      }),
       lastLogin: user.lastLogin,
     };
 
@@ -416,30 +434,34 @@ export class AuthService {
       zaloLinkStatus: user.zaloLinkStatus,
       zaloName: user.zaloName,
       avatarZalo: user.avatarZalo,
+      isAdmin, // Flag đặc biệt cho admin
       roles:
         user.roles?.map((role) => ({
           id: role.id,
           name: role.name,
           display_name: role.display_name,
         })) || [],
-      departments,
-      server_ip,
-      permissions: [
-        ...user.roles?.flatMap((role: Role) => {
-          if (!role?.rolePermissions) return [];
-          return (
-            role.rolePermissions
-              .filter(
-                (rp: RolePermission) =>
-                  !!rp && rp.isActive && !!rp.permission && !!rp.permission.name && !!rp.permission.action,
-              )
-              .map((rp: RolePermission) => ({
-                name: rp.permission!.name,
-                action: rp.permission!.action,
-              })) || []
-          );
-        }) || [],
-      ],
+      // Chỉ chứa departments và permissions nếu không phải admin
+      ...(isAdmin ? {} : {
+        departments,
+        server_ip,
+        permissions: [
+          ...user.roles?.flatMap((role: Role) => {
+            if (!role?.rolePermissions) return [];
+            return (
+              role.rolePermissions
+                .filter(
+                  (rp: RolePermission) =>
+                    !!rp && rp.isActive && !!rp.permission && !!rp.permission.name && !!rp.permission.action,
+                )
+                .map((rp: RolePermission) => ({
+                  name: rp.permission!.name,
+                  action: rp.permission!.action,
+                })) || []
+            );
+          }) || [],
+        ],
+      }),
       lastLogin: user.lastLogin,
     };
 
@@ -512,30 +534,34 @@ export class AuthService {
       zaloLinkStatus: user.zaloLinkStatus,
       zaloName: user.zaloName,
       avatarZalo: user.avatarZalo,
+      isAdmin, // Flag đặc biệt cho admin
       roles:
         user.roles?.map((role) => ({
           id: role.id,
           name: role.name,
           display_name: role.display_name,
         })) || [],
-      departments,
-      server_ip,
-      permissions: [
-        ...user.roles?.flatMap((role: Role) => {
-          if (!role?.rolePermissions) return [];
-          return (
-            role.rolePermissions
-              .filter(
-                (rp: RolePermission) =>
-                  !!rp && rp.isActive && !!rp.permission && !!rp.permission.name && !!rp.permission.action,
-              )
-              .map((rp: RolePermission) => ({
-                name: rp.permission!.name,
-                action: rp.permission!.action,
-              })) || []
-          );
-        }) || [],
-      ],
+      // Chỉ chứa departments và permissions nếu không phải admin
+      ...(isAdmin ? {} : {
+        departments,
+        server_ip,
+        permissions: [
+          ...user.roles?.flatMap((role: Role) => {
+            if (!role?.rolePermissions) return [];
+            return (
+              role.rolePermissions
+                .filter(
+                  (rp: RolePermission) =>
+                    !!rp && rp.isActive && !!rp.permission && !!rp.permission.name && !!rp.permission.action,
+                )
+                .map((rp: RolePermission) => ({
+                  name: rp.permission!.name,
+                  action: rp.permission!.action,
+                })) || []
+            );
+          }) || [],
+        ],
+      }),
       lastLogin: user.lastLogin,
     };
 
@@ -550,3 +576,6 @@ export class AuthService {
     };
   }
 }
+
+
+

@@ -1,45 +1,29 @@
-import { Module, forwardRef } from '@nestjs/common';
-import { TypeOrmModule } from '@nestjs/typeorm';
+import { Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
+import { PassportModule } from '@nestjs/passport';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import { Reflector } from '@nestjs/core';
-import { User } from '../users/user.entity';
 import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
 import { JwtStrategy } from './jwt.strategy';
-import { JwtAuthGuard } from './jwt-auth.guard';
-import { AuthGuard } from '../common/guards/auth.guard';
 import { UserModule } from '../users/user.module';
-import { Permission } from '../permissions/permission.entity';
-import { PermissionModule } from '../permissions/permission.module';
 import { DepartmentModule } from '../departments/department.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([User, Permission]),
+    PassportModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => ({
         secret: configService.get<string>('JWT_SECRET'),
-        signOptions: { expiresIn: '7d' },
-        global: true,
+        signOptions: { expiresIn: '30d' },
       }),
       inject: [ConfigService],
     }),
-    ConfigModule,
-    PermissionModule,
+    UserModule,
     DepartmentModule,
-    forwardRef(() => UserModule),
-  ],
-  providers: [
-    AuthService,
-    JwtStrategy,
-    AuthGuard,
-    JwtAuthGuard,
-    ConfigService,
-    Reflector,
   ],
   controllers: [AuthController],
-  exports: [AuthService, AuthGuard, JwtModule, JwtAuthGuard],
+  providers: [AuthService, JwtStrategy],
+  exports: [AuthService, JwtModule],
 })
 export class AuthModule {}
