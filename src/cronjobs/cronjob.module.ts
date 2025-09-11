@@ -3,7 +3,10 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { ScheduleModule } from '@nestjs/schedule';
 import { HttpModule } from '@nestjs/axios';
 import { CronjobService } from '../cronjobs/cronjob.service';
+import { ProductV2CronjobService } from './product-v2.cronjob.service';
 import { NKCProduct } from '../nkc_products/nkc_product.entity';
+import { Product } from '../products/product.entity';
+import { Brand } from '../brands/brand.entity';
 import { Category } from '../categories/category.entity';
 import { DebtStatistic } from '../debt_statistics/debt_statistic.entity';
 import { Debt } from '../debts/debt.entity';
@@ -22,7 +25,9 @@ import { OrderCleanupCronjobService } from './order-cleanup.cronjob.service';
     ScheduleModule.forRoot(),
     HttpModule,
     TypeOrmModule.forFeature([
-      NKCProduct, 
+  NKCProduct, 
+  Product,
+  Brand,
       Category, 
       DebtStatistic, 
       Debt, 
@@ -35,7 +40,7 @@ import { OrderCleanupCronjobService } from './order-cleanup.cronjob.service';
       SystemConfig,
     ]),
   ],
-  providers: [CronjobService, ScheduleStatusUpdaterService, OrderCleanupCronjobService],
-  exports: [CronjobService, ScheduleStatusUpdaterService, OrderCleanupCronjobService],
+  providers: [CronjobService, ScheduleStatusUpdaterService, OrderCleanupCronjobService, ProductV2CronjobService],
+  exports: [CronjobService, ScheduleStatusUpdaterService, OrderCleanupCronjobService, ProductV2CronjobService],
 })
 export class CronjobModule {}

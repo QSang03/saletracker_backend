@@ -79,10 +79,17 @@ export class UserController {
         Number(page),
         Number(limit),
         filter,
+        true, // exclude view users for manager
       );
     }
-
-    return { data: [], total: 0 };
+    // Other non-admin roles: still can see users but exclude 'view' users
+    return this.userService.findAll(
+      Number(page),
+      Number(limit),
+      filter,
+      user,
+      true, // excludeViewUsers
+    );
   }
 
   @Get('for-permission-management')
@@ -175,6 +182,7 @@ export class UserController {
         isActive: boolean;
       }[];
       viewSubRoleName?: string; // Thêm thông tin để tạo role "view con"
+  pmPrivateRoleName?: string; // Thêm thông tin để tạo role "pm riêng" (pm_<username>)
     },
   ) {
     // Gọi service cập nhật roles, departments, permissions, role-permissions cho user
@@ -185,6 +193,7 @@ export class UserController {
       body.permissionIds,
       body.rolePermissions,
       body.viewSubRoleName, // Truyền thông tin tạo role "view con"
+      body.pmPrivateRoleName, // Truyền thông tin tạo role pm riêng
     );
     return { success: true };
   }
@@ -392,5 +401,14 @@ export class UserController {
     if (roleIds.length === 0) return [];
     // Lấy tất cả role-permission mapping cho các role này
     return this.rolesPermissionsService.findByRoleIds(roleIds);
+  }
+
+  @Get(':id/zalo-link-status-logs')
+  async getZaloLinkStatusLogs(
+    @Param('id', ParseIntPipe) id: number,
+    @Query('page') page = '1',
+    @Query('limit') limit = '10',
+  ) {
+    return this.userService.getZaloLinkStatusLogs(id, Number(page), Number(limit));
   }
 }

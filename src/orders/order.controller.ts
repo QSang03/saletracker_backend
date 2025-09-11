@@ -41,6 +41,9 @@ export class OrderController {
     @Query('employees') employees?: string,
     @Query('departments') departments?: string,
     @Query('products') products?: string,
+    @Query('brands') brands?: string,
+    @Query('categories') categories?: string,
+    @Query('brandCategories') brandCategories?: string,
     @Query('warningLevel') warningLevel?: string,
     @Query('sortField')
     sortField?:
@@ -86,6 +89,9 @@ export class OrderController {
       employees,
       departments,
       products,
+      brands,
+      categories,
+      brandCategories,
       warningLevel,
       quantity,
       conversationType,

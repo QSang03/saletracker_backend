@@ -6,17 +6,22 @@ import {
   Param,
   Put,
   Delete,
+  UseGuards,
+  Req,
 } from '@nestjs/common';
 import { BrandService } from './brand.service';
 import { Brand } from './brand.entity';
+import { AuthGuard } from '../common/guards/auth.guard';
+import { Request } from 'express';
 
 @Controller('brands')
 export class BrandController {
   constructor(private readonly brandService: BrandService) {}
 
+  @UseGuards(AuthGuard)
   @Get()
-  findAll() {
-    return this.brandService.findAll();
+  findAll(@Req() req: Request) {
+    return this.brandService.findAll({ user: (req as any)?.user });
   }
 
   @Get(':id')

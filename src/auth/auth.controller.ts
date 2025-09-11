@@ -45,14 +45,20 @@ export class AuthController {
     if (!user) return null;
 
     // Trả về cả name và action cho mỗi permission
-    const permissions = user.roles.flatMap((role) =>
-      role.rolePermissions
-        .filter((rp) => rp.isActive)
-        .map((rp) => ({
-          name: rp.permission.name,
-          action: rp.permission.action,
-        })),
-    );
+    const permissions = user.roles.flatMap((role) => {
+      if (!role?.rolePermissions) return [];
+      return (
+        role.rolePermissions
+          .filter(
+            (rp) =>
+              !!rp && rp.isActive && !!rp.permission && !!rp.permission.name && !!rp.permission.action,
+          )
+          .map((rp) => ({
+            name: rp.permission!.name,
+            action: rp.permission!.action,
+          })) || []
+      );
+    });
 
     let departments: any;
     const isAdmin = user.roles?.some((role) => role.name === 'admin');

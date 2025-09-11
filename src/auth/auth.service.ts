@@ -122,15 +122,21 @@ export class AuthService {
         })) || [],
       departments, // Sử dụng biến departments đã xử lý ở trên
       permissions: [
-        ...updatedUser.roles?.flatMap(
-          (role: Role) =>
+        // Null-safe flattening of active permissions (skip orphan rolePermissions lacking permission)
+        ...updatedUser.roles?.flatMap((role: Role) => {
+          if (!role?.rolePermissions) return [];
+          return (
             role.rolePermissions
-              ?.filter((rp: RolePermission) => rp.isActive)
+              .filter(
+                (rp: RolePermission) =>
+                  !!rp && rp.isActive && !!rp.permission && !!rp.permission.name && !!rp.permission.action,
+              )
               .map((rp: RolePermission) => ({
-                name: rp.permission.name,
-                action: rp.permission.action,
-              })) || [],
-        ),
+                name: rp.permission!.name,
+                action: rp.permission!.action,
+              })) || []
+          );
+        }) || [],
       ],
       lastLogin: updatedUser.lastLogin,
     };
@@ -310,15 +316,20 @@ export class AuthService {
       departments,
       server_ip,
       permissions: [
-        ...user.roles?.flatMap(
-          (role: Role) =>
+        ...user.roles?.flatMap((role: Role) => {
+          if (!role?.rolePermissions) return [];
+          return (
             role.rolePermissions
-              ?.filter((rp: RolePermission) => rp.isActive)
+              .filter(
+                (rp: RolePermission) =>
+                  !!rp && rp.isActive && !!rp.permission && !!rp.permission.name && !!rp.permission.action,
+              )
               .map((rp: RolePermission) => ({
-                name: rp.permission.name,
-                action: rp.permission.action,
-              })) || [],
-        ),
+                name: rp.permission!.name,
+                action: rp.permission!.action,
+              })) || []
+          );
+        }) || [],
       ],
       lastLogin: user.lastLogin,
     };
@@ -414,15 +425,20 @@ export class AuthService {
       departments,
       server_ip,
       permissions: [
-        ...user.roles?.flatMap(
-          (role: Role) =>
+        ...user.roles?.flatMap((role: Role) => {
+          if (!role?.rolePermissions) return [];
+          return (
             role.rolePermissions
-              ?.filter((rp: RolePermission) => rp.isActive)
+              .filter(
+                (rp: RolePermission) =>
+                  !!rp && rp.isActive && !!rp.permission && !!rp.permission.name && !!rp.permission.action,
+              )
               .map((rp: RolePermission) => ({
-                name: rp.permission.name,
-                action: rp.permission.action,
-              })) || [],
-        ),
+                name: rp.permission!.name,
+                action: rp.permission!.action,
+              })) || []
+          );
+        }) || [],
       ],
       lastLogin: user.lastLogin,
     };
@@ -505,15 +521,20 @@ export class AuthService {
       departments,
       server_ip,
       permissions: [
-        ...user.roles?.flatMap(
-          (role: Role) =>
+        ...user.roles?.flatMap((role: Role) => {
+          if (!role?.rolePermissions) return [];
+          return (
             role.rolePermissions
-              ?.filter((rp: RolePermission) => rp.isActive)
+              .filter(
+                (rp: RolePermission) =>
+                  !!rp && rp.isActive && !!rp.permission && !!rp.permission.name && !!rp.permission.action,
+              )
               .map((rp: RolePermission) => ({
-                name: rp.permission.name,
-                action: rp.permission.action,
-              })) || [],
-        ),
+                name: rp.permission!.name,
+                action: rp.permission!.action,
+              })) || []
+          );
+        }) || [],
       ],
       lastLogin: user.lastLogin,
     };

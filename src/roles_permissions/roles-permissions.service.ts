@@ -13,6 +13,20 @@ export class RolesPermissionsService {
 
   async bulkUpdate(permissions: any[]): Promise<RolePermission[]> {
     if (!permissions || permissions.length === 0) return [];
+    // Defensive filter: loại bỏ bản ghi roleId không hợp lệ (null, 0, âm) hoặc permissionId thiếu
+    permissions = permissions.filter(p => {
+      const roleIdNum = typeof p.roleId === 'string' ? Number(p.roleId) : p.roleId;
+      const permIdNum = typeof p.permissionId === 'string' ? Number(p.permissionId) : p.permissionId;
+      const valid = roleIdNum && roleIdNum > 0 && permIdNum && permIdNum > 0;
+      if (!valid) {
+        // eslint-disable-next-line no-console
+        console.warn('⚠️  Bỏ qua rolePermission invalid:', p);
+      }
+      p.roleId = roleIdNum;
+      p.permissionId = permIdNum;
+      return valid;
+    });
+    if (permissions.length === 0) return [];
     const results: RolePermission[] = [];
     for (const item of permissions) {
       const { roleId, permissionId, isActive } = item;

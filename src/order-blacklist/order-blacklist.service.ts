@@ -508,6 +508,7 @@ export class OrderBlacklistService {
   // ✅ Thêm method để lấy departments cho filter
   async getDepartmentsForFilter(
     currentUser: any,
+    userIds?: number[],
   ): Promise<Array<{ value: number; label: string }>> {
     const userRoles = currentUser.roles
       ? currentUser.roles.map((role) => role.name)
@@ -519,12 +520,24 @@ export class OrderBlacklistService {
     );
 
     if (isAdmin || isViewRole) {
-      // Admin: lấy tất cả departments
-      const departments = await this.departmentRepository.find({
-        select: ['id', 'name'],
-        order: { name: 'ASC' },
-      });
-      return departments.map((dept) => ({ value: dept.id, label: dept.name }));
+      // Admin / view: nếu có userIds thì chỉ lấy departments mà các user đó thuộc về
+      if (userIds && userIds.length > 0) {
+        const departments = await this.departmentRepository
+          .createQueryBuilder('dept')
+          .innerJoin('dept.users', 'user')
+          .where('user.id IN (:...userIds)', { userIds })
+          .select(['dept.id', 'dept.name'])
+          .groupBy('dept.id')
+          .orderBy('dept.name', 'ASC')
+          .getMany();
+        return departments.map((dept) => ({ value: dept.id, label: dept.name }));
+      } else {
+        const departments = await this.departmentRepository.find({
+          select: ['id', 'name'],
+            order: { name: 'ASC' },
+        });
+        return departments.map((dept) => ({ value: dept.id, label: dept.name }));
+      }
     } else if (isManager) {
       // Manager: chỉ lấy departments có server_ip mà họ thuộc về
       const departments = await this.departmentRepository
@@ -536,6 +549,22 @@ export class OrderBlacklistService {
         .select(['dept.id', 'dept.name'])
         .orderBy('dept.name', 'ASC')
         .getMany();
+      // Nếu truyền userIds, giao với departments mà manager được phép
+      if (userIds && userIds.length > 0) {
+        const allowedDeptIds = new Set(departments.map((d) => d.id));
+        const filtered = await this.departmentRepository
+          .createQueryBuilder('dept')
+          .innerJoin('dept.users', 'user')
+          .where('user.id IN (:...userIds)', { userIds })
+          .andWhere('dept.id IN (:...allowedIds)', {
+            allowedIds: Array.from(allowedDeptIds),
+          })
+          .select(['dept.id', 'dept.name'])
+          .groupBy('dept.id')
+          .orderBy('dept.name', 'ASC')
+          .getMany();
+        return filtered.map((dept) => ({ value: dept.id, label: dept.name }));
+      }
       return departments.map((dept) => ({ value: dept.id, label: dept.name }));
     }
 

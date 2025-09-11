@@ -1,21 +1,22 @@
-import {
-  Entity,
-  PrimaryGeneratedColumn,
-  Column,
-  ManyToMany,
-  JoinTable,
-  ManyToOne,
-} from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, Index } from 'typeorm';
 import { Category } from '../categories/category.entity';
 import { Brand } from '../brands/brand.entity';
 
 @Entity({ name: 'products' })
+@Index('idx_products_code', ['productCode'])
+@Index('ft_products_name_desc', ['productName', 'description'], { fulltext: true })
 export class Product {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @Column({ name: 'product_name', type: 'varchar', length: 255 })
+  @Column({ name: 'product_code', type: 'varchar', length: 255 })
+  productCode: string;
+
+  @Column({ name: 'product_name', type: 'text' })
   productName: string;
+
+  @Column({ type: 'longtext', nullable: true })
+  description?: string;
 
   @Column({
     name: 'created_at',
@@ -32,12 +33,13 @@ export class Product {
   })
   updatedAt: Date;
 
-  @ManyToMany(() => Category, (category: Category) => category.products, {
+  @Index('idx_products_category_id')
+  @ManyToOne(() => Category, (category: Category) => category.products, {
     nullable: true,
   })
-  @JoinTable({ name: 'product_categories' })
-  categories?: Category[];
+  category?: Category;
 
+  @Index('idx_products_brand_id')
   @ManyToOne(() => Brand, (brand: Brand) => brand.products, { nullable: true })
   brand?: Brand;
 }

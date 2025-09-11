@@ -72,8 +72,20 @@ export class OrderBlacklistController {
 
   // ✅ Thêm endpoint để lấy departments cho filter
   @Get('filter-options/departments')
-  async getDepartmentsForFilter(@Request() req: any) {
-    return await this.orderBlacklistService.getDepartmentsForFilter(req.user);
+  async getDepartmentsForFilter(
+    @Query('users') users: string,
+    @Request() req: any,
+  ) {
+    const userIds = users
+      ? users
+          .split(',')
+          .map((id) => Number(id))
+          .filter((id) => !isNaN(id))
+      : [];
+    return await this.orderBlacklistService.getDepartmentsForFilter(
+      req.user,
+      userIds,
+    );
   }
 
   // ✅ Thêm endpoint để lấy users cho filter

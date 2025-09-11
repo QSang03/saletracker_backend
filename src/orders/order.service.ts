@@ -6,8 +6,11 @@ import { OrderDetail } from 'src/order-details/order-detail.entity';
 import { Department } from 'src/departments/department.entity';
 import { User } from 'src/users/user.entity';
 import { Product } from 'src/products/product.entity';
+import { Brand } from 'src/brands/brand.entity';
+import { Category } from 'src/categories/category.entity';
 import { OrderBlacklistService } from '../order-blacklist/order-blacklist.service';
 import { Logger } from '@nestjs/common';
+import slugify from 'slugify';
 
 interface OrderFilters {
   page: number;
@@ -21,6 +24,9 @@ interface OrderFilters {
   employees?: string;
   departments?: string;
   products?: string;
+  brands?: string;
+  categories?: string;
+  brandCategories?: string;
   quantity?: string;
   conversationType?: string;
   warningLevel?: string;
@@ -53,6 +59,10 @@ export class OrderService {
     private userRepository: Repository<User>,
     @InjectRepository(Product)
     private productRepository: Repository<Product>,
+    @InjectRepository(Brand)
+    private brandRepository: Repository<Brand>,
+    @InjectRepository(Category)
+    private categoryRepository: Repository<Category>,
     private orderBlacklistService: OrderBlacklistService,
   ) {}
 
@@ -448,45 +458,62 @@ export class OrderService {
 
     /**
      * Logic xử lý role PM:
-     * - Nếu chỉ có role PM gốc → trả về mảng rỗng (không có dữ liệu)
-     * - Nếu có role pm-{department} → lọc users theo phòng ban đó
+     * - Nếu có role pm-{department} → lọc users theo phòng ban đó (logic cũ)
+     * - Nếu chỉ có role PM và có permissions pm_cat_* hoặc pm_brand_* → lọc theo categories/brands
      */
     const isPM = roleNames.includes('pm');
     if (isPM) {
       // Kiểm tra có role pm_{phong_ban} nào không
       const pmRoles = roleNames.filter((r: string) => r.startsWith('pm-'));
-      if (pmRoles.length === 0) {
-        return []; // Chỉ có PM mà không có pm_{phong_ban} → trả về mảng rỗng
-      }
+      
+      if (pmRoles.length > 0) {
+        // Có role pm_{phong_ban} → lọc theo phòng ban đó (logic cũ)
+        const departmentSlugs = pmRoles.map((r: string) => r.replace('pm-', ''));
 
-      // Có role pm_{phong_ban} → lọc theo phòng ban đó
-      const departmentSlugs = pmRoles.map((r: string) => r.replace('pm-', ''));
+        const departments = await this.departmentRepository
+          .find({
+            where: departmentSlugs.map((slug) => ({ slug, deletedAt: IsNull() })),
+          })
+          .then((departments) =>
+            departments.filter(
+              (dep) => dep.server_ip && dep.server_ip.trim() !== '',
+            ),
+          );
 
-      const departments = await this.departmentRepository
-        .find({
-          where: departmentSlugs.map((slug) => ({ slug, deletedAt: IsNull() })),
-        })
-        .then((departments) =>
-          departments.filter(
-            (dep) => dep.server_ip && dep.server_ip.trim() !== '',
-          ),
+        if (departments.length > 0) {
+          const departmentIds = departments.map((d) => d.id);
+
+          if (departmentIds.length === 0) return [];
+
+          const usersInDepartments = await this.userRepository
+            .createQueryBuilder('user')
+            .leftJoin('user.departments', 'dept')
+            .where('dept.id IN (:...departmentIds)', { departmentIds })
+            .andWhere('user.deletedAt IS NULL')
+            .getMany();
+
+          return usersInDepartments.map((u) => u.id);
+        }
+        return []; // PM không có department hợp lệ
+      } else {
+        // Chỉ có role PM, kiểm tra permissions pm_cat_* hoặc pm_brand_*
+        // Trả về null để báo hiệu cần lọc theo categories/brands trong findAllPaginated
+        const permissions = (user.permissions || []).map((p: any) =>
+          typeof p === 'string' ? p : (p.name || ''),
+        );
+        
+        const pmPermissions = permissions.filter((p: string) => 
+          p.toLowerCase().startsWith('pm_')
         );
 
-      if (departments.length > 0) {
-        const departmentIds = departments.map((d) => d.id);
-
-        if (departmentIds.length === 0) return [];
-
-        const usersInDepartments = await this.userRepository
-          .createQueryBuilder('user')
-          .leftJoin('user.departments', 'dept')
-          .where('dept.id IN (:...departmentIds)', { departmentIds })
-          .andWhere('user.deletedAt IS NULL')
-          .getMany();
-
-        return usersInDepartments.map((u) => u.id);
+        if (pmPermissions.length > 0) {
+          // Trả về null để báo hiệu cần lọc theo categories/brands
+          // Logic lọc sẽ được xử lý trong findAllPaginated
+          return null;
+        }
+        
+        return []; // PM không có permissions hợp lệ
       }
-      return []; // PM không có department hợp lệ
     }
 
     const managerRoles = roleNames.filter((r: string) =>
@@ -550,10 +577,62 @@ export class OrderService {
     }
   }
 
+  // Helper method để lấy category và brand IDs từ PM permissions
+  private async getCategoryAndBrandIdsFromPMPermissions(user: any): Promise<{
+    categoryIds: number[];
+    brandIds: number[];
+  }> {
+    const permissions = (user.permissions || []).map((p: any) =>
+      typeof p === 'string' ? p : (p.name || ''),
+    );
+    
+    const pmPermissions = permissions.filter((p: string) => 
+      p.toLowerCase().startsWith('pm_')
+    );
+
+    if (pmPermissions.length === 0) {
+      return { categoryIds: [], brandIds: [] };
+    }
+
+    // Tạo slugs từ permissions (giống ProductService)
+    const permissionSlugs = pmPermissions
+      .map((p: string) => p.toLowerCase().replace('pm_', ''))
+      .map((s) => slugify(s, { lower: true, strict: true }));
+
+    // Lấy tất cả categories và brands
+    const [allCategories, allBrands] = await Promise.all([
+      this.categoryRepository.find({
+        select: ['id', 'catName'],
+        where: { deletedAt: IsNull() },
+      }),
+      this.brandRepository.find({
+        select: ['id', 'name'],
+      }),
+    ]);
+
+    // Lọc categories và brands có slug khớp với permissions
+    const allowedCategoryIds = allCategories
+      .filter((c) => permissionSlugs.includes(slugify(c.catName || '', { lower: true, strict: true })))
+      .map((c) => c.id);
+
+    const allowedBrandIds = allBrands
+      .filter((b) => permissionSlugs.includes(slugify(b.name || '', { lower: true, strict: true })))
+      .map((b) => b.id);
+
+
+    return {
+      categoryIds: allowedCategoryIds,
+      brandIds: allowedBrandIds,
+    };
+  }
+
   async findAllWithPermission(user?: any): Promise<Order[]> {
     const queryBuilder = this.orderRepository
       .createQueryBuilder('order')
       .leftJoinAndSelect('order.details', 'details')
+      .leftJoinAndSelect('details.product', 'product')
+      .leftJoinAndSelect('product.category', 'category')
+      .leftJoinAndSelect('product.brand', 'brand')
       .leftJoinAndSelect('order.sale_by', 'sale_by')
       .leftJoinAndSelect('sale_by.departments', 'sale_by_departments');
 
@@ -567,8 +646,41 @@ export class OrderService {
           userIds: allowedUserIds,
         });
       }
+    } else if (user && user.roles) {
+      // allowedUserIds === null có nghĩa là PM chỉ có permissions
+      const roleNames = (user.roles || []).map((r: any) =>
+        typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
+      );
+      const isPM = roleNames.includes('pm');
+      const hasPmRoles = roleNames.some((r: string) => r.startsWith('pm-'));
+      
+      if (isPM && !hasPmRoles) {
+        // PM chỉ có permissions, lọc theo categories/brands
+        const { categoryIds, brandIds } = await this.getCategoryAndBrandIdsFromPMPermissions(user);
+
+        if (categoryIds.length > 0 || brandIds.length > 0) {
+          const conditions: string[] = [];
+          const params: any = {};
+
+          if (categoryIds.length > 0) {
+            conditions.push('category.id IN (:...categoryIds)');
+            params.categoryIds = categoryIds;
+          }
+
+          if (brandIds.length > 0) {
+            conditions.push('brand.id IN (:...brandIds)');
+            params.brandIds = brandIds;
+          }
+
+          if (conditions.length > 0) {
+            queryBuilder.andWhere(`(${conditions.join(' OR ')})`, params);
+          }
+        } else {
+          queryBuilder.andWhere('1 = 0'); // Không có categories/brands nào khớp
+        }
+      }
     }
-    // Admin (allowedUserIds === null) không có điều kiện gì
+    // Admin (allowedUserIds === null và không phải PM) không có điều kiện gì
 
     return queryBuilder.getMany();
   }
@@ -1164,6 +1276,9 @@ export class OrderService {
       employees,
       departments,
       products,
+      brands,
+      categories,
+      brandCategories,
       warningLevel,
       quantity,
       conversationType,
@@ -1224,6 +1339,8 @@ export class OrderService {
       .createQueryBuilder('details')
       .leftJoinAndSelect('details.order', 'order')
       .leftJoinAndSelect('details.product', 'product')
+      .leftJoinAndSelect('product.category', 'category')
+      .leftJoinAndSelect('product.brand', 'brand')
       .leftJoinAndSelect('order.sale_by', 'sale_by')
       .leftJoinAndSelect('sale_by.departments', 'sale_by_departments')
       .addSelect(`${dynamicExpr}`, 'dynamicExtended')
@@ -1237,6 +1354,43 @@ export class OrderService {
         return { data: [], total: 0, page, pageSize };
       }
       qb.andWhere('sale_by.id IN (:...userIds)', { userIds: allowedUserIds });
+    }
+    // allowedUserIds === null có nghĩa là PM chỉ có permissions, sẽ được xử lý ở logic bên dưới
+
+    // Thêm logic phân quyền cho PM permissions (khi PM chỉ có permissions, không có role phụ)
+    if (allowedUserIds === null && user && user.roles) {
+      const roleNames = (user.roles || []).map((r: any) =>
+        typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
+      );
+      const isPM = roleNames.includes('pm');
+      const hasPmRoles = roleNames.some((r: string) => r.startsWith('pm-'));
+      
+      if (isPM && !hasPmRoles) {
+        // PM chỉ có permissions, không có role phụ
+        const { categoryIds, brandIds } = await this.getCategoryAndBrandIdsFromPMPermissions(user);
+
+        if (categoryIds.length > 0 || brandIds.length > 0) {
+          const conditions: string[] = [];
+          const params: any = {};
+
+          if (categoryIds.length > 0) {
+            conditions.push('category.id IN (:...categoryIds)');
+            params.categoryIds = categoryIds;
+          }
+
+          if (brandIds.length > 0) {
+            conditions.push('brand.id IN (:...brandIds)');
+            params.brandIds = brandIds;
+          }
+
+          if (conditions.length > 0) {
+            qb.andWhere(`(${conditions.join(' OR ')})`, params);
+          }
+        } else {
+          // Không có categories/brands nào khớp → không có dữ liệu
+          return { data: [], total: 0, page, pageSize };
+        }
+      }
     }
 
     // Basic filters
@@ -1323,6 +1477,42 @@ export class OrderService {
         .filter((id) => !isNaN(id));
       if (productIds.length > 0)
         qb.andWhere('details.product_id IN (:...productIds)', { productIds });
+    }
+
+    // Brands filter - filter by product brands
+    if (brands) {
+      const brandNames = brands
+        .split(',')
+        .map((name) => name.trim())
+        .filter((name) => name);
+      if (brandNames.length > 0) {
+        qb.andWhere('brand.name IN (:...brandNames)', { brandNames });
+      }
+    }
+
+    // Categories filter - filter by product categories
+    if (categories) {
+      const categoryNames = categories
+        .split(',')
+        .map((name) => name.trim())
+        .filter((name) => name);
+      if (categoryNames.length > 0) {
+        qb.andWhere('category.catName IN (:...categoryNames)', { categoryNames });
+      }
+    }
+
+    // Brand Categories filter - filter by both product brands and categories
+    if (brandCategories) {
+      const brandCategoryNames = brandCategories
+        .split(',')
+        .map((name) => name.trim())
+        .filter((name) => name);
+      if (brandCategoryNames.length > 0) {
+        // Lọc theo cả brand name và category name
+        qb.andWhere('(brand.name IN (:...brandCategoryNames) OR category.catName IN (:...brandCategoryNames))', { 
+          brandCategoryNames 
+        });
+      }
     }
 
     // Conversation type filter (group vs personal) based on metadata.conversation_info.is_group
@@ -1443,6 +1633,9 @@ export class OrderService {
     const qb = this.orderRepository
       .createQueryBuilder('order')
       .leftJoinAndSelect('order.details', 'details')
+      .leftJoinAndSelect('details.product', 'product')
+      .leftJoinAndSelect('product.category', 'category')
+      .leftJoinAndSelect('product.brand', 'brand')
       .leftJoinAndSelect('order.sale_by', 'sale_by')
       .leftJoinAndSelect('sale_by.departments', 'sale_by_departments')
       .where('order.id = :id', { id });
@@ -1451,6 +1644,39 @@ export class OrderService {
     if (allowedUserIds !== null) {
       if (allowedUserIds.length === 0) return null;
       qb.andWhere('sale_by.id IN (:...userIds)', { userIds: allowedUserIds });
+    } else if (user && user.roles) {
+      // allowedUserIds === null có nghĩa là PM chỉ có permissions
+      const roleNames = (user.roles || []).map((r: any) =>
+        typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
+      );
+      const isPM = roleNames.includes('pm');
+      const hasPmRoles = roleNames.some((r: string) => r.startsWith('pm-'));
+      
+      if (isPM && !hasPmRoles) {
+        // PM chỉ có permissions, lọc theo categories/brands
+        const { categoryIds, brandIds } = await this.getCategoryAndBrandIdsFromPMPermissions(user);
+
+        if (categoryIds.length > 0 || brandIds.length > 0) {
+          const conditions: string[] = [];
+          const params: any = {};
+
+          if (categoryIds.length > 0) {
+            conditions.push('category.id IN (:...categoryIds)');
+            params.categoryIds = categoryIds;
+          }
+
+          if (brandIds.length > 0) {
+            conditions.push('brand.id IN (:...brandIds)');
+            params.brandIds = brandIds;
+          }
+
+          if (conditions.length > 0) {
+            qb.andWhere(`(${conditions.join(' OR ')})`, params);
+          }
+        } else {
+          return null; // Không có categories/brands nào khớp
+        }
+      }
     }
 
     return qb.getOne();

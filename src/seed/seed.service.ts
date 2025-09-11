@@ -8,6 +8,7 @@ import { UserStatus } from '../users/user-status.enum';
 import { SystemConfig } from '../system_config/system_config.entity';
 import { SeedDebtTriggerService } from './seed-debt-trigger.service';
 import { SeedCampaignTriggerService } from './seed-campaign-trigger.service';
+import { SeedUserTriggerService } from './seed-user-trigger.service';
 
 @Injectable()
 export class SeedService implements OnModuleInit {
@@ -20,11 +21,13 @@ export class SeedService implements OnModuleInit {
     private readonly systemConfigRepo: Repository<SystemConfig>,
     private readonly seedDebtTriggerService: SeedDebtTriggerService,
     private readonly seedCampaignTriggerService: SeedCampaignTriggerService,
+    private readonly seedUserTriggerService: SeedUserTriggerService,
   ) {}
 
   async onModuleInit() {
     await this.seedDebtTriggerService.seedTriggers();
     await this.seedCampaignTriggerService.seedTriggers();
+    await this.seedUserTriggerService.seedTriggers();
 
     const existed = await this.userRepo.findOne({
       where: { username: 'admin' },

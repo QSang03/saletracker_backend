@@ -8,8 +8,12 @@ import { Department } from '../departments/department.entity';
 import { RolePermission } from '../roles_permissions/roles-permissions.entity';
 import { SystemConfig } from '../system_config/system_config.entity';
 import { DatabaseChangeLog } from 'src/observers/change_log.entity';
+import { Brand } from '../brands/brand.entity';
+import { Category } from '../categories/category.entity';
 import { SeedDebtTriggerService } from './seed-debt-trigger.service';
 import { SeedCampaignTriggerService } from './seed-campaign-trigger.service';
+import { SeedUserTriggerService } from './seed-user-trigger.service';
+
 
 @Module({
   imports: [
@@ -21,8 +25,11 @@ import { SeedCampaignTriggerService } from './seed-campaign-trigger.service';
       RolePermission,
       SystemConfig,
       DatabaseChangeLog,
+      Brand,
+      Category,
     ]),
   ],
-  providers: [SeedService, SeedDebtTriggerService, SeedCampaignTriggerService],
+  providers: [SeedService, SeedDebtTriggerService, SeedCampaignTriggerService, SeedUserTriggerService],
+
 })
 export class SeedModule {}

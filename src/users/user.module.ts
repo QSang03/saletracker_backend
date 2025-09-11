@@ -10,10 +10,11 @@ import { UserGateway } from './user.gateway';
 import { ChangeUserLog } from './change-user-log.entity';
 import { RolesPermissionsModule } from '../roles_permissions/roles-permissions.module';
 import { UserStatusObserver } from '../observers/user-status.observer';
+import { DatabaseChangeLog } from '../observers/change_log.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([User, Role, Department, ChangeUserLog]),
+  TypeOrmModule.forFeature([User, Role, Department, ChangeUserLog, DatabaseChangeLog]),
     JwtModule.register({}),
     RolesPermissionsModule,
   ],

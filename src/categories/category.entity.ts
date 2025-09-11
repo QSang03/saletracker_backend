@@ -1,30 +1,22 @@
-import {
-  Entity,
-  PrimaryColumn,
-  Column,
-  ManyToOne,
-  OneToMany,
-  ManyToMany,
-} from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, OneToMany, Index } from 'typeorm';
 import { Product } from '../products/product.entity';
 
 @Entity({ name: 'categories' })
 export class Category {
-  @PrimaryColumn({ type: 'int' })
+  @PrimaryGeneratedColumn({ type: 'int', unsigned: true })
   id: number;
 
+  @Index('idx_categories_cat_name')
   @Column({ name: 'cat_name', type: 'varchar', length: 255 })
   catName: string;
 
-  @ManyToOne(() => Category, (category) => category.children, {
-    nullable: true,
-  })
-  parent?: Category;
+  @Index('idx_categories_slug')
+  @Column({ name: 'slug', type: 'varchar', length: 255, nullable: true })
+  slug?: string;
 
-  @OneToMany(() => Category, (category) => category.parent)
-  children?: Category[];
+  // parent/children relations removed — categories are now flat from the source API
 
-  @ManyToMany(() => Product, (product) => product.categories)
+  @OneToMany(() => Product, (product) => product.category)
   products?: Product[];
 
   @Column({
