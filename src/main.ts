@@ -6,9 +6,7 @@ import * as bodyParser from 'body-parser';
 
 async function bootstrap() {
   // Limit Nest internal logger to warnings and errors to avoid noisy route mapping logs
-  const app = await NestFactory.create(AppModule, {
-    logger: ['warn', 'error'],
-  });
+  const app = await NestFactory.create(AppModule);
 
   // Increase body size limit for file uploads
   app.use(bodyParser.json({ limit: '50mb' }));
