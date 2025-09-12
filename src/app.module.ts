@@ -39,6 +39,7 @@ import { CampaignDepartmentsSchedulesModule } from './campaign_departments_sched
 import { OrderBlacklistModule } from './order-blacklist/order-blacklist.module';
 import { AutoReplyModule } from './auto_reply/auto_reply.module';
 import { CommonModule } from './common/common.module';
+import { CustomersModule } from './customers/customer.module';
 
 @Module({
   imports: [
@@ -82,6 +83,7 @@ import { CommonModule } from './common/common.module';
     CampaignDepartmentsSchedulesModule,
     AutoReplyModule,
     CommonModule,
+  CustomersModule,
   ],
   controllers: [AppController],
   providers: [AppService],

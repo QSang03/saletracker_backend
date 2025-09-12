@@ -11,6 +11,10 @@ import { Category } from 'src/categories/category.entity';
 import { OrderBlacklistService } from '../order-blacklist/order-blacklist.service';
 import { Logger } from '@nestjs/common';
 import slugify from 'slugify';
+import * as ExcelJS from 'exceljs';
+import * as tmp from 'tmp';
+import * as fs from 'fs';
+import * as path from 'path';
 
 interface OrderFilters {
   page: number;
@@ -42,6 +46,33 @@ interface OrderFilters {
   sortDirection?: 'asc' | 'desc' | null;
   user?: any; // truyền cả user object
   includeHidden?: string; // '1' | 'true' to include hidden items (admin only)
+}
+
+interface ExportFilters {
+  search?: string;
+  status?: string;
+  date?: string;
+  dateRange?: { start: string; end: string };
+  employee?: string;
+  employees?: string;
+  departments?: string;
+  products?: string;
+  brands?: string;
+  categories?: string;
+  brandCategories?: string;
+  quantity?: string;
+  conversationType?: string;
+  warningLevel?: string;
+  sortField?:
+    | 'quantity'
+    | 'unit_price'
+    | 'created_at'
+    | 'conversation_start'
+    | 'conversation_end'
+    | null;
+  sortDirection?: 'asc' | 'desc' | null;
+  user?: any;
+  includeHidden?: string;
 }
 
 @Injectable()
@@ -2557,6 +2588,409 @@ export class OrderService {
         overdue: v.overdue,
       })),
     };
+  }
+
+  // =============== Excel Export Methods ===============
+  
+  async exportOrdersToExcel(filters: ExportFilters): Promise<Buffer> {
+    try {
+      // 1. Đếm tổng số records cần export
+      const totalCount = await this.countOrdersWithFilters(filters);
+      
+      this.logger.log(`Exporting ${totalCount} orders to Excel`);
+      
+      // 2. Nếu > 2000 records, chia nhỏ
+      if (totalCount > 2000) {
+        this.logger.log(`Large dataset detected (${totalCount} records), using batch processing`);
+        return this.exportOrdersInBatches(filters, totalCount);
+      }
+      
+      // 3. Nếu ≤ 2000 records, xuất bình thường
+      this.logger.log(`Small dataset (${totalCount} records), using single export`);
+      return this.exportOrdersSingle(filters);
+    } catch (error) {
+      this.logger.error('Error in exportOrdersToExcel:', error);
+      throw error;
+    }
+  }
+
+  private async countOrdersWithFilters(filters: ExportFilters): Promise<number> {
+    const qb = this.orderDetailRepository
+      .createQueryBuilder('details')
+      .leftJoinAndSelect('details.order', 'order')
+      .leftJoinAndSelect('order.sale_by', 'sale_by')
+      .leftJoinAndSelect('sale_by.departments', 'sale_by_departments')
+      .where('details.deleted_at IS NULL');
+
+    // Apply filters (sử dụng lại logic từ findAllPaginated)
+    await this.applyFiltersToQuery(qb, filters);
+    
+    return await qb.getCount();
+  }
+
+  private async exportOrdersSingle(filters: ExportFilters): Promise<Buffer> {
+    // Lấy tất cả dữ liệu
+    const orders = await this.getAllOrdersForExport(filters);
+    
+    // Tạo Excel file
+    return this.createExcelBuffer(orders);
+  }
+
+  private async exportOrdersInBatches(filters: ExportFilters, totalCount: number): Promise<Buffer> {
+    const BATCH_SIZE = 2000;
+    const totalBatches = Math.ceil(totalCount / BATCH_SIZE);
+    const tempFiles: string[] = [];
+    
+    try {
+      this.logger.log(`Processing ${totalBatches} batches of ${BATCH_SIZE} records each`);
+      
+      // Tạo từng batch
+      for (let i = 0; i < totalBatches; i++) {
+        const offset = i * BATCH_SIZE;
+        this.logger.log(`Processing batch ${i + 1}/${totalBatches} (offset: ${offset})`);
+        
+        const batchData = await this.getOrdersBatch(filters, BATCH_SIZE, offset);
+        const tempFile = await this.createExcelFile(batchData, `temp_batch_${i}.xlsx`);
+        tempFiles.push(tempFile);
+      }
+      
+      this.logger.log(`Merging ${tempFiles.length} temporary files`);
+      
+      // Gộp tất cả file tạm thành 1 file cuối cùng
+      const finalBuffer = await this.mergeExcelFiles(tempFiles);
+      
+      // Cleanup temp files
+      await this.cleanupTempFiles(tempFiles);
+      
+      this.logger.log('Excel export completed successfully');
+      return finalBuffer;
+    } catch (error) {
+      this.logger.error('Error in exportOrdersInBatches:', error);
+      // Cleanup temp files nếu có lỗi
+      await this.cleanupTempFiles(tempFiles);
+      throw error;
+    }
+  }
+
+  private async getAllOrdersForExport(filters: ExportFilters): Promise<OrderDetail[]> {
+    const qb = this.orderDetailRepository
+      .createQueryBuilder('details')
+      .leftJoinAndSelect('details.order', 'order')
+      .leftJoinAndSelect('order.sale_by', 'sale_by')
+      .leftJoinAndSelect('details.product', 'product')
+      .leftJoinAndSelect('sale_by.departments', 'sale_by_departments')
+      .where('details.deleted_at IS NULL');
+
+    // Apply filters
+    await this.applyFiltersToQuery(qb, filters);
+    
+    // Apply sorting
+    if (filters.sortField && filters.sortDirection) {
+      const sortDirection = filters.sortDirection.toUpperCase() as 'ASC' | 'DESC';
+      qb.orderBy(`details.${filters.sortField}`, sortDirection);
+    } else {
+      qb.orderBy('details.created_at', 'DESC');
+    }
+
+    return await qb.getMany();
+  }
+
+  private async getOrdersBatch(filters: ExportFilters, limit: number, offset: number): Promise<OrderDetail[]> {
+    const qb = this.orderDetailRepository
+      .createQueryBuilder('details')
+      .leftJoinAndSelect('details.order', 'order')
+      .leftJoinAndSelect('order.sale_by', 'sale_by')
+      .leftJoinAndSelect('details.product', 'product')
+      .leftJoinAndSelect('sale_by.departments', 'sale_by_departments')
+      .where('details.deleted_at IS NULL')
+      .limit(limit)
+      .offset(offset);
+
+    // Apply filters
+    await this.applyFiltersToQuery(qb, filters);
+    
+    // Apply sorting
+    if (filters.sortField && filters.sortDirection) {
+      const sortDirection = filters.sortDirection.toUpperCase() as 'ASC' | 'DESC';
+      qb.orderBy(`details.${filters.sortField}`, sortDirection);
+    } else {
+      qb.orderBy('details.created_at', 'DESC');
+    }
+
+    return await qb.getMany();
+  }
+
+  private async applyFiltersToQuery(qb: any, filters: ExportFilters): Promise<void> {
+    // Permission scoping
+    if (filters.user) {
+      const allowedUserIds = await this.getUserIdsByRole(filters.user);
+      if (allowedUserIds !== null) {
+        if (allowedUserIds.length === 0) {
+          qb.andWhere('1 = 0');
+        } else {
+          qb.andWhere('sale_by.id IN (:...userIds)', { userIds: allowedUserIds });
+        }
+      }
+    }
+
+    // Search filter
+    if (filters.search) {
+      qb.andWhere(
+        '(details.customer_name LIKE :search OR details.raw_item LIKE :search OR sale_by.full_name LIKE :search)',
+        { search: `%${filters.search}%` }
+      );
+    }
+
+    // Status filter
+    if (filters.status) {
+      qb.andWhere('details.status = :status', { status: filters.status });
+    }
+
+    // Date filters
+    if (filters.date) {
+      const date = new Date(filters.date);
+      const startOfDay = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+      const endOfDay = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1);
+      qb.andWhere('details.created_at BETWEEN :startOfDay AND :endOfDay', {
+        startOfDay,
+        endOfDay,
+      });
+    }
+
+    if (filters.dateRange && filters.dateRange.start && filters.dateRange.end) {
+      qb.andWhere('details.created_at BETWEEN :startDate AND :endDate', {
+        startDate: filters.dateRange.start,
+        endDate: filters.dateRange.end,
+      });
+    }
+
+    // Employee filter
+    if (filters.employee) {
+      qb.andWhere('sale_by.id = :employeeId', { employeeId: parseInt(filters.employee) });
+    }
+
+    if (filters.employees) {
+      const empIds = filters.employees.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
+      if (empIds.length > 0) {
+        qb.andWhere('sale_by.id IN (:...empIds)', { empIds });
+      }
+    }
+
+    // Department filter
+    if (filters.departments) {
+      const deptIds = filters.departments.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
+      if (deptIds.length > 0) {
+        qb.andWhere('sale_by_departments.id IN (:...deptIds)', { deptIds });
+      }
+    }
+
+    // Product filter
+    if (filters.products) {
+      const productIds = filters.products.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
+      if (productIds.length > 0) {
+        qb.andWhere('details.product_id IN (:...productIds)', { productIds });
+      }
+    }
+
+    // Quantity filter
+    if (filters.quantity) {
+      const quantity = parseInt(filters.quantity);
+      if (!isNaN(quantity)) {
+        qb.andWhere('details.quantity >= :quantity', { quantity });
+      }
+    }
+
+    // Include hidden filter (admin only)
+    if (filters.includeHidden !== '1' && filters.includeHidden !== 'true') {
+      qb.andWhere('details.hidden_at IS NULL');
+    }
+  }
+
+  private async createExcelBuffer(orders: OrderDetail[]): Promise<Buffer> {
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Đơn hàng');
+
+    // Định nghĩa headers
+    worksheet.columns = [
+      { header: 'ID', key: 'id', width: 10 },
+      { header: 'Mã đơn hàng', key: 'orderId', width: 15 },
+      { header: 'Sản phẩm', key: 'productName', width: 30 },
+      { header: 'Khách hàng', key: 'customerName', width: 25 },
+      { header: 'Số lượng', key: 'quantity', width: 12 },
+      { header: 'Đơn giá', key: 'unitPrice', width: 15 },
+      { header: 'Thành tiền', key: 'totalAmount', width: 15 },
+      { header: 'Trạng thái', key: 'status', width: 15 },
+      { header: 'Nhân viên', key: 'employeeName', width: 20 },
+      { header: 'Phòng ban', key: 'departmentName', width: 20 },
+      { header: 'Ngày tạo', key: 'createdAt', width: 20 },
+    ];
+
+    // Style cho header
+    worksheet.getRow(1).font = { bold: true };
+    worksheet.getRow(1).fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFE0E0E0' }
+    };
+
+    // Thêm dữ liệu
+    orders.forEach(order => {
+      const totalAmount = (order.quantity || 0) * (order.unit_price || 0);
+      const departmentName = order.order?.sale_by?.departments?.[0]?.name || 'N/A';
+      
+      worksheet.addRow({
+        id: order.id,
+        orderId: order.order?.id || 'N/A',
+        productName: order.raw_item || order.product?.productName || 'N/A',
+        customerName: order.customer_name || 'N/A',
+        quantity: order.quantity || 0,
+        unitPrice: order.unit_price || 0,
+        totalAmount: totalAmount,
+        status: this.getStatusText(order.status),
+        employeeName: order.order?.sale_by?.fullName || order.order?.sale_by?.username || 'N/A',
+        departmentName: departmentName,
+        createdAt: order.created_at ? new Date(order.created_at).toLocaleString('vi-VN') : 'N/A',
+      });
+    });
+
+    // Auto-fit columns
+    worksheet.columns.forEach(column => {
+      if (column.eachCell) {
+        let maxLength = 0;
+        column.eachCell({ includeEmpty: true }, (cell) => {
+          const columnLength = cell.value ? cell.value.toString().length : 10;
+          if (columnLength > maxLength) {
+            maxLength = columnLength;
+          }
+        });
+        column.width = Math.min(maxLength + 2, 50);
+      }
+    });
+
+    return await workbook.xlsx.writeBuffer() as Buffer;
+  }
+
+  private async createExcelFile(orders: OrderDetail[], filename: string): Promise<string> {
+    const buffer = await this.createExcelBuffer(orders);
+    
+    return new Promise((resolve, reject) => {
+      tmp.file({ postfix: '.xlsx' }, (err, path, fd, cleanup) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        
+        fs.writeFile(path, buffer, (writeErr) => {
+          if (writeErr) {
+            cleanup();
+            reject(writeErr);
+            return;
+          }
+          
+          resolve(path);
+        });
+      });
+    });
+  }
+
+  private async mergeExcelFiles(tempFiles: string[]): Promise<Buffer> {
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Đơn hàng');
+
+    // Định nghĩa headers (giống như createExcelBuffer)
+    worksheet.columns = [
+      { header: 'ID', key: 'id', width: 10 },
+      { header: 'Mã đơn hàng', key: 'orderId', width: 15 },
+      { header: 'Sản phẩm', key: 'productName', width: 30 },
+      { header: 'Khách hàng', key: 'customerName', width: 25 },
+      { header: 'Số lượng', key: 'quantity', width: 12 },
+      { header: 'Đơn giá', key: 'unitPrice', width: 15 },
+      { header: 'Thành tiền', key: 'totalAmount', width: 15 },
+      { header: 'Trạng thái', key: 'status', width: 15 },
+      { header: 'Nhân viên', key: 'employeeName', width: 20 },
+      { header: 'Phòng ban', key: 'departmentName', width: 20 },
+      { header: 'Ngày tạo', key: 'createdAt', width: 20 },
+    ];
+
+    // Style cho header
+    worksheet.getRow(1).font = { bold: true };
+    worksheet.getRow(1).fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFE0E0E0' }
+    };
+
+    let rowIndex = 2; // Bắt đầu từ dòng 2 (sau header)
+
+    // Đọc từng file tạm và gộp dữ liệu
+    for (const tempFile of tempFiles) {
+      try {
+        const tempWorkbook = new ExcelJS.Workbook();
+        await tempWorkbook.xlsx.readFile(tempFile);
+        
+        const tempWorksheet = tempWorkbook.getWorksheet(1);
+        
+        if (tempWorksheet) {
+          tempWorksheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+            // Bỏ qua header row
+            if (rowNumber > 1) {
+              const rowData: any = {};
+              row.eachCell({ includeEmpty: false }, (cell, colNumber) => {
+                const column = worksheet.getColumn(colNumber);
+                const header = column?.header as string;
+                if (header) {
+                  rowData[header] = cell.value;
+                }
+              });
+              
+              worksheet.addRow(rowData);
+              rowIndex++;
+            }
+          });
+        }
+      } catch (error) {
+        this.logger.error(`Error reading temp file ${tempFile}:`, error);
+      }
+    }
+
+    // Auto-fit columns
+    worksheet.columns.forEach(column => {
+      if (column.eachCell) {
+        let maxLength = 0;
+        column.eachCell({ includeEmpty: true }, (cell) => {
+          const columnLength = cell.value ? cell.value.toString().length : 10;
+          if (columnLength > maxLength) {
+            maxLength = columnLength;
+          }
+        });
+        column.width = Math.min(maxLength + 2, 50);
+      }
+    });
+
+    return await workbook.xlsx.writeBuffer() as Buffer;
+  }
+
+  private async cleanupTempFiles(tempFiles: string[]): Promise<void> {
+    for (const tempFile of tempFiles) {
+      try {
+        if (fs.existsSync(tempFile)) {
+          fs.unlinkSync(tempFile);
+          this.logger.log(`Cleaned up temp file: ${tempFile}`);
+        }
+      } catch (error) {
+        this.logger.error(`Error cleaning up temp file ${tempFile}:`, error);
+      }
+    }
+  }
+
+  private getStatusText(status: string): string {
+    const statusMap: { [key: string]: string } = {
+      'pending': 'Chờ xử lý',
+      'processing': 'Đang xử lý',
+      'completed': 'Hoàn thành',
+      'cancelled': 'Đã hủy',
+    };
+    return statusMap[status] || status;
   }
 }
 

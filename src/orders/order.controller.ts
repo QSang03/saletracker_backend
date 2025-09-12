@@ -10,8 +10,10 @@ import {
   Query,
   UseGuards,
   Req,
+  Res,
   Logger,
 } from '@nestjs/common';
+import { Response } from 'express';
 import { AuthGuard } from '@nestjs/passport';
 import { OrderService } from './order.service';
 import { Order } from './order.entity';
@@ -243,5 +245,85 @@ export class OrderController {
   @Delete(':id')
   async delete(@Param('id', ParseIntPipe) id: number): Promise<void> {
     return this.orderService.delete(id);
+  }
+
+  @Get('export')
+  async exportOrders(
+    @Res() res: Response,
+    @Req() req: any,
+    @Query('search') search?: string,
+    @Query('status') status?: string,
+    @Query('date') date?: string,
+    @Query('dateRange') dateRange?: string,
+    @Query('employee') employee?: string,
+    @Query('employees') employees?: string,
+    @Query('departments') departments?: string,
+    @Query('products') products?: string,
+    @Query('brands') brands?: string,
+    @Query('categories') categories?: string,
+    @Query('brandCategories') brandCategories?: string,
+    @Query('warningLevel') warningLevel?: string,
+    @Query('sortField')
+    sortField?:
+      | 'quantity'
+      | 'unit_price'
+      | 'created_at'
+      | 'conversation_start'
+      | 'conversation_end',
+    @Query('sortDirection') sortDirection?: 'asc' | 'desc',
+    @Query('quantity') quantity?: string,
+    @Query('conversationType') conversationType?: string,
+    @Query('includeHidden') includeHidden?: string,
+  ): Promise<void> {
+    // Parse dateRange if provided
+    let parsedDateRange;
+    if (dateRange) {
+      try {
+        parsedDateRange = JSON.parse(dateRange);
+      } catch (e) {
+        parsedDateRange = undefined;
+      }
+    }
+
+    const filters = {
+      search: search?.trim(),
+      status,
+      date,
+      dateRange: parsedDateRange,
+      employee,
+      employees,
+      departments,
+      products,
+      brands,
+      categories,
+      brandCategories,
+      warningLevel,
+      quantity,
+      conversationType,
+      sortField: sortField || null,
+      sortDirection: sortDirection || null,
+      includeHidden,
+      user: req.user,
+    };
+
+    try {
+      const excelBuffer = await this.orderService.exportOrdersToExcel(filters);
+      
+      const filename = `don-hang-${new Date().toISOString().split('T')[0]}.xlsx`;
+      
+      res.set({
+        'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'Content-Disposition': `attachment; filename="${filename}"`,
+        'Content-Length': excelBuffer.length.toString(),
+      });
+      
+      res.send(excelBuffer);
+    } catch (error) {
+      this.logger.error('Error exporting orders:', error);
+      res.status(500).json({ 
+        error: 'Lỗi khi xuất dữ liệu', 
+        message: error.message 
+      });
+    }
   }
 }
