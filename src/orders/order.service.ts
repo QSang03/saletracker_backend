@@ -1557,9 +1557,11 @@ export class OrderService {
       );
       const isAdminUser = roleNames.includes('admin');
       const isManager = roleNames.some((r: string) => r.startsWith('manager-'));
+      const isPM = roleNames.some((r: string) => r.startsWith('pm-') || r === 'pm');
 
       if (!isAdminUser) {
-        if (isManager) {
+        if (isManager && !isPM) {
+          // Manager (không phải PM): lấy blacklist của tất cả users trong phạm vi
           const allowedUserIds = (await this.getUserIdsByRole(user)) || [];
           const map =
             await this.orderBlacklistService.getBlacklistedContactsForUsers(
@@ -1569,6 +1571,7 @@ export class OrderService {
           for (const set of map.values()) for (const id of set) merged.add(id);
           blacklistForSql = Array.from(merged);
         } else {
+          // User thường hoặc PM: chỉ lấy blacklist của chính họ
           blacklistForSql =
             await this.orderBlacklistService.getBlacklistedContactsForUser(
               user.id,
