@@ -791,15 +791,6 @@ export class OrderDetailService {
     }
   }
 
-  // Helper method để tính toán extended khi khôi phục
-  private calculateExtendedForRestore(createdAt: Date): number {
-    // Công thức: ngày tạo + x - ngày hiện tại = 4
-    // => x = 4 + (ngày hiện tại - ngày tạo) tính theo ngày
-    const now = new Date();
-    const daysDiff = Math.floor((now.getTime() - createdAt.getTime()) / (1000 * 60 * 60 * 24));
-    return Math.max(4, 4 + daysDiff);
-  }
-
   async getDetailedStats(params: {
     period: string;
     date?: string;
@@ -1108,12 +1099,17 @@ export class OrderDetailService {
     // Clear reason and recalc extended per item
     for (const od of items) {
       try {
-        const newExtended = this.calculateExtendedForRestore(od.order.created_at);
+        const created = new Date(od.created_at);
+        created.setHours(0, 0, 0, 0);
+        const deltaDays = Math.floor(
+          (today.getTime() - created.getTime()) / msPerDay,
+        );
+        const newExtended = Math.max(4, deltaDays + 4);
         await this.orderDetailRepository.update(od.id, {
           reason: '',
           extended: newExtended,
           last_extended_at: new Date(),
-          extend_reason: ExtendReason.RESTORE_AUTO,
+          extend_reason: ExtendReason.SYSTEM_RESTORE,
         });
       } catch (e) {
         // fallback: at least clear reason
@@ -1154,14 +1150,27 @@ export class OrderDetailService {
 
     if (!existing) return false;
 
-    const newExtended = this.calculateExtendedForRestore(existing.order.created_at);
-    
-    await this.orderDetailRepository.update(id, {
-      hidden_at: null,
-      extended: newExtended,
-      last_extended_at: new Date(),
-      extend_reason: ExtendReason.RESTORE_AUTO,
-    });
+    try {
+      // Tính toán extend mới
+      // Công thức: ngày tạo + x - ngày hiện tại = 4
+      // => x = 4 + (ngày hiện tại - ngày tạo) tính theo ngày
+      const now = new Date();
+      const createdAt = new Date(existing.order.created_at);
+      const daysDiff = Math.ceil((now.getTime() - createdAt.getTime()) / (1000 * 60 * 60 * 24));
+      const newExtended = Math.max(1, 4 + daysDiff); // Đảm bảo extend ít nhất là 1
+
+      await this.orderDetailRepository.update(id, {
+        hidden_at: null,
+        extended: newExtended,
+        last_extended_at: new Date(),
+        extend_reason: ExtendReason.SYSTEM_RESTORE,
+      });
+    } catch (e) {
+      // fallback: at least unhide
+      await this.orderDetailRepository.update(id, {
+        hidden_at: null,
+      });
+    }
 
     return true;
   }
@@ -1207,15 +1216,36 @@ export class OrderDetailService {
 
     if (items.length === 0) return { unhidden: 0 };
 
-    // Cập nhật từng item với extended được tính lại
+    // Tính toán extend mới cho từng order detail
+    const now = new Date();
     for (const item of items) {
-      const newExtended = this.calculateExtendedForRestore(item.order.created_at);
-      await this.orderDetailRepository.update(item.id, {
-        hidden_at: null,
-        extended: newExtended,
-        last_extended_at: new Date(),
-        extend_reason: ExtendReason.RESTORE_AUTO,
-      });
+      try {
+        // Công thức: ngày tạo + x - ngày hiện tại = 4
+        // => x = 4 + (ngày hiện tại - ngày tạo) tính theo ngày
+        const createdAt = new Date(item.order.created_at);
+        const daysDiff = Math.ceil((now.getTime() - createdAt.getTime()) / (1000 * 60 * 60 * 24));
+        const newExtended = Math.max(1, 4 + daysDiff); // Đảm bảo extend ít nhất là 1
+
+        await this.orderDetailRepository
+          .createQueryBuilder()
+          .update(OrderDetail)
+          .set({
+            hidden_at: null,
+            extended: newExtended,
+            last_extended_at: new Date(),
+            extend_reason: ExtendReason.SYSTEM_RESTORE,
+          })
+          .where('id = :id', { id: item.id })
+          .execute();
+      } catch (e) {
+        // fallback: at least unhide
+        await this.orderDetailRepository
+          .createQueryBuilder()
+          .update(OrderDetail)
+          .set({ hidden_at: null })
+          .where('id = :id', { id: item.id })
+          .execute();
+      }
     }
 
     return { unhidden: items.length };

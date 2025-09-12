@@ -11,10 +11,6 @@ import { Category } from 'src/categories/category.entity';
 import { OrderBlacklistService } from '../order-blacklist/order-blacklist.service';
 import { Logger } from '@nestjs/common';
 import slugify from 'slugify';
-import * as ExcelJS from 'exceljs';
-import * as tmp from 'tmp';
-import * as fs from 'fs';
-import * as path from 'path';
 
 interface OrderFilters {
   page: number;
@@ -46,45 +42,11 @@ interface OrderFilters {
   sortDirection?: 'asc' | 'desc' | null;
   user?: any; // truyền cả user object
   includeHidden?: string; // '1' | 'true' to include hidden items (admin only)
-  ownOnly?: string; // '1' | 'true' to force own-only mode (order management)
-}
-
-interface ExportFilters {
-  search?: string;
-  status?: string;
-  date?: string;
-  dateRange?: { start: string; end: string };
-  employee?: string;
-  employees?: string;
-  departments?: string;
-  products?: string;
-  brands?: string;
-  categories?: string;
-  brandCategories?: string;
-  quantity?: string;
-  conversationType?: string;
-  warningLevel?: string;
-  sortField?:
-    | 'quantity'
-    | 'unit_price'
-    | 'created_at'
-    | 'conversation_start'
-    | 'conversation_end'
-    | null;
-  sortDirection?: 'asc' | 'desc' | null;
-  user?: any;
-  includeHidden?: string;
-  ownOnly?: string;
 }
 
 @Injectable()
 export class OrderService {
   private readonly logger = new Logger(OrderService.name);
-  private static activeExports = new Set<string>(); // Track active exports
-  private static readonly GLOBAL_MAX_RECORDS = 2000; // Tổng tối đa 2000 dòng cho tất cả export đồng thời
-  private static globalRecordsProcessed = 0; // Tổng số dòng đã xử lý
-  private static lastSessionEndTime = Date.now(); // Thời gian kết thúc phiên cuối cùng
-  private static readonly COOLDOWN_INTERVAL = 60 * 1000; // Nghỉ 1 phút sau khi hoàn thành phiên
 
   constructor(
     @InjectRepository(Order)
@@ -137,22 +99,13 @@ export class OrderService {
     }
   }
 
-  // Helper method để tính toán extended khi khôi phục
-  private calculateExtendedForRestore(createdAt: Date): number {
-    // Công thức: ngày tạo + x - ngày hiện tại = 4
-    // => x = 4 + (ngày hiện tại - ngày tạo) tính theo ngày
-    const now = new Date();
-    const daysDiff = Math.floor((now.getTime() - createdAt.getTime()) / (1000 * 60 * 60 * 24));
-    return Math.max(4, 4 + daysDiff);
-  }
-
   // Phase 2.6: Tối ưu hóa - Bulk unhide operations
   async bulkUnhideOrderDetails(
     orderDetailIds: number[],
     userId: number,
   ): Promise<{ success: boolean; affected: number; errors: string[] }> {
     try {
-      // Lấy danh sách order details để tính toán extended
+      // Lấy thông tin các order details cần unhide để tính toán extend mới
       const orderDetails = await this.orderDetailRepository
         .createQueryBuilder('detail')
         .leftJoinAndSelect('detail.order', 'order')
@@ -168,24 +121,40 @@ export class OrderService {
         };
       }
 
-      // Cập nhật từng order detail với extended được tính lại
-      const updatePromises = orderDetails.map(async (detail) => {
-        const newExtended = this.calculateExtendedForRestore(detail.order.created_at);
-        
-        return this.orderDetailRepository.update(detail.id, {
-          hidden_at: null,
+      // Tính toán extend mới cho từng order detail
+      const now = new Date();
+      const updates = orderDetails.map((detail) => {
+        // Công thức: ngày tạo + x - ngày hiện tại = 4
+        // => x = 4 + (ngày hiện tại - ngày tạo) tính theo ngày
+        const createdAt = new Date(detail.order.created_at);
+        const daysDiff = Math.ceil((now.getTime() - createdAt.getTime()) / (1000 * 60 * 60 * 24));
+        const newExtended = Math.max(1, 4 + daysDiff); // Đảm bảo extend ít nhất là 1
+
+        return {
+          id: detail.id,
           extended: newExtended,
-          last_extended_at: new Date(),
-          extend_reason: ExtendReason.RESTORE_AUTO,
-          updated_at: new Date(),
-        });
+        };
       });
 
-      await Promise.all(updatePromises);
+      // Batch update với extended mới
+      for (const update of updates) {
+        await this.orderDetailRepository
+          .createQueryBuilder()
+          .update(OrderDetail)
+          .set({
+            hidden_at: null,
+            extended: update.extended,
+            last_extended_at: () => 'NOW()',
+            extend_reason: ExtendReason.SYSTEM_RESTORE,
+            updated_at: () => 'NOW()',
+          })
+          .where('id = :id', { id: update.id })
+          .execute();
+      }
 
       return {
         success: true,
-        affected: orderDetails.length,
+        affected: updates.length,
         errors: [],
       };
     } catch (error) {
@@ -728,6 +697,218 @@ export class OrderService {
       )
       .map((c) => c.id);
     return { brandIds, categoryIds };
+  }
+
+  async getFilterOptionsForPM(user?: any): Promise<{
+    departments: Array<{
+      value: number;
+      label: string;
+      users: Array<{ value: number; label: string }>;
+    }>;
+    products: Array<{ value: number; label: string }>;
+  }> {
+    const result: {
+      departments: Array<{
+        value: number;
+        label: string;
+        users: Array<{ value: number; label: string }>;
+      }>;
+      products: Array<{ value: number; label: string }>;
+    } = { departments: [], products: [] };
+
+    if (!user) return result;
+
+    const roleNames = (user.roles || []).map((r: any) =>
+      typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
+    );
+
+    // Lấy tất cả products
+    const products = await this.productRepository.find({
+      order: { productCode: 'ASC' },
+    });
+    result.products = products.map((product) => ({
+      value: product.id,
+      label: product.productCode,
+    }));
+
+    // Lấy view user IDs để loại trừ
+    const viewUserIds = new Set<number>();
+    const viewRoles = roleNames.filter((r: string) => r.startsWith('view-'));
+    if (viewRoles.length > 0) {
+      const viewDepartmentSlugs = viewRoles.map((r: string) =>
+        r.replace('view-', ''),
+      );
+      const viewDepartments = await this.departmentRepository.find({
+        where: viewDepartmentSlugs.map((slug) => ({ slug, deletedAt: IsNull() })),
+        relations: ['users'],
+      });
+      viewDepartments.forEach((dept) => {
+        dept.users?.forEach((u) => {
+          if (!u.deletedAt) viewUserIds.add(u.id);
+        });
+      });
+    }
+
+    // Xử lý departments theo role - LOGIC RIÊNG CHO PM TRANSACTIONS
+    if (roleNames.includes('admin')) {
+      // Admin: lấy tất cả departments có server_ip hợp lệ
+      const departments = await this.departmentRepository
+        .find({
+          where: {
+            deletedAt: IsNull(),
+            server_ip: Not(IsNull()),
+          },
+          relations: ['users'],
+          order: { name: 'ASC' },
+        })
+        .then((departments) =>
+          departments
+            .filter((dep) => dep.server_ip && dep.server_ip.trim() !== '')
+            .map((dep) => ({
+              ...dep,
+              users: (dep.users || []).filter((u) => !u.deletedAt),
+            })),
+        );
+
+      result.departments = departments.map((dept) => ({
+        value: dept.id,
+        label: dept.name,
+        slug: dept.slug,
+        users: (dept.users || [])
+          .filter((u) => {
+            const uid = Number(u.id);
+            return !u.deletedAt && !viewUserIds.has(uid);
+          })
+          .map((u) => ({
+            value: u.id,
+            label: u.fullName || u.username,
+          })),
+      }));
+    } else {
+      const pmRoles = roleNames.filter((r: string) => r.startsWith('pm-'));
+      const managerRoles = roleNames.filter((r: string) =>
+        r.startsWith('manager-'),
+      );
+
+      if (pmRoles.length > 0) {
+        // PM có role pm-{slug}: lấy departments theo pm-{slug} và tất cả users trong đó (có server_ip hợp lệ)
+        const departmentSlugs = pmRoles.map((r: string) =>
+          r.replace('pm-', ''),
+        );
+
+
+        const departments = await this.departmentRepository
+          .find({
+            where: departmentSlugs.map((slug) => ({
+              slug,
+              deletedAt: IsNull(),
+              server_ip: Not(IsNull()),
+            })),
+            relations: ['users'],
+            order: { name: 'ASC' },
+          })
+          .then((departments) =>
+            departments
+              .filter((dep) => dep.server_ip && dep.server_ip.trim() !== '')
+              .map((dep) => ({
+                ...dep,
+                users: (dep.users || []).filter((u) => !u.deletedAt),
+              })),
+          );
+
+        result.departments = departments.map((dept) => ({
+          value: dept.id,
+          label: dept.name,
+          slug: dept.slug,
+          users: (dept.users || [])
+            .filter((u) => {
+              const uid = Number(u.id);
+              return !u.deletedAt && !viewUserIds.has(uid);
+            })
+            .map((u) => ({
+              value: u.id,
+              label: u.fullName || u.username,
+            })),
+        }));
+
+      } else if (managerRoles.length > 0) {
+        // Manager: chỉ lấy department của mình và users trong đó, chỉ lấy department có server_ip hợp lệ
+        const departmentSlugs = managerRoles.map((r: string) =>
+          r.replace('manager-', ''),
+        );
+
+        const departments = await this.departmentRepository
+          .find({
+            where: departmentSlugs.map((slug) => ({
+              slug,
+              deletedAt: IsNull(),
+              server_ip: Not(IsNull()),
+            })),
+            relations: ['users'],
+            order: { name: 'ASC' },
+          })
+          .then((departments) =>
+            departments
+              .filter((dep) => dep.server_ip && dep.server_ip.trim() !== '')
+              .map((dep) => ({
+                ...dep,
+                users: (dep.users || []).filter((u) => !u.deletedAt),
+              })),
+          );
+
+        result.departments = departments.map((dept) => ({
+          value: dept.id,
+          label: dept.name,
+          slug: dept.slug,
+          users: (dept.users || [])
+            .filter((u) => {
+              const uid = Number(u.id);
+              return !u.deletedAt && !viewUserIds.has(uid);
+            })
+            .map((u) => ({
+              value: u.id,
+              label: u.fullName || u.username,
+            })),
+        }));
+      } else {
+        // Kiểm tra xem có phải PM user chỉ có permissions không
+        const isPM = roleNames.includes('pm');
+        if (isPM) {
+          // PM user chỉ có permissions (pm_cat_*, pm_brand_*): KHÔNG trả về departments
+          // Frontend sẽ ẩn bộ lọc phòng ban và chỉ hiển thị bộ lọc brand/category
+          result.departments = [];
+        } else {
+          // User thường: chỉ thấy chính mình và department của mình, chỉ lấy department có server_ip hợp lệ
+          const currentUser = await this.userRepository.findOne({
+            where: {
+              id: user.id,
+              deletedAt: IsNull(),
+            },
+            relations: ['departments'],
+          });
+
+          if (currentUser && currentUser.departments) {
+            // Lọc lại departments có server_ip hợp lệ
+            const validDepartments = currentUser.departments.filter(
+              (dept) => !!dept.server_ip,
+            );
+            result.departments = validDepartments.map((dept) => ({
+              value: dept.id,
+              label: dept.name,
+              slug: dept.slug,
+              users: [
+                {
+                  value: currentUser.id,
+                  label: currentUser.fullName || currentUser.username,
+                },
+              ].filter((u) => !viewUserIds.has(Number(u.value))),
+            }));
+          }
+        }
+      }
+    }
+
+    return result;
   }
 
   private isPrivatePm(user: any): boolean {
@@ -1322,6 +1503,26 @@ export class OrderService {
     page: number;
     pageSize: number;
   }> {
+    // API này dành cho manager-order: PM user được xem như user thường (chỉ lấy đơn hàng của chính họ)
+    return this.findAllPaginatedInternal(filters, false);
+  }
+
+  async findAllPaginatedForPM(filters: OrderFilters): Promise<{
+    data: OrderDetail[];
+    total: number;
+    page: number;
+    pageSize: number;
+  }> {
+    // API này dành cho manager-pm-transactions: PM user có quyền theo phòng ban
+    return this.findAllPaginatedInternal(filters, true);
+  }
+
+  private async findAllPaginatedInternal(filters: OrderFilters, enablePMPermissions: boolean): Promise<{
+    data: OrderDetail[];
+    total: number;
+    page: number;
+    pageSize: number;
+  }> {
     const {
       page,
       pageSize,
@@ -1344,7 +1545,6 @@ export class OrderService {
       sortDirection,
       user,
       includeHidden,
-      ownOnly,
     } = filters;
 
     const skip = (page - 1) * pageSize;
@@ -1407,13 +1607,27 @@ export class OrderService {
       .addSelect(convoEndExpr, 'conversation_end');
 
     // Permissions
-    const ownOnlyFlag = (ownOnly || '').toString().toLowerCase();
-    const isOwnOnly = ownOnlyFlag === '1' || ownOnlyFlag === 'true';
+    let allowedUserIds;
+    if (enablePMPermissions) {
+      // API cho PM transactions: sử dụng logic PM permissions đầy đủ
+      allowedUserIds = await this.getUserIdsByRole(user);
+    } else {
+      // API cho manager-order: PM user được xem như user thường (chỉ lấy đơn hàng của chính họ)
+      if (user && user.roles) {
+        const roleNames = (user.roles || []).map((r: any) => typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase());
+        const isPM = roleNames.includes('pm');
+        if (isPM) {
+          // PM user chỉ lấy đơn hàng của chính họ
+          allowedUserIds = [user.id];
+        } else {
+          // User thường: sử dụng logic permissions bình thường
+          allowedUserIds = await this.getUserIdsByRole(user);
+        }
+      } else {
+        allowedUserIds = null;
+      }
+    }
 
-    // If ownOnly is requested, force filter to current user only
-    const allowedUserIds = isOwnOnly
-      ? [user?.id || user?.sub].filter((v: any) => typeof v === 'number')
-      : await this.getUserIdsByRole(user);
     if (allowedUserIds !== null) {
       if (allowedUserIds.length === 0) {
         return { data: [], total: 0, page, pageSize };
@@ -1423,7 +1637,7 @@ export class OrderService {
     // allowedUserIds === null có nghĩa là PM chỉ có permissions, sẽ được xử lý ở logic bên dưới
 
     // PM private permission scoping (khi allowedUserIds === null): áp dụng logic mới pm_brand_/pm_cat_
-  if (!isOwnOnly && allowedUserIds === null && user && user.roles) {
+    if (allowedUserIds === null && user && user.roles && enablePMPermissions) {
       const roleNames = (user.roles || []).map((r: any) => typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase());
       const isPM = roleNames.includes('pm');
       const hasPmDeptRole = roleNames.some(r => r.startsWith('pm-'));
@@ -1519,15 +1733,44 @@ export class OrderService {
     }
 
     if (departments) {
-      const departmentIds = departments
+      const departmentValues = departments
         .split(',')
-        .map((id) => parseInt(id.trim(), 10))
-        .filter((id) => !isNaN(id));
-      if (departmentIds.length > 0) {
-        qb.andWhere(
-          `sale_by_departments.id IN (:...departmentIds) AND sale_by_departments.server_ip IS NOT NULL AND TRIM(sale_by_departments.server_ip) <> ''`,
-          { departmentIds },
-        );
+        .map((val) => val.trim())
+        .filter((val) => val);
+      
+      if (departmentValues.length > 0) {
+        // Phân biệt ID (số) và slug (chuỗi)
+        const departmentIds: number[] = [];
+        const departmentSlugs: string[] = [];
+        
+        departmentValues.forEach((val) => {
+          const numVal = parseInt(val, 10);
+          if (!isNaN(numVal)) {
+            departmentIds.push(numVal);
+          } else {
+            departmentSlugs.push(val);
+          }
+        });
+        
+        // Tìm department IDs từ slugs nếu có
+        if (departmentSlugs.length > 0) {
+          const departmentsFromSlugs = await this.departmentRepository
+            .createQueryBuilder('dept')
+            .select('dept.id')
+            .where('dept.slug IN (:...slugs)', { slugs: departmentSlugs })
+            .andWhere('dept.deletedAt IS NULL')
+            .getMany();
+          
+          const idsFromSlugs = departmentsFromSlugs.map(d => d.id);
+          departmentIds.push(...idsFromSlugs);
+        }
+        
+        if (departmentIds.length > 0) {
+          qb.andWhere(
+            `sale_by_departments.id IN (:...departmentIds) AND sale_by_departments.server_ip IS NOT NULL AND TRIM(sale_by_departments.server_ip) <> ''`,
+            { departmentIds },
+          );
+        }
       }
     }
 
@@ -1722,9 +1965,12 @@ export class OrderService {
       );
     }
 
-    // Avoid logging full generated SQL (may contain sensitive values).
-    // Keep only a concise debug statement about the query shape/filters.
-    this.logger.debug('OrderService.findAllPaginated - built query (sql logging disabled)');
+    // Log generated SQL for debugging filter behavior
+    try {
+      this.logger.debug(`OrderService.findAllPaginated - SQL: ${qb.getSql()}`);
+    } catch (e) {
+      // ignore if getSql fails for some QB configurations
+    }
 
     // Pagination with count at DB level
     const [data, total] = await qb.skip(skip).take(pageSize).getManyAndCount();
@@ -2627,353 +2873,6 @@ export class OrderService {
         overdue: v.overdue,
       })),
     };
-  }
-
-  // =============== Excel Export Methods ===============
-  
-  async exportOrdersToExcel(filters: ExportFilters, progressCallback?: (progress: any) => void): Promise<Buffer> {
-    const userId = filters.user?.sub || filters.user?.id || 'anonymous';
-    const exportId = `${userId}_${Date.now()}`;
-    
-    try {
-      const now = Date.now();
-      
-      // Kiểm tra cooldown period (nghỉ 1 phút sau khi hoàn thành phiên)
-      if (OrderService.globalRecordsProcessed >= OrderService.GLOBAL_MAX_RECORDS) {
-        const timeSinceLastSession = now - OrderService.lastSessionEndTime;
-        const remainingCooldown = OrderService.COOLDOWN_INTERVAL - timeSinceLastSession;
-        
-        if (remainingCooldown > 0) {
-          const remainingSeconds = Math.ceil(remainingCooldown / 1000);
-          throw new Error(`Đã hoàn thành phiên export (${OrderService.GLOBAL_MAX_RECORDS} dòng). Vui lòng thử lại sau ${remainingSeconds} giây.`);
-        } else {
-          // Cooldown đã hết, reset để bắt đầu phiên mới
-          OrderService.globalRecordsProcessed = 0;
-          OrderService.lastSessionEndTime = now;
-          this.logger.log(`Cooldown ended, starting new export session`);
-        }
-      }
-      
-      // Thêm vào danh sách export đang chạy
-      OrderService.activeExports.add(exportId);
-      this.logger.log(`Starting export ${exportId}. Active exports: ${OrderService.activeExports.size}, Global records: ${OrderService.globalRecordsProcessed}/${OrderService.GLOBAL_MAX_RECORDS}`);
-      
-      // Tính toán số dòng còn lại có thể xử lý
-      const remainingRecords = OrderService.GLOBAL_MAX_RECORDS - OrderService.globalRecordsProcessed;
-      const recordsToProcess = Math.min(remainingRecords, 500); // Tối đa 500 dòng mỗi export
-      
-      this.logger.log(`Export ${exportId} will process ${recordsToProcess} records (remaining: ${remainingRecords})`);
-      
-      // Lấy dữ liệu với giới hạn tổng thể
-      const allData = await this.getOrdersBatch(filters, recordsToProcess, 0);
-      
-      if (allData.length === 0) {
-        this.logger.log('No data found for export');
-        if (progressCallback) {
-          progressCallback({
-            message: 'Không có dữ liệu để xuất',
-            percentage: 100,
-            currentBatch: 0,
-            totalBatches: 0,
-            recordsProcessed: 0
-          });
-        }
-        return this.createEmptyExcelBuffer();
-      }
-      
-      // Cập nhật số dòng đã xử lý toàn cục
-      OrderService.globalRecordsProcessed += allData.length;
-      this.logger.log(`Exporting ${allData.length} records. Global processed: ${OrderService.globalRecordsProcessed}/${OrderService.GLOBAL_MAX_RECORDS}`);
-      
-      // Kiểm tra xem có hoàn thành phiên không
-      if (OrderService.globalRecordsProcessed >= OrderService.GLOBAL_MAX_RECORDS) {
-        OrderService.lastSessionEndTime = Date.now();
-        this.logger.log(`Export session completed! Cooldown started for ${OrderService.COOLDOWN_INTERVAL / 1000} seconds`);
-      }
-      
-      if (progressCallback) {
-        progressCallback({
-          message: `Đang tạo file Excel với ${allData.length} bản ghi... (Toàn hệ thống: ${OrderService.globalRecordsProcessed}/${OrderService.GLOBAL_MAX_RECORDS} dòng)`,
-          percentage: 50,
-          currentBatch: 1,
-          totalBatches: 1,
-          recordsProcessed: allData.length
-        });
-      }
-      
-      const result = await this.createExcelBuffer(allData);
-      
-      if (progressCallback) {
-        const sessionStatus = OrderService.globalRecordsProcessed >= OrderService.GLOBAL_MAX_RECORDS 
-          ? ' - Phiên export đã hoàn thành, nghỉ 1 phút'
-          : '';
-        
-        progressCallback({
-          message: `Hoàn thành xuất dữ liệu Excel (${allData.length} dòng) - Toàn hệ thống: ${OrderService.globalRecordsProcessed}/${OrderService.GLOBAL_MAX_RECORDS} dòng${sessionStatus}`,
-          percentage: 100,
-          currentBatch: 1,
-          totalBatches: 1,
-          recordsProcessed: allData.length
-        });
-      }
-      
-      return result;
-    } catch (error) {
-      this.logger.error('Error in exportOrdersToExcel:', error);
-      throw error;
-    } finally {
-      // Luôn xóa khỏi danh sách export đang chạy
-      OrderService.activeExports.delete(exportId);
-      
-      const sessionStatus = OrderService.globalRecordsProcessed >= OrderService.GLOBAL_MAX_RECORDS 
-        ? ' - SESSION COMPLETED, COOLDOWN ACTIVE'
-        : '';
-        
-      this.logger.log(`Completed export ${exportId}. Active exports: ${OrderService.activeExports.size}, Global records: ${OrderService.globalRecordsProcessed}/${OrderService.GLOBAL_MAX_RECORDS}${sessionStatus}`);
-    }
-  }
-
-  private async createEmptyExcelBuffer(): Promise<Buffer> {
-    const workbook = new ExcelJS.Workbook();
-    const worksheet = workbook.addWorksheet('Đơn hàng');
-
-    // Định nghĩa headers
-    worksheet.columns = [
-      { header: 'ID', key: 'id', width: 10 },
-      { header: 'Mã đơn hàng', key: 'orderId', width: 15 },
-      { header: 'Sản phẩm', key: 'productName', width: 30 },
-      { header: 'Khách hàng', key: 'customerName', width: 25 },
-      { header: 'Số lượng', key: 'quantity', width: 12 },
-      { header: 'Đơn giá', key: 'unitPrice', width: 15 },
-      { header: 'Thành tiền', key: 'totalAmount', width: 15 },
-      { header: 'Trạng thái', key: 'status', width: 15 },
-      { header: 'Nhân viên', key: 'employeeName', width: 20 },
-      { header: 'Phòng ban', key: 'departmentName', width: 20 },
-      { header: 'Ngày tạo', key: 'createdAt', width: 20 },
-    ];
-
-    // Style cho header
-    worksheet.getRow(1).font = { bold: true };
-    worksheet.getRow(1).fill = {
-      type: 'pattern',
-      pattern: 'solid',
-      fgColor: { argb: 'FFE0E0E0' }
-    };
-
-    // Thêm dòng thông báo không có dữ liệu
-    worksheet.addRow({
-      id: 'N/A',
-      orderId: 'N/A',
-      productName: 'Không có dữ liệu',
-      customerName: 'N/A',
-      quantity: 0,
-      unitPrice: 0,
-      totalAmount: 0,
-      status: 'N/A',
-      employeeName: 'N/A',
-      departmentName: 'N/A',
-      createdAt: 'N/A',
-    });
-
-    return (await workbook.xlsx.writeBuffer()) as unknown as Buffer;
-  }
-
-
-
-
-  private async getOrdersBatch(filters: ExportFilters, limit: number, offset: number): Promise<OrderDetail[]> {
-    const qb = this.orderDetailRepository
-      .createQueryBuilder('details')
-      .leftJoinAndSelect('details.order', 'order')
-      .leftJoinAndSelect('order.sale_by', 'sale_by')
-      .leftJoinAndSelect('details.product', 'product')
-      .leftJoinAndSelect('sale_by.departments', 'sale_by_departments')
-      .where('details.deleted_at IS NULL')
-      .limit(limit)
-      .offset(offset);
-
-    // Apply filters
-    await this.applyFiltersToQuery(qb, filters);
-    
-    // Apply sorting
-    if (filters.sortField && filters.sortDirection) {
-      const sortDirection = filters.sortDirection.toUpperCase() as 'ASC' | 'DESC';
-      qb.orderBy(`details.${filters.sortField}`, sortDirection);
-    } else {
-      qb.orderBy('details.created_at', 'DESC');
-    }
-
-    // Note: SelectQueryBuilder does not expose a `timeout` method in TypeORM.
-    // If you need to enforce a query timeout, configure it at the driver/connection level
-    // or implement application-level cancellation/timeout logic.
-    // For now we omit qb.timeout(...) to keep TypeScript happy.
-
-    return await qb.getMany();
-  }
-
-  private async applyFiltersToQuery(qb: any, filters: ExportFilters): Promise<void> {
-    // Permission scoping
-    if (filters.user) {
-      const ownOnlyFlag = (filters.ownOnly || '').toString().toLowerCase();
-      const isOwnOnly = ownOnlyFlag === '1' || ownOnlyFlag === 'true';
-      const allowedUserIds = isOwnOnly
-        ? [filters.user?.id || filters.user?.sub].filter((v: any) => typeof v === 'number')
-        : await this.getUserIdsByRole(filters.user);
-      if (allowedUserIds !== null) {
-        if (allowedUserIds.length === 0) {
-          qb.andWhere('1 = 0');
-        } else {
-          qb.andWhere('sale_by.id IN (:...userIds)', { userIds: allowedUserIds });
-        }
-      }
-    }
-
-    // Search filter
-    if (filters.search) {
-      qb.andWhere(
-        '(details.customer_name LIKE :search OR details.raw_item LIKE :search OR sale_by.full_name LIKE :search)',
-        { search: `%${filters.search}%` }
-      );
-    }
-
-    // Status filter
-    if (filters.status) {
-      qb.andWhere('details.status = :status', { status: filters.status });
-    }
-
-    // Date filters
-    if (filters.date) {
-      const date = new Date(filters.date);
-      const startOfDay = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-      const endOfDay = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1);
-      qb.andWhere('details.created_at BETWEEN :startOfDay AND :endOfDay', {
-        startOfDay,
-        endOfDay,
-      });
-    }
-
-    if (filters.dateRange && filters.dateRange.start && filters.dateRange.end) {
-      qb.andWhere('details.created_at BETWEEN :startDate AND :endDate', {
-        startDate: filters.dateRange.start,
-        endDate: filters.dateRange.end,
-      });
-    }
-
-    // Employee filter
-    if (filters.employee) {
-      qb.andWhere('sale_by.id = :employeeId', { employeeId: parseInt(filters.employee) });
-    }
-
-    if (filters.employees) {
-      const empIds = filters.employees.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
-      if (empIds.length > 0) {
-        qb.andWhere('sale_by.id IN (:...empIds)', { empIds });
-      }
-    }
-
-    // Department filter
-    if (filters.departments) {
-      const deptIds = filters.departments.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
-      if (deptIds.length > 0) {
-        qb.andWhere('sale_by_departments.id IN (:...deptIds)', { deptIds });
-      }
-    }
-
-    // Product filter
-    if (filters.products) {
-      const productIds = filters.products.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
-      if (productIds.length > 0) {
-        qb.andWhere('details.product_id IN (:...productIds)', { productIds });
-      }
-    }
-
-    // Quantity filter
-    if (filters.quantity) {
-      const quantity = parseInt(filters.quantity);
-      if (!isNaN(quantity)) {
-        qb.andWhere('details.quantity >= :quantity', { quantity });
-      }
-    }
-
-    // Include hidden filter (admin only)
-    if (filters.includeHidden !== '1' && filters.includeHidden !== 'true') {
-      qb.andWhere('details.hidden_at IS NULL');
-    }
-  }
-
-  private async createExcelBuffer(orders: OrderDetail[]): Promise<Buffer> {
-    const workbook = new ExcelJS.Workbook();
-    const worksheet = workbook.addWorksheet('Đơn hàng');
-
-    // Định nghĩa headers
-    worksheet.columns = [
-      { header: 'ID', key: 'id', width: 10 },
-      { header: 'Mã đơn hàng', key: 'orderId', width: 15 },
-      { header: 'Sản phẩm', key: 'productName', width: 30 },
-      { header: 'Khách hàng', key: 'customerName', width: 25 },
-      { header: 'Số lượng', key: 'quantity', width: 12 },
-      { header: 'Đơn giá', key: 'unitPrice', width: 15 },
-      { header: 'Thành tiền', key: 'totalAmount', width: 15 },
-      { header: 'Trạng thái', key: 'status', width: 15 },
-      { header: 'Nhân viên', key: 'employeeName', width: 20 },
-      { header: 'Phòng ban', key: 'departmentName', width: 20 },
-      { header: 'Ngày tạo', key: 'createdAt', width: 20 },
-    ];
-
-    // Style cho header
-    worksheet.getRow(1).font = { bold: true };
-    worksheet.getRow(1).fill = {
-      type: 'pattern',
-      pattern: 'solid',
-      fgColor: { argb: 'FFE0E0E0' }
-    };
-
-    // Thêm dữ liệu
-    orders.forEach(order => {
-      const totalAmount = (order.quantity || 0) * (order.unit_price || 0);
-      const departmentName = order.order?.sale_by?.departments?.[0]?.name || 'N/A';
-      
-      worksheet.addRow({
-        id: order.id,
-        orderId: order.order?.id || 'N/A',
-        productName: order.raw_item || order.product?.productName || 'N/A',
-        customerName: order.customer_name || 'N/A',
-        quantity: order.quantity || 0,
-        unitPrice: order.unit_price || 0,
-        totalAmount: totalAmount,
-        status: this.getStatusText(order.status),
-        employeeName: order.order?.sale_by?.fullName || order.order?.sale_by?.username || 'N/A',
-        departmentName: departmentName,
-        createdAt: order.created_at ? new Date(order.created_at).toLocaleString('vi-VN') : 'N/A',
-      });
-    });
-
-    // Auto-fit columns
-    worksheet.columns.forEach(column => {
-      if (column.eachCell) {
-        let maxLength = 0;
-        column.eachCell({ includeEmpty: true }, (cell) => {
-          const columnLength = cell.value ? cell.value.toString().length : 10;
-          if (columnLength > maxLength) {
-            maxLength = columnLength;
-          }
-        });
-        column.width = Math.min(maxLength + 2, 50);
-      }
-    });
-
-  return (await workbook.xlsx.writeBuffer()) as unknown as Buffer;
-  }
-
-
-  private getStatusText(status: string): string {
-    const statusMap: { [key: string]: string } = {
-      'pending': 'Chờ xử lý',
-      'processing': 'Đang xử lý',
-      'completed': 'Hoàn thành',
-      'cancelled': 'Đã hủy',
-    };
-    return statusMap[status] || status;
   }
 }
 
