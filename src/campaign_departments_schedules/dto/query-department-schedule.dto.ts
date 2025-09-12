@@ -24,7 +24,7 @@ export class QueryDepartmentScheduleDto {
 
   @IsOptional()
   @IsNumber()
-  limit?: number = 10;
+  limit?: number = 999999;
 
   @IsOptional()
   @IsString()

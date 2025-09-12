@@ -87,7 +87,7 @@ export class CampaignDepartmentsSchedulesService {
       status,
       department_id,
       page = 1,
-      limit = 10,
+      limit = 999999,
       sort = 'created_at',
       order = 'DESC',
     } = query;
@@ -131,12 +131,14 @@ export class CampaignDepartmentsSchedulesService {
     const sortField = validSortFields.includes(sort) ? sort : 'created_at';
     queryBuilder.orderBy(`schedule.${sortField}`, order);
 
-    // Apply pagination
-    const offset = (page - 1) * limit;
-    queryBuilder.skip(offset).take(limit);
+    // Apply pagination - nếu limit = -1 thì không giới hạn
+    if (limit > 0) {
+      const offset = (page - 1) * limit;
+      queryBuilder.skip(offset).take(limit);
+    }
 
     const [data, total] = await queryBuilder.getManyAndCount();
-    const totalPages = Math.ceil(total / limit);
+    const totalPages = limit > 0 ? Math.ceil(total / limit) : 1;
 
     return {
       data,
@@ -437,7 +439,7 @@ export class CampaignDepartmentsSchedulesService {
       department_id,
       department_ids,
       page = 1,
-      limit = 10,
+      limit = 999999,
       sort = 'created_at',
       order = 'DESC',
     } = query;
@@ -488,12 +490,14 @@ export class CampaignDepartmentsSchedulesService {
     const sortField = validSortFields.includes(sort) ? sort : 'created_at';
     queryBuilder.orderBy(`schedule.${sortField}`, order);
 
-    // Apply pagination
-    const offset = (page - 1) * limit;
-    queryBuilder.skip(offset).take(limit);
+    // Apply pagination - nếu limit = -1 thì không giới hạn
+    if (limit > 0) {
+      const offset = (page - 1) * limit;
+      queryBuilder.skip(offset).take(limit);
+    }
 
     const [data, total] = await queryBuilder.getManyAndCount();
-    const totalPages = Math.ceil(total / limit);
+    const totalPages = limit > 0 ? Math.ceil(total / limit) : 1;
 
     return {
       data,
