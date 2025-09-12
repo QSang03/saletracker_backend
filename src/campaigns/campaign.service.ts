@@ -852,9 +852,6 @@ export class CampaignService {
 
     const [endHour, endMin] = commonTimeRange.end_time.split(':').map(Number);
     result.endDate.setHours(endHour, endMin, 0, 0);
-
-    this.logger.log(`✅ [calculate3DayDateRange] Applied common time range: ${commonTimeRange.start_time} - ${commonTimeRange.end_time}`);
-
     return Promise.resolve(result);
   }
 
