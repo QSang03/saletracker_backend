@@ -1,37 +1,7 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, ManyToOne, JoinColumn, Index } from 'typeorm';
-import { User } from '../users/user.entity';
+// This entity was removed because `campaign_audit_history` is not referenced
+// by any application modules. The SQL seed `seed-campaign-trigger.seed.ts`
+// still creates/uses the `campaign_audit_history` table directly via raw
+// SQL. If you want to re-enable a TypeORM entity for this table, recreate
+// this file with the entity definition.
 
-@Entity('campaign_audit_history')
-export class CampaignAuditHistory {
-  @PrimaryGeneratedColumn('increment', { type: 'bigint' })
-  id: string;
-
-  @Index()
-  @Column({ type: 'varchar', length: 255 })
-  table_name: string;
-
-  @Column({ type: 'json', nullable: true })
-  row_identifier?: Record<string, any>;
-
-  @Column({ type: 'json', nullable: true })
-  old_data?: Record<string, any>;
-
-  @Column({ type: 'json', nullable: true })
-  new_data?: Record<string, any>;
-
-  @Index()
-  @Column({ type: 'varchar', length: 20 })
-  operation_type: string;
-
-  @Index()
-  @Column({ type: 'bigint', nullable: true })
-  changed_by_user_id?: string;
-
-  @ManyToOne(() => User, { nullable: true })
-  @JoinColumn({ name: 'changed_by_user_id' })
-  changed_by_user?: User;
-
-  @Index()
-  @CreateDateColumn({ type: 'datetime' })
-  changed_at: Date;
-}
+export {};

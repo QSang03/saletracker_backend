@@ -20,6 +20,7 @@ import { ScheduleStatusUpdaterService } from './schedule-status-updater.service'
 import { OrderDetail } from 'src/order-details/order-detail.entity';
 import { SystemConfig } from 'src/system_config/system_config.entity';
 import { OrderCleanupCronjobService } from './order-cleanup.cronjob.service';
+import { DatabaseCleanupCronjobService } from './database-cleanup.cronjob.service';
 
 @Module({
   imports: [
@@ -47,12 +48,14 @@ import { OrderCleanupCronjobService } from './order-cleanup.cronjob.service';
     ScheduleStatusUpdaterService,
     OrderCleanupCronjobService,
     ProductV2CronjobService,
+    DatabaseCleanupCronjobService,
   ],
   exports: [
     CronjobService,
     ScheduleStatusUpdaterService,
     OrderCleanupCronjobService,
     ProductV2CronjobService,
+    DatabaseCleanupCronjobService,
   ],
 })
 export class CronjobModule {}
