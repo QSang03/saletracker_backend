@@ -800,11 +800,6 @@ export class CampaignService {
     // ✅ SỬA: Sử dụng TẤT CẢ schedules thay vì chỉ usedSchedules để thu thập slots
     const schedulesToSearch = allDepartmentSchedules;
 
-    // ✅ DEBUG: Log schedules được sử dụng
-    schedulesToSearch.forEach(s => {
-      const slots = (s as any)?.schedule_config?.slots || [];
-    });
-
     // ✅ NEW: Thu thập slots cho TẤT CẢ ngày trong 3-day sequence
     const allDaySlots: { [dateKey: string]: any[] } = {};
     
@@ -841,9 +836,6 @@ export class CampaignService {
           }
         }
       }
-
-      this.logger.log(`🔍 [calculate3DayDateRange] ${dateKey} (day ${dayOfWeek}) slots:`, 
-        allDaySlots[dateKey].map(s => `${s.start_time}-${s.end_time}`).join(', '));
     }
 
     // ✅ NEW: Tìm time range chung cho tất cả ngày
