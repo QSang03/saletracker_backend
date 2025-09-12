@@ -112,6 +112,82 @@ export class OrderController {
     });
   }
 
+  // Management endpoints: always enforce own-only for the authenticated user
+  @Get('management')
+  async findAllManagement(
+    @Query('page') page: string = '1',
+    @Query('pageSize') pageSize: string = '10',
+    @Query('search') search?: string,
+    @Query('status') status?: string,
+    @Query('date') date?: string,
+    @Query('dateRange') dateRange?: string,
+    @Query('employee') employee?: string,
+    @Query('employees') employees?: string,
+    @Query('departments') departments?: string,
+    @Query('products') products?: string,
+    @Query('brands') brands?: string,
+    @Query('categories') categories?: string,
+    @Query('brandCategories') brandCategories?: string,
+    @Query('warningLevel') warningLevel?: string,
+    @Query('sortField')
+    sortField?:
+      | 'quantity'
+      | 'unit_price'
+      | 'created_at'
+      | 'conversation_start'
+      | 'conversation_end',
+    @Query('sortDirection') sortDirection?: 'asc' | 'desc',
+    @Query('quantity') quantity?: string,
+    @Query('conversationType') conversationType?: string,
+    @Query('includeHidden') includeHidden?: string,
+    @Req() req?: any,
+  ): Promise<{
+    data: OrderDetail[];
+    total: number;
+    page: number;
+    pageSize: number;
+  }> {
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const pageSizeNum = Math.min(
+      1000000,
+      Math.max(1, parseInt(pageSize, 10) || 10),
+    );
+
+    let parsedDateRange;
+    if (dateRange) {
+      try {
+        parsedDateRange = JSON.parse(dateRange);
+      } catch (e) {
+        parsedDateRange = undefined;
+      }
+    }
+
+    // Force ownOnly regardless of incoming employees/departments
+    return this.orderService.findAllPaginated({
+      page: pageNum,
+      pageSize: pageSizeNum,
+      search: search?.trim(),
+      status,
+      date,
+      dateRange: parsedDateRange,
+      employee,
+      employees,
+      departments,
+      products,
+      brands,
+      categories,
+      brandCategories,
+      warningLevel,
+      quantity,
+      conversationType,
+      sortField: sortField || null,
+      sortDirection: sortDirection || null,
+      includeHidden,
+      ownOnly: '1',
+      user: req.user,
+    });
+  }
+
   @Get('all')
   async findAllWithPermission(@Req() req?: any): Promise<Order[]> {
     return this.orderService.findAll();
@@ -385,6 +461,108 @@ export class OrderController {
         error: 'Lỗi khi xuất dữ liệu', 
         message: error.message 
       });
+    }
+  }
+
+  // Management export: enforce own-only
+  @Get('management/export')
+  @UsePipes()
+  async exportOrdersManagement(
+    @Res() res: Response,
+    @Req() req: any,
+    @Query('search') search?: string,
+    @Query('status') status?: string,
+    @Query('date') date?: string,
+    @Query('dateRange') dateRange?: string,
+    @Query('employee') employee?: string,
+    @Query('employees') employees?: string,
+    @Query('departments') departments?: string,
+    @Query('products') products?: string,
+    @Query('brands') brands?: string,
+    @Query('categories') categories?: string,
+    @Query('brandCategories') brandCategories?: string,
+    @Query('warningLevel') warningLevel?: string,
+    @Query('sortField')
+    sortField?:
+      | 'quantity'
+      | 'unit_price'
+      | 'created_at'
+      | 'conversation_start'
+      | 'conversation_end',
+    @Query('sortDirection') sortDirection?: 'asc' | 'desc',
+    @Query('quantity') quantity?: string,
+    @Query('conversationType') conversationType?: string,
+    @Query('includeHidden') includeHidden?: string,
+  ): Promise<void> {
+    let parsedDateRange;
+    if (dateRange) {
+      try {
+        parsedDateRange = JSON.parse(dateRange);
+      } catch (e) {
+        parsedDateRange = undefined;
+      }
+    }
+
+    const filters = {
+      search: search?.trim(),
+      status,
+      date,
+      dateRange: parsedDateRange,
+      employee,
+      employees,
+      departments,
+      products,
+      brands,
+      categories,
+      brandCategories,
+      warningLevel,
+      quantity,
+      conversationType,
+      sortField: sortField || null,
+      sortDirection: sortDirection || null,
+      includeHidden,
+      ownOnly: '1',
+      user: req.user,
+    };
+
+    try {
+      const userId = req.user?.sub || req.user?.id;
+      this.websocketGateway.emitToUser(userId, 'export:excel:start', {
+        message: 'Bắt đầu xuất dữ liệu Excel (hệ thống giới hạn 2000 dòng/phiên, nghỉ 1 phút giữa các phiên)...',
+        progress: 0,
+      });
+
+      const excelBuffer = await this.orderService.exportOrdersToExcel(filters, (progress) => {
+        this.websocketGateway.emitToUser(userId, 'export:excel:progress', {
+          message: progress.message,
+          progress: progress.percentage,
+          currentBatch: progress.currentBatch,
+          totalBatches: progress.totalBatches,
+          recordsProcessed: progress.recordsProcessed,
+        });
+      });
+
+      const filename = `don-hang-${new Date().toISOString().split('T')[0]}.xlsx`;
+      this.websocketGateway.emitToUser(userId, 'export:excel:complete', {
+        message: 'Xuất dữ liệu Excel hoàn thành!',
+        progress: 100,
+        filename: filename,
+      });
+
+      res.set({
+        'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'Content-Disposition': `attachment; filename="${filename}"`,
+        'Content-Length': excelBuffer.length.toString(),
+      });
+      res.send(excelBuffer);
+    } catch (error) {
+      this.logger.error('Error exporting orders (management):', error);
+      const userId = req.user?.sub || req.user?.id;
+      this.websocketGateway.emitToUser(userId, 'export:excel:error', {
+        message: 'Lỗi khi xuất dữ liệu Excel',
+        error: (error as any).message,
+      });
+      res.status(500).json({ error: 'Lỗi khi xuất dữ liệu', message: (error as any).message });
     }
   }
 }

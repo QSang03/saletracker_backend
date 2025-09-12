@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Like, Between, Not, IsNull, In } from 'typeorm';
 import { Order } from './order.entity';
-import { OrderDetail } from 'src/order-details/order-detail.entity';
+import { OrderDetail, ExtendReason } from 'src/order-details/order-detail.entity';
 import { Department } from 'src/departments/department.entity';
 import { User } from 'src/users/user.entity';
 import { Product } from 'src/products/product.entity';
@@ -137,27 +137,55 @@ export class OrderService {
     }
   }
 
+  // Helper method để tính toán extended khi khôi phục
+  private calculateExtendedForRestore(createdAt: Date): number {
+    // Công thức: ngày tạo + x - ngày hiện tại = 4
+    // => x = 4 + (ngày hiện tại - ngày tạo) tính theo ngày
+    const now = new Date();
+    const daysDiff = Math.floor((now.getTime() - createdAt.getTime()) / (1000 * 60 * 60 * 24));
+    return Math.max(4, 4 + daysDiff);
+  }
+
   // Phase 2.6: Tối ưu hóa - Bulk unhide operations
   async bulkUnhideOrderDetails(
     orderDetailIds: number[],
     userId: number,
   ): Promise<{ success: boolean; affected: number; errors: string[] }> {
     try {
-      // Phase 2.6: Tối ưu hóa - Batch update để restore hidden orders
-      const result = await this.orderDetailRepository
-        .createQueryBuilder()
-        .update(OrderDetail)
-        .set({
+      // Lấy danh sách order details để tính toán extended
+      const orderDetails = await this.orderDetailRepository
+        .createQueryBuilder('detail')
+        .leftJoinAndSelect('detail.order', 'order')
+        .where('detail.id IN (:...ids)', { ids: orderDetailIds })
+        .andWhere('detail.hidden_at IS NOT NULL')
+        .getMany();
+
+      if (orderDetails.length === 0) {
+        return {
+          success: true,
+          affected: 0,
+          errors: [],
+        };
+      }
+
+      // Cập nhật từng order detail với extended được tính lại
+      const updatePromises = orderDetails.map(async (detail) => {
+        const newExtended = this.calculateExtendedForRestore(detail.order.created_at);
+        
+        return this.orderDetailRepository.update(detail.id, {
           hidden_at: null,
-          updated_at: () => 'NOW()',
-        })
-        .where('id IN (:...ids)', { ids: orderDetailIds })
-        .andWhere('hidden_at IS NOT NULL') // Chỉ restore những order đã bị hide
-        .execute();
+          extended: newExtended,
+          last_extended_at: new Date(),
+          extend_reason: ExtendReason.RESTORE_AUTO,
+          updated_at: new Date(),
+        });
+      });
+
+      await Promise.all(updatePromises);
 
       return {
         success: true,
-        affected: result.affected || 0,
+        affected: orderDetails.length,
         errors: [],
       };
     } catch (error) {

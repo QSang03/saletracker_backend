@@ -21,6 +21,7 @@ export enum OrderDetailStatus {
 export enum ExtendReason {
   SYSTEM_SUNDAY_AUTO = 'hệ thống tự gia hạn vào chủ nhật hoặc nghỉ lễ',
   USER_MANUAL = 'chính chủ gia hạn',
+  RESTORE_AUTO = 'hệ thống tự gia hạn khi khôi phục',
 }
 @Index('idx_order_details_order_status', ['order_id', 'status'])
 @Index('idx_order_details_product_status', ['product_id', 'status'])
