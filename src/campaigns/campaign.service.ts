@@ -346,12 +346,38 @@ export class CampaignService {
   }
 
   private async calculateDateRangeFromHourlySlotsWithApplicableDate(
-    departmentConfig: any,
+    allDepartmentSchedules: DepartmentSchedule[] | any, // Accept both formats for backward compatibility
     campaignConfig: any,
     campaignType: CampaignType,
   ): Promise<{ startDate: Date; endDate: Date }> {
-    if (!departmentConfig?.slots || !Array.isArray(departmentConfig.slots)) {
+    // ✅ NEW: Handle both old format (single schedule config) and new format (array of schedules)
+    let departmentSchedules: DepartmentSchedule[];
+    
+    if (Array.isArray(allDepartmentSchedules)) {
+      // New format: array of DepartmentSchedule objects
+      departmentSchedules = allDepartmentSchedules.filter(
+        schedule => schedule.schedule_type === ScheduleType.HOURLY_SLOTS
+      );
+    } else {
+      // Old format: single schedule config (for backward compatibility)
+      // Create a fake schedule object to maintain compatibility
+      departmentSchedules = [{
+        schedule_config: allDepartmentSchedules,
+        schedule_type: ScheduleType.HOURLY_SLOTS
+      } as DepartmentSchedule];
+    }
+
+    if (departmentSchedules.length === 0) {
       throw new Error('Invalid hourly slots configuration');
+    }
+
+    // ✅ NEW: Collect all slots from all schedules
+    let allSlots: any[] = [];
+    for (const schedule of departmentSchedules) {
+      const departmentConfig = schedule.schedule_config as any;
+      if (departmentConfig?.slots && Array.isArray(departmentConfig.slots)) {
+        allSlots.push(...departmentConfig.slots);
+      }
     }
 
     const now = new Date();
@@ -385,7 +411,7 @@ export class CampaignService {
       }
     }
     // ✅ UPDATED: Enhanced slot processing for 3-day campaigns
-    for (const slot of departmentConfig.slots) {
+    for (const slot of allSlots) {
       let slotDates: Array<{ date: Date; slot: any }> = [];
 
       if (slot.applicable_date) {
@@ -506,7 +532,7 @@ export class CampaignService {
           // ✅ NEW: For 3-day campaigns, add dates for all required days
           if (campaignConfig?.type === '3_day') {
             return await this.calculate3DayDateRange(
-              departmentConfig,
+              departmentSchedules, // Use the schedules array instead of departmentConfig
               campaignConfig,
               campaignType,
             );
@@ -525,7 +551,7 @@ export class CampaignService {
     }
     if (validSlots.length === 0) {
       this.logger.error(`❌ No valid future slots found. Debug info:`);
-      this.logger.error(`- Department slots:`, departmentConfig.slots);
+      this.logger.error(`- All slots from all schedules:`, allSlots);
       this.logger.error(`- Campaign config:`, campaignConfig);
       this.logger.error(`- Required days of week:`, requiredDaysOfWeek);
       this.logger.error(`- Current time:`, now.toISOString());
@@ -567,12 +593,37 @@ export class CampaignService {
       campaignType.includes('daily') ||
       campaignType.includes('hourly')
     ) {
-      // Hourly/Daily campaign: always use 8:00-17:45
-      startDate = new Date(targetDate);
-      startDate.setHours(8, 0, 0, 0);
+      // ✅ SỬA: Hourly/Daily campaign - gom tất cả slots cùng ngày thay vì hardcode 8:00-17:45
+      // Find all slots for the target date to get actual time range
+      const slotsForTargetDay = allSlots.filter((slot) => {
+        if (slot.applicable_date) {
+          const slotDate = new Date(slot.applicable_date);
+          return slotDate.toDateString() === targetDate.toDateString();
+        } else if (slot.day_of_week !== undefined) {
+          return slot.day_of_week === nearestSlot.day_of_week;
+        }
+        return false;
+      });
 
-      endDate = new Date(targetDate);
-      endDate.setHours(17, 45, 0, 0);
+      if (slotsForTargetDay.length > 0) {
+        // ✅ SỬA: Tìm nhóm slots liền kề lớn nhất thay vì min-max tất cả
+        const consecutiveGroup = this.findLargestConsecutiveSlotGroup(slotsForTargetDay);
+        
+        startDate = new Date(targetDate);
+        const [startHour, startMin] = consecutiveGroup.start_time.split(':').map(Number);
+        startDate.setHours(startHour, startMin, 0, 0);
+
+        endDate = new Date(targetDate);
+        const [endHour, endMin] = consecutiveGroup.end_time.split(':').map(Number);
+        endDate.setHours(endHour, endMin, 0, 0);
+      } else {
+        // Fallback nếu không tìm thấy slots (giữ logic cũ)
+        startDate = new Date(targetDate);
+        startDate.setHours(8, 0, 0, 0);
+
+        endDate = new Date(targetDate);
+        endDate.setHours(17, 45, 0, 0);
+      }
     } else {
       // Weekly campaigns and other types
       let campaignDuration = 1;
@@ -584,7 +635,7 @@ export class CampaignService {
       }
 
       // Find all slots for the same day to get full time range
-      const slotsForThisDay = departmentConfig.slots.filter((slot) => {
+      const slotsForThisDay = allSlots.filter((slot) => {
         if (slot.applicable_date) {
           const slotDate = new Date(slot.applicable_date);
           return slotDate.toDateString() === targetDate.toDateString();
@@ -597,15 +648,11 @@ export class CampaignService {
       let earliestStartTime = nearestSlot.start_time;
       let latestEndTime = nearestSlot.end_time;
 
-      for (const slot of slotsForThisDay) {
-        if (
-          this.parseTime(slot.start_time) < this.parseTime(earliestStartTime)
-        ) {
-          earliestStartTime = slot.start_time;
-        }
-        if (this.parseTime(slot.end_time) > this.parseTime(latestEndTime)) {
-          latestEndTime = slot.end_time;
-        }
+      if (slotsForThisDay.length > 0) {
+        // ✅ SỬA: Tìm nhóm slots liền kề lớn nhất thay vì min-max tất cả
+        const consecutiveGroup = this.findLargestConsecutiveSlotGroup(slotsForThisDay);
+        earliestStartTime = consecutiveGroup.start_time;
+        latestEndTime = consecutiveGroup.end_time;
       }
 
       startDate = new Date(targetDate);
@@ -741,9 +788,7 @@ export class CampaignService {
       throw new Error('No valid consecutive 3-day sequence found');
     }
 
-    // ✅ Điều chỉnh time: start_date dùng slot start nhỏ nhất của ngày đầu,
-    // end_date dùng slot end lớn nhất của ngày cuối, nhưng CHỈ trong các schedules
-    // đã được dùng trong chuỗi 3 ngày ở trên
+    // ✅ SỬA: Điều chỉnh time bằng cách gom slots liền kề cho từng ngày
     const firstDay = new Date(result.startDate);
     const lastDay = new Date(result.endDate);
 
@@ -752,63 +797,71 @@ export class CampaignService {
     const firstDayOfWeek = this.getVietnamDayOfWeek(firstDay); // 1..7
     const lastDayOfWeek = this.getVietnamDayOfWeek(lastDay); // 1..7
 
-    let minStartTime: string | null = null;
-    let maxEndTime: string | null = null;
+    // ✅ SỬA: Sử dụng TẤT CẢ schedules thay vì chỉ usedSchedules để thu thập slots
+    const schedulesToSearch = allDepartmentSchedules;
 
-    const schedulesToSearch =
-      result.usedSchedules && result.usedSchedules.length > 0
-        ? result.usedSchedules
-        : allDepartmentSchedules;
+    // ✅ DEBUG: Log schedules được sử dụng
+    schedulesToSearch.forEach(s => {
+      const slots = (s as any)?.schedule_config?.slots || [];
+    });
 
-    for (const schedule of schedulesToSearch) {
-      const slots = (schedule as any)?.schedule_config?.slots;
-      if (!Array.isArray(slots)) continue;
+    // ✅ NEW: Thu thập slots cho TẤT CẢ ngày trong 3-day sequence
+    const allDaySlots: { [dateKey: string]: any[] } = {};
+    
+    // Tính toán tất cả ngày trong 3-day sequence
+    const allDatesInSequence: Date[] = [];
+    for (let i = 0; i < 3; i++) {
+      const date = new Date(firstDay);
+      date.setDate(date.getDate() + i);
+      allDatesInSequence.push(date);
+    }
 
-      for (const slot of slots) {
-        // Kiểm tra slot có áp dụng cho ngày cần xét không
-        let appliesToFirst = false;
-        let appliesToLast = false;
+    for (const date of allDatesInSequence) {
+      const dateKey = this.vietnamDateKey(date);
+      const dayOfWeek = this.getVietnamDayOfWeek(date);
+      allDaySlots[dateKey] = [];
 
-        if (slot.applicable_date) {
-          const slotDateKey = this.vietnamDateKey(
-            this.parseVietnamDate(slot.applicable_date),
-          );
-          if (slotDateKey === firstDayVNKey) appliesToFirst = true;
-          if (slotDateKey === lastDayVNKey) appliesToLast = true;
-        } else if (slot.day_of_week) {
-          if (slot.day_of_week === firstDayOfWeek) appliesToFirst = true;
-          if (slot.day_of_week === lastDayOfWeek) appliesToLast = true;
-        }
+      for (const schedule of schedulesToSearch) {
+        const slots = (schedule as any)?.schedule_config?.slots || [];
+        
+        for (const slot of slots) {
+          let appliesTo = false;
 
-        if (appliesToFirst && slot.start_time) {
-          if (
-            minStartTime === null ||
-            this.parseTime(slot.start_time) < this.parseTime(minStartTime)
-          ) {
-            minStartTime = slot.start_time;
+          if (slot.applicable_date) {
+            const slotDateKey = this.vietnamDateKey(
+              this.parseVietnamDate(slot.applicable_date),
+            );
+            if (slotDateKey === dateKey) appliesTo = true;
+          } else if (slot.day_of_week) {
+            if (slot.day_of_week === dayOfWeek) appliesTo = true;
           }
-        }
 
-        if (appliesToLast && slot.end_time) {
-          if (
-            maxEndTime === null ||
-            this.parseTime(slot.end_time) > this.parseTime(maxEndTime)
-          ) {
-            maxEndTime = slot.end_time;
+          if (appliesTo) {
+            allDaySlots[dateKey].push(slot);
           }
         }
       }
+
+      this.logger.log(`🔍 [calculate3DayDateRange] ${dateKey} (day ${dayOfWeek}) slots:`, 
+        allDaySlots[dateKey].map(s => `${s.start_time}-${s.end_time}`).join(', '));
     }
 
-    // Áp dụng nếu tìm thấy
-    if (minStartTime) {
-      const [h, m] = minStartTime.split(':').map(Number);
-      result.startDate.setHours(h, m, 0, 0);
+    // ✅ NEW: Tìm time range chung cho tất cả ngày
+    const commonTimeRange = this.findCommon3DayTimeRange(allDaySlots);
+    
+    if (!commonTimeRange) {
+      this.logger.error(`❌ [calculate3DayDateRange] No common time range found for all 3 days`);
+      throw new Error('No common time range found for all 3 days');
     }
-    if (maxEndTime) {
-      const [h, m] = maxEndTime.split(':').map(Number);
-      result.endDate.setHours(h, m, 0, 0);
-    }
+
+    // ✅ NEW: Áp dụng common time range
+    const [startHour, startMin] = commonTimeRange.start_time.split(':').map(Number);
+    result.startDate.setHours(startHour, startMin, 0, 0);
+
+    const [endHour, endMin] = commonTimeRange.end_time.split(':').map(Number);
+    result.endDate.setHours(endHour, endMin, 0, 0);
+
+    this.logger.log(`✅ [calculate3DayDateRange] Applied common time range: ${commonTimeRange.start_time} - ${commonTimeRange.end_time}`);
 
     return Promise.resolve(result);
   }
@@ -1487,6 +1540,189 @@ export class CampaignService {
   }
 
   /**
+   * ✅ NEW: Tìm tất cả consecutive groups trong một ngày
+   * @param slots - Danh sách slots của ngày đó
+   * @returns Array of consecutive groups với start_time và end_time
+   */
+  private findAllConsecutiveGroups(slots: any[]): Array<{ start_time: string; end_time: string }> {
+    if (slots.length === 0) return [];
+
+    // Sắp xếp slots theo start_time
+    const sortedSlots = slots.sort((a, b) => 
+      this.parseTime(a.start_time) - this.parseTime(b.start_time)
+    );
+
+    const groups: Array<{ start_time: string; end_time: string }> = [];
+    let currentGroup: any[] = [sortedSlots[0]];
+
+    for (let i = 1; i < sortedSlots.length; i++) {
+      const currentSlot = sortedSlots[i];
+      const previousSlot = currentGroup[currentGroup.length - 1];
+
+      // Kiểm tra slot hiện tại có liền kề với slot trước không
+      if (previousSlot.end_time === currentSlot.start_time) {
+        // Liền kề - thêm vào nhóm hiện tại
+        currentGroup.push(currentSlot);
+      } else {
+        // Không liền kề - kết thúc nhóm hiện tại
+        groups.push({
+          start_time: currentGroup[0].start_time,
+          end_time: currentGroup[currentGroup.length - 1].end_time
+        });
+        // Bắt đầu nhóm mới
+        currentGroup = [currentSlot];
+      }
+    }
+
+    // Thêm nhóm cuối cùng
+    groups.push({
+      start_time: currentGroup[0].start_time,
+      end_time: currentGroup[currentGroup.length - 1].end_time
+    });
+
+    return groups;
+  }
+
+  /**
+   * ✅ NEW: Tìm time range chung lớn nhất cho tất cả ngày trong 3-day campaign
+   * @param allDaySlots - Object chứa slots của từng ngày
+   * @returns Common time range hoặc null nếu không có
+   */
+  private findCommon3DayTimeRange(allDaySlots: { [dateKey: string]: any[] }): { start_time: string; end_time: string } | null {
+    const dateKeys = Object.keys(allDaySlots);
+    if (dateKeys.length === 0) return null;
+
+    // Tìm tất cả consecutive groups cho từng ngày
+    const allDayGroups: { [dateKey: string]: Array<{ start_time: string; end_time: string }> } = {};
+    
+    for (const dateKey of dateKeys) {
+      const slots = allDaySlots[dateKey];
+      allDayGroups[dateKey] = this.findAllConsecutiveGroups(slots);
+      
+      // debug logs removed
+    }
+
+    // Tìm intersection của tất cả groups
+    let commonGroups = allDayGroups[dateKeys[0]]; // Bắt đầu với groups của ngày đầu
+
+    for (let i = 1; i < dateKeys.length; i++) {
+      const currentDayGroups = allDayGroups[dateKeys[i]];
+      const intersection: Array<{ start_time: string; end_time: string }> = [];
+
+      for (const commonGroup of commonGroups) {
+        for (const currentGroup of currentDayGroups) {
+          // Tìm phần giao giữa 2 time ranges
+          const intersectionStart = Math.max(
+            this.parseTime(commonGroup.start_time),
+            this.parseTime(currentGroup.start_time)
+          );
+          const intersectionEnd = Math.min(
+            this.parseTime(commonGroup.end_time),
+            this.parseTime(currentGroup.end_time)
+          );
+
+          if (intersectionStart < intersectionEnd) {
+            // Có giao - thêm vào intersection
+            intersection.push({
+              start_time: this.minutesToTime(intersectionStart),
+              end_time: this.minutesToTime(intersectionEnd)
+            });
+          }
+        }
+      }
+
+      commonGroups = intersection;
+      if (commonGroups.length === 0) {
+    // debug logs removed
+        return null; // Không có giao
+      }
+    }
+
+    // Chọn common group lớn nhất
+    let largestGroup = commonGroups[0];
+    let largestDuration = this.parseTime(largestGroup.end_time) - this.parseTime(largestGroup.start_time);
+
+    for (const group of commonGroups) {
+      const duration = this.parseTime(group.end_time) - this.parseTime(group.start_time);
+      if (duration > largestDuration) {
+        largestGroup = group;
+        largestDuration = duration;
+      }
+    }
+
+  // debug logs removed
+    return largestGroup;
+  }
+
+  /**
+   * ✅ NEW: Convert minutes to time string (HH:MM)
+   */
+  private minutesToTime(minutes: number): string {
+    const hours = Math.floor(minutes / 60);
+    const mins = minutes % 60;
+    return `${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}`;
+  }
+
+  /**
+   * ✅ NEW: Tìm nhóm slots liền kề lớn nhất từ danh sách slots
+   * @param slots - Danh sách slots cần kiểm tra
+   * @returns { start_time, end_time } của nhóm liền kề lớn nhất
+   */
+  private findLargestConsecutiveSlotGroup(slots: any[]): { start_time: string; end_time: string } {
+    if (slots.length === 0) {
+      throw new Error('No slots provided');
+    }
+
+    // debug logs removed
+    // Sắp xếp slots theo start_time
+    const sortedSlots = slots.sort((a, b) => 
+      this.parseTime(a.start_time) - this.parseTime(b.start_time)
+    );
+
+    // debug logs removed
+    let largestGroup: any[] = [];
+    let currentGroup: any[] = [sortedSlots[0]];
+
+    for (let i = 1; i < sortedSlots.length; i++) {
+      const currentSlot = sortedSlots[i];
+      const previousSlot = currentGroup[currentGroup.length - 1];
+
+  // debug logs removed
+
+      // Kiểm tra slot hiện tại có liền kề với slot trước không
+      if (previousSlot.end_time === currentSlot.start_time) {
+        // Liền kề - thêm vào nhóm hiện tại
+        currentGroup.push(currentSlot);
+  // debug logs removed
+      } else {
+        // Không liền kề - kết thúc nhóm hiện tại
+        if (currentGroup.length > largestGroup.length) {
+          largestGroup = [...currentGroup];
+          // debug logs removed
+        }
+        // Bắt đầu nhóm mới
+        currentGroup = [currentSlot];
+  // debug logs removed
+      }
+    }
+
+    // Kiểm tra nhóm cuối cùng
+    if (currentGroup.length > largestGroup.length) {
+      largestGroup = [...currentGroup];
+  // debug logs removed
+    }
+
+    const result = {
+      start_time: largestGroup[0].start_time,
+      end_time: largestGroup[largestGroup.length - 1].end_time
+    };
+
+  // debug logs removed
+
+    return result;
+  }
+
+  /**
    * Parse time string to minutes for comparison
    * @param timeStr - Time string in format "HH:MM"
    * @returns Number of minutes since midnight
@@ -1569,9 +1805,11 @@ export class CampaignService {
             campaign.campaign_type.includes('hourly') ||
             campaign.campaign_type.includes('daily')
           ) {
-            dateRange = this.calculateDateRangeFromDailyDatesWithApplicableDate(
-              bestMatchingSchedule.schedule_config as any,
+            // ✅ SỬA: Truyền tất cả schedules để gom slots cùng ngày
+            dateRange = await this.calculateDateRangeFromHourlySlotsWithApplicableDate(
+              departmentSchedules, // Pass all schedules instead of just one
               campaignSchedule?.schedule_config,
+              campaign.campaign_type,
             );
           } else {
             if (campaignSchedule?.schedule_config?.type === '3_day') {
@@ -1581,9 +1819,10 @@ export class CampaignService {
                 campaign.campaign_type,
               );
             } else {
+              // ✅ SỬA: Truyền tất cả schedules để gom slots cùng ngày
               dateRange =
                 await this.calculateDateRangeFromHourlySlotsWithApplicableDate(
-                  bestMatchingSchedule.schedule_config as any,
+                  departmentSchedules, // Pass all schedules instead of just one
                   campaignSchedule?.schedule_config,
                   campaign.campaign_type,
                 );

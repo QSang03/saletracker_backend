@@ -10,11 +10,13 @@ import { Product } from 'src/products/product.entity';
 import { Brand } from 'src/brands/brand.entity';
 import { Category } from 'src/categories/category.entity';
 import { OrderBlacklistModule } from '../order-blacklist/order-blacklist.module';
+import { WebsocketModule } from 'src/websocket/websocket.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Order, OrderDetail, Department, User, Product, Brand, Category]),
     OrderBlacklistModule,
+    WebsocketModule,
   ],
   providers: [OrderService],
   controllers: [OrderController],

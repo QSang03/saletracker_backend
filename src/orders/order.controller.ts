@@ -12,6 +12,8 @@ import {
   Req,
   Res,
   Logger,
+  UsePipes,
+  ValidationPipe,
 } from '@nestjs/common';
 import { Response } from 'express';
 import { AuthGuard } from '@nestjs/passport';
@@ -24,12 +26,16 @@ import {
   EmployeeStatsResponse,
   CustomerStatsResponse,
 } from './order.service';
+import { WebsocketGateway } from 'src/websocket/websocket.gateway';
 
 @Controller('orders')
 @UseGuards(AuthGuard('jwt'))
 export class OrderController {
   private readonly logger = new Logger(OrderController.name);
-  constructor(private readonly orderService: OrderService) {}
+  constructor(
+    private readonly orderService: OrderService,
+    private readonly websocketGateway: WebsocketGateway,
+  ) {}
 
   @Get()
   async findAll(
@@ -58,6 +64,7 @@ export class OrderController {
     @Query('quantity') quantity?: string,
     @Query('conversationType') conversationType?: string,
     @Query('includeHidden') includeHidden?: string,
+    @Query('ownOnly') ownOnly?: string,
     @Req() req?: any,
   ): Promise<{
     data: OrderDetail[];
@@ -100,6 +107,7 @@ export class OrderController {
       sortField: sortField || null,
       sortDirection: sortDirection || null,
       includeHidden,
+      ownOnly,
       user: req.user,
     });
   }
@@ -247,7 +255,20 @@ export class OrderController {
     return this.orderService.delete(id);
   }
 
+  @Get('export-test')
+  async exportTest(@Res() res: Response, @Req() req: any): Promise<void> {
+    try {
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', 'attachment; filename="test.xlsx"');
+      res.send(Buffer.from('test'));
+    } catch (error) {
+      this.logger.error('Error in export test:', error);
+      res.status(500).json({ message: 'Export test failed' });
+    }
+  }
+
   @Get('export')
+  @UsePipes()
   async exportOrders(
     @Res() res: Response,
     @Req() req: any,
@@ -274,7 +295,14 @@ export class OrderController {
     @Query('quantity') quantity?: string,
     @Query('conversationType') conversationType?: string,
     @Query('includeHidden') includeHidden?: string,
+    @Query('ownOnly') ownOnly?: string,
   ): Promise<void> {
+    // Debug logging
+    this.logger.log('Export request received with params:', {
+      search, status, date, dateRange, employee, employees, departments,
+      products, brands, categories, brandCategories, warningLevel,
+      sortField, sortDirection, quantity, conversationType, includeHidden
+    });
     // Parse dateRange if provided
     let parsedDateRange;
     if (dateRange) {
@@ -303,13 +331,38 @@ export class OrderController {
       sortField: sortField || null,
       sortDirection: sortDirection || null,
       includeHidden,
+      ownOnly,
       user: req.user,
     };
 
     try {
-      const excelBuffer = await this.orderService.exportOrdersToExcel(filters);
+      const userId = req.user?.sub || req.user?.id;
+      
+      // Gửi thông báo bắt đầu export
+      this.websocketGateway.emitToUser(userId, 'export:excel:start', {
+        message: 'Bắt đầu xuất dữ liệu Excel (hệ thống giới hạn 2000 dòng/phiên, nghỉ 1 phút giữa các phiên)...',
+        progress: 0
+      });
+      
+      const excelBuffer = await this.orderService.exportOrdersToExcel(filters, (progress) => {
+        // Gửi progress update qua WebSocket
+        this.websocketGateway.emitToUser(userId, 'export:excel:progress', {
+          message: progress.message,
+          progress: progress.percentage,
+          currentBatch: progress.currentBatch,
+          totalBatches: progress.totalBatches,
+          recordsProcessed: progress.recordsProcessed
+        });
+      });
       
       const filename = `don-hang-${new Date().toISOString().split('T')[0]}.xlsx`;
+      
+      // Gửi thông báo hoàn thành
+      this.websocketGateway.emitToUser(userId, 'export:excel:complete', {
+        message: 'Xuất dữ liệu Excel hoàn thành!',
+        progress: 100,
+        filename: filename
+      });
       
       res.set({
         'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -320,6 +373,14 @@ export class OrderController {
       res.send(excelBuffer);
     } catch (error) {
       this.logger.error('Error exporting orders:', error);
+      
+      // Gửi thông báo lỗi
+      const userId = req.user?.sub || req.user?.id;
+      this.websocketGateway.emitToUser(userId, 'export:excel:error', {
+        message: 'Lỗi khi xuất dữ liệu Excel',
+        error: error.message
+      });
+      
       res.status(500).json({ 
         error: 'Lỗi khi xuất dữ liệu', 
         message: error.message 

@@ -46,6 +46,7 @@ interface OrderFilters {
   sortDirection?: 'asc' | 'desc' | null;
   user?: any; // truyền cả user object
   includeHidden?: string; // '1' | 'true' to include hidden items (admin only)
+  ownOnly?: string; // '1' | 'true' to force own-only mode (order management)
 }
 
 interface ExportFilters {
@@ -73,11 +74,17 @@ interface ExportFilters {
   sortDirection?: 'asc' | 'desc' | null;
   user?: any;
   includeHidden?: string;
+  ownOnly?: string;
 }
 
 @Injectable()
 export class OrderService {
   private readonly logger = new Logger(OrderService.name);
+  private static activeExports = new Set<string>(); // Track active exports
+  private static readonly GLOBAL_MAX_RECORDS = 2000; // Tổng tối đa 2000 dòng cho tất cả export đồng thời
+  private static globalRecordsProcessed = 0; // Tổng số dòng đã xử lý
+  private static lastSessionEndTime = Date.now(); // Thời gian kết thúc phiên cuối cùng
+  private static readonly COOLDOWN_INTERVAL = 60 * 1000; // Nghỉ 1 phút sau khi hoàn thành phiên
 
   constructor(
     @InjectRepository(Order)
@@ -1309,6 +1316,7 @@ export class OrderService {
       sortDirection,
       user,
       includeHidden,
+      ownOnly,
     } = filters;
 
     const skip = (page - 1) * pageSize;
@@ -1371,7 +1379,13 @@ export class OrderService {
       .addSelect(convoEndExpr, 'conversation_end');
 
     // Permissions
-    const allowedUserIds = await this.getUserIdsByRole(user);
+    const ownOnlyFlag = (ownOnly || '').toString().toLowerCase();
+    const isOwnOnly = ownOnlyFlag === '1' || ownOnlyFlag === 'true';
+
+    // If ownOnly is requested, force filter to current user only
+    const allowedUserIds = isOwnOnly
+      ? [user?.id || user?.sub].filter((v: any) => typeof v === 'number')
+      : await this.getUserIdsByRole(user);
     if (allowedUserIds !== null) {
       if (allowedUserIds.length === 0) {
         return { data: [], total: 0, page, pageSize };
@@ -1381,7 +1395,7 @@ export class OrderService {
     // allowedUserIds === null có nghĩa là PM chỉ có permissions, sẽ được xử lý ở logic bên dưới
 
     // PM private permission scoping (khi allowedUserIds === null): áp dụng logic mới pm_brand_/pm_cat_
-    if (allowedUserIds === null && user && user.roles) {
+  if (!isOwnOnly && allowedUserIds === null && user && user.roles) {
       const roleNames = (user.roles || []).map((r: any) => typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase());
       const isPM = roleNames.includes('pm');
       const hasPmDeptRole = roleNames.some(r => r.startsWith('pm-'));
@@ -1680,12 +1694,9 @@ export class OrderService {
       );
     }
 
-    // Log generated SQL for debugging filter behavior
-    try {
-      this.logger.debug(`OrderService.findAllPaginated - SQL: ${qb.getSql()}`);
-    } catch (e) {
-      // ignore if getSql fails for some QB configurations
-    }
+    // Avoid logging full generated SQL (may contain sensitive values).
+    // Keep only a concise debug statement about the query shape/filters.
+    this.logger.debug('OrderService.findAllPaginated - built query (sql logging disabled)');
 
     // Pagination with count at DB level
     const [data, total] = await qb.skip(skip).take(pageSize).getManyAndCount();
@@ -2592,108 +2603,155 @@ export class OrderService {
 
   // =============== Excel Export Methods ===============
   
-  async exportOrdersToExcel(filters: ExportFilters): Promise<Buffer> {
+  async exportOrdersToExcel(filters: ExportFilters, progressCallback?: (progress: any) => void): Promise<Buffer> {
+    const userId = filters.user?.sub || filters.user?.id || 'anonymous';
+    const exportId = `${userId}_${Date.now()}`;
+    
     try {
-      // 1. Đếm tổng số records cần export
-      const totalCount = await this.countOrdersWithFilters(filters);
+      const now = Date.now();
       
-      this.logger.log(`Exporting ${totalCount} orders to Excel`);
-      
-      // 2. Nếu > 2000 records, chia nhỏ
-      if (totalCount > 2000) {
-        this.logger.log(`Large dataset detected (${totalCount} records), using batch processing`);
-        return this.exportOrdersInBatches(filters, totalCount);
+      // Kiểm tra cooldown period (nghỉ 1 phút sau khi hoàn thành phiên)
+      if (OrderService.globalRecordsProcessed >= OrderService.GLOBAL_MAX_RECORDS) {
+        const timeSinceLastSession = now - OrderService.lastSessionEndTime;
+        const remainingCooldown = OrderService.COOLDOWN_INTERVAL - timeSinceLastSession;
+        
+        if (remainingCooldown > 0) {
+          const remainingSeconds = Math.ceil(remainingCooldown / 1000);
+          throw new Error(`Đã hoàn thành phiên export (${OrderService.GLOBAL_MAX_RECORDS} dòng). Vui lòng thử lại sau ${remainingSeconds} giây.`);
+        } else {
+          // Cooldown đã hết, reset để bắt đầu phiên mới
+          OrderService.globalRecordsProcessed = 0;
+          OrderService.lastSessionEndTime = now;
+          this.logger.log(`Cooldown ended, starting new export session`);
+        }
       }
       
-      // 3. Nếu ≤ 2000 records, xuất bình thường
-      this.logger.log(`Small dataset (${totalCount} records), using single export`);
-      return this.exportOrdersSingle(filters);
+      // Thêm vào danh sách export đang chạy
+      OrderService.activeExports.add(exportId);
+      this.logger.log(`Starting export ${exportId}. Active exports: ${OrderService.activeExports.size}, Global records: ${OrderService.globalRecordsProcessed}/${OrderService.GLOBAL_MAX_RECORDS}`);
+      
+      // Tính toán số dòng còn lại có thể xử lý
+      const remainingRecords = OrderService.GLOBAL_MAX_RECORDS - OrderService.globalRecordsProcessed;
+      const recordsToProcess = Math.min(remainingRecords, 500); // Tối đa 500 dòng mỗi export
+      
+      this.logger.log(`Export ${exportId} will process ${recordsToProcess} records (remaining: ${remainingRecords})`);
+      
+      // Lấy dữ liệu với giới hạn tổng thể
+      const allData = await this.getOrdersBatch(filters, recordsToProcess, 0);
+      
+      if (allData.length === 0) {
+        this.logger.log('No data found for export');
+        if (progressCallback) {
+          progressCallback({
+            message: 'Không có dữ liệu để xuất',
+            percentage: 100,
+            currentBatch: 0,
+            totalBatches: 0,
+            recordsProcessed: 0
+          });
+        }
+        return this.createEmptyExcelBuffer();
+      }
+      
+      // Cập nhật số dòng đã xử lý toàn cục
+      OrderService.globalRecordsProcessed += allData.length;
+      this.logger.log(`Exporting ${allData.length} records. Global processed: ${OrderService.globalRecordsProcessed}/${OrderService.GLOBAL_MAX_RECORDS}`);
+      
+      // Kiểm tra xem có hoàn thành phiên không
+      if (OrderService.globalRecordsProcessed >= OrderService.GLOBAL_MAX_RECORDS) {
+        OrderService.lastSessionEndTime = Date.now();
+        this.logger.log(`Export session completed! Cooldown started for ${OrderService.COOLDOWN_INTERVAL / 1000} seconds`);
+      }
+      
+      if (progressCallback) {
+        progressCallback({
+          message: `Đang tạo file Excel với ${allData.length} bản ghi... (Toàn hệ thống: ${OrderService.globalRecordsProcessed}/${OrderService.GLOBAL_MAX_RECORDS} dòng)`,
+          percentage: 50,
+          currentBatch: 1,
+          totalBatches: 1,
+          recordsProcessed: allData.length
+        });
+      }
+      
+      const result = await this.createExcelBuffer(allData);
+      
+      if (progressCallback) {
+        const sessionStatus = OrderService.globalRecordsProcessed >= OrderService.GLOBAL_MAX_RECORDS 
+          ? ' - Phiên export đã hoàn thành, nghỉ 1 phút'
+          : '';
+        
+        progressCallback({
+          message: `Hoàn thành xuất dữ liệu Excel (${allData.length} dòng) - Toàn hệ thống: ${OrderService.globalRecordsProcessed}/${OrderService.GLOBAL_MAX_RECORDS} dòng${sessionStatus}`,
+          percentage: 100,
+          currentBatch: 1,
+          totalBatches: 1,
+          recordsProcessed: allData.length
+        });
+      }
+      
+      return result;
     } catch (error) {
       this.logger.error('Error in exportOrdersToExcel:', error);
       throw error;
-    }
-  }
-
-  private async countOrdersWithFilters(filters: ExportFilters): Promise<number> {
-    const qb = this.orderDetailRepository
-      .createQueryBuilder('details')
-      .leftJoinAndSelect('details.order', 'order')
-      .leftJoinAndSelect('order.sale_by', 'sale_by')
-      .leftJoinAndSelect('sale_by.departments', 'sale_by_departments')
-      .where('details.deleted_at IS NULL');
-
-    // Apply filters (sử dụng lại logic từ findAllPaginated)
-    await this.applyFiltersToQuery(qb, filters);
-    
-    return await qb.getCount();
-  }
-
-  private async exportOrdersSingle(filters: ExportFilters): Promise<Buffer> {
-    // Lấy tất cả dữ liệu
-    const orders = await this.getAllOrdersForExport(filters);
-    
-    // Tạo Excel file
-    return this.createExcelBuffer(orders);
-  }
-
-  private async exportOrdersInBatches(filters: ExportFilters, totalCount: number): Promise<Buffer> {
-    const BATCH_SIZE = 2000;
-    const totalBatches = Math.ceil(totalCount / BATCH_SIZE);
-    const tempFiles: string[] = [];
-    
-    try {
-      this.logger.log(`Processing ${totalBatches} batches of ${BATCH_SIZE} records each`);
+    } finally {
+      // Luôn xóa khỏi danh sách export đang chạy
+      OrderService.activeExports.delete(exportId);
       
-      // Tạo từng batch
-      for (let i = 0; i < totalBatches; i++) {
-        const offset = i * BATCH_SIZE;
-        this.logger.log(`Processing batch ${i + 1}/${totalBatches} (offset: ${offset})`);
+      const sessionStatus = OrderService.globalRecordsProcessed >= OrderService.GLOBAL_MAX_RECORDS 
+        ? ' - SESSION COMPLETED, COOLDOWN ACTIVE'
+        : '';
         
-        const batchData = await this.getOrdersBatch(filters, BATCH_SIZE, offset);
-        const tempFile = await this.createExcelFile(batchData, `temp_batch_${i}.xlsx`);
-        tempFiles.push(tempFile);
-      }
-      
-      this.logger.log(`Merging ${tempFiles.length} temporary files`);
-      
-      // Gộp tất cả file tạm thành 1 file cuối cùng
-      const finalBuffer = await this.mergeExcelFiles(tempFiles);
-      
-      // Cleanup temp files
-      await this.cleanupTempFiles(tempFiles);
-      
-      this.logger.log('Excel export completed successfully');
-      return finalBuffer;
-    } catch (error) {
-      this.logger.error('Error in exportOrdersInBatches:', error);
-      // Cleanup temp files nếu có lỗi
-      await this.cleanupTempFiles(tempFiles);
-      throw error;
+      this.logger.log(`Completed export ${exportId}. Active exports: ${OrderService.activeExports.size}, Global records: ${OrderService.globalRecordsProcessed}/${OrderService.GLOBAL_MAX_RECORDS}${sessionStatus}`);
     }
   }
 
-  private async getAllOrdersForExport(filters: ExportFilters): Promise<OrderDetail[]> {
-    const qb = this.orderDetailRepository
-      .createQueryBuilder('details')
-      .leftJoinAndSelect('details.order', 'order')
-      .leftJoinAndSelect('order.sale_by', 'sale_by')
-      .leftJoinAndSelect('details.product', 'product')
-      .leftJoinAndSelect('sale_by.departments', 'sale_by_departments')
-      .where('details.deleted_at IS NULL');
+  private async createEmptyExcelBuffer(): Promise<Buffer> {
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Đơn hàng');
 
-    // Apply filters
-    await this.applyFiltersToQuery(qb, filters);
-    
-    // Apply sorting
-    if (filters.sortField && filters.sortDirection) {
-      const sortDirection = filters.sortDirection.toUpperCase() as 'ASC' | 'DESC';
-      qb.orderBy(`details.${filters.sortField}`, sortDirection);
-    } else {
-      qb.orderBy('details.created_at', 'DESC');
-    }
+    // Định nghĩa headers
+    worksheet.columns = [
+      { header: 'ID', key: 'id', width: 10 },
+      { header: 'Mã đơn hàng', key: 'orderId', width: 15 },
+      { header: 'Sản phẩm', key: 'productName', width: 30 },
+      { header: 'Khách hàng', key: 'customerName', width: 25 },
+      { header: 'Số lượng', key: 'quantity', width: 12 },
+      { header: 'Đơn giá', key: 'unitPrice', width: 15 },
+      { header: 'Thành tiền', key: 'totalAmount', width: 15 },
+      { header: 'Trạng thái', key: 'status', width: 15 },
+      { header: 'Nhân viên', key: 'employeeName', width: 20 },
+      { header: 'Phòng ban', key: 'departmentName', width: 20 },
+      { header: 'Ngày tạo', key: 'createdAt', width: 20 },
+    ];
 
-    return await qb.getMany();
+    // Style cho header
+    worksheet.getRow(1).font = { bold: true };
+    worksheet.getRow(1).fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFE0E0E0' }
+    };
+
+    // Thêm dòng thông báo không có dữ liệu
+    worksheet.addRow({
+      id: 'N/A',
+      orderId: 'N/A',
+      productName: 'Không có dữ liệu',
+      customerName: 'N/A',
+      quantity: 0,
+      unitPrice: 0,
+      totalAmount: 0,
+      status: 'N/A',
+      employeeName: 'N/A',
+      departmentName: 'N/A',
+      createdAt: 'N/A',
+    });
+
+    return (await workbook.xlsx.writeBuffer()) as unknown as Buffer;
   }
+
+
+
 
   private async getOrdersBatch(filters: ExportFilters, limit: number, offset: number): Promise<OrderDetail[]> {
     const qb = this.orderDetailRepository
@@ -2717,13 +2775,22 @@ export class OrderService {
       qb.orderBy('details.created_at', 'DESC');
     }
 
+    // Note: SelectQueryBuilder does not expose a `timeout` method in TypeORM.
+    // If you need to enforce a query timeout, configure it at the driver/connection level
+    // or implement application-level cancellation/timeout logic.
+    // For now we omit qb.timeout(...) to keep TypeScript happy.
+
     return await qb.getMany();
   }
 
   private async applyFiltersToQuery(qb: any, filters: ExportFilters): Promise<void> {
     // Permission scoping
     if (filters.user) {
-      const allowedUserIds = await this.getUserIdsByRole(filters.user);
+      const ownOnlyFlag = (filters.ownOnly || '').toString().toLowerCase();
+      const isOwnOnly = ownOnlyFlag === '1' || ownOnlyFlag === 'true';
+      const allowedUserIds = isOwnOnly
+        ? [filters.user?.id || filters.user?.sub].filter((v: any) => typeof v === 'number')
+        : await this.getUserIdsByRole(filters.user);
       if (allowedUserIds !== null) {
         if (allowedUserIds.length === 0) {
           qb.andWhere('1 = 0');
@@ -2870,118 +2937,6 @@ export class OrderService {
   return (await workbook.xlsx.writeBuffer()) as unknown as Buffer;
   }
 
-  private async createExcelFile(orders: OrderDetail[], filename: string): Promise<string> {
-    const buffer = await this.createExcelBuffer(orders);
-    
-    return new Promise((resolve, reject) => {
-      tmp.file({ postfix: '.xlsx' }, (err, path, fd, cleanup) => {
-        if (err) {
-          reject(err);
-          return;
-        }
-        
-        fs.writeFile(path, buffer, (writeErr) => {
-          if (writeErr) {
-            cleanup();
-            reject(writeErr);
-            return;
-          }
-          
-          resolve(path);
-        });
-      });
-    });
-  }
-
-  private async mergeExcelFiles(tempFiles: string[]): Promise<Buffer> {
-    const workbook = new ExcelJS.Workbook();
-    const worksheet = workbook.addWorksheet('Đơn hàng');
-
-    // Định nghĩa headers (giống như createExcelBuffer)
-    worksheet.columns = [
-      { header: 'ID', key: 'id', width: 10 },
-      { header: 'Mã đơn hàng', key: 'orderId', width: 15 },
-      { header: 'Sản phẩm', key: 'productName', width: 30 },
-      { header: 'Khách hàng', key: 'customerName', width: 25 },
-      { header: 'Số lượng', key: 'quantity', width: 12 },
-      { header: 'Đơn giá', key: 'unitPrice', width: 15 },
-      { header: 'Thành tiền', key: 'totalAmount', width: 15 },
-      { header: 'Trạng thái', key: 'status', width: 15 },
-      { header: 'Nhân viên', key: 'employeeName', width: 20 },
-      { header: 'Phòng ban', key: 'departmentName', width: 20 },
-      { header: 'Ngày tạo', key: 'createdAt', width: 20 },
-    ];
-
-    // Style cho header
-    worksheet.getRow(1).font = { bold: true };
-    worksheet.getRow(1).fill = {
-      type: 'pattern',
-      pattern: 'solid',
-      fgColor: { argb: 'FFE0E0E0' }
-    };
-
-    let rowIndex = 2; // Bắt đầu từ dòng 2 (sau header)
-
-    // Đọc từng file tạm và gộp dữ liệu
-    for (const tempFile of tempFiles) {
-      try {
-        const tempWorkbook = new ExcelJS.Workbook();
-        await tempWorkbook.xlsx.readFile(tempFile);
-        
-        const tempWorksheet = tempWorkbook.getWorksheet(1);
-        
-        if (tempWorksheet) {
-          tempWorksheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
-            // Bỏ qua header row
-            if (rowNumber > 1) {
-              const rowData: any = {};
-              row.eachCell({ includeEmpty: false }, (cell, colNumber) => {
-                const column = worksheet.getColumn(colNumber);
-                const header = column?.header as string;
-                if (header) {
-                  rowData[header] = cell.value;
-                }
-              });
-              
-              worksheet.addRow(rowData);
-              rowIndex++;
-            }
-          });
-        }
-      } catch (error) {
-        this.logger.error(`Error reading temp file ${tempFile}:`, error);
-      }
-    }
-
-    // Auto-fit columns
-    worksheet.columns.forEach(column => {
-      if (column.eachCell) {
-        let maxLength = 0;
-        column.eachCell({ includeEmpty: true }, (cell) => {
-          const columnLength = cell.value ? cell.value.toString().length : 10;
-          if (columnLength > maxLength) {
-            maxLength = columnLength;
-          }
-        });
-        column.width = Math.min(maxLength + 2, 50);
-      }
-    });
-
-  return (await workbook.xlsx.writeBuffer()) as unknown as Buffer;
-  }
-
-  private async cleanupTempFiles(tempFiles: string[]): Promise<void> {
-    for (const tempFile of tempFiles) {
-      try {
-        if (fs.existsSync(tempFile)) {
-          fs.unlinkSync(tempFile);
-          this.logger.log(`Cleaned up temp file: ${tempFile}`);
-        }
-      } catch (error) {
-        this.logger.error(`Error cleaning up temp file ${tempFile}:`, error);
-      }
-    }
-  }
 
   private getStatusText(status: string): string {
     const statusMap: { [key: string]: string } = {

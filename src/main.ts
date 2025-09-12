@@ -5,7 +5,10 @@ import { DatetimeInterceptor } from './common/interceptors/datetime.interceptor'
 import * as bodyParser from 'body-parser';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  // Limit Nest internal logger to warnings and errors to avoid noisy route mapping logs
+  const app = await NestFactory.create(AppModule, {
+    logger: ['warn', 'error'],
+  });
 
   // Increase body size limit for file uploads
   app.use(bodyParser.json({ limit: '50mb' }));
@@ -32,6 +35,9 @@ async function bootstrap() {
   // Lắng nghe trên tất cả IP để dùng LAN
   const port = process.env.PORT || 3001;
   await app.listen(port);
-  console.log(`🚀 Backend API đang chạy trên port ${port}`);
+  // Use Nest logger for consistent logging
+  const { Logger } = require('@nestjs/common');
+  const logger = new Logger('Bootstrap');
+  logger.log(`🚀 Backend API đang chạy trên port ${port}`);
 }
 bootstrap();
