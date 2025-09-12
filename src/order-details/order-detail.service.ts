@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ExtendReason, OrderDetail } from './order-detail.entity';
@@ -20,6 +20,8 @@ interface HiddenOrderOptions {
 
 @Injectable()
 export class OrderDetailService {
+  private readonly logger = new Logger(OrderDetailService.name);
+
   constructor(
     @InjectRepository(OrderDetail)
     private orderDetailRepository: Repository<OrderDetail>,
@@ -74,19 +76,20 @@ export class OrderDetailService {
       // Role view cần check phòng ban được phân quyền
       // Lấy departments từ user.departments hoặc từ permissions
       let departmentIds: number[] = [];
-      
+
       // Thử lấy từ user.departments trước
       if (user.departments && user.departments.length > 0) {
         departmentIds = user.departments.map((dept: any) => dept.id);
       }
-      
+
       // Nếu không có departments, thử lấy từ permissions
       if (departmentIds.length === 0 && user.permissions) {
         const permissionNames = user.permissions.map((p: any) => p.name);
-        const departmentSlugs = permissionNames.filter((name: string) => 
-          !name.includes('thong-ke') && !name.includes('thong_ke')
+        const departmentSlugs = permissionNames.filter(
+          (name: string) =>
+            !name.includes('thong-ke') && !name.includes('thong_ke'),
         );
-        
+
         if (departmentSlugs.length > 0) {
           const departments = await this.departmentRepository
             .createQueryBuilder('dept')
@@ -94,15 +97,15 @@ export class OrderDetailService {
             .andWhere('dept.server_ip IS NOT NULL')
             .andWhere("TRIM(dept.server_ip) <> ''")
             .getMany();
-          
+
           departmentIds = departments.map((d) => d.id);
         }
       }
-      
+
       if (departmentIds.length === 0) {
         return []; // Không có phòng ban nào được phân quyền
       }
-      
+
       // Lấy tất cả user trong các phòng ban được phân quyền
       const usersInDepartments = await this.userRepository
         .createQueryBuilder('user')
@@ -122,10 +125,10 @@ export class OrderDetailService {
       if (pmRoles.length === 0) {
         return []; // Chỉ có PM mà không có pm_{phong_ban} → trả về mảng rỗng
       }
-      
+
       // Có role pm_{phong_ban} → lọc theo phòng ban đó
       const departmentSlugs = pmRoles.map((r: string) => r.replace('pm-', ''));
-      
+
       const departments = await this.departmentRepository
         .createQueryBuilder('dept')
         .where('dept.slug IN (:...slugs)', { slugs: departmentSlugs })
@@ -588,7 +591,10 @@ export class OrderDetailService {
     }
 
     // Không có cập nhật notes: có thể update hàng loạt
-    await this.orderDetailRepository.update(orderDetails.map((od) => od.id), updates);
+    await this.orderDetailRepository.update(
+      orderDetails.map((od) => od.id),
+      updates,
+    );
     return { updated: orderDetails.length };
   }
 
@@ -1090,8 +1096,7 @@ export class OrderDetailService {
     if (items.length === 0) return { restored: 0 };
 
     const msPerDay = 24 * 60 * 60 * 1000;
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const now = new Date();
 
     // Restore first to clear deleted_at
     await this.orderDetailRepository.restore(items.map((i) => i.id));
@@ -1099,12 +1104,15 @@ export class OrderDetailService {
     // Clear reason and recalc extended per item
     for (const od of items) {
       try {
-        const created = new Date(od.created_at);
-        created.setHours(0, 0, 0, 0);
-        const deltaDays = Math.floor(
-          (today.getTime() - created.getTime()) / msPerDay,
-        );
-        const newExtended = Math.max(4, deltaDays + 4);
+        // Công thức: ngày tạo + x - ngày hiện tại = 4
+        // => x = 4 + (ngày hiện tại - ngày tạo) tính theo ngày
+        const createdAt = new Date(od.created_at);
+        createdAt.setHours(0, 0, 0, 0); // Chỉ lấy ngày, bỏ giờ phút giây
+        const nowDate = new Date();
+        nowDate.setHours(0, 0, 0, 0); // Chỉ lấy ngày, bỏ giờ phút giây
+        const daysDiff = Math.floor((nowDate.getTime() - createdAt.getTime()) / (1000 * 60 * 60 * 24));
+        const newExtended = Math.max(1, 4 + daysDiff); // Đảm bảo extend ít nhất là 1
+
         await this.orderDetailRepository.update(od.id, {
           reason: '',
           extended: newExtended,
@@ -1155,9 +1163,11 @@ export class OrderDetailService {
       // Công thức: ngày tạo + x - ngày hiện tại = 4
       // => x = 4 + (ngày hiện tại - ngày tạo) tính theo ngày
       const now = new Date();
-      const createdAt = new Date(existing.order.created_at);
-      const daysDiff = Math.ceil((now.getTime() - createdAt.getTime()) / (1000 * 60 * 60 * 24));
-      const newExtended = Math.max(1, 4 + daysDiff); // Đảm bảo extend ít nhất là 1
+      const createdAt = new Date(existing.created_at);
+      createdAt.setHours(0, 0, 0, 0); // Chỉ lấy ngày, bỏ giờ phút giây
+      now.setHours(0, 0, 0, 0); // Chỉ lấy ngày, bỏ giờ phút giây
+      const daysDiff = Math.floor((now.getTime() - createdAt.getTime()) / (1000 * 60 * 60 * 24));
+      const newExtended = Math.max(1, 4 + daysDiff);
 
       await this.orderDetailRepository.update(id, {
         hidden_at: null,
@@ -1222,9 +1232,12 @@ export class OrderDetailService {
       try {
         // Công thức: ngày tạo + x - ngày hiện tại = 4
         // => x = 4 + (ngày hiện tại - ngày tạo) tính theo ngày
-        const createdAt = new Date(item.order.created_at);
-        const daysDiff = Math.ceil((now.getTime() - createdAt.getTime()) / (1000 * 60 * 60 * 24));
-        const newExtended = Math.max(1, 4 + daysDiff); // Đảm bảo extend ít nhất là 1
+        const createdAt = new Date(item.created_at);
+        createdAt.setHours(0, 0, 0, 0); // Chỉ lấy ngày, bỏ giờ phút giây
+        const nowDate = new Date();
+        nowDate.setHours(0, 0, 0, 0); // Chỉ lấy ngày, bỏ giờ phút giây
+        const daysDiff = Math.floor((nowDate.getTime() - createdAt.getTime()) / (1000 * 60 * 60 * 24));
+        const newExtended = Math.max(1, 4 + daysDiff);
 
         await this.orderDetailRepository
           .createQueryBuilder()
@@ -1423,9 +1436,9 @@ export class OrderDetailService {
 
   /**
    * Đếm số lượng khách hàng unique từ order_details
-  * Quy tắc: Khách A có nhiều đơn với cùng Sale A -> tính 1 khách hàng.
-  * Khi Khách A mua với Sale B -> tính thêm 1 khách hàng nữa.
-  * => Đếm theo cặp (customer_name, sale_id).
+   * Quy tắc: Khách A có nhiều đơn với cùng Sale A -> tính 1 khách hàng.
+   * Khi Khách A mua với Sale B -> tính thêm 1 khách hàng nữa.
+   * => Đếm theo cặp (customer_name, sale_id).
    */
   async getCustomerCount(filters?: {
     fromDate?: string;
@@ -1442,7 +1455,7 @@ export class OrderDetailService {
     quantity?: string;
     employeeId?: number;
     departmentId?: number;
-  countMode?: 'customer' | 'sale';
+    countMode?: 'customer' | 'sale';
     user?: any;
   }): Promise<number> {
     // Lấy toàn bộ bản ghi chi tiết theo các filter cơ bản bằng SQL
@@ -1453,7 +1466,10 @@ export class OrderDetailService {
       .leftJoinAndSelect('sale_by.departments', 'sale_by_departments')
       .where('details.deleted_at IS NULL')
       .andWhere('details.hidden_at IS NULL')
-      .andWhere('(details.customer_name IS NOT NULL AND details.customer_name != :empty)', { empty: '' });
+      .andWhere(
+        '(details.customer_name IS NOT NULL AND details.customer_name != :empty)',
+        { empty: '' },
+      );
 
     // Phân quyền theo role "view"
     if (filters?.user) {
@@ -1483,7 +1499,9 @@ export class OrderDetailService {
       });
     } else {
       if (filters?.fromDate)
-        qb.andWhere('order.created_at >= :fromDate', { fromDate: filters.fromDate });
+        qb.andWhere('order.created_at >= :fromDate', {
+          fromDate: filters.fromDate,
+        });
       if (filters?.toDate) {
         const end = new Date(filters.toDate);
         end.setHours(23, 59, 59, 999);
@@ -1510,14 +1528,17 @@ export class OrderDetailService {
     }
 
     // Employee filter (single or CSV)
-    if (filters?.employee) qb.andWhere('sale_by.id = :employee', { employee: filters.employee });
+    if (filters?.employee)
+      qb.andWhere('sale_by.id = :employee', { employee: filters.employee });
     if (filters?.employees) {
       const empIds = this.parseCsvNumbers(filters.employees);
       if (empIds.length > 0)
         qb.andWhere('sale_by.id IN (:...empIds)', { empIds });
     }
     if (filters?.employeeId)
-      qb.andWhere('sale_by.id = :empIdSingle', { empIdSingle: filters.employeeId });
+      qb.andWhere('sale_by.id = :empIdSingle', {
+        empIdSingle: filters.employeeId,
+      });
 
     // Department filter (CSV hoặc single) với điều kiện server_ip như trang quản lý
     if (filters?.departments) {
@@ -1548,7 +1569,10 @@ export class OrderDetailService {
     }
 
     // Quantity minimum
-    if (filters?.quantity !== undefined && String(filters.quantity).trim() !== '') {
+    if (
+      filters?.quantity !== undefined &&
+      String(filters.quantity).trim() !== ''
+    ) {
       const minQty = parseInt(String(filters.quantity), 10);
       if (!isNaN(minQty) && minQty > 0)
         qb.andWhere('details.quantity >= :minQty', { minQty });
@@ -1566,9 +1590,10 @@ export class OrderDetailService {
       const allowedIds = await this.getUserIdsByRole(filters?.user);
       const isManager = roleNames.some((r: string) => r.startsWith('manager-'));
       if (isManager) {
-        const map = await this.orderBlacklistService.getBlacklistedContactsForUsers(
-          allowedIds || [filters?.user?.id],
-        );
+        const map =
+          await this.orderBlacklistService.getBlacklistedContactsForUsers(
+            allowedIds || [filters?.user?.id],
+          );
         const bl = new Set<string>();
         for (const set of map.values()) for (const id of set) bl.add(id);
         filtered = filtered.filter((od) => {
@@ -1576,9 +1601,10 @@ export class OrderDetailService {
           return !cid || !bl.has(cid);
         });
       } else {
-        const list = await this.orderBlacklistService.getBlacklistedContactsForUser(
-          filters?.user?.id,
-        );
+        const list =
+          await this.orderBlacklistService.getBlacklistedContactsForUser(
+            filters?.user?.id,
+          );
         const bl = new Set(list);
         filtered = filtered.filter((od) => {
           const cid = this.extractCustomerIdFromMetadata(od.metadata);
@@ -1589,11 +1615,16 @@ export class OrderDetailService {
 
     // Warning level filter dựa trên dynamicExtended
     if (filters?.warningLevel) {
-      const levels = this.parseCsvNumbers(filters.warningLevel).filter((n) => !isNaN(n));
+      const levels = this.parseCsvNumbers(filters.warningLevel).filter(
+        (n) => !isNaN(n),
+      );
       if (levels.length > 0) {
         const levelSet = new Set(levels);
         filtered = filtered.filter((od) => {
-          const dyn = this.calcDynamicExtended(od.created_at || null, od.extended);
+          const dyn = this.calcDynamicExtended(
+            od.created_at || null,
+            od.extended,
+          );
           return dyn !== null && levelSet.has(dyn);
         });
       }
@@ -1622,9 +1653,19 @@ export class OrderDetailService {
     }
 
     // Debug: Log để kiểm tra dữ liệu
-    const sample = filters?.countMode === 'sale' ?
-      Array.from(new Set(filtered.map((od) => od.order?.sale_by?.id))).slice(0, 5) :
-      Array.from(new Set(filtered.map((od) => `${(od.customer_name||'').trim()}__${od.order?.sale_by?.id}`))).slice(0, 5);
+    const sample =
+      filters?.countMode === 'sale'
+        ? Array.from(
+            new Set(filtered.map((od) => od.order?.sale_by?.id)),
+          ).slice(0, 5)
+        : Array.from(
+            new Set(
+              filtered.map(
+                (od) =>
+                  `${(od.customer_name || '').trim()}__${od.order?.sale_by?.id}`,
+              ),
+            ),
+          ).slice(0, 5);
     console.log('🔍 Customer Count Debug:', {
       totalRecords: rows.length,
       afterBlacklistAndFilters: filtered.length,
@@ -1657,7 +1698,17 @@ export class OrderDetailService {
     page: number;
     pageSize: number;
     user?: any;
-  }): Promise<{ data: { customer_name: string; sale_id: number; sale_name: string; orders: number }[]; total: number; page: number; pageSize: number }> {
+  }): Promise<{
+    data: {
+      customer_name: string;
+      sale_id: number;
+      sale_name: string;
+      orders: number;
+    }[];
+    total: number;
+    page: number;
+    pageSize: number;
+  }> {
     // Tải dữ liệu ở mức chi tiết để có thể áp dụng warningLevel sau đó
     const qb = this.orderDetailRepository
       .createQueryBuilder('details')
@@ -1674,7 +1725,12 @@ export class OrderDetailService {
       const allowedUserIds = await this.getUserIdsByRole(params.user);
       if (allowedUserIds !== null) {
         if (allowedUserIds.length === 0)
-          return { data: [], total: 0, page: params.page, pageSize: params.pageSize };
+          return {
+            data: [],
+            total: 0,
+            page: params.page,
+            pageSize: params.pageSize,
+          };
         qb.andWhere('sale_by.id IN (:...allowedUserIds)', { allowedUserIds });
       }
     }
@@ -1698,7 +1754,9 @@ export class OrderDetailService {
       });
     } else {
       if (params.fromDate)
-        qb.andWhere('order.created_at >= :fromDate', { fromDate: params.fromDate });
+        qb.andWhere('order.created_at >= :fromDate', {
+          fromDate: params.fromDate,
+        });
       if (params.toDate) {
         const end = new Date(params.toDate);
         end.setHours(23, 59, 59, 999);
@@ -1725,14 +1783,17 @@ export class OrderDetailService {
     }
 
     // Employee filters
-    if (params.employee) qb.andWhere('sale_by.id = :employee', { employee: params.employee });
+    if (params.employee)
+      qb.andWhere('sale_by.id = :employee', { employee: params.employee });
     if (params.employees) {
       const empIds = this.parseCsvNumbers(params.employees);
       if (empIds.length > 0)
         qb.andWhere('sale_by.id IN (:...empIds)', { empIds });
     }
     if (params.employeeId)
-      qb.andWhere('sale_by.id = :empIdSingle', { empIdSingle: params.employeeId });
+      qb.andWhere('sale_by.id = :empIdSingle', {
+        empIdSingle: params.employeeId,
+      });
 
     // Departments with server_ip condition
     if (params.departments) {
@@ -1763,7 +1824,10 @@ export class OrderDetailService {
     }
 
     // Quantity minimum
-    if (params.quantity !== undefined && String(params.quantity).trim() !== '') {
+    if (
+      params.quantity !== undefined &&
+      String(params.quantity).trim() !== ''
+    ) {
       const minQty = parseInt(String(params.quantity), 10);
       if (!isNaN(minQty) && minQty > 0)
         qb.andWhere('details.quantity >= :minQty', { minQty });
@@ -1781,9 +1845,10 @@ export class OrderDetailService {
       const allowedIds = await this.getUserIdsByRole(params?.user);
       const isManager = roleNames.some((r: string) => r.startsWith('manager-'));
       if (isManager) {
-        const map = await this.orderBlacklistService.getBlacklistedContactsForUsers(
-          allowedIds || [params?.user?.id],
-        );
+        const map =
+          await this.orderBlacklistService.getBlacklistedContactsForUsers(
+            allowedIds || [params?.user?.id],
+          );
         const bl = new Set<string>();
         for (const set of map.values()) for (const id of set) bl.add(id);
         filtered = filtered.filter((od) => {
@@ -1791,9 +1856,10 @@ export class OrderDetailService {
           return !cid || !bl.has(cid);
         });
       } else {
-        const list = await this.orderBlacklistService.getBlacklistedContactsForUser(
-          params?.user?.id,
-        );
+        const list =
+          await this.orderBlacklistService.getBlacklistedContactsForUser(
+            params?.user?.id,
+          );
         const bl = new Set(list);
         filtered = filtered.filter((od) => {
           const cid = this.extractCustomerIdFromMetadata(od.metadata);
@@ -1804,25 +1870,44 @@ export class OrderDetailService {
 
     // Warning level filter
     if (params.warningLevel) {
-      const levels = this.parseCsvNumbers(params.warningLevel).filter((n) => !isNaN(n));
+      const levels = this.parseCsvNumbers(params.warningLevel).filter(
+        (n) => !isNaN(n),
+      );
       if (levels.length > 0) {
         const levelSet = new Set(levels);
         filtered = filtered.filter((od) => {
-          const dyn = this.calcDynamicExtended(od.created_at || null, od.extended);
+          const dyn = this.calcDynamicExtended(
+            od.created_at || null,
+            od.extended,
+          );
           return dyn !== null && levelSet.has(dyn);
         });
       }
     }
 
     // Group theo (customer_name, sale_id) và đếm số đơn
-    const map = new Map<string, { customer_name: string; sale_id: number; sale_name: string; orders: number }>();
+    const map = new Map<
+      string,
+      {
+        customer_name: string;
+        sale_id: number;
+        sale_name: string;
+        orders: number;
+      }
+    >();
     for (const od of filtered) {
       const name = (od.customer_name || '').trim();
       if (!name) continue;
       const saleId = od.order?.sale_by?.id ?? 0;
-      const saleName = od.order?.sale_by?.fullName || od.order?.sale_by?.username || '';
+      const saleName =
+        od.order?.sale_by?.fullName || od.order?.sale_by?.username || '';
       const key = `${name}__${saleId}`;
-      const cur = map.get(key) || { customer_name: name, sale_id: saleId, sale_name: saleName, orders: 0 };
+      const cur = map.get(key) || {
+        customer_name: name,
+        sale_id: saleId,
+        sale_name: saleName,
+        orders: 0,
+      };
       cur.orders += 1;
       map.set(key, cur);
     }
