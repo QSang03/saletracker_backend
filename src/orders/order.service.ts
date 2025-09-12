@@ -2867,7 +2867,7 @@ export class OrderService {
       }
     });
 
-    return await workbook.xlsx.writeBuffer() as Buffer;
+  return (await workbook.xlsx.writeBuffer()) as unknown as Buffer;
   }
 
   private async createExcelFile(orders: OrderDetail[], filename: string): Promise<string> {
@@ -2967,7 +2967,7 @@ export class OrderService {
       }
     });
 
-    return await workbook.xlsx.writeBuffer() as Buffer;
+  return (await workbook.xlsx.writeBuffer()) as unknown as Buffer;
   }
 
   private async cleanupTempFiles(tempFiles: string[]): Promise<void> {
