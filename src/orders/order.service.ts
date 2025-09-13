@@ -492,6 +492,39 @@ export class OrderService {
     }
 
     /**
+     * Logic xử lý role Manager:
+     * - Nếu có role manager-{department} → lọc users theo phòng ban đó
+     */
+    const isManager = roleNames.some((r: string) => r.startsWith('manager-'));
+    if (isManager) {
+      const managerRoles = roleNames.filter((r: string) => r.startsWith('manager-'));
+      const departmentSlugs = managerRoles.map((r: string) => r.replace('manager-', ''));
+
+      const departments = await this.departmentRepository
+        .find({
+          where: departmentSlugs.map((slug) => ({ slug, deletedAt: IsNull() })),
+        })
+        .then((departments) =>
+          departments.filter(
+            (dep) => dep.server_ip && dep.server_ip.trim() !== '',
+          ),
+        );
+
+      if (departments.length === 0) return []; // Manager không có department hợp lệ
+
+      const departmentIds = departments.map((d) => d.id);
+
+      const usersInDepartments = await this.userRepository
+        .createQueryBuilder('user')
+        .leftJoin('user.departments', 'dept')
+        .where('dept.id IN (:...departmentIds)', { departmentIds })
+        .andWhere('user.deletedAt IS NULL')
+        .getMany();
+
+      return usersInDepartments.map((u) => u.id);
+    }
+
+    /**
      * Logic xử lý role PM:
      * - Nếu có role pm-{department} → lọc users theo phòng ban đó (logic cũ)
      * - Nếu chỉ có role PM và có permissions pm_cat_* hoặc pm_brand_* → lọc theo categories/brands
@@ -1615,19 +1648,20 @@ export class OrderService {
       // API cho PM transactions: sử dụng logic PM permissions đầy đủ
       allowedUserIds = await this.getUserIdsByRole(user);
     } else {
-      // API cho manager-order: PM user được xem như user thường (chỉ lấy đơn hàng của chính họ)
+      // API cho manager-order: logic đơn giản
       if (user && user.roles) {
         const roleNames = (user.roles || []).map((r: any) => typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase());
-        const isPM = roleNames.includes('pm');
-        if (isPM) {
-          // PM user chỉ lấy đơn hàng của chính họ
-          allowedUserIds = [user.id];
-        } else {
-          // User thường: sử dụng logic permissions bình thường
+        const isManager = roleNames.some((r: string) => r.startsWith('manager-'));
+        
+        if (isManager) {
+          // Có role manager: xem như manager (xem tất cả nhân viên mà họ quản lý)
           allowedUserIds = await this.getUserIdsByRole(user);
+        } else {
+          // Không có role manager: xem như user thường (chỉ xem chính mình)
+          allowedUserIds = [user.id];
         }
       } else {
-        allowedUserIds = null;
+        allowedUserIds = [user.id]; // Fallback: chỉ xem chính mình
       }
     }
 
