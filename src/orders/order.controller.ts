@@ -204,6 +204,34 @@ export class OrderController {
     return this.orderService.getFilterOptionsForPM(req.user);
   }
 
+  @Get('products')
+  async getAllProducts(
+    @Query('limit') limit: string = '50',
+    @Req() req?: any,
+  ): Promise<{ products: any[] }> {
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 50));
+    return this.orderService.getAllProducts(limitNum);
+  }
+
+  @Get('products/search')
+  async searchProducts(
+    @Query('q') query: string,
+    @Query('limit') limit: string = '10',
+    @Req() req?: any,
+  ): Promise<{ products: any[] }> {
+    const limitNum = Math.min(50, Math.max(1, parseInt(limit, 10) || 10));
+    return this.orderService.searchProducts(query || '', limitNum);
+  }
+
+  @Put('product-code/:id')
+  async updateProductCode(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: { productCode: string },
+    @Req() req?: any,
+  ): Promise<{ success: boolean; message: string }> {
+    return this.orderService.updateProductCode(id, body.productCode, req.user);
+  }
+
   // =============== Stats endpoints ===============
   @Get('stats/overview')
   async getOverviewStats(

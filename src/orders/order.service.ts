@@ -691,6 +691,132 @@ export class OrderService {
     return [user.id];
   }
 
+  // ✅ Lấy tất cả products để tìm kiếm
+  async getAllProducts(limit: number = 50): Promise<{ products: any[] }> {
+    try {
+      const products = await this.productRepository
+        .createQueryBuilder('product')
+        .leftJoinAndSelect('product.category', 'category')
+        .leftJoinAndSelect('product.brand', 'brand')
+        .orderBy('product.product_code', 'ASC')
+        .limit(limit)
+        .getMany();
+
+      this.logger.debug(`Found ${products.length} total products`);
+      
+      return { products };
+    } catch (error) {
+      this.logger.error('Error getting all products:', error);
+      return { products: [] };
+    }
+  }
+
+  // ✅ Tìm kiếm products theo product_code
+  async searchProducts(query: string, limit: number = 10): Promise<{ products: any[] }> {
+    try {
+      this.logger.log(`🔍 SEARCH PRODUCTS CALLED: query="${query}", limit=${limit}`);
+      
+      if (!query || query.trim().length < 1) {
+        this.logger.log(`❌ Empty query, returning empty results`);
+        return { products: [] };
+      }
+
+      const searchQuery = `%${query.trim()}%`;
+      this.logger.log(`🔍 Searching products with query: "${searchQuery}"`);
+
+      const products = await this.productRepository
+        .createQueryBuilder('product')
+        .leftJoinAndSelect('product.category', 'category')
+        .leftJoinAndSelect('product.brand', 'brand')
+        .where('product.product_code LIKE :query', { query: searchQuery })
+        .orderBy('product.product_code', 'ASC')
+        .limit(limit)
+        .getMany();
+
+      this.logger.log(`✅ Found ${products.length} products for query: "${searchQuery}"`);
+      
+      return { products };
+    } catch (error) {
+      this.logger.error('❌ Error searching products:', error);
+      return { products: [] };
+    }
+  }
+
+  // ✅ Cập nhật mã sản phẩm cho order detail
+  async updateProductCode(orderDetailId: number, productCode: string, user: any): Promise<{ success: boolean; message: string }> {
+    try {
+      // Tìm order detail
+      const orderDetail = await this.orderDetailRepository.findOne({
+        where: { id: orderDetailId },
+        relations: ['product', 'order', 'order.sale_by']
+      });
+
+      if (!orderDetail) {
+        return { success: false, message: 'Không tìm thấy đơn hàng' };
+      }
+
+      // Kiểm tra quyền: admin, view role, manager của phòng ban, hoặc người tạo đơn hàng
+      if (user && user.roles) {
+        const roleNames = (user.roles || []).map((r: any) =>
+          typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
+        );
+        const isAdminUser = roleNames.includes('admin');
+        const isViewRole = roleNames.includes('view');
+        const isManager = roleNames.some((r: string) => r.startsWith('manager-'));
+        const isPM = roleNames.includes('pm');
+        const isOwner = orderDetail.order?.sale_by?.id === user.id;
+
+        let hasPermission = isAdminUser || isViewRole || isOwner;
+
+        // Kiểm tra manager permission
+        if (!hasPermission && isManager) {
+          const allowedUserIds = await this.getUserIdsByRole(user);
+          hasPermission = allowedUserIds && allowedUserIds.includes(orderDetail.order?.sale_by?.id);
+        }
+
+        // Kiểm tra PM permission
+        if (!hasPermission && isPM) {
+          const allowedUserIds = await this.getPMUserIdsOnly(user);
+          if (allowedUserIds && allowedUserIds.length > 0) {
+            hasPermission = allowedUserIds.includes(orderDetail.order?.sale_by?.id);
+          }
+        }
+
+        if (!hasPermission) {
+          return { success: false, message: 'Bạn không có quyền chỉnh sửa đơn hàng này' };
+        }
+      } else {
+        return { success: false, message: 'Không xác định được quyền truy cập' };
+      }
+
+      // Tìm hoặc tạo product với mã sản phẩm mới
+      let product = await this.productRepository.findOne({
+        where: { productCode: productCode.trim() }
+      });
+
+      if (!product) {
+        // Tạo product mới nếu chưa tồn tại
+        product = this.productRepository.create({
+          productCode: productCode.trim(),
+          productName: `Sản phẩm ${productCode.trim()}`, // Tên mặc định
+          description: `Sản phẩm được tạo tự động với mã ${productCode.trim()}`
+        });
+        product = await this.productRepository.save(product);
+      }
+
+      // Cập nhật order detail với product mới
+      orderDetail.product = product;
+      orderDetail.product_id = product.id;
+      
+      await this.orderDetailRepository.save(orderDetail);
+
+      return { success: true, message: 'Cập nhật mã sản phẩm thành công' };
+    } catch (error) {
+      this.logger.error('Error updating product code:', error);
+      return { success: false, message: 'Có lỗi xảy ra khi cập nhật mã sản phẩm' };
+    }
+  }
+
   // Helper method để parse customer_id từ metadata JSON
   private extractCustomerIdFromMetadata(metadata: any): string | null {
     try {
@@ -1730,9 +1856,16 @@ export class OrderService {
         };
       }
     } else {
-      // allowedUserIds = null → PM có pm_permissions, cần lọc theo categories/brands
-      // Nếu không có brandCategories từ frontend, tự động lấy từ PM permissions
-      if (!brandCategories || !brandCategories.trim()) {
+      // allowedUserIds = null → Admin/View role hoặc PM có pm_permissions
+      // Chỉ áp dụng logic PM permissions nếu không phải admin/view
+      const roleNames = (user.roles || []).map((r: any) =>
+        typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
+      );
+      const isAdminUser = roleNames.includes('admin');
+      const isViewRole = roleNames.includes('view');
+      
+      if (!isAdminUser && !isViewRole && (!brandCategories || !brandCategories.trim())) {
+        // Chỉ PM có pm_permissions mới cần lọc theo categories/brands
         const permissions = (user.permissions || []).map((p: any) =>
           typeof p === 'string' ? p : (p.name || ''),
         );
