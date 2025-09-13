@@ -26,8 +26,7 @@ export const typeOrmConfig: TypeOrmModuleOptions = {
   // Connection pooling optimization
   extra: {
     connectionLimit: 20, // Tăng connection limit
-    acquireTimeout: 60000, // 60 seconds timeout
-    timeout: 60000, // Query timeout
+    connectTimeout: 60000, // 60 seconds connect timeout
     typeCast: (field, next) => {
       if (field.type === 'TIMESTAMP') {
         return field.string();

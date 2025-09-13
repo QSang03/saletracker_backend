@@ -18,6 +18,7 @@ import {
 import { AuthGuard } from '@nestjs/passport';
 import { OrderDetailService } from './order-detail.service';
 import { OrderDetail } from './order-detail.entity';
+import { TransactionStatsService } from './transaction-stats.service';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { OrderBlacklistService } from '../order-blacklist/order-blacklist.service';
@@ -28,6 +29,7 @@ export class OrderDetailController {
   constructor(
     private readonly orderDetailService: OrderDetailService,
     private readonly orderBlacklistService: OrderBlacklistService,
+    private readonly transactionStatsService: TransactionStatsService,
   ) {}
 
   @Get()
@@ -178,6 +180,51 @@ export class OrderDetailController {
       products,
       user: req.user,
     });
+  }
+
+  // =============== Optimized Transaction Stats endpoint ===============
+    @Get('stats/transactions')
+  @UseGuards(AuthGuard('jwt'))
+  async getTransactionStats(@Query() query: any, @Req() req: any) {
+    const params = {
+      period: query.period || 'day',
+      dateFrom: query.dateFrom,
+      dateTo: query.dateTo,
+      employees: query.employees,
+      departments: query.departments,
+      user: req.user,
+    };
+    return this.transactionStatsService.getTransactionStats(params);
+  }
+
+  @Get('stats/transactions/details')
+  @UseGuards(AuthGuard('jwt'))
+  async getTransactionDetails(@Query() query: any, @Req() req: any) {
+    
+    const timestamp = parseInt(query.timestamp);
+    
+    if (isNaN(timestamp)) {
+      console.error('❌ Controller: Invalid timestamp from query:', query.timestamp);
+      return {
+        items: [],
+        total: 0,
+        page: 1,
+        pageSize: 0,
+      };
+    }
+    
+    const params = {
+      period: query.period || 'day',
+      dateFrom: query.dateFrom,
+      dateTo: query.dateTo,
+      timestamp: timestamp,
+      status: query.status,
+      user: req.user,
+      page: parseInt(query.page) || 1,
+      limit: parseInt(query.limit) || 20,
+    };
+    
+    return this.transactionStatsService.getTransactionDetails(params);
   }
 
   @Get('customer-count')

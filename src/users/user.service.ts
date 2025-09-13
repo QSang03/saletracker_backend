@@ -7,7 +7,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In, IsNull, Not } from 'typeorm';
+import { Repository, In, IsNull, Not, Like } from 'typeorm';
 import { User } from './user.entity';
 import * as bcrypt from 'bcrypt';
 import { CreateUserDto } from './dto/create-user.dto';
@@ -849,6 +849,9 @@ export class UserService {
     }[],
   viewSubRoleName?: string, // Thêm thông tin để tạo role "view con"
   pmPrivateRoleName?: string, // Thêm thông tin để tạo role pm riêng (pm_<username>)
+  pmCustomRoleNames?: string[], // Danh sách tên các PM custom roles
+  pmCustomRolePermissions?: Array<{ roleName: string; permissions: number[] }>, // Quyền cho từng PM custom role
+  pmMode?: 'general' | 'custom', // Chế độ PM
   ) {
     const user = await this.userRepo.findOne({
       where: { id: userId },
@@ -957,12 +960,49 @@ export class UserService {
       // Việc gán permissions cho pmPrivateSubRole sẽ xử lý sau ở khối tổng hợp
     }
 
-    // Gom & cập nhật permissions (đơn giản, tách rõ 3 nhóm: thường, view_sub, pm_private)
+    // Xử lý tạo các PM custom roles nếu có pmCustomRoleNames
+    const pmCustomRoles: any[] = [];
+    if (pmCustomRoleNames && pmCustomRoleNames.length > 0 && pmMode === 'custom') {
+      console.log('🔧 Tạo các PM custom roles:', pmCustomRoleNames);
+      
+      for (const roleName of pmCustomRoleNames) {
+        let customRole = await this.roleRepo.findOne({ where: { name: roleName } });
+        
+        if (!customRole) {
+          customRole = this.roleRepo.create({
+            name: roleName,
+            display_name: `PM Custom Role for ${user.username}`,
+          });
+          customRole = await this.roleRepo.save(customRole);
+          console.log('✅ Đã tạo PM custom role:', customRole);
+        }
+        
+        // Gán role mới cho user
+        try {
+          await this.userRepo
+            .createQueryBuilder()
+            .relation(User, 'roles')
+            .of(userId)
+            .add(customRole.id);
+        } catch (e) {
+          console.warn('⚠️ Không thể add PM custom role vào user (có thể đã tồn tại):', e?.message);
+        }
+        
+        if (customRole && !roleIds.includes(customRole.id)) {
+          roleIds.push(customRole.id);
+        }
+        
+        pmCustomRoles.push(customRole);
+      }
+    }
+
+    // Gom & cập nhật permissions (đơn giản, tách rõ 4 nhóm: thường, view_sub, pm_private, pm_custom)
     if (rolePermissions && Array.isArray(rolePermissions)) {
       const safeList = rolePermissions.filter(rp => rp && typeof rp.permissionId === 'number');
       const base: { roleId: number; permissionId: number; isActive: boolean }[] = [];
       const viewList: { roleId: number; permissionId: number; isActive: boolean }[] = [];
       const pmPrivateList: { roleId: number; permissionId: number; isActive: boolean }[] = [];
+      const pmCustomList: { roleId: number; permissionId: number; isActive: boolean }[] = [];
 
       for (const rp of safeList) {
         const pid = rp.permissionId;
@@ -988,6 +1028,13 @@ export class UserService {
         // PM private sub role
         if (pmPrivateSubRole && rid === pmPrivateSubRole.id) {
           pmPrivateList.push({ roleId: pmPrivateSubRole.id, permissionId: pid, isActive: rp.isActive });
+          continue;
+        }
+
+        // PM custom roles
+        const pmCustomRole = pmCustomRoles.find(cr => cr.id === rid);
+        if (pmCustomRole) {
+          pmCustomList.push({ roleId: pmCustomRole.id, permissionId: pid, isActive: rp.isActive });
           continue;
         }
 
@@ -1024,6 +1071,89 @@ export class UserService {
       }
 
       if (base.length) await this.rolesPermissionsService.bulkUpdate(base);
+    }
+
+    // Xử lý permissions cho PM custom roles từ pmCustomRolePermissions
+    if (pmCustomRolePermissions && pmCustomRolePermissions.length > 0 && pmMode === 'custom') {
+      console.log('🔧 Xử lý permissions cho PM custom roles:', pmCustomRolePermissions);
+      
+      for (const customRolePerm of pmCustomRolePermissions) {
+        const customRole = pmCustomRoles.find(cr => cr.name === customRolePerm.roleName);
+        if (customRole && customRolePerm.permissions.length > 0) {
+          const customPermissions = customRolePerm.permissions.map(permissionId => ({
+            roleId: customRole.id,
+            permissionId,
+            isActive: true
+          }));
+          
+          // Upsert permissions cho custom role
+          await this.rolesPermissionsService.bulkUpdate(customPermissions);
+          
+          // Cleanup permissions không còn được chọn
+          const existing = await this.rolesPermissionsService.findByRoleIds([customRole.id]);
+          const keep = new Set(customRolePerm.permissions);
+          for (const ex of existing) {
+            const exPid = ex.permission?.id;
+            if (exPid && !keep.has(exPid)) {
+              await this.rolesPermissionsService.remove(ex.id);
+            }
+          }
+        }
+      }
+    }
+
+    // 🧹 Cleanup: Xóa các PM custom roles cũ nếu không còn được sử dụng
+    try {
+      if (pmMode === 'custom' && pmCustomRoleNames && pmCustomRoleNames.length > 0) {
+        // Tìm tất cả PM custom roles cũ của user này
+        const existingPmCustomRoles = await this.roleRepo.find({
+          where: {
+            name: Like(`pm_${user.username}_%`)
+          }
+        });
+        
+        // Xóa các role không còn trong danh sách mới
+        for (const oldRole of existingPmCustomRoles) {
+          if (!pmCustomRoleNames.includes(oldRole.name)) {
+            // Gỡ role khỏi user
+            await this.userRepo
+              .createQueryBuilder()
+              .relation(User, 'roles')
+              .of(userId)
+              .remove(oldRole.id);
+            // Xóa mọi RolePermission của role này
+            const rpList = await this.rolesPermissionsService.findByRoleIds([oldRole.id]);
+            for (const rp of rpList) await this.rolesPermissionsService.remove(rp.id);
+            // Xóa role luôn
+            await this.roleRepo.delete(oldRole.id);
+            console.log('🧹 Đã xóa PM custom role cũ:', oldRole.name);
+          }
+        }
+      } else if (pmMode === 'general' || !pmMode) {
+        // Nếu chuyển về chế độ general, xóa tất cả PM custom roles
+        const existingPmCustomRoles = await this.roleRepo.find({
+          where: {
+            name: Like(`pm_${user.username}_%`)
+          }
+        });
+        
+        for (const oldRole of existingPmCustomRoles) {
+          // Gỡ role khỏi user
+          await this.userRepo
+            .createQueryBuilder()
+            .relation(User, 'roles')
+            .of(userId)
+            .remove(oldRole.id);
+          // Xóa mọi RolePermission của role này
+          const rpList = await this.rolesPermissionsService.findByRoleIds([oldRole.id]);
+          for (const rp of rpList) await this.rolesPermissionsService.remove(rp.id);
+          // Xóa role luôn
+          await this.roleRepo.delete(oldRole.id);
+          console.log('🧹 Đã xóa PM custom role khi chuyển về general mode:', oldRole.name);
+        }
+      }
+    } catch (cleanupErr) {
+      console.error('⚠️ Lỗi khi cleanup PM custom roles:', cleanupErr);
     }
 
   // 🧹 Cleanup: Xóa role pm_<username> nếu không còn quyền riêng nào được chọn
@@ -1454,3 +1584,4 @@ export class UserService {
     };
   }
 }
+

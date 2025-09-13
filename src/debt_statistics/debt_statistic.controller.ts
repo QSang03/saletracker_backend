@@ -1,13 +1,11 @@
 import { Controller, Get, Post, Query, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { DebtStatisticService } from './debt_statistic.service';
-import { CronjobService } from '../cronjobs/cronjob.service';
 
 @Controller('debt-statistics')
 export class DebtStatisticController {
   constructor(
     private readonly debtStatisticService: DebtStatisticService,
-    private readonly cronjobService: CronjobService,
   ) {}
 
   // Test endpoint without authentication
@@ -114,12 +112,19 @@ export class DebtStatisticController {
       fromDate = fromDate || today;
       toDate = toDate || today;
     }
-    return this.debtStatisticService.getPayLaterDelay(
-      fromDate,
-      toDate,
-      bucketNumbers,
-      { employeeCode, customerCode },
-    );
+    try {
+      return await this.debtStatisticService.getPayLaterDelay(
+        fromDate,
+        toDate,
+        bucketNumbers,
+        { employeeCode, customerCode },
+      );
+    } catch (error) {
+      // Log and return structured error for easier frontend debugging
+      // eslint-disable-next-line no-console
+      console.error('[getPayLaterDelay] Error:', error?.message || error, error?.stack || 'no-stack');
+      return { success: false, error: error?.message || 'Internal Server Error' };
+    }
   }
 
   // Daily pay-later delay buckets per day
@@ -142,7 +147,13 @@ export class DebtStatisticController {
       fromDate = fromDate || today;
       toDate = toDate || today;
     }
-    return this.debtStatisticService.getPayLaterDelayDaily(fromDate, toDate, bucketNumbers, { employeeCode, customerCode });
+    try {
+      return await this.debtStatisticService.getPayLaterDelayDaily(fromDate, toDate, bucketNumbers, { employeeCode, customerCode });
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error('[getPayLaterDelayDaily] Error:', error?.message || error, error?.stack || 'no-stack');
+      return { success: false, error: error?.message || 'Internal Server Error' };
+    }
   }
 
   // New: Contact responses aggregation (hybrid: history from debt_histories, today from debt_logs)
@@ -194,12 +205,6 @@ export class DebtStatisticController {
     @Query('to') toDate: string,
   ) {
     return this.debtStatisticService.getEmployeePerformance(fromDate, toDate);
-  }
-
-  @Post('capture')
-  @UseGuards(JwtAuthGuard)
-  async captureDebtStatistics(@Query('date') date?: string) {
-    return this.cronjobService.captureDebtStatisticsManual(date);
   }
 
   @Get('detailed')

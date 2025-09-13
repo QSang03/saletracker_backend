@@ -804,11 +804,51 @@ export class OrderService {
         product = await this.productRepository.save(product);
       }
 
+      // Lưu mã cũ trước khi cập nhật
+      const oldProductCode = orderDetail.product?.productCode || null;
+      const rawItem = orderDetail.raw_item || '';
+
       // Cập nhật order detail với product mới
       orderDetail.product = product;
       orderDetail.product_id = product.id;
       
       await this.orderDetailRepository.save(orderDetail);
+
+      // ✅ Ghi log thay đổi mã sản phẩm
+      try {
+        const logData = {
+          code_new: productCode.trim(),
+          code_old: oldProductCode,
+          raw_item: rawItem,
+          timestamp: new Date().toISOString(),
+          user_id: user?.id || null,
+          user_name: user?.fullName || user?.username || 'Unknown',
+          order_detail_id: orderDetailId,
+          order_id: orderDetail.order?.id || null
+        };
+
+        // Tạo thư mục logs nếu chưa tồn tại
+        const fs = require('fs');
+        const path = require('path');
+        const logsDir = path.join(process.cwd(), 'logs');
+        if (!fs.existsSync(logsDir)) {
+          fs.mkdirSync(logsDir, { recursive: true });
+        }
+
+        // Tạo tên file theo ngày
+        const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+        const logFileName = `product_code_changes_${today}.jsonl`;
+        const logFilePath = path.join(logsDir, logFileName);
+
+        // Ghi log vào file JSONL (mỗi dòng là một JSON object)
+        const logLine = JSON.stringify(logData) + '\n';
+        fs.appendFileSync(logFilePath, logLine, 'utf8');
+
+        this.logger.log(`Product code change logged: ${oldProductCode} -> ${productCode.trim()}`);
+      } catch (logError) {
+        this.logger.error('Error writing product code change log:', logError);
+        // Không throw error vì đây chỉ là logging, không ảnh hưởng đến chức năng chính
+      }
 
       return { success: true, message: 'Cập nhật mã sản phẩm thành công' };
     } catch (error) {
@@ -1928,9 +1968,9 @@ export class OrderService {
     
     // Apply search
     if (search && search.trim()) {
-      const searchTerm = `%${search.trim()}%`;
+      const searchTerm = `%${String(search).trim()}%`;
       qb.andWhere(
-        '(details.customer_name LIKE :search OR details.order_code LIKE :search OR details.raw_item LIKE :search)',
+        '(CAST(details.id AS CHAR) LIKE :search OR LOWER(details.customer_name) LIKE LOWER(:search) OR LOWER(details.raw_item) LIKE LOWER(:search) OR LOWER(product.productCode) LIKE LOWER(:search) OR LOWER(product.productName) LIKE LOWER(:search) OR LOWER(sale_by.fullName) LIKE LOWER(:search) OR LOWER(sale_by.username) LIKE LOWER(:search) OR LOWER(details.notes) LIKE LOWER(:search) OR LOWER(JSON_UNQUOTE(JSON_EXTRACT(details.metadata, "$.customer_name"))) LIKE LOWER(:search) OR LOWER(JSON_UNQUOTE(JSON_EXTRACT(details.metadata, "$.customer_phone"))) LIKE LOWER(:search))',
         { search: searchTerm },
       );
     }

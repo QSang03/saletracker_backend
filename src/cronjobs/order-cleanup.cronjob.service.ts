@@ -20,7 +20,7 @@ export class OrderCleanupCronjobService {
   ) {}
 
   // ✅ SỬA: Chạy MỌI NGÀY để có thể check và xử lý (0 = Chủ nhật, 1-6 = Thứ 2-7)
-  @Cron('00 01 * * *')
+  @Cron(process.env.CRON_ORDER_CLEANUP_TIME || '00 01 * * *')
   async cleanupExpiredOrderDetails() {
     const executionStartTime = new Date();
     try {
@@ -46,7 +46,7 @@ export class OrderCleanupCronjobService {
         // ĐƯỢC phép chạy cleanup → Xử lý bình thường
         this.logger.log('✅ Được phép chạy cleanup hôm nay');
 
-  const orderDetails = await this.getActiveOrderDetails();
+        const orderDetails = await this.getActiveOrderDetails();
         this.logger.log(
           `📦 Tìm thấy ${orderDetails.length} order details cần kiểm tra`,
         );
@@ -465,239 +465,73 @@ export class OrderCleanupCronjobService {
   }
 
   /**
-   * Thực hiện xóa mềm các order_detail
+   * Thực hiện xóa mềm các order_detail theo batch
    */
   private async softHideOrderDetails(ids: number[]): Promise<void> {
     const time = new Date();
     const reason = 'Hệ Thống Ẩn Tự Động';
-    this.logger.log(`� Bắt đầu ẩn tại: ${this.formatDateTime(time)}`);
+    const BATCH_SIZE = 1000; // Batch size để tránh query quá lớn
+    
+    this.logger.log(`🔄 Bắt đầu ẩn ${ids.length} order details theo batch tại: ${this.formatDateTime(time)}`);
+    
+    if (ids.length === 0) {
+      this.logger.log('⚠️ Không có ID nào để ẩn');
+      return;
+    }
 
-    const result = await this.orderDetailRepository
-      .createQueryBuilder()
-      .update(OrderDetail)
-      .set({ hidden_at: time, reason })
-      .where('id IN (:...ids)', { ids })
-      .andWhere('deleted_at IS NULL')
-      .execute();
+    let totalAffected = 0;
+    const batches = this.chunkArray(ids, BATCH_SIZE);
+    
+    this.logger.log(`📊 Chia thành ${batches.length} batch(es), mỗi batch tối đa ${BATCH_SIZE} items`);
 
-    this.logger.log(`✅ Đã cập nhật hidden_at cho ${result.affected} records`);
-    this.logger.log(`📋 Chi tiết các ID đã ẩn: [${ids.join(', ')}]`);
-    this.logger.log(`🕐 Thời gian ẩn: ${this.formatDateTime(time)}`);
-  }
+    for (let i = 0; i < batches.length; i++) {
+      const batch = batches[i];
+      this.logger.log(`🔄 Đang xử lý batch ${i + 1}/${batches.length} với ${batch.length} IDs`);
+      
+      try {
+        const result = await this.orderDetailRepository
+          .createQueryBuilder()
+          .update(OrderDetail)
+          .set({ hidden_at: time, reason })
+          .where('id IN (:...ids)', { ids: batch })
+          .andWhere('deleted_at IS NULL')
+          .execute();
 
-  /**
-   * Manual trigger để test cleanup (có thể gọi từ controller)
-   */
-  async manualCleanup(): Promise<{
-    success: boolean;
-    deletedCount: number;
-    message: string;
-    executionLog: string[];
-    executionTime: number;
-  }> {
-    const logs: string[] = [];
-    const originalLog = this.logger.log.bind(this.logger);
-    const startTime = new Date();
-
-    // Capture logs để trả về
-    this.logger.log = (message: string) => {
-      logs.push(`${new Date().toISOString()}: ${message}`);
-      originalLog(message);
-    };
-
-    try {
-      this.logger.log('🔧 Manual trigger cleanup được gọi');
-      this.logger.log(
-        `🕐 Thời gian bắt đầu: ${this.formatDateTime(startTime)}`,
-      );
-
-      // Bỏ qua kiểm tra ngày nghỉ/chủ nhật khi manual trigger
-      this.logger.log('⚠️ Manual mode: Bỏ qua kiểm tra ngày nghỉ và chủ nhật');
-
-      const orderDetails = await this.getActiveOrderDetails();
-      const expiredIds = this.calculateExpiredOrderDetails(orderDetails);
-
-      if (expiredIds.length > 0) {
-        await this.softHideOrderDetails(expiredIds);
+        totalAffected += result.affected || 0;
+        
+        this.logger.log(`✅ Batch ${i + 1}: Đã cập nhật hidden_at cho ${result.affected} records`);
+        this.logger.log(`📋 Batch ${i + 1} IDs: [${batch.join(', ')}]`);
+        
+        // Thêm delay nhỏ giữa các batch để tránh overload database
+        if (i < batches.length - 1) {
+          await this.delay(1000); // 1000ms delay
+        }
+        
+      } catch (error) {
+        this.logger.error(`❌ Lỗi khi xử lý batch ${i + 1}:`, error.message);
+        throw error; // Re-throw để không bỏ qua lỗi
       }
-
-      const endTime = new Date();
-      const executionTime = endTime.getTime() - startTime.getTime();
-
-      // Restore original log function
-      this.logger.log = originalLog;
-
-      return {
-        success: true,
-        deletedCount: expiredIds.length,
-        message: `✅ Đã xóa mềm ${expiredIds.length} order details`,
-        executionLog: logs,
-        executionTime,
-      };
-    } catch (error) {
-      // Restore original log function
-      this.logger.log = originalLog;
-
-      const endTime = new Date();
-      const executionTime = endTime.getTime() - startTime.getTime();
-
-      this.logger.error('❌ Lỗi trong manual cleanup:', error.stack);
-      return {
-        success: false,
-        deletedCount: 0,
-        message: `❌ Lỗi: ${error.message}`,
-        executionLog: logs,
-        executionTime,
-      };
     }
+
+    this.logger.log(`✅ TỔNG KẾT: Đã cập nhật hidden_at cho ${totalAffected}/${ids.length} records`);
+    this.logger.log(`🕐 Hoàn thành tại: ${this.formatDateTime(new Date())}`);
   }
 
   /**
-   * ✅ THÊM MỚI: Manual extend để test gia hạn
+   * Utility function để chia array thành các chunk nhỏ hơn
    */
-  async manualExtend(): Promise<{
-    success: boolean;
-    extendedCount: number;
-    message: string;
-    executionLog: string[];
-    executionTime: number;
-  }> {
-    const logs: string[] = [];
-    const originalLog = this.logger.log.bind(this.logger);
-    const startTime = new Date();
-
-    // Capture logs để trả về
-    this.logger.log = (message: string) => {
-      logs.push(`${new Date().toISOString()}: ${message}`);
-      originalLog(message);
-    };
-
-    try {
-      this.logger.log('🆙 Manual trigger extend được gọi');
-      this.logger.log(
-        `🕐 Thời gian bắt đầu: ${this.formatDateTime(startTime)}`,
-      );
-
-      const beforeExtend = await this.getActiveOrderDetails();
-      await this.extendAllActiveOrderDetails();
-
-      const endTime = new Date();
-      const executionTime = endTime.getTime() - startTime.getTime();
-
-      // Restore original log function
-      this.logger.log = originalLog;
-
-      return {
-        success: true,
-        extendedCount: beforeExtend.length,
-        message: `✅ Đã gia hạn ${beforeExtend.length} order details thêm 1 ngày`,
-        executionLog: logs,
-        executionTime,
-      };
-    } catch (error) {
-      // Restore original log function
-      this.logger.log = originalLog;
-
-      const endTime = new Date();
-      const executionTime = endTime.getTime() - startTime.getTime();
-
-      this.logger.error('❌ Lỗi trong manual extend:', error.stack);
-      return {
-        success: false,
-        extendedCount: 0,
-        message: `❌ Lỗi: ${error.message}`,
-        executionLog: logs,
-        executionTime,
-      };
+  private chunkArray<T>(array: T[], size: number): T[][] {
+    const chunks: T[][] = [];
+    for (let i = 0; i < array.length; i += size) {
+      chunks.push(array.slice(i, i + size));
     }
+    return chunks;
   }
 
   /**
-   * ✅ THÊM MỚI: Debug method để kiểm tra trạng thái hiện tại
+   * Utility function để delay giữa các batch
    */
-  async debugHolidayCheck(): Promise<{
-    today: string;
-    dayOfWeek: string;
-    dayOfWeekNumber: number;
-    isHoliday: boolean;
-    allowHoliday: boolean;
-    allowSunday: boolean;
-    canRun: boolean;
-    configs: any[];
-  }> {
-    const today = new Date();
-    const todayStr = today.toLocaleDateString('en-CA', {
-      timeZone: 'Asia/Ho_Chi_Minh',
-    });
-    const dayOfWeek = today.getDay();
-
-    const isHoliday = await this.isTodayHoliday();
-    const allowHoliday = await this.isHolidayRunAllowed();
-    const allowSunday = await this.isSundayRunAllowed();
-    const canRun = await this.canRunToday();
-
-    const configs = await this.systemConfigRepository.find({
-      where: [
-        { name: 'system_scheduleHoliday' },
-        { name: 'system_scheduleSunday' },
-        { name: 'holiday_multi_days' },
-        { name: 'holiday_single_day' },
-        { name: 'holiday_separated_days' },
-      ],
-    });
-
-    return {
-      today: todayStr,
-      dayOfWeek: this.getDayOfWeekName(dayOfWeek),
-      dayOfWeekNumber: dayOfWeek,
-      isHoliday,
-      allowHoliday,
-      allowSunday,
-      canRun,
-      configs,
-    };
-  }
-
-  /**
-   * Thêm method để check status của cronjob
-   */
-  async getCleanupStatus(): Promise<{
-    canRunToday: boolean;
-    todayInfo: {
-      date: string;
-      dayOfWeek: string;
-      isSunday: boolean;
-      isHoliday: boolean;
-    };
-    settings: {
-      allowSunday: boolean;
-      allowHoliday: boolean;
-    };
-    activeOrdersCount: number;
-  }> {
-    const today = new Date();
-    const dayOfWeek = today.getDay();
-
-    const canRunToday = await this.canRunToday();
-    const isHoliday = await this.isTodayHoliday();
-    const allowSunday = await this.isSundayRunAllowed();
-    const allowHoliday = await this.isHolidayRunAllowed();
-
-    const activeOrders = await this.getActiveOrderDetails();
-
-    return {
-      canRunToday,
-      todayInfo: {
-        date: this.formatDate(today),
-        dayOfWeek: this.getDayOfWeekName(dayOfWeek),
-        isSunday: dayOfWeek === 0,
-        isHoliday,
-      },
-      settings: {
-        allowSunday,
-        allowHoliday,
-      },
-      activeOrdersCount: activeOrders.length,
-    };
+  private delay(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 }

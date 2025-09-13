@@ -182,7 +182,10 @@ export class UserController {
         isActive: boolean;
       }[];
       viewSubRoleName?: string; // Thêm thông tin để tạo role "view con"
-  pmPrivateRoleName?: string; // Thêm thông tin để tạo role "pm riêng" (pm_<username>)
+      pmPrivateRoleName?: string; // Thêm thông tin để tạo role "pm riêng" (pm_<username>)
+      pmCustomRoleNames?: string[]; // Danh sách tên các PM custom roles
+      pmCustomRolePermissions?: Array<{ roleName: string; permissions: number[] }>; // Quyền cho từng PM custom role
+      pmMode?: 'general' | 'custom'; // Chế độ PM
     },
   ) {
     // Gọi service cập nhật roles, departments, permissions, role-permissions cho user
@@ -194,6 +197,9 @@ export class UserController {
       body.rolePermissions,
       body.viewSubRoleName, // Truyền thông tin tạo role "view con"
       body.pmPrivateRoleName, // Truyền thông tin tạo role pm riêng
+      body.pmCustomRoleNames, // Truyền danh sách PM custom roles
+      body.pmCustomRolePermissions, // Truyền quyền cho PM custom roles
+      body.pmMode, // Truyền chế độ PM
     );
     return { success: true };
   }

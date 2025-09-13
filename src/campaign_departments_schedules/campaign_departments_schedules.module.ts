@@ -5,12 +5,10 @@ import { CampaignDepartmentsSchedulesController } from './campaign_departments_s
 import { DepartmentSchedule } from './campaign_departments_schedules.entity';
 import { User } from '../users/user.entity';
 import { Department } from '../departments/department.entity';
-import { CronjobModule } from '../cronjobs/cronjob.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([DepartmentSchedule, User, Department]),
-    CronjobModule
+    TypeOrmModule.forFeature([DepartmentSchedule, User, Department])
   ],
   controllers: [CampaignDepartmentsSchedulesController],
   providers: [CampaignDepartmentsSchedulesService],

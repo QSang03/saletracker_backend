@@ -4,6 +4,10 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { HttpModule } from '@nestjs/axios';
 import { CronjobService } from '../cronjobs/cronjob.service';
 import { ProductV2CronjobService } from './product-v2.cronjob.service';
+import { DebtStatisticsCronjobService } from './debt-statistics.cronjob.service';
+import { DebtHistoriesCronjobService } from './debt-histories.cronjob.service';
+import { OrderCleanupCronjobService } from './order-cleanup.cronjob.service';
+import { DatabaseCleanupCronjobService } from './database-cleanup.cronjob.service';
 import { NKCProduct } from '../nkc_products/nkc_product.entity';
 import { Product } from '../products/product.entity';
 import { Brand } from '../brands/brand.entity';
@@ -19,8 +23,6 @@ import { PermissionModule } from '../permissions/permission.module';
 import { ScheduleStatusUpdaterService } from './schedule-status-updater.service';
 import { OrderDetail } from 'src/order-details/order-detail.entity';
 import { SystemConfig } from 'src/system_config/system_config.entity';
-import { OrderCleanupCronjobService } from './order-cleanup.cronjob.service';
-import { DatabaseCleanupCronjobService } from './database-cleanup.cronjob.service';
 
 @Module({
   imports: [
@@ -44,18 +46,23 @@ import { DatabaseCleanupCronjobService } from './database-cleanup.cronjob.servic
     ]),
   ],
   providers: [
-    CronjobService,
+    CronjobService, // Service chính (chỉ để thông tin)
     ScheduleStatusUpdaterService,
+    // Các cronjob service riêng biệt
+    DebtStatisticsCronjobService,
+    DebtHistoriesCronjobService,
     OrderCleanupCronjobService,
-    ProductV2CronjobService,
     DatabaseCleanupCronjobService,
+    ProductV2CronjobService,
   ],
   exports: [
     CronjobService,
     ScheduleStatusUpdaterService,
+    DebtStatisticsCronjobService,
+    DebtHistoriesCronjobService,
     OrderCleanupCronjobService,
-    ProductV2CronjobService,
     DatabaseCleanupCronjobService,
+    ProductV2CronjobService,
   ],
 })
 export class CronjobModule {}

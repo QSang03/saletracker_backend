@@ -5,6 +5,11 @@ import { ExtendReason, OrderDetail } from './order-detail.entity';
 import { Department } from 'src/departments/department.entity';
 import { User } from 'src/users/user.entity';
 import { OrderBlacklistService } from '../order-blacklist/order-blacklist.service';
+import { TransactionStatsService } from './transaction-stats.service';
+import { 
+  TransactionStatsParams, 
+  TransactionStatsResponse 
+} from './transaction-stats.interface';
 
 interface HiddenOrderOptions {
   page?: number;
@@ -30,6 +35,7 @@ export class OrderDetailService {
     @InjectRepository(User)
     private userRepository: Repository<User>,
     private orderBlacklistService: OrderBlacklistService,
+    private transactionStatsService: TransactionStatsService,
   ) {}
 
   // Normalize a date-only string (YYYY-MM-DD) into safe bounds for SQL comparisons.
@@ -1925,5 +1931,12 @@ export class OrderDetailService {
     const data = groups.slice(start, start + params.pageSize);
 
     return { data, total, page: params.page, pageSize: params.pageSize };
+  }
+
+  /**
+   * ✅ NEW: Optimized transaction statistics method
+   */
+  async getTransactionStats(params: TransactionStatsParams): Promise<TransactionStatsResponse> {
+    return this.transactionStatsService.getTransactionStats(params);
   }
 }
