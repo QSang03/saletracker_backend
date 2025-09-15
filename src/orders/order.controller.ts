@@ -180,6 +180,84 @@ export class OrderController {
     });
   }
 
+  @Get('pm-transactions/no-product')
+  async findOrdersWithoutProduct(
+    @Query('page') page: string = '1',
+    @Query('pageSize') pageSize: string = '10',
+    @Query('search') search?: string,
+    @Query('status') status?: string,
+    @Query('date') date?: string,
+    @Query('dateRange') dateRange?: string,
+    @Query('employee') employee?: string,
+    @Query('employees') employees?: string,
+    @Query('departments') departments?: string,
+    @Query('products') products?: string,
+    @Query('brands') brands?: string,
+    @Query('categories') categories?: string,
+    @Query('brandCategories') brandCategories?: string,
+    @Query('warningLevel') warningLevel?: string,
+    @Query('sortField')
+    sortField?:
+      | 'quantity'
+      | 'unit_price'
+      | 'created_at'
+      | 'conversation_start'
+      | 'conversation_end',
+    @Query('sortDirection') sortDirection?: 'asc' | 'desc',
+    @Query('quantity') quantity?: string,
+    @Query('conversationType') conversationType?: string,
+    @Query('includeHidden') includeHidden?: string,
+    @Query('pmCustomMode') pmCustomMode?: string,
+    @Query('rolePermissions') rolePermissions?: string,
+    @Req() req?: any,
+  ): Promise<{
+    data: OrderDetail[];
+    total: number;
+    page: number;
+    pageSize: number;
+  }> {
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const pageSizeNum = Math.min(
+      1000000,
+      Math.max(1, parseInt(pageSize, 10) || 10),
+    );
+
+    // Parse dateRange if provided
+    let parsedDateRange;
+    if (dateRange) {
+      try {
+        parsedDateRange = JSON.parse(dateRange);
+      } catch (e) {
+        parsedDateRange = undefined;
+      }
+    }
+
+    return this.orderService.findAllPaginatedForPMWithoutProduct({
+      page: pageNum,
+      pageSize: pageSizeNum,
+      search: search?.trim(),
+      status,
+      date,
+      dateRange: parsedDateRange,
+      employee,
+      employees,
+      departments,
+      products,
+      brands,
+      categories,
+      brandCategories,
+      warningLevel,
+      quantity,
+      conversationType,
+      sortField: sortField || null,
+      sortDirection: sortDirection || null,
+      includeHidden,
+      pmCustomMode,
+      rolePermissions,
+      user: req.user,
+    });
+  }
+
   @Get('all')
   async findAllWithPermission(@Req() req?: any): Promise<Order[]> {
     return this.orderService.findAll();
@@ -207,6 +285,18 @@ export class OrderController {
     products: Array<{ value: number; label: string }>;
   }> {
     return this.orderService.getFilterOptionsForPM(req.user);
+  }
+
+  @Get('pm-transactions/no-product/filter-options')
+  async getFilterOptionsForNoProduct(@Req() req?: any): Promise<{
+    departments: Array<{
+      value: number;
+      label: string;
+      users: Array<{ value: number; label: string }>;
+    }>;
+    products: Array<{ value: number; label: string }>;
+  }> {
+    return this.orderService.getFilterOptionsForPMWithoutProduct(req.user);
   }
 
   @Get('products')

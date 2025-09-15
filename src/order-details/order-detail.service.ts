@@ -192,21 +192,6 @@ export class OrderDetailService {
     }
   }
 
-  // Helper method để parse customer_id từ metadata JSON
-  private extractCustomerIdFromMetadata(metadata: any): string | null {
-    try {
-      if (typeof metadata === 'string') {
-        const parsed = JSON.parse(metadata);
-        return parsed.customer_id || null;
-      } else if (typeof metadata === 'object' && metadata !== null) {
-        return metadata.customer_id || null;
-      }
-      return null;
-    } catch (error) {
-      return null;
-    }
-  }
-
   async findAllWithPermission(user?: any): Promise<OrderDetail[]> {
     const queryBuilder = this.orderDetailRepository
       .createQueryBuilder('details')
@@ -263,9 +248,8 @@ export class OrderDetailService {
 
         if (blacklistedSet.size > 0) {
           return orderDetails.filter((orderDetail) => {
-            const customerId = this.extractCustomerIdFromMetadata(
-              orderDetail.metadata,
-            );
+            // Use generated column meta_customer_id (already string)
+            const customerId = orderDetail.meta_customer_id;
             return !customerId || !blacklistedSet.has(customerId);
           });
         }
@@ -313,9 +297,7 @@ export class OrderDetailService {
         );
 
         if (!isAdmin) {
-          const customerId = this.extractCustomerIdFromMetadata(
-            orderDetail.metadata,
-          );
+          const customerId = orderDetail.meta_customer_id;
           if (customerId) {
             if (isManager) {
               const userIds = Array.isArray(allowedUserIds)
@@ -455,16 +437,14 @@ export class OrderDetailService {
 
     if (customerId) {
       // Tìm tất cả order details có cùng customer_id trong metadata nhưng CHỈ của user hiện tại
+      // OPTIMIZED: Use generated column meta_customer_id instead of JSON_EXTRACT
       const orderDetailsWithSameCustomer = await this.orderDetailRepository
         .createQueryBuilder('orderDetail')
         .leftJoin('orderDetail.order', 'order')
         .leftJoin('order.sale_by', 'sale_by')
-        .where(
-          "JSON_UNQUOTE(JSON_EXTRACT(orderDetail.metadata, '$.customer_id')) = :customerId",
-          {
-            customerId,
-          },
-        )
+        .where('orderDetail.meta_customer_id = :customerId', {
+          customerId,
+        })
         .andWhere('sale_by.id = :userId', { userId: user?.id })
         .getMany();
 
@@ -494,12 +474,10 @@ export class OrderDetailService {
     customerId: string,
     customerName: string,
   ): Promise<{ updated: number }> {
+    // Use generated column meta_customer_id instead of JSON_EXTRACT
     const orderDetails = await this.orderDetailRepository
       .createQueryBuilder('orderDetail')
-      .where(
-        "JSON_UNQUOTE(JSON_EXTRACT(orderDetail.metadata, '$.customer_id')) = :customerId",
-        { customerId },
-      )
+      .where('orderDetail.meta_customer_id = :customerId', { customerId })
       .getMany();
 
     const idsToUpdate = orderDetails.map((od) => od.id);
@@ -878,7 +856,7 @@ export class OrderDetailService {
         const bl = new Set<string>();
         for (const set of map.values()) for (const id of set) bl.add(id);
         rows = rows.filter((od) => {
-          const cid = this.extractCustomerIdFromMetadata(od.metadata);
+          const cid = od.meta_customer_id;
           return !cid || !bl.has(cid);
         });
       } else {
@@ -888,7 +866,7 @@ export class OrderDetailService {
           );
         const bl = new Set(list);
         rows = rows.filter((od) => {
-          const cid = this.extractCustomerIdFromMetadata(od.metadata);
+          const cid = od.meta_customer_id;
           return !cid || !bl.has(cid);
         });
       }
@@ -897,7 +875,7 @@ export class OrderDetailService {
     // Map to response rows
     const resultRows = rows.map((od) => {
       const revenue = (od.quantity || 0) * (od.unit_price || 0);
-      const customerId = this.extractCustomerIdFromMetadata(od.metadata);
+      const customerId = od.meta_customer_id;
       const dynamicExtended = this.calcDynamicExtended(
         od.created_at || null,
         od.extended,
@@ -1073,7 +1051,7 @@ export class OrderDetailService {
         }
         if (blacklistedSet.size > 0) {
           filtered = filtered.filter((od) => {
-            const customerId = this.extractCustomerIdFromMetadata(od.metadata);
+            const customerId = od.meta_customer_id;
             return !customerId || !blacklistedSet.has(customerId);
           });
         }
@@ -1436,7 +1414,7 @@ export class OrderDetailService {
 
         if (blacklistedSet.size > 0) {
           filtered = filtered.filter((od) => {
-            const customerId = this.extractCustomerIdFromMetadata(od.metadata);
+            const customerId = od.meta_customer_id;
             return !customerId || !blacklistedSet.has(customerId);
           });
         }
@@ -1609,7 +1587,7 @@ export class OrderDetailService {
         const bl = new Set<string>();
         for (const set of map.values()) for (const id of set) bl.add(id);
         filtered = filtered.filter((od) => {
-          const cid = this.extractCustomerIdFromMetadata(od.metadata);
+          const cid = od.meta_customer_id;
           return !cid || !bl.has(cid);
         });
       } else {
@@ -1619,7 +1597,7 @@ export class OrderDetailService {
           );
         const bl = new Set(list);
         filtered = filtered.filter((od) => {
-          const cid = this.extractCustomerIdFromMetadata(od.metadata);
+          const cid = od.meta_customer_id;
           return !cid || !bl.has(cid);
         });
       }
@@ -1857,7 +1835,7 @@ export class OrderDetailService {
         const bl = new Set<string>();
         for (const set of map.values()) for (const id of set) bl.add(id);
         filtered = filtered.filter((od) => {
-          const cid = this.extractCustomerIdFromMetadata(od.metadata);
+          const cid = od.meta_customer_id;
           return !cid || !bl.has(cid);
         });
       } else {
@@ -1867,7 +1845,7 @@ export class OrderDetailService {
           );
         const bl = new Set(list);
         filtered = filtered.filter((od) => {
-          const cid = this.extractCustomerIdFromMetadata(od.metadata);
+          const cid = od.meta_customer_id;
           return !cid || !bl.has(cid);
         });
       }

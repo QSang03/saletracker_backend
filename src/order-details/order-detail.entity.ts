@@ -39,6 +39,16 @@ export enum ExtendReason {
 @Index('idx_order_details_hidden_status', ['hidden_at', 'status', 'deleted_at'])
 @Index('idx_order_details_hidden_employee', ['hidden_at', 'order_id'])
 @Index('idx_order_details_hidden_pagination', ['hidden_at', 'id'], { where: 'hidden_at IS NOT NULL' })
+// Generated columns for JSON extractions and calculations
+@Index('idx_order_details_meta_customer_id', ['meta_customer_id'])
+@Index('idx_order_details_meta_is_group', ['meta_is_group'])
+@Index('idx_order_details_expiry_days', ['expiry_days', 'created_at', 'id'])
+// Optimized index for expiry-based filtering with status
+@Index('idx_expiry_days_status', ['expiry_days', 'status', 'id'])
+// Indexes for conversation timestamps
+@Index('idx_conversation_start', ['conversation_start'])
+@Index('idx_conversation_end', ['conversation_end'])
+@Index('idx_conversation_duration', ['conversation_start', 'conversation_end'])
 @Entity('order_details')
 export class OrderDetail {
   @PrimaryGeneratedColumn('increment', { type: 'bigint' })
@@ -132,4 +142,82 @@ export class OrderDetail {
   @Index()
   @Column('timestamp', { nullable: true })
   hidden_at: Date | null;
+
+  // Generated columns for optimized querying
+  @Column({
+    type: 'varchar',
+    length: 50,
+    nullable: true,
+    asExpression: "CASE WHEN JSON_UNQUOTE(JSON_EXTRACT(`metadata`, '$.customer_id')) = 'null' OR JSON_UNQUOTE(JSON_EXTRACT(`metadata`, '$.customer_id')) IS NULL THEN NULL ELSE JSON_UNQUOTE(JSON_EXTRACT(`metadata`, '$.customer_id')) END",
+    generatedType: 'STORED',
+  })
+  meta_customer_id: string | null;
+
+  @Column({
+    type: 'tinyint',
+    nullable: true,
+    asExpression: "CASE WHEN JSON_UNQUOTE(JSON_EXTRACT(`metadata`, '$.conversation_info.is_group')) IN ('null', 'false', '') OR JSON_UNQUOTE(JSON_EXTRACT(`metadata`, '$.conversation_info.is_group')) IS NULL THEN 0 WHEN JSON_UNQUOTE(JSON_EXTRACT(`metadata`, '$.conversation_info.is_group')) = 'true' THEN 1 ELSE CAST(JSON_UNQUOTE(JSON_EXTRACT(`metadata`, '$.conversation_info.is_group')) AS UNSIGNED) END",
+    generatedType: 'STORED',
+  })
+  meta_is_group: number | null;
+
+  @Column({
+    type: 'int',
+    nullable: true,
+    asExpression: "(TO_DAYS(DATE(`created_at`)) + COALESCE(`extended`, 0))",
+    generatedType: 'STORED',
+  })
+  expiry_days: number | null;
+
+  // Generated columns for conversation timestamps
+  // conversation_start: phần tử đầu
+  @Column({
+    type: 'datetime',
+    nullable: true,
+    asExpression: `
+      CASE
+        WHEN JSON_TYPE(JSON_EXTRACT(metadata, '$.messages')) = 'ARRAY'
+             AND JSON_LENGTH(JSON_EXTRACT(metadata, '$.messages')) > 0
+        THEN STR_TO_DATE(
+               LEFT(
+                 JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.messages[0].timestamp')),
+                 19
+               ),
+               '%Y-%m-%dT%H:%i:%s'
+             )
+        ELSE NULL
+      END
+    `,
+    generatedType: 'STORED',
+  })
+  conversation_start: Date | null;
+
+  // conversation_end: phần tử cuối
+  @Column({
+    type: 'datetime',
+    nullable: true,
+    asExpression: `
+      CASE
+        WHEN JSON_TYPE(JSON_EXTRACT(metadata, '$.messages')) = 'ARRAY'
+             AND JSON_LENGTH(JSON_EXTRACT(metadata, '$.messages')) > 0
+        THEN STR_TO_DATE(
+               LEFT(
+                 JSON_UNQUOTE(
+                   JSON_EXTRACT(
+                     metadata,
+                     CONCAT('$.messages[',
+                            JSON_LENGTH(JSON_EXTRACT(metadata, '$.messages')) - 1,
+                            '].timestamp')
+                   )
+                 ),
+                 19
+               ),
+               '%Y-%m-%dT%H:%i:%s'
+             )
+        ELSE NULL
+      END
+    `,
+    generatedType: 'STORED',
+  })
+  conversation_end: Date | null;
 }

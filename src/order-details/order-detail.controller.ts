@@ -183,7 +183,7 @@ export class OrderDetailController {
   }
 
   // =============== Optimized Transaction Stats endpoint ===============
-    @Get('stats/transactions')
+  @Get('stats/transactions')
   @UseGuards(AuthGuard('jwt'))
   async getTransactionStats(@Query() query: any, @Req() req: any) {
     const params = {
@@ -200,9 +200,8 @@ export class OrderDetailController {
   @Get('stats/transactions/details')
   @UseGuards(AuthGuard('jwt'))
   async getTransactionDetails(@Query() query: any, @Req() req: any) {
-    
     const timestamp = parseInt(query.timestamp);
-    
+
     if (isNaN(timestamp)) {
       return {
         items: [],
@@ -211,7 +210,7 @@ export class OrderDetailController {
         pageSize: 0,
       };
     }
-    
+
     const params = {
       period: query.period || 'day',
       dateFrom: query.dateFrom,
@@ -222,7 +221,7 @@ export class OrderDetailController {
       page: parseInt(query.page) || 1,
       limit: parseInt(query.limit) || 20,
     };
-    
+
     return this.transactionStatsService.getTransactionDetails(params);
   }
 
@@ -231,20 +230,20 @@ export class OrderDetailController {
   async getCustomerCount(
     @Query('fromDate') fromDate?: string,
     @Query('toDate') toDate?: string,
-  @Query('employeeId') employeeId?: string,
-  @Query('departmentId') departmentId?: string,
-  // Apply full order filters
-  @Query('search') search?: string,
-  @Query('status') status?: string,
-  @Query('date') date?: string,
-  @Query('dateRange') dateRange?: string,
-  @Query('employee') employee?: string,
-  @Query('employees') employees?: string,
-  @Query('departments') departments?: string,
-  @Query('products') products?: string,
-  @Query('warningLevel') warningLevel?: string,
-  @Query('quantity') quantity?: string,
-  @Query('countMode') countMode?: 'customer' | 'sale',
+    @Query('employeeId') employeeId?: string,
+    @Query('departmentId') departmentId?: string,
+    // Apply full order filters
+    @Query('search') search?: string,
+    @Query('status') status?: string,
+    @Query('date') date?: string,
+    @Query('dateRange') dateRange?: string,
+    @Query('employee') employee?: string,
+    @Query('employees') employees?: string,
+    @Query('departments') departments?: string,
+    @Query('products') products?: string,
+    @Query('warningLevel') warningLevel?: string,
+    @Query('quantity') quantity?: string,
+    @Query('countMode') countMode?: 'customer' | 'sale',
     @Req() req?: any,
   ) {
     // Parse và validate employeeId
@@ -290,10 +289,10 @@ export class OrderDetailController {
       quantity,
       employeeId: parsedEmployeeId,
       departmentId: parsedDepartmentId,
-  countMode,
+      countMode,
       user: req?.user,
     });
-    
+
     return { customerCount: count };
   }
 
@@ -302,19 +301,19 @@ export class OrderDetailController {
   async getCustomers(
     @Query('fromDate') fromDate?: string,
     @Query('toDate') toDate?: string,
-  @Query('employeeId') employeeId?: string,
-  @Query('departmentId') departmentId?: string,
-  // Apply full order filters
-  @Query('search') search?: string,
-  @Query('status') status?: string,
-  @Query('date') date?: string,
-  @Query('dateRange') dateRange?: string,
-  @Query('employee') employee?: string,
-  @Query('employees') employees?: string,
-  @Query('departments') departments?: string,
-  @Query('products') products?: string,
-  @Query('warningLevel') warningLevel?: string,
-  @Query('quantity') quantity?: string,
+    @Query('employeeId') employeeId?: string,
+    @Query('departmentId') departmentId?: string,
+    // Apply full order filters
+    @Query('search') search?: string,
+    @Query('status') status?: string,
+    @Query('date') date?: string,
+    @Query('dateRange') dateRange?: string,
+    @Query('employee') employee?: string,
+    @Query('employees') employees?: string,
+    @Query('departments') departments?: string,
+    @Query('products') products?: string,
+    @Query('warningLevel') warningLevel?: string,
+    @Query('quantity') quantity?: string,
     @Query('page') page: string = '1',
     @Query('pageSize') pageSize: string = '30',
     @Req() req?: any,
@@ -332,7 +331,10 @@ export class OrderDetailController {
     }
 
     const pageNum = Math.max(1, parseInt(page, 10) || 1);
-    const pageSizeNum = Math.max(1, Math.min(parseInt(pageSize, 10) || 30, 200));
+    const pageSizeNum = Math.max(
+      1,
+      Math.min(parseInt(pageSize, 10) || 30, 200),
+    );
 
     // Parse dateRange if provided
     let parsedDateRange: any = undefined;
@@ -400,7 +402,7 @@ export class OrderDetailController {
       throw new ForbiddenException('Bạn không có quyền sửa order này');
     }
 
-  return this.orderDetailService.update(id, orderDetailData, req?.user);
+    return this.orderDetailService.update(id, orderDetailData, req?.user);
   }
 
   @Delete(':id')
@@ -540,5 +542,4 @@ export class OrderDetailController {
       blacklistEntry,
     };
   }
-
 }

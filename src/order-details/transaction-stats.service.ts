@@ -123,7 +123,7 @@ export class TransactionStatsService {
 
     return `AND NOT EXISTS (
       SELECT 1 FROM order_blacklist ob
-      WHERE ob.zalo_contact_id = JSON_UNQUOTE(JSON_EXTRACT(od.metadata, '$.customer_id'))
+      WHERE ob.zalo_contact_id = od.meta_customer_id
         AND (ob.user_id = ${user.id} ${deptFilter ? deptFilter : ''})
     )`;
   }
@@ -137,21 +137,33 @@ export class TransactionStatsService {
     let current: { from: Date; to: Date };
     let previous: { from: Date; to: Date };
 
-    if (period === 'custom' && dateFrom && dateTo) {
-      // Custom date range
+    // If user provides specific dateFrom/dateTo, use them regardless of period
+    if (dateFrom && dateTo) {
       current = {
         from: startOfDay(new Date(dateFrom)),
         to: endOfDay(new Date(dateTo)),
       };
 
-      // Calculate previous period with same duration
-      const duration = current.to.getTime() - current.from.getTime();
-      previous = {
-        from: new Date(current.from.getTime() - duration),
-        to: new Date(current.from.getTime() - 1), // End just before current period
-      };
+      // Calculate previous period based on the period type and current range duration
+      if (period === 'day') {
+        // For day period: previous day(s) with same duration
+        const durationDays = Math.ceil((current.to.getTime() - current.from.getTime()) / (1000 * 60 * 60 * 24));
+        const previousEnd = new Date(current.from.getTime() - 1); // End just before current period
+        const previousStart = new Date(previousEnd.getTime() - (durationDays - 1) * (1000 * 60 * 60 * 24));
+        previous = {
+          from: startOfDay(previousStart),
+          to: endOfDay(previousEnd),
+        };
+      } else {
+        // For week/quarter/custom: use same duration
+        const duration = current.to.getTime() - current.from.getTime();
+        previous = {
+          from: new Date(current.from.getTime() - duration),
+          to: new Date(current.from.getTime() - 1), // End just before current period
+        };
+      }
     } else {
-      // Preset periods (day, week, quarter)
+      // Use preset periods (day, week, quarter) when no specific dates provided
       current = this.getPresetRange(period);
       previous = this.getPreviousRange(period, current);
     }
@@ -301,18 +313,19 @@ export class TransactionStatsService {
         SUM(CASE WHEN deduped.created_at >= ? AND deduped.created_at <= ? AND deduped.status = 'pending' THEN 1 ELSE 0 END) as prev_pending,
         SUM(CASE WHEN deduped.created_at >= ? AND deduped.created_at <= ? AND deduped.status = 'completed' THEN deduped.unit_price * deduped.quantity ELSE 0 END) as prev_revenue,
         
-        -- New GD calculation based on formula: (created_at + extended - current_date)
+        -- Optimized GD calculation using generated column expiry_days
+        -- expiry_days = TO_DAYS(DATE(created_at)) + COALESCE(extended, 0)
         -- Logic: Số ngày còn lại trước khi hết hạn
         -- >= 4: Còn nhiều thời gian (GD bình thường)
         -- = 3: Còn 3 ngày (cần chú ý) 
         -- = 2: Còn 2 ngày (khá gấp)
         -- = 1: Còn 1 ngày (hết hạn hôm nay)
         -- <= 0: Đã quá hạn
-        SUM(CASE WHEN DATEDIFF(DATE_ADD(DATE(deduped.created_at), INTERVAL COALESCE(deduped.extended, 4) DAY), CURDATE()) >= 4 THEN 1 ELSE 0 END) as gd_today,
-        SUM(CASE WHEN DATEDIFF(DATE_ADD(DATE(deduped.created_at), INTERVAL COALESCE(deduped.extended, 4) DAY), CURDATE()) = 3 THEN 1 ELSE 0 END) as gd_yesterday,  
-        SUM(CASE WHEN DATEDIFF(DATE_ADD(DATE(deduped.created_at), INTERVAL COALESCE(deduped.extended, 4) DAY), CURDATE()) = 2 THEN 1 ELSE 0 END) as gd_2days_ago
+        SUM(CASE WHEN (deduped.expiry_days - TO_DAYS(CURDATE())) >= 4 THEN 1 ELSE 0 END) as gd_today,
+        SUM(CASE WHEN (deduped.expiry_days - TO_DAYS(CURDATE())) = 3 THEN 1 ELSE 0 END) as gd_yesterday,  
+        SUM(CASE WHEN (deduped.expiry_days - TO_DAYS(CURDATE())) = 2 THEN 1 ELSE 0 END) as gd_2days_ago
       FROM (
-        SELECT DISTINCT od.id, od.created_at, od.status, od.unit_price, od.quantity, od.extended
+        SELECT DISTINCT od.id, od.created_at, od.status, od.unit_price, od.quantity, od.expiry_days
         FROM order_details od
         JOIN orders o ON od.order_id = o.id
         JOIN users u ON o.sale_by = u.id
@@ -662,19 +675,19 @@ export class TransactionStatsService {
         )`
       : '';
 
-    // Use subquery to deduplicate first, then aggregate without DISTINCT
+    // Use subquery to deduplicate first, then aggregate using generated column
     const query = `
       SELECT 
         SUM(CASE 
-          WHEN DATEDIFF(DATE_ADD(DATE(deduped.created_at), INTERVAL COALESCE(deduped.extended, 4) DAY), CURDATE()) = 1
+          WHEN (deduped.expiry_days - TO_DAYS(CURDATE())) = 1
           THEN 1 ELSE 0 
         END) as expired_today,
         SUM(CASE 
-          WHEN DATEDIFF(DATE_ADD(DATE(deduped.created_at), INTERVAL COALESCE(deduped.extended, 4) DAY), CURDATE()) < 1
+          WHEN (deduped.expiry_days - TO_DAYS(CURDATE())) < 1
           THEN 1 ELSE 0 
         END) as overdue
       FROM (
-        SELECT DISTINCT od.id, od.created_at, od.extended
+        SELECT DISTINCT od.id, od.expiry_days
         FROM order_details od
         JOIN orders o ON od.order_id = o.id
         JOIN users u ON o.sale_by = u.id

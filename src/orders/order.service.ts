@@ -2,7 +2,10 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Like, Between, Not, IsNull, In } from 'typeorm';
 import { Order } from './order.entity';
-import { OrderDetail, ExtendReason } from 'src/order-details/order-detail.entity';
+import {
+  OrderDetail,
+  ExtendReason,
+} from 'src/order-details/order-detail.entity';
 import { Department } from 'src/departments/department.entity';
 import { User } from 'src/users/user.entity';
 import { Product } from 'src/products/product.entity';
@@ -129,7 +132,9 @@ export class OrderService {
         // Công thức: ngày tạo + x - ngày hiện tại = 4
         // => x = 4 + (ngày hiện tại - ngày tạo) tính theo ngày
         const createdAt = new Date(detail.order.created_at);
-        const daysDiff = Math.ceil((now.getTime() - createdAt.getTime()) / (1000 * 60 * 60 * 24));
+        const daysDiff = Math.ceil(
+          (now.getTime() - createdAt.getTime()) / (1000 * 60 * 60 * 24),
+        );
         const newExtended = Math.max(1, 4 + daysDiff); // Đảm bảo extend ít nhất là 1
 
         return {
@@ -499,8 +504,12 @@ export class OrderService {
      */
     const isManager = roleNames.some((r: string) => r.startsWith('manager-'));
     if (isManager) {
-      const managerRoles = roleNames.filter((r: string) => r.startsWith('manager-'));
-      const departmentSlugs = managerRoles.map((r: string) => r.replace('manager-', ''));
+      const managerRoles = roleNames.filter((r: string) =>
+        r.startsWith('manager-'),
+      );
+      const departmentSlugs = managerRoles.map((r: string) =>
+        r.replace('manager-', ''),
+      );
 
       const departments = await this.departmentRepository
         .find({
@@ -535,14 +544,19 @@ export class OrderService {
     if (isPM) {
       // Kiểm tra có role pm_{phong_ban} nào không
       const pmRoles = roleNames.filter((r: string) => r.startsWith('pm-'));
-      
+
       if (pmRoles.length > 0) {
         // Có role pm_{phong_ban} → lọc theo phòng ban đó (logic cũ)
-        const departmentSlugs = pmRoles.map((r: string) => r.replace('pm-', ''));
+        const departmentSlugs = pmRoles.map((r: string) =>
+          r.replace('pm-', ''),
+        );
 
         const departments = await this.departmentRepository
           .find({
-            where: departmentSlugs.map((slug) => ({ slug, deletedAt: IsNull() })),
+            where: departmentSlugs.map((slug) => ({
+              slug,
+              deletedAt: IsNull(),
+            })),
           })
           .then((departments) =>
             departments.filter(
@@ -569,11 +583,11 @@ export class OrderService {
         // Chỉ có role PM, kiểm tra permissions pm_cat_* hoặc pm_brand_*
         // Trả về null để báo hiệu cần lọc theo categories/brands trong findAllPaginated
         const permissions = (user.permissions || []).map((p: any) =>
-          typeof p === 'string' ? p : (p.name || ''),
+          typeof p === 'string' ? p : p.name || '',
         );
-        
-        const pmPermissions = permissions.filter((p: string) => 
-          p.toLowerCase().startsWith('pm_')
+
+        const pmPermissions = permissions.filter((p: string) =>
+          p.toLowerCase().startsWith('pm_'),
         );
 
         if (pmPermissions.length > 0) {
@@ -581,7 +595,7 @@ export class OrderService {
           // Logic lọc sẽ được xử lý trong findAllPaginated
           return null;
         }
-        
+
         return []; // PM không có permissions hợp lệ
       }
     }
@@ -642,14 +656,19 @@ export class OrderService {
     if (isPM) {
       // Kiểm tra có role pm_{phong_ban} nào không
       const pmRoles = roleNames.filter((r: string) => r.startsWith('pm-'));
-      
+
       if (pmRoles.length > 0) {
         // ✅ PM có role phụ (pm-phongban): lấy users theo phòng ban
-        const departmentSlugs = pmRoles.map((r: string) => r.replace('pm-', ''));
+        const departmentSlugs = pmRoles.map((r: string) =>
+          r.replace('pm-', ''),
+        );
 
         const departments = await this.departmentRepository
           .find({
-            where: departmentSlugs.map((slug) => ({ slug, deletedAt: IsNull() })),
+            where: departmentSlugs.map((slug) => ({
+              slug,
+              deletedAt: IsNull(),
+            })),
           })
           .then((departments) =>
             departments.filter(
@@ -673,18 +692,18 @@ export class OrderService {
       } else {
         // ✅ PM có quyền riêng (pm_permissions): trả về null để lọc theo categories/brands
         const permissions = (user.permissions || []).map((p: any) =>
-          typeof p === 'string' ? p : (p.name || ''),
+          typeof p === 'string' ? p : p.name || '',
         );
-        
-        const pmPermissions = permissions.filter((p: string) => 
-          p.toLowerCase().startsWith('pm_')
+
+        const pmPermissions = permissions.filter((p: string) =>
+          p.toLowerCase().startsWith('pm_'),
         );
 
         if (pmPermissions.length > 0) {
           // Trả về null để báo hiệu cần lọc theo categories/brands
           return null;
         }
-        
+
         return []; // PM không có permissions hợp lệ
       }
     }
@@ -712,7 +731,10 @@ export class OrderService {
   }
 
   // ✅ Tìm kiếm products theo product_code
-  async searchProducts(query: string, limit: number = 10): Promise<{ products: any[] }> {
+  async searchProducts(
+    query: string,
+    limit: number = 10,
+  ): Promise<{ products: any[] }> {
     try {
       if (!query || query.trim().length < 1) {
         return { products: [] };
@@ -728,7 +750,7 @@ export class OrderService {
         .orderBy('product.product_code', 'ASC')
         .limit(limit)
         .getMany();
-      
+
       return { products };
     } catch (error) {
       this.logger.error('❌ Error searching products:', error);
@@ -737,12 +759,16 @@ export class OrderService {
   }
 
   // ✅ Cập nhật mã sản phẩm cho order detail
-  async updateProductCode(orderDetailId: number, productCode: string, user: any): Promise<{ success: boolean; message: string }> {
+  async updateProductCode(
+    orderDetailId: number,
+    productCode: string,
+    user: any,
+  ): Promise<{ success: boolean; message: string }> {
     try {
       // Tìm order detail
       const orderDetail = await this.orderDetailRepository.findOne({
         where: { id: orderDetailId },
-        relations: ['product', 'order', 'order.sale_by']
+        relations: ['product', 'order', 'order.sale_by'],
       });
 
       if (!orderDetail) {
@@ -752,11 +778,15 @@ export class OrderService {
       // Kiểm tra quyền: admin, view role, manager của phòng ban, hoặc người tạo đơn hàng
       if (user && user.roles) {
         const roleNames = (user.roles || []).map((r: any) =>
-          typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
+          typeof r === 'string'
+            ? r.toLowerCase()
+            : (r.name || '').toLowerCase(),
         );
         const isAdminUser = roleNames.includes('admin');
         const isViewRole = roleNames.includes('view');
-        const isManager = roleNames.some((r: string) => r.startsWith('manager-'));
+        const isManager = roleNames.some((r: string) =>
+          r.startsWith('manager-'),
+        );
         const isPM = roleNames.includes('pm');
         const isOwner = orderDetail.order?.sale_by?.id === user.id;
 
@@ -765,27 +795,37 @@ export class OrderService {
         // Kiểm tra manager permission
         if (!hasPermission && isManager) {
           const allowedUserIds = await this.getUserIdsByRole(user);
-          hasPermission = allowedUserIds && allowedUserIds.includes(orderDetail.order?.sale_by?.id);
+          hasPermission =
+            allowedUserIds &&
+            allowedUserIds.includes(orderDetail.order?.sale_by?.id);
         }
 
         // Kiểm tra PM permission
         if (!hasPermission && isPM) {
           const allowedUserIds = await this.getPMUserIdsOnly(user);
           if (allowedUserIds && allowedUserIds.length > 0) {
-            hasPermission = allowedUserIds.includes(orderDetail.order?.sale_by?.id);
+            hasPermission = allowedUserIds.includes(
+              orderDetail.order?.sale_by?.id,
+            );
           }
         }
 
         if (!hasPermission) {
-          return { success: false, message: 'Bạn không có quyền chỉnh sửa đơn hàng này' };
+          return {
+            success: false,
+            message: 'Bạn không có quyền chỉnh sửa đơn hàng này',
+          };
         }
       } else {
-        return { success: false, message: 'Không xác định được quyền truy cập' };
+        return {
+          success: false,
+          message: 'Không xác định được quyền truy cập',
+        };
       }
 
       // Tìm hoặc tạo product với mã sản phẩm mới
       let product = await this.productRepository.findOne({
-        where: { productCode: productCode.trim() }
+        where: { productCode: productCode.trim() },
       });
 
       if (!product) {
@@ -793,7 +833,7 @@ export class OrderService {
         product = this.productRepository.create({
           productCode: productCode.trim(),
           productName: `Sản phẩm ${productCode.trim()}`, // Tên mặc định
-          description: `Sản phẩm được tạo tự động với mã ${productCode.trim()}`
+          description: `Sản phẩm được tạo tự động với mã ${productCode.trim()}`,
         });
         product = await this.productRepository.save(product);
       }
@@ -805,7 +845,7 @@ export class OrderService {
       // Cập nhật order detail với product mới
       orderDetail.product = product;
       orderDetail.product_id = product.id;
-      
+
       await this.orderDetailRepository.save(orderDetail);
 
       // ✅ Ghi log thay đổi mã sản phẩm
@@ -818,7 +858,7 @@ export class OrderService {
           user_id: user?.id || null,
           user_name: user?.fullName || user?.username || 'Unknown',
           order_detail_id: orderDetailId,
-          order_id: orderDetail.order?.id || null
+          order_id: orderDetail.order?.id || null,
         };
 
         // Tạo thư mục logs nếu chưa tồn tại
@@ -837,7 +877,6 @@ export class OrderService {
         // Ghi log vào file JSONL (mỗi dòng là một JSON object)
         const logLine = JSON.stringify(logData) + '\n';
         fs.appendFileSync(logFilePath, logLine, 'utf8');
-
       } catch (logError) {
         this.logger.error('Error writing product code change log:', logError);
         // Không throw error vì đây chỉ là logging, không ảnh hưởng đến chức năng chính
@@ -846,11 +885,15 @@ export class OrderService {
       return { success: true, message: 'Cập nhật mã sản phẩm thành công' };
     } catch (error) {
       this.logger.error('Error updating product code:', error);
-      return { success: false, message: 'Có lỗi xảy ra khi cập nhật mã sản phẩm' };
+      return {
+        success: false,
+        message: 'Có lỗi xảy ra khi cập nhật mã sản phẩm',
+      };
     }
   }
 
-  // Helper method để parse customer_id từ metadata JSON
+  // DEPRECATED: Helper method để parse customer_id từ metadata JSON
+  // Use generated column meta_customer_id instead for better performance
   private extractCustomerIdFromMetadata(metadata: any): string | null {
     try {
       if (typeof metadata === 'string') {
@@ -870,13 +913,45 @@ export class OrderService {
     }
   }
 
-  // Helper method để lấy category và brand IDs từ PM permissions
+  // NEW: Helper method to calculate days remaining using generated column
+  private getDaysRemainingFromExpiry(expiryDays: number | null): number | null {
+    if (!expiryDays) return null;
+    
+    // Calculate current days since epoch (MySQL TO_DAYS format)
+    const currentDays = Math.floor(Date.now() / (1000 * 60 * 60 * 24)) + 719163; // JS epoch to MySQL days offset
+    return expiryDays - currentDays;
+  }
+
+  // NEW: Helper methods for expiry_days range queries (optimized for index usage)
+  private getExpiryDaysForWarningLevels(levels: number[]): string {
+    // Convert warning levels to expiry_days values for better index usage
+    // level 0 = expires today = TO_DAYS(CURDATE())  
+    // level -1 = expired yesterday = TO_DAYS(CURDATE()) - 1
+    // level 1 = expires tomorrow = TO_DAYS(CURDATE()) + 1
+    const expiryDaysValues = levels.map(level => `(TO_DAYS(CURDATE()) + ${level})`).join(',');
+    return `details.expiry_days IN (${expiryDaysValues})`;
+  }
+
+  private getExpiryDaysRangeCondition(fromLevel: number, toLevel: number): string {
+    // For range queries: expiry_days BETWEEN (TO_DAYS(CURDATE()) + fromLevel) AND (TO_DAYS(CURDATE()) + toLevel)
+    return `details.expiry_days BETWEEN (TO_DAYS(CURDATE()) + ${fromLevel}) AND (TO_DAYS(CURDATE()) + ${toLevel})`;
+  }
+
+  private getExpiredTodayCondition(): string {
+    // Today's expiry: expiry_days = TO_DAYS(CURDATE())
+    return `details.expiry_days = TO_DAYS(CURDATE())`;
+  }
+
+  private getOverdueCondition(): string {
+    // Overdue: expiry_days < TO_DAYS(CURDATE())
+    return `details.expiry_days < TO_DAYS(CURDATE())`;
+  }  // Helper method để lấy category và brand IDs từ PM permissions
   private async getCategoryAndBrandIdsFromPMPermissions(user: any): Promise<{
     categoryIds: number[];
     brandIds: number[];
   }> {
     const permissions = (user.permissions || []).map((p: any) =>
-      typeof p === 'string' ? p : (p.name || ''),
+      typeof p === 'string' ? p : p.name || '',
     );
     const pmPermissions = permissions.filter((p: string) =>
       p.toLowerCase().startsWith('pm_'),
@@ -944,7 +1019,9 @@ export class OrderService {
     ]);
     const brandIds = brands
       .filter((b) =>
-        brandSlugs.includes(slugify(b.name || '', { lower: true, strict: true })),
+        brandSlugs.includes(
+          slugify(b.name || '', { lower: true, strict: true }),
+        ),
       )
       .map((b) => b.id);
     const categoryIds = categories
@@ -997,7 +1074,10 @@ export class OrderService {
         r.replace('view-', ''),
       );
       const viewDepartments = await this.departmentRepository.find({
-        where: viewDepartmentSlugs.map((slug) => ({ slug, deletedAt: IsNull() })),
+        where: viewDepartmentSlugs.map((slug) => ({
+          slug,
+          deletedAt: IsNull(),
+        })),
         relations: ['users'],
       });
       viewDepartments.forEach((dept) => {
@@ -1054,7 +1134,6 @@ export class OrderService {
           r.replace('pm-', ''),
         );
 
-
         const departments = await this.departmentRepository
           .find({
             where: departmentSlugs.map((slug) => ({
@@ -1088,7 +1167,6 @@ export class OrderService {
               label: u.fullName || u.username,
             })),
         }));
-
       } else if (managerRoles.length > 0) {
         // Manager: chỉ lấy department của mình và users trong đó, chỉ lấy department có server_ip hợp lệ
         const departmentSlugs = managerRoles.map((r: string) =>
@@ -1164,6 +1242,101 @@ export class OrderService {
           }
         }
       }
+    }
+
+    return result;
+  }
+
+  async getFilterOptionsForPMWithoutProduct(user?: any): Promise<{
+    departments: Array<{
+      value: number;
+      label: string;
+      users: Array<{ value: number; label: string }>;
+    }>;
+    products: Array<{ value: number; label: string }>;
+  }> {
+    const result: {
+      departments: Array<{
+        value: number;
+        label: string;
+        users: Array<{ value: number; label: string }>;
+      }>;
+      products: Array<{ value: number; label: string }>;
+    } = { departments: [], products: [] };
+
+    if (!user) return result;
+
+    const roleNames = (user.roles || []).map((r: any) =>
+      typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
+    );
+
+    // ✅ KEY DIFFERENCE: Không lấy products vì đây là đơn hàng không có product_id
+    result.products = [];
+
+    // Lấy view user IDs để loại trừ
+    const viewUserIds = new Set<number>();
+    const viewRoles = roleNames.filter((r: string) => r.startsWith('view-'));
+    if (viewRoles.length > 0) {
+      const viewDepartmentSlugs = viewRoles.map((r: string) =>
+        r.replace('view-', ''),
+      );
+      const viewDepartments = await this.departmentRepository.find({
+        where: viewDepartmentSlugs.map((slug) => ({
+          slug,
+          deletedAt: IsNull(),
+        })),
+        relations: ['users'],
+      });
+      viewDepartments.forEach((dept) => {
+        dept.users?.forEach((u) => {
+          if (!u.deletedAt) viewUserIds.add(u.id);
+        });
+      });
+    }
+
+    // ✅ KEY DIFFERENCE: Tất cả PM xem được tất cả departments - không filter theo permissions
+    // Chỉ check basic role để đảm bảo user có quyền PM
+    const isAdminUser = roleNames.includes('admin');
+    const isViewRole = roleNames.includes('view');
+    const isPM = roleNames.includes('pm');
+
+    if (isAdminUser || isViewRole || isPM) {
+      // Admin/View/PM: lấy tất cả departments có server_ip hợp lệ
+      const departments = await this.departmentRepository
+        .find({
+          where: {
+            deletedAt: IsNull(),
+            server_ip: Not(IsNull()),
+          },
+          relations: ['users'],
+          order: { name: 'ASC' },
+        })
+        .then((departments) =>
+          departments
+            .filter((dep) => dep.server_ip && dep.server_ip.trim() !== '')
+            .map((dep) => ({
+              ...dep,
+              users: (dep.users || []).filter((u) => !u.deletedAt),
+            })),
+        );
+
+      result.departments = departments.map((dept) => ({
+        value: dept.id,
+        label: dept.name,
+        slug: dept.slug,
+        users: (dept.users || [])
+          .filter((u) => {
+            const uid = Number(u.id);
+            return !u.deletedAt && !viewUserIds.has(uid);
+          })
+          .map((u) => ({
+            value: u.id,
+            label: u.fullName || u.username,
+          })),
+      }));
+    } else {
+      // User không có quyền PM → trả về empty
+      result.departments = [];
     }
 
     return result;
@@ -1455,7 +1628,8 @@ export class OrderService {
     return result;
   }
 
-  // Thêm method helper để tính toán dynamic extended
+  // DEPRECATED: Dynamic extended calculation - now using generated column expiry_days
+  // This method is kept for backward compatibility but should use expiry_days column instead
   private calcDynamicExtended(
     createdAt: Date | null,
     originalExtended: number | null,
@@ -1465,6 +1639,8 @@ export class OrderService {
         return typeof originalExtended === 'number' ? originalExtended : null;
       }
 
+      // Use generated column calculation: expiry_days - TO_DAYS(CURDATE())
+      // This is more efficient than JS date calculation
       const createdDate = new Date(createdAt);
       createdDate.setHours(0, 0, 0, 0); // Reset time to start of day
 
@@ -1666,7 +1842,8 @@ export class OrderService {
   //           if (set) for (const cid of set) blacklistedSet.add(cid);
   //         }
   //         const filterFn = (od: OrderDetail) => {
-  //           const cid = this.extractCustomerIdFromMetadata(od.metadata);
+  //           // OPTIMIZED: Use generated column meta_customer_id instead of extractCustomerIdFromMetadata
+  //           const cid = od.meta_customer_id;
   //           return !cid || !blacklistedSet.has(cid);
   //         };
   //         filteredData = filteredData.filter(filterFn);
@@ -1675,7 +1852,8 @@ export class OrderService {
   //       if (userBlacklisted && userBlacklisted.length > 0) {
   //         const set = new Set(userBlacklisted);
   //         const filterFn = (od: OrderDetail) => {
-  //           const cid = this.extractCustomerIdFromMetadata(od.metadata);
+  //           // OPTIMIZED: Use generated column meta_customer_id instead of extractCustomerIdFromMetadata
+  //           const cid = od.meta_customer_id;
   //           return !cid || !set.has(cid);
   //         };
   //         filteredData = filteredData.filter(filterFn);
@@ -1727,12 +1905,13 @@ export class OrderService {
   //       return priceDiff;
   //     });
   //   } else {
-  //     // Mặc định: Sort theo dynamicExtended
+  //     // OPTIMIZED: Sort using generated column expiry_days for better performance
+  //     // Note: expiry_days - TO_DAYS(CURDATE()) gives remaining days (same as dynamicExtended)
   //     filteredData.sort((a, b) => {
-  //       const aExtended =
-  //         a.dynamicExtended !== null ? a.dynamicExtended : -999999;
-  //       const bExtended =
-  //         b.dynamicExtended !== null ? b.dynamicExtended : -999999;
+  //       // Calculate remaining days from generated column expiry_days
+  //       const currentDays = Math.floor(Date.now() / (1000 * 60 * 60 * 24)) + 719163; // JS epoch to MySQL days offset
+  //       const aExtended = a.expiry_days ? a.expiry_days - currentDays : -999999;
+  //       const bExtended = b.expiry_days ? b.expiry_days - currentDays : -999999;
 
   //       const extendedDiff =
   //         actualSortDirection === 'asc'
@@ -1827,16 +2006,6 @@ export class OrderService {
     // Build query: compute dynamicExtended in SQL to allow filtering/sorting in DB
     const dynamicExpr = `DATEDIFF(DATE_ADD(DATE(details.created_at), INTERVAL COALESCE(details.extended,0) DAY), CURDATE())`;
 
-    // Compute conversation_start and conversation_end
-    const convoStartExpr = `(
-      SELECT MIN(STR_TO_DATE(LEFT(JSON_UNQUOTE(JSON_EXTRACT(m.value, '$.timestamp')), 19), '%Y-%m-%dT%H:%i:%s'))
-      FROM JSON_TABLE(details.metadata, '$.messages[*]' COLUMNS (value JSON PATH '$')) AS m
-    )`;
-    const convoEndExpr = `(
-      SELECT MAX(STR_TO_DATE(LEFT(JSON_UNQUOTE(JSON_EXTRACT(m.value, '$.timestamp')), 19), '%Y-%m-%dT%H:%i:%s'))
-      FROM JSON_TABLE(details.metadata, '$.messages[*]' COLUMNS (value JSON PATH '$')) AS m
-    )`;
-
     const qb = this.orderDetailRepository
       .createQueryBuilder('details')
       .leftJoinAndSelect('details.order', 'order')
@@ -1845,9 +2014,7 @@ export class OrderService {
       .leftJoinAndSelect('product.brand', 'brand')
       .leftJoinAndSelect('order.sale_by', 'sale_by')
       .leftJoinAndSelect('sale_by.departments', 'sale_by_departments')
-      .addSelect(`${dynamicExpr}`, 'dynamicExtended')
-      .addSelect(convoStartExpr, 'conversation_start')
-      .addSelect(convoEndExpr, 'conversation_end');
+      .addSelect(`${dynamicExpr}`, 'dynamicExtended');
 
     // ✅ Logic PM thuần túy: không check manager
     let allowedUserIds;
@@ -1857,7 +2024,7 @@ export class OrderService {
       );
       const isAdminUser = roleNames.includes('admin');
       const isViewRole = roleNames.includes('view');
-      
+
       if (isAdminUser || isViewRole) {
         // Admin hoặc view role: xem tất cả
         allowedUserIds = null; // null = không filter theo user
@@ -1896,88 +2063,104 @@ export class OrderService {
       );
       const isAdminUser = roleNames.includes('admin');
       const isViewRole = roleNames.includes('view');
-      
-      if (!isAdminUser && !isViewRole && (!brandCategories || !brandCategories.trim())) {
+
+      if (
+        !isAdminUser &&
+        !isViewRole &&
+        (!brandCategories || !brandCategories.trim())
+      ) {
         // Chỉ PM có pm_permissions mới cần lọc theo categories/brands
         const permissions = (user.permissions || []).map((p: any) =>
-          typeof p === 'string' ? p : (p.name || ''),
+          typeof p === 'string' ? p : p.name || '',
         );
-        
-        const pmPermissions = permissions.filter((p: string) => 
-          p.toLowerCase().startsWith('pm_')
+
+        const pmPermissions = permissions.filter((p: string) =>
+          p.toLowerCase().startsWith('pm_'),
         );
 
         if (pmPermissions.length > 0) {
           // ✅ Kiểm tra chế độ PM từ query parameter
           const pmCustomMode = filters.pmCustomMode === 'true';
-          
+
           if (pmCustomMode) {
             // ✅ Chế độ tổ hợp riêng: xử lý từng role riêng biệt từ rolePermissions parameter
-            this.logger.log('🔍 [Order PM Custom Mode] Starting role-based combination logic');
-            
+            this.logger.log(
+              '🔍 [Order PM Custom Mode] Starting role-based combination logic',
+            );
+
             const allCombinations: string[] = [];
             const allSinglePermissions: string[] = [];
-            
+
             // Parse rolePermissions từ query parameter
             if (filters.rolePermissions) {
               try {
                 const rolePermissionsData = JSON.parse(filters.rolePermissions);
-                
+
                 // Xử lý từng role riêng biệt
-                Object.entries(rolePermissionsData).forEach(([roleName, roleData]: [string, any]) => {
-                  const roleBrands = roleData.brands || [];
-                  const roleCategories = roleData.categories || [];
-                  
-                  // Convert permissions to slugs
-                  const brandSlugs: string[] = [];
-                  const categorySlugs: string[] = [];
-                  
-                  roleBrands.forEach((brand: string) => {
-                    if (brand.startsWith('pm_brand_')) {
-                      const slug = slugify(brand.replace('pm_brand_', ''), { lower: true, strict: true });
-                      brandSlugs.push(slug);
-                    }
-                  });
-                  
-                  roleCategories.forEach((category: string) => {
-                    if (category.startsWith('pm_cat_')) {
-                      const slug = slugify(category.replace('pm_cat_', ''), { lower: true, strict: true });
-                      categorySlugs.push(slug);
-                    }
-                  });
-                  
-                  // Tổ hợp chỉ trong role này
-                  if (categorySlugs.length > 0 && brandSlugs.length > 0) {
-                    categorySlugs.forEach(cat => {
-                      brandSlugs.forEach(brand => {
-                        const combination = `${cat}+${brand}`;
-                        allCombinations.push(combination);
-                      });
+                Object.entries(rolePermissionsData).forEach(
+                  ([roleName, roleData]: [string, any]) => {
+                    const roleBrands = roleData.brands || [];
+                    const roleCategories = roleData.categories || [];
+
+                    // Convert permissions to slugs
+                    const brandSlugs: string[] = [];
+                    const categorySlugs: string[] = [];
+
+                    roleBrands.forEach((brand: string) => {
+                      if (brand.startsWith('pm_brand_')) {
+                        const slug = slugify(brand.replace('pm_brand_', ''), {
+                          lower: true,
+                          strict: true,
+                        });
+                        brandSlugs.push(slug);
+                      }
                     });
-                  } else {
-                    // Role chỉ có 1 loại permission
-                    const singleSlugs = [...categorySlugs, ...brandSlugs];
-                    allSinglePermissions.push(...singleSlugs);
-                  }
-                });
-                
+
+                    roleCategories.forEach((category: string) => {
+                      if (category.startsWith('pm_cat_')) {
+                        const slug = slugify(category.replace('pm_cat_', ''), {
+                          lower: true,
+                          strict: true,
+                        });
+                        categorySlugs.push(slug);
+                      }
+                    });
+
+                    // Tổ hợp chỉ trong role này
+                    if (categorySlugs.length > 0 && brandSlugs.length > 0) {
+                      categorySlugs.forEach((cat) => {
+                        brandSlugs.forEach((brand) => {
+                          const combination = `${cat}+${brand}`;
+                          allCombinations.push(combination);
+                        });
+                      });
+                    } else {
+                      // Role chỉ có 1 loại permission
+                      const singleSlugs = [...categorySlugs, ...brandSlugs];
+                      allSinglePermissions.push(...singleSlugs);
+                    }
+                  },
+                );
               } catch (error) {
-                this.logger.error('❌ [Order PM Custom Mode] Error parsing rolePermissions:', error);
+                this.logger.error(
+                  '❌ [Order PM Custom Mode] Error parsing rolePermissions:',
+                  error,
+                );
               }
             }
-            
+
             // Áp dụng filter
             if (allCombinations.length > 0) {
               qb.andWhere(
                 'CONCAT(category.slug, "+", brand.slug) IN (:...allCombinations)',
-                { allCombinations }
+                { allCombinations },
               );
             }
-            
+
             if (allSinglePermissions.length > 0) {
               qb.andWhere(
                 '(category.slug IN (:...allSinglePermissions) OR brand.slug IN (:...allSinglePermissions))',
-                { allSinglePermissions }
+                { allSinglePermissions },
               );
             }
           } else {
@@ -1985,8 +2168,8 @@ export class OrderService {
             const categories: string[] = [];
             const brands: string[] = [];
             const combinations: string[] = [];
-            
-            pmPermissions.forEach(p => {
+
+            pmPermissions.forEach((p) => {
               const lower = p.toLowerCase();
               if (lower.startsWith('pm_cat_')) {
                 categories.push(lower);
@@ -1994,26 +2177,26 @@ export class OrderService {
                 brands.push(lower);
               }
             });
-            
+
             if (categories.length > 0 && brands.length > 0) {
               // ✅ PM có cả categories và brands: chỉ lấy combination (đúng cả 2)
-              categories.forEach(cat => {
-                brands.forEach(brand => {
+              categories.forEach((cat) => {
+                brands.forEach((brand) => {
                   combinations.push(`${cat}+${brand}`);
                 });
               });
-              
+
               // Chỉ check combination, không check riêng lẻ
               qb.andWhere(
                 'CONCAT(CONCAT("pm_cat_", category.slug), "+", CONCAT("pm_brand_", brand.slug)) IN (:...combinations)',
-                { combinations }
+                { combinations },
               );
             } else {
               // ✅ PM chỉ có 1 loại: check riêng lẻ
               const allPermissions = [...categories, ...brands];
               qb.andWhere(
                 '(CONCAT("pm_cat_", category.slug) IN (:...allPermissions) OR CONCAT("pm_brand_", brand.slug) IN (:...allPermissions))',
-                { allPermissions }
+                { allPermissions },
               );
             }
           }
@@ -2031,49 +2214,71 @@ export class OrderService {
 
     // ✅ Xử lý filters.brands và filters.categories riêng biệt (từ 2 dropdown)
     // CHỈ áp dụng khi user đã chọn brands/categories cụ thể
-    if ((filters.brands && filters.brands.trim()) || (filters.categories && filters.categories.trim())) {
-      this.logger.log('🔍 [Order Filter] User selected specific brands/categories, applying targeted filter');
-      
+    if (
+      (filters.brands && filters.brands.trim()) ||
+      (filters.categories && filters.categories.trim())
+    ) {
+      this.logger.log(
+        '🔍 [Order Filter] User selected specific brands/categories, applying targeted filter',
+      );
+
       // Lấy tất cả permissions của user để kiểm tra quyền
       const permissions = (user.permissions || []).map((p: any) =>
-        typeof p === 'string' ? p : (p.name || ''),
+        typeof p === 'string' ? p : p.name || '',
       );
-      
-      const pmPermissions = permissions.filter((p: string) => 
-        p.toLowerCase().startsWith('pm_')
+
+      const pmPermissions = permissions.filter((p: string) =>
+        p.toLowerCase().startsWith('pm_'),
       );
 
       if (pmPermissions.length > 0) {
         // Tạo danh sách brands/categories mà user có quyền
         const allowedBrands: string[] = [];
         const allowedCategories: string[] = [];
-        
-        pmPermissions.forEach(permission => {
+
+        pmPermissions.forEach((permission) => {
           if (permission.toLowerCase().startsWith('pm_brand_')) {
-            const slug = slugify(permission.replace('pm_brand_', ''), { lower: true, strict: true });
+            const slug = slugify(permission.replace('pm_brand_', ''), {
+              lower: true,
+              strict: true,
+            });
             allowedBrands.push(slug);
           } else if (permission.toLowerCase().startsWith('pm_cat_')) {
-            const slug = slugify(permission.replace('pm_cat_', ''), { lower: true, strict: true });
+            const slug = slugify(permission.replace('pm_cat_', ''), {
+              lower: true,
+              strict: true,
+            });
             allowedCategories.push(slug);
           }
         });
 
         // Áp dụng filter brands (chỉ trong phạm vi quyền được phép)
         if (filters.brands && filters.brands.trim()) {
-          const brandList = filters.brands.split(',').map(b => b.trim()).filter(Boolean);
+          const brandList = filters.brands
+            .split(',')
+            .map((b) => b.trim())
+            .filter(Boolean);
           if (brandList.length > 0) {
-            const brandSlugs = brandList.map(brand => 
-              slugify(brand, { lower: true, strict: true })
+            const brandSlugs = brandList.map((brand) =>
+              slugify(brand, { lower: true, strict: true }),
             );
-            
+
             // Chỉ lọc brands mà user có quyền
-            const validBrandSlugs = brandSlugs.filter(slug => allowedBrands.includes(slug));
+            const validBrandSlugs = brandSlugs.filter((slug) =>
+              allowedBrands.includes(slug),
+            );
             if (validBrandSlugs.length > 0) {
-              qb.andWhere('brand.slug IN (:...validBrandSlugs)', { validBrandSlugs });
-              this.logger.log(`🔍 [Order Filter] Applied brand filter (within permissions): ${validBrandSlugs.join(', ')}`);
+              qb.andWhere('brand.slug IN (:...validBrandSlugs)', {
+                validBrandSlugs,
+              });
+              this.logger.log(
+                `🔍 [Order Filter] Applied brand filter (within permissions): ${validBrandSlugs.join(', ')}`,
+              );
             } else {
               // User chọn brands không có quyền → trả về empty
-              this.logger.log('🔍 [Order Filter] User selected brands without permission, returning empty');
+              this.logger.log(
+                '🔍 [Order Filter] User selected brands without permission, returning empty',
+              );
               return { data: [], total: 0, page, pageSize };
             }
           }
@@ -2081,20 +2286,31 @@ export class OrderService {
 
         // Áp dụng filter categories (chỉ trong phạm vi quyền được phép)
         if (filters.categories && filters.categories.trim()) {
-          const categoryList = filters.categories.split(',').map(c => c.trim()).filter(Boolean);
+          const categoryList = filters.categories
+            .split(',')
+            .map((c) => c.trim())
+            .filter(Boolean);
           if (categoryList.length > 0) {
-            const categorySlugs = categoryList.map(category => 
-              slugify(category, { lower: true, strict: true })
+            const categorySlugs = categoryList.map((category) =>
+              slugify(category, { lower: true, strict: true }),
             );
-            
+
             // Chỉ lọc categories mà user có quyền
-            const validCategorySlugs = categorySlugs.filter(slug => allowedCategories.includes(slug));
+            const validCategorySlugs = categorySlugs.filter((slug) =>
+              allowedCategories.includes(slug),
+            );
             if (validCategorySlugs.length > 0) {
-              qb.andWhere('category.slug IN (:...validCategorySlugs)', { validCategorySlugs });
-              this.logger.log(`🔍 [Order Filter] Applied category filter (within permissions): ${validCategorySlugs.join(', ')}`);
+              qb.andWhere('category.slug IN (:...validCategorySlugs)', {
+                validCategorySlugs,
+              });
+              this.logger.log(
+                `🔍 [Order Filter] Applied category filter (within permissions): ${validCategorySlugs.join(', ')}`,
+              );
             } else {
               // User chọn categories không có quyền → trả về empty
-              this.logger.log('🔍 [Order Filter] User selected categories without permission, returning empty');
+              this.logger.log(
+                '🔍 [Order Filter] User selected categories without permission, returning empty',
+              );
               return { data: [], total: 0, page, pageSize };
             }
           }
@@ -2105,7 +2321,7 @@ export class OrderService {
     // Apply other filters (same as findAllPaginatedInternal)
     // ... (rest of the filtering logic will be the same)
     // For now, let me continue with the basic structure and add the rest later
-    
+
     // Apply search
     if (search && search.trim()) {
       const searchTerm = `%${String(search).trim()}%`;
@@ -2117,7 +2333,10 @@ export class OrderService {
 
     // Apply status filter
     if (status && status.trim()) {
-      const statusList = status.split(',').map(s => s.trim()).filter(Boolean);
+      const statusList = status
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
       if (statusList.length > 0) {
         qb.andWhere('details.status IN (:...statusList)', { statusList });
       }
@@ -2129,15 +2348,21 @@ export class OrderService {
     }
 
     if (dateRange && dateRange.start && dateRange.end) {
-      qb.andWhere('DATE(details.created_at) >= :startDate AND DATE(details.created_at) <= :endDate', {
-        startDate: dateRange.start,
-        endDate: dateRange.end,
-      });
+      qb.andWhere(
+        'DATE(details.created_at) >= :startDate AND DATE(details.created_at) <= :endDate',
+        {
+          startDate: dateRange.start,
+          endDate: dateRange.end,
+        },
+      );
     }
 
     // Apply department filter
     if (departments && departments.trim()) {
-      const deptList = departments.split(',').map(d => d.trim()).filter(Boolean);
+      const deptList = departments
+        .split(',')
+        .map((d) => d.trim())
+        .filter(Boolean);
       if (deptList.length > 0) {
         qb.andWhere('sale_by_departments.id IN (:...deptList)', { deptList });
       }
@@ -2145,7 +2370,10 @@ export class OrderService {
 
     // Apply employee filter
     if (employees && employees.trim()) {
-      const empList = employees.split(',').map(e => e.trim()).filter(Boolean);
+      const empList = employees
+        .split(',')
+        .map((e) => e.trim())
+        .filter(Boolean);
       if (empList.length > 0) {
         qb.andWhere('sale_by.id IN (:...empList)', { empList });
       }
@@ -2153,29 +2381,36 @@ export class OrderService {
 
     // Apply brand/category filters
     if (brandCategories && brandCategories.trim()) {
-      const brandCatList = brandCategories.split(',').map(bc => bc.trim()).filter(Boolean);
+      const brandCatList = brandCategories
+        .split(',')
+        .map((bc) => bc.trim())
+        .filter(Boolean);
       if (brandCatList.length > 0) {
         qb.andWhere(
           '(CONCAT("pm_cat_", category.slug) IN (:...brandCatList) OR CONCAT("pm_brand_", brand.slug) IN (:...brandCatList) OR CONCAT(CONCAT("pm_cat_", category.slug), "+", CONCAT("pm_brand_", brand.slug)) IN (:...brandCatList))',
-          { brandCatList }
+          { brandCatList },
         );
       }
     }
 
-    // Warning level filter based on dynamicExtended (match manager order logic)
+    // Warning level filter - OPTIMIZED: Use expiry_days with range for better index usage
     if (warningLevel) {
       const levels = warningLevel
         .split(',')
         .map((l) => parseInt(l.trim(), 10))
         .filter((n) => !isNaN(n));
       if (levels.length > 0) {
-        qb.andWhere(`${dynamicExpr} IN (:...levels)`, { levels });
+        // Convert levels to expiry_days values: expiry_days = TO_DAYS(CURDATE()) + level
+        const expiryDaysValues = levels.map(level => `(TO_DAYS(CURDATE()) + ${level})`).join(',');
+        qb.andWhere(`details.expiry_days IN (${expiryDaysValues})`);
       }
     }
 
     // Apply quantity filter
     if (quantity && !isNaN(Number(quantity))) {
-      qb.andWhere('details.quantity >= :quantity', { quantity: Number(quantity) });
+      qb.andWhere('details.quantity >= :quantity', {
+        quantity: Number(quantity),
+      });
     }
 
     // Apply conversation type filter (group vs personal) based on metadata.conversation_info.is_group
@@ -2191,20 +2426,18 @@ export class OrderService {
         tokens.includes('private') ||
         tokens.includes('individual');
       if (wantsGroup && !wantsPersonal) {
-        qb.andWhere(
-          `JSON_EXTRACT(details.metadata, '$.conversation_info.is_group') = true`,
-        );
+        qb.andWhere('details.meta_is_group = 1');
       } else if (wantsPersonal && !wantsGroup) {
-        qb.andWhere(
-          `JSON_EXTRACT(details.metadata, '$.conversation_info.is_group') = false`,
-        );
+        qb.andWhere('details.meta_is_group = 0');
       }
       // if both selected, do not add filter (show all)
     }
 
-    // Apply blacklist filter
+    // Apply blacklist filter - OPTIMIZED: Use generated column meta_customer_id
     if (blacklistForSql && blacklistForSql.length > 0) {
-      qb.andWhere('JSON_UNQUOTE(JSON_EXTRACT(details.metadata, "$.customer_id")) NOT IN (:...blacklistForSql)', { blacklistForSql });
+      qb.andWhere('details.meta_customer_id NOT IN (:...blacklistForSql)', {
+        blacklistForSql,
+      });
     }
 
     // Apply hidden filter
@@ -2214,25 +2447,42 @@ export class OrderService {
 
     // Sorting Logic - Only prioritize dynamicExtended when no sortField specified
     const dir = sortDirection?.toLowerCase() === 'asc' ? 'ASC' : 'DESC';
-    
+
     if (sortField) {
       // When sortField is specified, sort by that field only (no dynamicExtended priority)
       if (sortField === 'created_at') {
-      qb.orderBy('details.created_at', dir).addOrderBy('details.id', 'DESC');
+        qb.orderBy('details.created_at', dir).addOrderBy('details.id', 'DESC');
       } else if (sortField === 'conversation_start') {
-      qb.orderBy('conversation_start', dir).addOrderBy('details.created_at', 'DESC');
+        qb.orderBy('details.conversation_start', dir).addOrderBy(
+          'details.created_at',
+          'DESC',
+        );
       } else if (sortField === 'conversation_end') {
-      qb.orderBy('conversation_end', dir).addOrderBy('details.created_at', 'DESC');
+        qb.orderBy('details.conversation_end', dir).addOrderBy(
+          'details.created_at',
+          'DESC',
+        );
       } else if (sortField === 'quantity') {
-      qb.orderBy('details.quantity', dir).addOrderBy('details.created_at', 'DESC');
+        qb.orderBy('details.quantity', dir).addOrderBy(
+          'details.created_at',
+          'DESC',
+        );
       } else if (sortField === 'unit_price') {
-      qb.orderBy('details.unit_price', dir).addOrderBy('details.created_at', 'DESC');
+        qb.orderBy('details.unit_price', dir).addOrderBy(
+          'details.created_at',
+          'DESC',
+        );
       } else if (sortField === 'extended' || sortField === 'dynamicExtended') {
-      qb.orderBy('dynamicExtended', dir).addOrderBy('details.created_at', 'DESC');
+        qb.orderBy('dynamicExtended', dir).addOrderBy(
+          'details.created_at',
+          'DESC',
+        );
       }
     } else {
-      // Default sort: prioritize dynamicExtended (ngày_tạo + extend - ngày_hiện_tại)
-      qb.orderBy('dynamicExtended', 'DESC').addOrderBy('conversation_start', 'DESC').addOrderBy('details.created_at', 'DESC');
+      // OPTIMIZED: Default sort using expiry_days for better performance and index usage
+      qb.orderBy('details.expiry_days', 'DESC')
+        .addOrderBy('details.conversation_start', 'DESC')
+        .addOrderBy('details.created_at', 'DESC');
     }
 
     // Apply pagination
@@ -2249,7 +2499,10 @@ export class OrderService {
     };
   }
 
-  private async findAllPaginatedInternal(filters: OrderFilters, enablePMPermissions: boolean): Promise<{
+  private async findAllPaginatedInternal(
+    filters: OrderFilters,
+    enablePMPermissions: boolean,
+  ): Promise<{
     data: OrderDetail[];
     total: number;
     page: number;
@@ -2289,7 +2542,9 @@ export class OrderService {
       );
       const isAdminUser = roleNames.includes('admin');
       const isManager = roleNames.some((r: string) => r.startsWith('manager-'));
-      const isPM = roleNames.some((r: string) => r.startsWith('pm-') || r === 'pm');
+      const isPM = roleNames.some(
+        (r: string) => r.startsWith('pm-') || r === 'pm',
+      );
 
       if (!isAdminUser) {
         if (isManager && !isPM) {
@@ -2312,22 +2567,10 @@ export class OrderService {
       }
     }
 
-    // Build query: compute dynamicExtended in SQL to allow filtering/sorting in DB
-    // MySQL expression: DATEDIFF(DATE_ADD(DATE(details.created_at), INTERVAL COALESCE(details.extended,0) DAY), CURDATE())
-    const dynamicExpr = `DATEDIFF(DATE_ADD(DATE(details.created_at), INTERVAL COALESCE(details.extended,0) DAY), CURDATE())`;
-
-    // Compute conversation_start and conversation_end: try to extract the minimal/maximal timestamp from metadata.messages
-    // We add selected fields 'conversation_start' and 'conversation_end' as DATETIME parsed from JSON timestamps
-    // Robust parsing: strip fractional seconds and trailing Z if present, then parse
-    // Use LEFT(...,19) to get 'YYYY-MM-DDTHH:MM:SS' which STR_TO_DATE can parse
-    const convoStartExpr = `(
-      SELECT MIN(STR_TO_DATE(LEFT(JSON_UNQUOTE(JSON_EXTRACT(m.value, '$.timestamp')), 19), '%Y-%m-%dT%H:%i:%s'))
-      FROM JSON_TABLE(details.metadata, '$.messages[*]' COLUMNS (value JSON PATH '$')) AS m
-    )`;
-    const convoEndExpr = `(
-      SELECT MAX(STR_TO_DATE(LEFT(JSON_UNQUOTE(JSON_EXTRACT(m.value, '$.timestamp')), 19), '%Y-%m-%dT%H:%i:%s'))
-      FROM JSON_TABLE(details.metadata, '$.messages[*]' COLUMNS (value JSON PATH '$')) AS m
-    )`;
+    // Build query: OPTIMIZED - use generated column expiry_days instead of complex calculations
+    // Old: DATEDIFF(DATE_ADD(DATE(details.created_at), INTERVAL COALESCE(details.extended,0) DAY), CURDATE())
+    // New: Use generated column for better performance
+    const dynamicExpr = `(details.expiry_days - TO_DAYS(CURDATE()))`;
 
     const qb = this.orderDetailRepository
       .createQueryBuilder('details')
@@ -2337,9 +2580,7 @@ export class OrderService {
       .leftJoinAndSelect('product.brand', 'brand')
       .leftJoinAndSelect('order.sale_by', 'sale_by')
       .leftJoinAndSelect('sale_by.departments', 'sale_by_departments')
-      .addSelect(`${dynamicExpr}`, 'dynamicExtended')
-      .addSelect(convoStartExpr, 'conversation_start')
-      .addSelect(convoEndExpr, 'conversation_end');
+      .addSelect(`${dynamicExpr}`, 'dynamicExtended');
 
     // Permissions
     let allowedUserIds;
@@ -2349,11 +2590,17 @@ export class OrderService {
     } else {
       // API cho manager-order: logic đơn giản
       if (user && user.roles) {
-        const roleNames = (user.roles || []).map((r: any) => typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase());
+        const roleNames = (user.roles || []).map((r: any) =>
+          typeof r === 'string'
+            ? r.toLowerCase()
+            : (r.name || '').toLowerCase(),
+        );
         const isAdminUser = roleNames.includes('admin');
         const isViewRole = roleNames.includes('view');
-        const isManager = roleNames.some((r: string) => r.startsWith('manager-'));
-        
+        const isManager = roleNames.some((r: string) =>
+          r.startsWith('manager-'),
+        );
+
         if (isAdminUser || isViewRole) {
           // ✅ Admin hoặc view role: xem tất cả đơn hàng
           allowedUserIds = null; // null = không filter theo user
@@ -2379,28 +2626,59 @@ export class OrderService {
 
     // PM private permission scoping (khi allowedUserIds === null): áp dụng logic mới pm_brand_/pm_cat_
     if (allowedUserIds === null && user && user.roles && enablePMPermissions) {
-      const roleNames = (user.roles || []).map((r: any) => typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase());
+      const roleNames = (user.roles || []).map((r: any) =>
+        typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
+      );
       const isPM = roleNames.includes('pm');
-      const hasPmDeptRole = roleNames.some(r => r.startsWith('pm-'));
+      const hasPmDeptRole = roleNames.some((r) => r.startsWith('pm-'));
       if (isPM && !hasPmDeptRole) {
         // Thu thập permission names (kể cả từ role private pm_<username>)
-        const permNames = (user.permissions || []).map((p: any) => typeof p === 'string' ? p.toLowerCase() : (p.name || '').toLowerCase());
+        const permNames = (user.permissions || []).map((p: any) =>
+          typeof p === 'string'
+            ? p.toLowerCase()
+            : (p.name || '').toLowerCase(),
+        );
         // Lọc pm_brand_*, pm_cat_*
-        const brandSlugs = permNames.filter(p => p.startsWith('pm_brand_')).map(p => p.replace('pm_brand_', '').trim()).filter(Boolean);
-        const catSlugs = permNames.filter(p => p.startsWith('pm_cat_')).map(p => p.replace('pm_cat_', '').trim()).filter(Boolean);
+        const brandSlugs = permNames
+          .filter((p) => p.startsWith('pm_brand_'))
+          .map((p) => p.replace('pm_brand_', '').trim())
+          .filter(Boolean);
+        const catSlugs = permNames
+          .filter((p) => p.startsWith('pm_cat_'))
+          .map((p) => p.replace('pm_cat_', '').trim())
+          .filter(Boolean);
         if (brandSlugs.length === 0 && catSlugs.length === 0) {
           return { data: [], total: 0, page, pageSize }; // Không có quyền riêng rõ ràng
         }
         // Map slugs -> ids
-        const allBrands = await this.brandRepository.find({ select: ['id', 'name'] });
-        const allCategories = await this.categoryRepository.find({ select: ['id', 'catName'] });
-        const brandIds = allBrands.filter(b => brandSlugs.includes(slugify(b.name || '', { lower: true, strict: true }))).map(b => b.id);
-        const categoryIds = allCategories.filter(c => catSlugs.includes(slugify(c.catName || '', { lower: true, strict: true }))).map(c => c.id);
+        const allBrands = await this.brandRepository.find({
+          select: ['id', 'name'],
+        });
+        const allCategories = await this.categoryRepository.find({
+          select: ['id', 'catName'],
+        });
+        const brandIds = allBrands
+          .filter((b) =>
+            brandSlugs.includes(
+              slugify(b.name || '', { lower: true, strict: true }),
+            ),
+          )
+          .map((b) => b.id);
+        const categoryIds = allCategories
+          .filter((c) =>
+            catSlugs.includes(
+              slugify(c.catName || '', { lower: true, strict: true }),
+            ),
+          )
+          .map((c) => c.id);
         if (brandIds.length === 0 && categoryIds.length === 0) {
           return { data: [], total: 0, page, pageSize };
         }
         if (brandIds.length > 0 && categoryIds.length > 0) {
-          qb.andWhere('brand.id IN (:...brandIds) AND category.id IN (:...categoryIds)', { brandIds, categoryIds });
+          qb.andWhere(
+            'brand.id IN (:...brandIds) AND category.id IN (:...categoryIds)',
+            { brandIds, categoryIds },
+          );
         } else if (brandIds.length > 0) {
           qb.andWhere('brand.id IN (:...brandIds)', { brandIds });
         } else if (categoryIds.length > 0) {
@@ -2478,12 +2756,12 @@ export class OrderService {
         .split(',')
         .map((val) => val.trim())
         .filter((val) => val);
-      
+
       if (departmentValues.length > 0) {
         // Phân biệt ID (số) và slug (chuỗi)
         const departmentIds: number[] = [];
         const departmentSlugs: string[] = [];
-        
+
         departmentValues.forEach((val) => {
           const numVal = parseInt(val, 10);
           if (!isNaN(numVal)) {
@@ -2492,7 +2770,7 @@ export class OrderService {
             departmentSlugs.push(val);
           }
         });
-        
+
         // Tìm department IDs từ slugs nếu có
         if (departmentSlugs.length > 0) {
           const departmentsFromSlugs = await this.departmentRepository
@@ -2501,11 +2779,11 @@ export class OrderService {
             .where('dept.slug IN (:...slugs)', { slugs: departmentSlugs })
             .andWhere('dept.deletedAt IS NULL')
             .getMany();
-          
-          const idsFromSlugs = departmentsFromSlugs.map(d => d.id);
+
+          const idsFromSlugs = departmentsFromSlugs.map((d) => d.id);
           departmentIds.push(...idsFromSlugs);
         }
-        
+
         if (departmentIds.length > 0) {
           qb.andWhere(
             `sale_by_departments.id IN (:...departmentIds) AND sale_by_departments.server_ip IS NOT NULL AND TRIM(sale_by_departments.server_ip) <> ''`,
@@ -2542,7 +2820,9 @@ export class OrderService {
         .map((name) => name.trim())
         .filter((name) => name);
       if (categoryNames.length > 0) {
-        qb.andWhere('category.catName IN (:...categoryNames)', { categoryNames });
+        qb.andWhere('category.catName IN (:...categoryNames)', {
+          categoryNames,
+        });
       }
     }
 
@@ -2560,19 +2840,30 @@ export class OrderService {
         let pairIdx = 0;
         tokens.forEach((tok) => {
           if (tok.includes('+')) {
-            const parts = tok.split('+').map((p) => p.trim()).filter(Boolean);
+            const parts = tok
+              .split('+')
+              .map((p) => p.trim())
+              .filter(Boolean);
             let bSlug: string | null = null;
             let cSlug: string | null = null;
             parts.forEach((p) => {
               const lower = p.toLowerCase();
               if (lower.startsWith('pm_brand_')) {
-                bSlug = slugify(lower.replace('pm_brand_', ''), { lower: true, strict: true });
+                bSlug = slugify(lower.replace('pm_brand_', ''), {
+                  lower: true,
+                  strict: true,
+                });
               } else if (lower.startsWith('pm_cat_')) {
-                cSlug = slugify(lower.replace('pm_cat_', ''), { lower: true, strict: true });
+                cSlug = slugify(lower.replace('pm_cat_', ''), {
+                  lower: true,
+                  strict: true,
+                });
               }
             });
             if (bSlug && cSlug) {
-              pairConds.push(`(brand.slug = :b${pairIdx} AND category.slug = :c${pairIdx})`);
+              pairConds.push(
+                `(brand.slug = :b${pairIdx} AND category.slug = :c${pairIdx})`,
+              );
               params[`b${pairIdx}`] = bSlug;
               params[`c${pairIdx}`] = cSlug;
               pairIdx++;
@@ -2580,9 +2871,19 @@ export class OrderService {
           } else {
             const lower = tok.toLowerCase();
             if (lower.startsWith('pm_brand_')) {
-              brandSlugs.push(slugify(lower.replace('pm_brand_', ''), { lower: true, strict: true }));
+              brandSlugs.push(
+                slugify(lower.replace('pm_brand_', ''), {
+                  lower: true,
+                  strict: true,
+                }),
+              );
             } else if (lower.startsWith('pm_cat_')) {
-              categorySlugs.push(slugify(lower.replace('pm_cat_', ''), { lower: true, strict: true }));
+              categorySlugs.push(
+                slugify(lower.replace('pm_cat_', ''), {
+                  lower: true,
+                  strict: true,
+                }),
+              );
             } else {
               // Fallback: treat as plain name -> match either brand.name or category.catName case-insensitively
               // Use simple OR name conditions (added later)
@@ -2609,7 +2910,7 @@ export class OrderService {
       }
     }
 
-    // Conversation type filter (group vs personal) based on metadata.conversation_info.is_group
+    // Conversation type filter - OPTIMIZED: use generated column meta_is_group
     // Accept CSV values like 'group', 'personal' (case-insensitive). If both provided, no filter is applied.
     if (conversationType && conversationType.trim().length > 0) {
       const tokens = conversationType
@@ -2622,13 +2923,9 @@ export class OrderService {
         tokens.includes('private') ||
         tokens.includes('individual');
       if (wantsGroup && !wantsPersonal) {
-        qb.andWhere(
-          `JSON_EXTRACT(details.metadata, '$.conversation_info.is_group') = true`,
-        );
+        qb.andWhere('details.meta_is_group = 1');
       } else if (wantsPersonal && !wantsGroup) {
-        qb.andWhere(
-          `JSON_EXTRACT(details.metadata, '$.conversation_info.is_group') = false`,
-        );
+        qb.andWhere('details.meta_is_group = 0');
       }
       // if both selected, do not add filter (show all)
     }
@@ -2641,7 +2938,9 @@ export class OrderService {
       typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
     );
     const isAdminUser = roleNamesForHidden.includes('admin');
-    const hasPmRole = roleNamesForHidden.some((r: string) => r.startsWith('pm-'));
+    const hasPmRole = roleNamesForHidden.some((r: string) =>
+      r.startsWith('pm-'),
+    );
     const allowHiddenByRole = isAdminUser || hasPmRole;
 
     if (!(includeHiddenFlag && allowHiddenByRole)) {
@@ -2649,11 +2948,12 @@ export class OrderService {
       qb.andWhere('details.hidden_at IS NULL');
     }
 
-    // Apply blacklist filtering in SQL when available
+    // Apply blacklist filtering in SQL - OPTIMIZED: Use generated column meta_customer_id
     if (blacklistForSql && blacklistForSql.length > 0) {
-      // Use JSON_UNQUOTE to compare JSON value with plain strings
+      // Use generated column instead of JSON_EXTRACT for better performance
+      // Keep NULL customer_ids visible (they can't be blacklisted)
       qb.andWhere(
-        `(details.metadata IS NULL OR JSON_UNQUOTE(JSON_EXTRACT(details.metadata, '$.customer_id')) NOT IN (:...blacklist))`,
+        `(details.meta_customer_id IS NULL OR details.meta_customer_id NOT IN (:...blacklist))`,
         {
           blacklist: blacklistForSql,
         },
@@ -2673,25 +2973,271 @@ export class OrderService {
 
     // Sorting Logic - Only prioritize dynamicExtended when no sortField specified
     const dir = sortDirection?.toLowerCase() === 'asc' ? 'ASC' : 'DESC';
-    
+
     if (sortField) {
       // When sortField is specified, sort by that field only (no dynamicExtended priority)
       if (sortField === 'created_at') {
         qb.orderBy('details.created_at', dir).addOrderBy('details.id', 'DESC');
       } else if (sortField === 'conversation_start') {
-        qb.orderBy('conversation_start', dir).addOrderBy('details.created_at', 'DESC');
+        qb.orderBy('details.conversation_start', dir).addOrderBy(
+          'details.created_at',
+          'DESC',
+        );
       } else if (sortField === 'conversation_end') {
-        qb.orderBy('conversation_end', dir).addOrderBy('details.created_at', 'DESC');
+        qb.orderBy('details.conversation_end', dir).addOrderBy(
+          'details.created_at',
+          'DESC',
+        );
       } else if (sortField === 'quantity') {
-        qb.orderBy('details.quantity', dir).addOrderBy('details.created_at', 'DESC');
+        qb.orderBy('details.quantity', dir).addOrderBy(
+          'details.created_at',
+          'DESC',
+        );
       } else if (sortField === 'unit_price') {
-        qb.orderBy('details.unit_price', dir).addOrderBy('details.created_at', 'DESC');
+        qb.orderBy('details.unit_price', dir).addOrderBy(
+          'details.created_at',
+          'DESC',
+        );
       } else if (sortField === 'extended' || sortField === 'dynamicExtended') {
-        qb.orderBy('dynamicExtended', dir).addOrderBy('details.created_at', 'DESC');
+        // OPTIMIZED: Sort by expiry_days instead of computed dynamicExtended for better index usage
+        qb.orderBy('details.expiry_days', dir).addOrderBy('details.created_at', 'DESC');
       }
     } else {
       // Default sort: prioritize dynamicExtended (ngày_tạo + extend - ngày_hiện_tại)
-      qb.orderBy('dynamicExtended', 'DESC').addOrderBy('conversation_start', 'DESC').addOrderBy('details.created_at', 'DESC');
+      qb.orderBy('dynamicExtended', 'DESC')
+        .addOrderBy('details.conversation_start', 'DESC')
+        .addOrderBy('details.created_at', 'DESC');
+    }
+
+    // Pagination with count at DB level
+    const [data, total] = await qb.skip(skip).take(pageSize).getManyAndCount();
+
+    return { data, total, page, pageSize };
+  }
+
+  async findAllPaginatedForPMWithoutProduct(filters: OrderFilters): Promise<{
+    data: OrderDetail[];
+    total: number;
+    page: number;
+    pageSize: number;
+  }> {
+    // Copy logic từ findAllPaginatedForPMOnly nhưng thêm điều kiện product_id IS NULL
+    // và bỏ tất cả logic filter theo PM permissions - tất cả PM xem được tất cả
+    const {
+      page,
+      pageSize,
+      search,
+      status,
+      statuses,
+      date,
+      dateRange,
+      employee,
+      employees,
+      departments,
+      products,
+      brands,
+      categories,
+      brandCategories,
+      warningLevel,
+      quantity,
+      conversationType,
+      sortField,
+      sortDirection,
+      user,
+      includeHidden,
+    } = filters;
+
+    const skip = (page - 1) * pageSize;
+
+    // Precompute blacklist lists (PM chỉ lấy blacklist của chính họ)
+    let blacklistForSql: string[] | undefined;
+    if (user && user.roles) {
+      const roleNames = (user.roles || []).map((r: any) =>
+        typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
+      );
+      const isAdminUser = roleNames.includes('admin');
+
+      if (!isAdminUser) {
+        // PM: chỉ lấy blacklist của chính họ
+        blacklistForSql =
+          await this.orderBlacklistService.getBlacklistedContactsForUser(
+            user.id,
+          );
+      }
+    }
+
+    // Build query: compute dynamicExtended in SQL to allow filtering/sorting in DB
+    const dynamicExpr = `DATEDIFF(DATE_ADD(DATE(details.created_at), INTERVAL COALESCE(details.extended,0) DAY), CURDATE())`;
+
+    const qb = this.orderDetailRepository
+      .createQueryBuilder('details')
+      .leftJoinAndSelect('details.order', 'order')
+      .leftJoinAndSelect('details.product', 'product')
+      .leftJoinAndSelect('product.category', 'category')
+      .leftJoinAndSelect('product.brand', 'brand')
+      .leftJoinAndSelect('order.sale_by', 'sale_by')
+      .leftJoinAndSelect('sale_by.departments', 'sale_by_departments')
+      .addSelect(`${dynamicExpr}`, 'dynamicExtended');
+
+    // ✅ KEY DIFFERENCE: Chỉ hiển thị đơn hàng không có product_id
+    qb.andWhere('details.product_id IS NULL');
+
+    // ✅ KEY DIFFERENCE: Tất cả PM xem được tất cả dữ liệu - không filter theo permissions
+    // Chỉ check basic role để đảm bảo user có quyền PM
+    if (user && user.roles) {
+      const roleNames = (user.roles || []).map((r: any) =>
+        typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
+      );
+      const isAdminUser = roleNames.includes('admin');
+      const isViewRole = roleNames.includes('view');
+      const isPM = roleNames.includes('pm');
+
+      if (!isAdminUser && !isViewRole && !isPM) {
+        // User không có quyền PM → trả về empty
+        return {
+          data: [],
+          total: 0,
+          page,
+          pageSize,
+        };
+      }
+      // Nếu có quyền PM/Admin/View → xem tất cả (không filter thêm)
+    }
+
+    // Apply basic filters (search, status, date, etc.) - giữ nguyên logic filter cơ bản
+    if (search) {
+      qb.andWhere(
+        '(CAST(details.id AS CHAR) LIKE :search OR details.customer_name LIKE :search OR details.raw_item LIKE :search)',
+        { search: `%${search}%` },
+      );
+    }
+
+    if (status) {
+      qb.andWhere('details.status = :status', { status });
+    }
+
+    if (date) {
+      const startDate = new Date(date);
+      const endDate = new Date(date);
+      endDate.setHours(23, 59, 59, 999);
+      qb.andWhere('order.created_at BETWEEN :startDate AND :endDate', {
+        startDate,
+        endDate,
+      });
+    }
+
+    if (dateRange && dateRange.start && dateRange.end) {
+      const startDate = new Date(dateRange.start);
+      const endDate = new Date(dateRange.end);
+      endDate.setHours(23, 59, 59, 999);
+      qb.andWhere('order.created_at BETWEEN :rangeStart AND :rangeEnd', {
+        rangeStart: startDate,
+        rangeEnd: endDate,
+      });
+    }
+
+    if (employee) {
+      qb.andWhere('sale_by.id = :employee', { employee });
+    }
+
+    if (employees) {
+      const employeeIds = employees
+        .split(',')
+        .map((id) => parseInt(id.trim(), 10))
+        .filter((id) => !isNaN(id));
+      if (employeeIds.length > 0) {
+        qb.andWhere('sale_by.id IN (:...employeeIds)', {
+          employeeIds,
+        });
+      }
+    }
+
+    if (departments) {
+      const departmentIds = departments
+        .split(',')
+        .map((id) => parseInt(id.trim(), 10))
+        .filter((id) => !isNaN(id));
+      if (departmentIds.length > 0) {
+        qb.andWhere(
+          `
+        sale_by_departments.id IN (:...departmentIds)
+        AND sale_by_departments.server_ip IS NOT NULL
+        AND TRIM(sale_by_departments.server_ip) <> ''
+      `,
+          { departmentIds },
+        );
+      }
+    }
+
+    if (warningLevel) {
+      const levels = warningLevel
+        .split(',')
+        .map((level) => parseInt(level.trim(), 10))
+        .filter((level) => !isNaN(level));
+      if (levels.length > 0) {
+        qb.andWhere('details.extended IN (:...levels)', { levels });
+      }
+    }
+
+    if (quantity) {
+      const qty = parseInt(quantity, 10);
+      if (!isNaN(qty)) {
+        qb.andWhere('details.quantity >= :quantity', { quantity: qty });
+      }
+    }
+
+    // Conversation type filter - OPTIMIZED: use generated column meta_is_group
+    // Accept CSV values like 'group', 'personal' (case-insensitive). If both provided, no filter is applied.
+    if (conversationType && conversationType.trim().length > 0) {
+      const tokens = conversationType
+        .split(',')
+        .map((s) => (s || '').trim().toLowerCase())
+        .filter((s) => s.length > 0);
+      const wantsGroup = tokens.includes('group');
+      const wantsPersonal =
+        tokens.includes('personal') ||
+        tokens.includes('private') ||
+        tokens.includes('individual');
+      if (wantsGroup && !wantsPersonal) {
+        qb.andWhere('details.meta_is_group = 1');
+      } else if (wantsPersonal && !wantsGroup) {
+        qb.andWhere('details.meta_is_group = 0');
+      }
+      // if both selected, do not add filter (show all)
+    }
+
+    // Apply blacklist filter - OPTIMIZED: Use generated column meta_customer_id
+    if (blacklistForSql && blacklistForSql.length > 0) {
+      // Use generated column instead of JSON_EXTRACT for better performance
+      // Keep NULL customer_ids visible (they can't be blacklisted)
+      qb.andWhere(
+        '(details.meta_customer_id IS NULL OR details.meta_customer_id NOT IN (:...blacklist))',
+        { blacklist: blacklistForSql },
+      );
+    }
+
+    // Apply hidden filter
+    if (includeHidden !== '1' && includeHidden !== 'true') {
+      qb.andWhere('details.hidden_at IS NULL');
+    }
+
+    // Apply sorting
+    const actualSortDirection =
+      sortDirection?.toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+
+    if (sortField === 'created_at') {
+      qb.orderBy('details.created_at', actualSortDirection);
+    } else if (sortField === 'quantity') {
+      qb.orderBy('details.quantity', actualSortDirection);
+    } else if (sortField === 'unit_price') {
+      qb.orderBy('details.unit_price', actualSortDirection);
+    } else if (sortField === 'conversation_start') {
+      qb.orderBy('details.conversation_start', actualSortDirection);
+    } else if (sortField === 'conversation_end') {
+      qb.orderBy('details.conversation_end', actualSortDirection);
+    } else {
+      // Default: sort by dynamicExtended
+      qb.orderBy('dynamicExtended', actualSortDirection);
     }
 
     // Pagination with count at DB level
@@ -2722,10 +3268,11 @@ export class OrderService {
       );
       const isPM = roleNames.includes('pm');
       const hasPmRoles = roleNames.some((r: string) => r.startsWith('pm-'));
-      
+
       if (isPM && !hasPmRoles) {
         // PM chỉ có permissions, lọc theo categories/brands
-        const { categoryIds, brandIds } = await this.getCategoryAndBrandIdsFromPMPermissions(user);
+        const { categoryIds, brandIds } =
+          await this.getCategoryAndBrandIdsFromPMPermissions(user);
 
         if (categoryIds.length > 0 || brandIds.length > 0) {
           const conditions: string[] = [];
@@ -2876,8 +3423,9 @@ export class OrderService {
         for (const set of map.values()) for (const id of set) bl.add(id);
 
         if (bl.size > 0) {
+          // OPTIMIZED: Use generated column meta_customer_id instead of JSON_EXTRACT
           const blacklistConditions = Array.from(bl)
-            .map(() => `JSON_EXTRACT(details.metadata, '$.customer_id') != ?`)
+            .map(() => `(details.meta_customer_id IS NULL OR details.meta_customer_id != ?)`)
             .join(' AND ');
           baseQuery += ` AND (${blacklistConditions})`;
           queryParams.push(...Array.from(bl));
@@ -2890,8 +3438,9 @@ export class OrderService {
         const bl = new Set(list);
 
         if (bl.size > 0) {
+          // OPTIMIZED: Use generated column meta_customer_id instead of JSON_EXTRACT
           const blacklistConditions = Array.from(bl)
-            .map(() => `JSON_EXTRACT(details.metadata, '$.customer_id') != ?`)
+            .map(() => `(details.meta_customer_id IS NULL OR details.meta_customer_id != ?)`)
             .join(' AND ');
           baseQuery += ` AND (${blacklistConditions})`;
           queryParams.push(...Array.from(bl));
