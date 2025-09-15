@@ -153,10 +153,7 @@ export class OrderController {
         parsedDateRange = undefined;
       }
     }
-      console.log('🔍 [Order Controller] Received pmCustomMode:', pmCustomMode);
-      console.log('🔍 [Order Controller] Received brandCategories:', brandCategories);
-      console.log('🔍 [Order Controller] Received rolePermissions:', rolePermissions);
-    
+
     return this.orderService.findAllPaginatedForPM({
       page: pageNum,
       pageSize: pageSizeNum,

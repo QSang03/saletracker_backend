@@ -204,7 +204,6 @@ export class OrderDetailController {
     const timestamp = parseInt(query.timestamp);
     
     if (isNaN(timestamp)) {
-      console.error('❌ Controller: Invalid timestamp from query:', query.timestamp);
       return {
         items: [],
         total: 0,

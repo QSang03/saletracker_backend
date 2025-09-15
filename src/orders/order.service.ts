@@ -1912,44 +1912,82 @@ export class OrderService {
           const pmCustomMode = filters.pmCustomMode === 'true';
           
           if (pmCustomMode) {
-            // ✅ Chế độ tổ hợp riêng: chỉ tổ hợp permissions trong cùng 1 role
-            // Backend sẽ nhận được tất cả permissions từ frontend và tự xử lý logic tổ hợp
-            // Không tổ hợp chéo giữa các role khác nhau
+            // ✅ Chế độ tổ hợp riêng: xử lý từng role riêng biệt từ rolePermissions parameter
+            this.logger.log('🔍 [Order PM Custom Mode] Starting role-based combination logic');
             
-            // Tạo danh sách tất cả combinations có thể từ permissions
-            const categories: string[] = [];
-            const brands: string[] = [];
-            const combinations: string[] = [];
+            const allCombinations: string[] = [];
+            const allSinglePermissions: string[] = [];
             
-            pmPermissions.forEach(p => {
-              const lower = p.toLowerCase();
-              if (lower.startsWith('pm_cat_')) {
-                categories.push(lower);
-              } else if (lower.startsWith('pm_brand_')) {
-                brands.push(lower);
-              }
-            });
-            
-            if (categories.length > 0 && brands.length > 0) {
-              // ✅ Chế độ tổ hợp riêng: chỉ tạo combinations từ permissions có sẵn
-              // Không tổ hợp chéo giữa các role
-              categories.forEach(cat => {
-                brands.forEach(brand => {
-                  combinations.push(`${cat}+${brand}`);
+            // Parse rolePermissions từ query parameter
+            if (filters.rolePermissions) {
+              try {
+                const rolePermissionsData = JSON.parse(filters.rolePermissions);
+                console.log('📥 [Order PM Custom Mode] Received rolePermissions:', rolePermissionsData);
+                
+                // Xử lý từng role riêng biệt
+                Object.entries(rolePermissionsData).forEach(([roleName, roleData]: [string, any]) => {
+                  console.log(`\n🔑 [Order PM Custom Mode] Processing role: ${roleName}`);
+                  
+                  const roleBrands = roleData.brands || [];
+                  const roleCategories = roleData.categories || [];
+                  
+                  // Convert permissions to slugs
+                  const brandSlugs: string[] = [];
+                  const categorySlugs: string[] = [];
+                  
+                  roleBrands.forEach((brand: string) => {
+                    if (brand.startsWith('pm_brand_')) {
+                      const slug = slugify(brand.replace('pm_brand_', ''), { lower: true, strict: true });
+                      brandSlugs.push(slug);
+                    }
+                  });
+                  
+                  roleCategories.forEach((category: string) => {
+                    if (category.startsWith('pm_cat_')) {
+                      const slug = slugify(category.replace('pm_cat_', ''), { lower: true, strict: true });
+                      categorySlugs.push(slug);
+                    }
+                  });
+                  
+                  // Tổ hợp chỉ trong role này
+                  if (categorySlugs.length > 0 && brandSlugs.length > 0) {
+                    categorySlugs.forEach(cat => {
+                      brandSlugs.forEach(brand => {
+                        const combination = `${cat}+${brand}`;
+                        allCombinations.push(combination);
+                        console.log(`  ✅ Added combination: ${combination}`);
+                      });
+                    });
+                  } else {
+                    // Role chỉ có 1 loại permission
+                    const singleSlugs = [...categorySlugs, ...brandSlugs];
+                    allSinglePermissions.push(...singleSlugs);
+                  }
                 });
-              });
-              
-              // Chỉ check combination, không check riêng lẻ
+                
+              } catch (error) {
+                console.error('❌ [Order PM Custom Mode] Error parsing rolePermissions:', error);
+              }
+            }
+            
+            console.log(`\n🎯 [Order PM Custom Mode] Final results:`);
+            console.log(`  📊 Total combinations: ${allCombinations.length}`, allCombinations);
+            console.log(`  📋 Total single permissions: ${allSinglePermissions.length}`, allSinglePermissions);
+            
+            // Áp dụng filter
+            if (allCombinations.length > 0) {
+              console.log(`🔍 [Order PM Custom Mode] Applying combination filter with ${allCombinations.length} combinations`);
               qb.andWhere(
-                'CONCAT(CONCAT("pm_cat_", category.slug), "+", CONCAT("pm_brand_", brand.slug)) IN (:...combinations)',
-                { combinations }
+                'CONCAT(category.slug, "+", brand.slug) IN (:...allCombinations)',
+                { allCombinations }
               );
-            } else {
-              // ✅ PM chỉ có 1 loại: check riêng lẻ
-              const allPermissions = [...categories, ...brands];
+            }
+            
+            if (allSinglePermissions.length > 0) {
+              console.log(`🔍 [Order PM Custom Mode] Applying single permission filter with ${allSinglePermissions.length} permissions`);
               qb.andWhere(
-                '(CONCAT("pm_cat_", category.slug) IN (:...allPermissions) OR CONCAT("pm_brand_", brand.slug) IN (:...allPermissions))',
-                { allPermissions }
+                '(category.slug IN (:...allSinglePermissions) OR brand.slug IN (:...allSinglePermissions))',
+                { allSinglePermissions }
               );
             }
           } else {

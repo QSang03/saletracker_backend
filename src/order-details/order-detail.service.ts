@@ -6,9 +6,9 @@ import { Department } from 'src/departments/department.entity';
 import { User } from 'src/users/user.entity';
 import { OrderBlacklistService } from '../order-blacklist/order-blacklist.service';
 import { TransactionStatsService } from './transaction-stats.service';
-import { 
-  TransactionStatsParams, 
-  TransactionStatsResponse 
+import {
+  TransactionStatsParams,
+  TransactionStatsResponse,
 } from './transaction-stats.interface';
 
 interface HiddenOrderOptions {
@@ -1116,7 +1116,9 @@ export class OrderDetailService {
         createdAt.setHours(0, 0, 0, 0); // Chỉ lấy ngày, bỏ giờ phút giây
         const nowDate = new Date();
         nowDate.setHours(0, 0, 0, 0); // Chỉ lấy ngày, bỏ giờ phút giây
-        const daysDiff = Math.floor((nowDate.getTime() - createdAt.getTime()) / (1000 * 60 * 60 * 24));
+        const daysDiff = Math.floor(
+          (nowDate.getTime() - createdAt.getTime()) / (1000 * 60 * 60 * 24),
+        );
         const newExtended = Math.max(1, 4 + daysDiff); // Đảm bảo extend ít nhất là 1
 
         await this.orderDetailRepository.update(od.id, {
@@ -1172,7 +1174,9 @@ export class OrderDetailService {
       const createdAt = new Date(existing.created_at);
       createdAt.setHours(0, 0, 0, 0); // Chỉ lấy ngày, bỏ giờ phút giây
       now.setHours(0, 0, 0, 0); // Chỉ lấy ngày, bỏ giờ phút giây
-      const daysDiff = Math.floor((now.getTime() - createdAt.getTime()) / (1000 * 60 * 60 * 24));
+      const daysDiff = Math.floor(
+        (now.getTime() - createdAt.getTime()) / (1000 * 60 * 60 * 24),
+      );
       const newExtended = Math.max(1, 4 + daysDiff);
 
       await this.orderDetailRepository.update(id, {
@@ -1242,7 +1246,9 @@ export class OrderDetailService {
         createdAt.setHours(0, 0, 0, 0); // Chỉ lấy ngày, bỏ giờ phút giây
         const nowDate = new Date();
         nowDate.setHours(0, 0, 0, 0); // Chỉ lấy ngày, bỏ giờ phút giây
-        const daysDiff = Math.floor((nowDate.getTime() - createdAt.getTime()) / (1000 * 60 * 60 * 24));
+        const daysDiff = Math.floor(
+          (nowDate.getTime() - createdAt.getTime()) / (1000 * 60 * 60 * 24),
+        );
         const newExtended = Math.max(1, 4 + daysDiff);
 
         await this.orderDetailRepository
@@ -1672,13 +1678,6 @@ export class OrderDetailService {
               ),
             ),
           ).slice(0, 5);
-    console.log('🔍 Customer Count Debug:', {
-      totalRecords: rows.length,
-      afterBlacklistAndFilters: filtered.length,
-      count,
-      sample,
-      mode: filters?.countMode || 'customer',
-    });
     return count;
   }
 
@@ -1936,7 +1935,9 @@ export class OrderDetailService {
   /**
    * ✅ NEW: Optimized transaction statistics method
    */
-  async getTransactionStats(params: TransactionStatsParams): Promise<TransactionStatsResponse> {
+  async getTransactionStats(
+    params: TransactionStatsParams,
+  ): Promise<TransactionStatsResponse> {
     return this.transactionStatsService.getTransactionStats(params);
   }
 }
