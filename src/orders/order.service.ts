@@ -1922,12 +1922,9 @@ export class OrderService {
             if (filters.rolePermissions) {
               try {
                 const rolePermissionsData = JSON.parse(filters.rolePermissions);
-                console.log('📥 [Order PM Custom Mode] Received rolePermissions:', rolePermissionsData);
                 
                 // Xử lý từng role riêng biệt
                 Object.entries(rolePermissionsData).forEach(([roleName, roleData]: [string, any]) => {
-                  console.log(`\n🔑 [Order PM Custom Mode] Processing role: ${roleName}`);
-                  
                   const roleBrands = roleData.brands || [];
                   const roleCategories = roleData.categories || [];
                   
@@ -1955,7 +1952,6 @@ export class OrderService {
                       brandSlugs.forEach(brand => {
                         const combination = `${cat}+${brand}`;
                         allCombinations.push(combination);
-                        console.log(`  ✅ Added combination: ${combination}`);
                       });
                     });
                   } else {
@@ -1966,17 +1962,12 @@ export class OrderService {
                 });
                 
               } catch (error) {
-                console.error('❌ [Order PM Custom Mode] Error parsing rolePermissions:', error);
+                this.logger.error('❌ [Order PM Custom Mode] Error parsing rolePermissions:', error);
               }
             }
             
-            console.log(`\n🎯 [Order PM Custom Mode] Final results:`);
-            console.log(`  📊 Total combinations: ${allCombinations.length}`, allCombinations);
-            console.log(`  📋 Total single permissions: ${allSinglePermissions.length}`, allSinglePermissions);
-            
             // Áp dụng filter
             if (allCombinations.length > 0) {
-              console.log(`🔍 [Order PM Custom Mode] Applying combination filter with ${allCombinations.length} combinations`);
               qb.andWhere(
                 'CONCAT(category.slug, "+", brand.slug) IN (:...allCombinations)',
                 { allCombinations }
@@ -1984,7 +1975,6 @@ export class OrderService {
             }
             
             if (allSinglePermissions.length > 0) {
-              console.log(`🔍 [Order PM Custom Mode] Applying single permission filter with ${allSinglePermissions.length} permissions`);
               qb.andWhere(
                 '(category.slug IN (:...allSinglePermissions) OR brand.slug IN (:...allSinglePermissions))',
                 { allSinglePermissions }
@@ -2035,6 +2025,79 @@ export class OrderService {
             page,
             pageSize,
           };
+        }
+      }
+    }
+
+    // ✅ Xử lý filters.brands và filters.categories riêng biệt (từ 2 dropdown)
+    // CHỈ áp dụng khi user đã chọn brands/categories cụ thể
+    if ((filters.brands && filters.brands.trim()) || (filters.categories && filters.categories.trim())) {
+      this.logger.log('🔍 [Order Filter] User selected specific brands/categories, applying targeted filter');
+      
+      // Lấy tất cả permissions của user để kiểm tra quyền
+      const permissions = (user.permissions || []).map((p: any) =>
+        typeof p === 'string' ? p : (p.name || ''),
+      );
+      
+      const pmPermissions = permissions.filter((p: string) => 
+        p.toLowerCase().startsWith('pm_')
+      );
+
+      if (pmPermissions.length > 0) {
+        // Tạo danh sách brands/categories mà user có quyền
+        const allowedBrands: string[] = [];
+        const allowedCategories: string[] = [];
+        
+        pmPermissions.forEach(permission => {
+          if (permission.toLowerCase().startsWith('pm_brand_')) {
+            const slug = slugify(permission.replace('pm_brand_', ''), { lower: true, strict: true });
+            allowedBrands.push(slug);
+          } else if (permission.toLowerCase().startsWith('pm_cat_')) {
+            const slug = slugify(permission.replace('pm_cat_', ''), { lower: true, strict: true });
+            allowedCategories.push(slug);
+          }
+        });
+
+        // Áp dụng filter brands (chỉ trong phạm vi quyền được phép)
+        if (filters.brands && filters.brands.trim()) {
+          const brandList = filters.brands.split(',').map(b => b.trim()).filter(Boolean);
+          if (brandList.length > 0) {
+            const brandSlugs = brandList.map(brand => 
+              slugify(brand, { lower: true, strict: true })
+            );
+            
+            // Chỉ lọc brands mà user có quyền
+            const validBrandSlugs = brandSlugs.filter(slug => allowedBrands.includes(slug));
+            if (validBrandSlugs.length > 0) {
+              qb.andWhere('brand.slug IN (:...validBrandSlugs)', { validBrandSlugs });
+              this.logger.log(`🔍 [Order Filter] Applied brand filter (within permissions): ${validBrandSlugs.join(', ')}`);
+            } else {
+              // User chọn brands không có quyền → trả về empty
+              this.logger.log('🔍 [Order Filter] User selected brands without permission, returning empty');
+              return { data: [], total: 0, page, pageSize };
+            }
+          }
+        }
+
+        // Áp dụng filter categories (chỉ trong phạm vi quyền được phép)
+        if (filters.categories && filters.categories.trim()) {
+          const categoryList = filters.categories.split(',').map(c => c.trim()).filter(Boolean);
+          if (categoryList.length > 0) {
+            const categorySlugs = categoryList.map(category => 
+              slugify(category, { lower: true, strict: true })
+            );
+            
+            // Chỉ lọc categories mà user có quyền
+            const validCategorySlugs = categorySlugs.filter(slug => allowedCategories.includes(slug));
+            if (validCategorySlugs.length > 0) {
+              qb.andWhere('category.slug IN (:...validCategorySlugs)', { validCategorySlugs });
+              this.logger.log(`🔍 [Order Filter] Applied category filter (within permissions): ${validCategorySlugs.join(', ')}`);
+            } else {
+              // User chọn categories không có quyền → trả về empty
+              this.logger.log('🔍 [Order Filter] User selected categories without permission, returning empty');
+              return { data: [], total: 0, page, pageSize };
+            }
+          }
         }
       }
     }
@@ -2099,26 +2162,14 @@ export class OrderService {
       }
     }
 
-    // Apply warning level filter
-    if (warningLevel && warningLevel.trim()) {
-      const warningList = warningLevel.split(',').map(w => w.trim()).filter(Boolean);
-      if (warningList.length > 0) {
-        const warningConditions = warningList.map((w, index) => {
-          const paramName = `warning${index}`;
-          switch (w) {
-            case '1':
-              return `(${dynamicExpr} = 0)`;
-            case '2':
-              return `(${dynamicExpr} = 1)`;
-            case '3':
-              return `(${dynamicExpr} = 2)`;
-            case '4':
-              return `(${dynamicExpr} > 2)`;
-            default:
-              return '1=0'; // Invalid warning level
-          }
-        });
-        qb.andWhere(`(${warningConditions.join(' OR ')})`);
+    // Warning level filter based on dynamicExtended (match manager order logic)
+    if (warningLevel) {
+      const levels = warningLevel
+        .split(',')
+        .map((l) => parseInt(l.trim(), 10))
+        .filter((n) => !isNaN(n));
+      if (levels.length > 0) {
+        qb.andWhere(`${dynamicExpr} IN (:...levels)`, { levels });
       }
     }
 
@@ -2127,12 +2178,28 @@ export class OrderService {
       qb.andWhere('details.quantity >= :quantity', { quantity: Number(quantity) });
     }
 
-    // Apply conversation type filter
-    if (conversationType && conversationType.trim()) {
-      const convTypeList = conversationType.split(',').map(ct => ct.trim()).filter(Boolean);
-      if (convTypeList.length > 0) {
-        qb.andWhere('details.conversation_type IN (:...convTypeList)', { convTypeList });
+    // Apply conversation type filter (group vs personal) based on metadata.conversation_info.is_group
+    // Accept CSV values like 'group', 'personal' (case-insensitive). If both provided, no filter is applied.
+    if (conversationType && conversationType.trim().length > 0) {
+      const tokens = conversationType
+        .split(',')
+        .map((s) => (s || '').trim().toLowerCase())
+        .filter((s) => s.length > 0);
+      const wantsGroup = tokens.includes('group');
+      const wantsPersonal =
+        tokens.includes('personal') ||
+        tokens.includes('private') ||
+        tokens.includes('individual');
+      if (wantsGroup && !wantsPersonal) {
+        qb.andWhere(
+          `JSON_EXTRACT(details.metadata, '$.conversation_info.is_group') = true`,
+        );
+      } else if (wantsPersonal && !wantsGroup) {
+        qb.andWhere(
+          `JSON_EXTRACT(details.metadata, '$.conversation_info.is_group') = false`,
+        );
       }
+      // if both selected, do not add filter (show all)
     }
 
     // Apply blacklist filter

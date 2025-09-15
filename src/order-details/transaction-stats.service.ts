@@ -267,34 +267,39 @@ export class TransactionStatsService {
     const permissionFilter = this.buildPermissionFilter(params.user);
     // Build blacklist filter (exclude blacklisted contacts for manager/user roles)
     const blacklistFilter = this.buildBlacklistFilter(params.user);
+    
+    // Build EXISTS filters for employees and departments (avoid JOIN fan-out)
     const employeeFilter = params.employees
-      ? `AND u.id IN (${params.employees})`
+      ? `AND EXISTS (SELECT 1 FROM orders o2 WHERE o2.id = od.order_id AND o2.sale_by IN (${params.employees}))`
       : '';
     const departmentFilter = params.departments
-      ? `AND d.id IN (${params.departments})`
+      ? `AND EXISTS (
+          SELECT 1 FROM orders o2 
+          JOIN users u2 ON o2.sale_by = u2.id
+          JOIN users_departments ud2 ON u2.id = ud2.user_id 
+          WHERE o2.id = od.order_id AND ud2.department_id IN (${params.departments})
+        )`
       : '';
 
-    // Single optimized query for both current and previous period stats
-    // Apply new GD calculation formula: (created_at + extend - current_date)
-    // >= 4: GD hôm nay, = 3: GD hôm qua, = 2: GD 2 ngày trước, = 1: Hết hạn hôm nay
+    // Use subquery to deduplicate order_details first, then aggregate without DISTINCT
     const query = `
       SELECT 
-  -- Current period stats (use COUNT DISTINCT to avoid duplicate rows from joins)
-  COUNT(DISTINCT CASE WHEN od.created_at >= ? AND od.created_at <= ? THEN od.id END) as current_total,
-  COUNT(DISTINCT CASE WHEN od.created_at >= ? AND od.created_at <= ? AND od.status = 'completed' THEN od.id END) as current_completed,
-  COUNT(DISTINCT CASE WHEN od.created_at >= ? AND od.created_at <= ? AND od.status = 'quoted' THEN od.id END) as current_quoted,
-  COUNT(DISTINCT CASE WHEN od.created_at >= ? AND od.created_at <= ? AND od.status = 'demand' THEN od.id END) as current_demand,
-  COUNT(DISTINCT CASE WHEN od.created_at >= ? AND od.created_at <= ? AND od.status = 'pending' THEN od.id END) as current_pending,
-  COUNT(DISTINCT CASE WHEN od.created_at >= ? AND od.created_at <= ? AND od.status = 'confirmed' THEN od.id END) as current_confirmed,
-  SUM(CASE WHEN od.created_at >= ? AND od.created_at <= ? AND od.status = 'completed' THEN od.unit_price * od.quantity ELSE 0 END) as current_revenue,
+        -- Current period stats (no DISTINCT needed - already deduped)
+        SUM(CASE WHEN deduped.created_at >= ? AND deduped.created_at <= ? THEN 1 ELSE 0 END) as current_total,
+        SUM(CASE WHEN deduped.created_at >= ? AND deduped.created_at <= ? AND deduped.status = 'completed' THEN 1 ELSE 0 END) as current_completed,
+        SUM(CASE WHEN deduped.created_at >= ? AND deduped.created_at <= ? AND deduped.status = 'quoted' THEN 1 ELSE 0 END) as current_quoted,
+        SUM(CASE WHEN deduped.created_at >= ? AND deduped.created_at <= ? AND deduped.status = 'demand' THEN 1 ELSE 0 END) as current_demand,
+        SUM(CASE WHEN deduped.created_at >= ? AND deduped.created_at <= ? AND deduped.status = 'pending' THEN 1 ELSE 0 END) as current_pending,
+        SUM(CASE WHEN deduped.created_at >= ? AND deduped.created_at <= ? AND deduped.status = 'confirmed' THEN 1 ELSE 0 END) as current_confirmed,
+        SUM(CASE WHEN deduped.created_at >= ? AND deduped.created_at <= ? AND deduped.status = 'completed' THEN deduped.unit_price * deduped.quantity ELSE 0 END) as current_revenue,
         
-  -- Previous period stats (use COUNT DISTINCT to avoid duplicate rows from joins)
-  COUNT(DISTINCT CASE WHEN od.created_at >= ? AND od.created_at <= ? THEN od.id END) as prev_total,
-  COUNT(DISTINCT CASE WHEN od.created_at >= ? AND od.created_at <= ? AND od.status = 'completed' THEN od.id END) as prev_completed,
-  COUNT(DISTINCT CASE WHEN od.created_at >= ? AND od.created_at <= ? AND od.status = 'quoted' THEN od.id END) as prev_quoted,
-  COUNT(DISTINCT CASE WHEN od.created_at >= ? AND od.created_at <= ? AND od.status = 'demand' THEN od.id END) as prev_demand,
-  COUNT(DISTINCT CASE WHEN od.created_at >= ? AND od.created_at <= ? AND od.status = 'pending' THEN od.id END) as prev_pending,
-  SUM(CASE WHEN od.created_at >= ? AND od.created_at <= ? AND od.status = 'completed' THEN od.unit_price * od.quantity ELSE 0 END) as prev_revenue,
+        -- Previous period stats (no DISTINCT needed - already deduped)
+        SUM(CASE WHEN deduped.created_at >= ? AND deduped.created_at <= ? THEN 1 ELSE 0 END) as prev_total,
+        SUM(CASE WHEN deduped.created_at >= ? AND deduped.created_at <= ? AND deduped.status = 'completed' THEN 1 ELSE 0 END) as prev_completed,
+        SUM(CASE WHEN deduped.created_at >= ? AND deduped.created_at <= ? AND deduped.status = 'quoted' THEN 1 ELSE 0 END) as prev_quoted,
+        SUM(CASE WHEN deduped.created_at >= ? AND deduped.created_at <= ? AND deduped.status = 'demand' THEN 1 ELSE 0 END) as prev_demand,
+        SUM(CASE WHEN deduped.created_at >= ? AND deduped.created_at <= ? AND deduped.status = 'pending' THEN 1 ELSE 0 END) as prev_pending,
+        SUM(CASE WHEN deduped.created_at >= ? AND deduped.created_at <= ? AND deduped.status = 'completed' THEN deduped.unit_price * deduped.quantity ELSE 0 END) as prev_revenue,
         
         -- New GD calculation based on formula: (created_at + extended - current_date)
         -- Logic: Số ngày còn lại trước khi hết hạn
@@ -303,19 +308,20 @@ export class TransactionStatsService {
         -- = 2: Còn 2 ngày (khá gấp)
         -- = 1: Còn 1 ngày (hết hạn hôm nay)
         -- <= 0: Đã quá hạn
-  COUNT(DISTINCT CASE WHEN DATEDIFF(DATE_ADD(DATE(od.created_at), INTERVAL COALESCE(od.extended, 4) DAY), CURDATE()) >= 4 THEN od.id END) as gd_today,
-  COUNT(DISTINCT CASE WHEN DATEDIFF(DATE_ADD(DATE(od.created_at), INTERVAL COALESCE(od.extended, 4) DAY), CURDATE()) = 3 THEN od.id END) as gd_yesterday,  
-  COUNT(DISTINCT CASE WHEN DATEDIFF(DATE_ADD(DATE(od.created_at), INTERVAL COALESCE(od.extended, 4) DAY), CURDATE()) = 2 THEN od.id END) as gd_2days_ago
-      FROM order_details od
-      JOIN orders o ON od.order_id = o.id
-      JOIN users u ON o.sale_by = u.id
-      LEFT JOIN users_departments ud ON u.id = ud.user_id
-      LEFT JOIN departments d ON ud.department_id = d.id
-      WHERE od.deleted_at IS NULL
-        ${blacklistFilter}
-        ${permissionFilter}
-        ${employeeFilter}
-        ${departmentFilter}
+        SUM(CASE WHEN DATEDIFF(DATE_ADD(DATE(deduped.created_at), INTERVAL COALESCE(deduped.extended, 4) DAY), CURDATE()) >= 4 THEN 1 ELSE 0 END) as gd_today,
+        SUM(CASE WHEN DATEDIFF(DATE_ADD(DATE(deduped.created_at), INTERVAL COALESCE(deduped.extended, 4) DAY), CURDATE()) = 3 THEN 1 ELSE 0 END) as gd_yesterday,  
+        SUM(CASE WHEN DATEDIFF(DATE_ADD(DATE(deduped.created_at), INTERVAL COALESCE(deduped.extended, 4) DAY), CURDATE()) = 2 THEN 1 ELSE 0 END) as gd_2days_ago
+      FROM (
+        SELECT DISTINCT od.id, od.created_at, od.status, od.unit_price, od.quantity, od.extended
+        FROM order_details od
+        JOIN orders o ON od.order_id = o.id
+        JOIN users u ON o.sale_by = u.id
+        WHERE od.deleted_at IS NULL
+          ${blacklistFilter}
+          ${permissionFilter}
+          ${employeeFilter}
+          ${departmentFilter}
+      ) deduped
     `;
 
     const queryParams = [
@@ -405,11 +411,18 @@ export class TransactionStatsService {
   ): Promise<ChartDataPoint[]> {
     const permissionFilter = this.buildPermissionFilter(params.user);
     const blacklistFilter = this.buildBlacklistFilter(params.user);
+    
+    // Build EXISTS filters for employees and departments (avoid JOIN fan-out)
     const employeeFilter = params.employees
-      ? `AND u.id IN (${params.employees})`
+      ? `AND EXISTS (SELECT 1 FROM orders o2 WHERE o2.id = od.order_id AND o2.sale_by IN (${params.employees}))`
       : '';
     const departmentFilter = params.departments
-      ? `AND d.id IN (${params.departments})`
+      ? `AND EXISTS (
+          SELECT 1 FROM orders o2 
+          JOIN users u2 ON o2.sale_by = u2.id
+          JOIN users_departments ud2 ON u2.id = ud2.user_id 
+          WHERE o2.id = od.order_id AND ud2.department_id IN (${params.departments})
+        )`
       : '';
 
     // Determine grouping based on period
@@ -418,46 +431,48 @@ export class TransactionStatsService {
 
     if (params.period === 'day') {
       dateFormat = '%d/%m/%Y';
-      groupBy = 'DATE(od.created_at)';
+      groupBy = 'DATE(deduped.created_at)';
     } else if (params.period === 'week') {
       // Group by week (Monday as start of week)
       dateFormat = 'Tuần %d/%m-%d/%m';
-      groupBy = 'YEARWEEK(od.created_at, 1)';
+      groupBy = 'YEARWEEK(deduped.created_at, 1)';
     } else if (params.period === 'custom') {
       // Custom period - show daily data
       dateFormat = '%d/%m/%Y';
-      groupBy = 'DATE(od.created_at)';
+      groupBy = 'DATE(deduped.created_at)';
     } else {
       // Quarter
       dateFormat = 'Q%q %Y';
-      groupBy = 'CONCAT(YEAR(od.created_at), "-", QUARTER(od.created_at))';
+      groupBy = 'CONCAT(YEAR(deduped.created_at), "-", QUARTER(deduped.created_at))';
     }
 
+    // Use subquery to deduplicate first, then aggregate without DISTINCT
     const query = `
       SELECT 
         ${groupBy} as period_key,
-        DATE_FORMAT(MIN(od.created_at), '${dateFormat}') as period_name,
-        UNIX_TIMESTAMP(DATE(MIN(od.created_at))) * 1000 as timestamp,
-  COUNT(DISTINCT CASE WHEN od.status = 'demand' THEN od.id END) as demand,
-  COUNT(DISTINCT CASE WHEN od.status = 'completed' THEN od.id END) as completed,
-  COUNT(DISTINCT CASE WHEN od.status = 'quoted' THEN od.id END) as quoted,
-  COUNT(DISTINCT CASE WHEN od.status = 'pending' THEN od.id END) as pending,
-  COUNT(DISTINCT CASE WHEN od.status = 'confirmed' THEN od.id END) as confirmed
-      FROM order_details od
-      JOIN orders o ON od.order_id = o.id
-      JOIN users u ON o.sale_by = u.id
-      LEFT JOIN users_departments ud ON u.id = ud.user_id
-      LEFT JOIN departments d ON ud.department_id = d.id
-      WHERE od.deleted_at IS NULL
-        ${blacklistFilter}
-        AND od.created_at >= ?
-        AND od.created_at <= ?
-        AND DAYOFWEEK(od.created_at) != 1  -- Exclude Sundays
-        ${permissionFilter}
-        ${employeeFilter}
-        ${departmentFilter}
+        DATE_FORMAT(MIN(deduped.created_at), '${dateFormat}') as period_name,
+        UNIX_TIMESTAMP(DATE(MIN(deduped.created_at))) * 1000 as timestamp,
+        SUM(CASE WHEN deduped.status = 'demand' THEN 1 ELSE 0 END) as demand,
+        SUM(CASE WHEN deduped.status = 'completed' THEN 1 ELSE 0 END) as completed,
+        SUM(CASE WHEN deduped.status = 'quoted' THEN 1 ELSE 0 END) as quoted,
+        SUM(CASE WHEN deduped.status = 'pending' THEN 1 ELSE 0 END) as pending,
+        SUM(CASE WHEN deduped.status = 'confirmed' THEN 1 ELSE 0 END) as confirmed
+      FROM (
+        SELECT DISTINCT od.id, od.created_at, od.status
+        FROM order_details od
+        JOIN orders o ON od.order_id = o.id
+        JOIN users u ON o.sale_by = u.id
+        WHERE od.deleted_at IS NULL
+          ${blacklistFilter}
+          AND od.created_at >= ?
+          AND od.created_at <= ?
+          AND DAYOFWEEK(od.created_at) != 1  -- Exclude Sundays
+          ${permissionFilter}
+          ${employeeFilter}
+          ${departmentFilter}
+      ) deduped
       GROUP BY ${groupBy}
-      ORDER BY MIN(od.created_at)
+      ORDER BY MIN(deduped.created_at)
       LIMIT 50
     `;
 
@@ -486,36 +501,45 @@ export class TransactionStatsService {
   ): Promise<CustomerStat[]> {
     const permissionFilter = this.buildPermissionFilter(params.user);
     const blacklistFilter = this.buildBlacklistFilter(params.user);
+    
+    // Build EXISTS filters for employees and departments (avoid JOIN fan-out)
     const employeeFilter = params.employees
-      ? `AND u.id IN (${params.employees})`
+      ? `AND EXISTS (SELECT 1 FROM orders o2 WHERE o2.id = od.order_id AND o2.sale_by IN (${params.employees}))`
       : '';
     const departmentFilter = params.departments
-      ? `AND d.id IN (${params.departments})`
+      ? `AND EXISTS (
+          SELECT 1 FROM orders o2 
+          JOIN users u2 ON o2.sale_by = u2.id
+          JOIN users_departments ud2 ON u2.id = ud2.user_id 
+          WHERE o2.id = od.order_id AND ud2.department_id IN (${params.departments})
+        )`
       : '';
 
+    // Use subquery to deduplicate first, then aggregate without DISTINCT
     const query = `
       SELECT 
-  COALESCE(od.customer_name, '--') as customer_name,
-  COUNT(DISTINCT od.id) as total,
-  COUNT(DISTINCT CASE WHEN od.status = 'completed' THEN od.id END) as completed,
-  COUNT(DISTINCT CASE WHEN od.status = 'quoted' THEN od.id END) as quoted,
-  COUNT(DISTINCT CASE WHEN od.status = 'pending' THEN od.id END) as pending,
-  COUNT(DISTINCT CASE WHEN od.status = 'demand' THEN od.id END) as demand,
-  COUNT(DISTINCT CASE WHEN od.status = 'confirmed' THEN od.id END) as confirmed
-      FROM order_details od
-      JOIN orders o ON od.order_id = o.id
-      JOIN users u ON o.sale_by = u.id
-      LEFT JOIN users_departments ud ON u.id = ud.user_id
-      LEFT JOIN departments d ON ud.department_id = d.id
-      WHERE od.deleted_at IS NULL
-        ${blacklistFilter}
-        AND od.created_at >= ?
-        AND od.created_at <= ?
-        AND DAYOFWEEK(od.created_at) != 1
-        ${permissionFilter}
-        ${employeeFilter}
-        ${departmentFilter}
-      GROUP BY od.customer_name
+        COALESCE(deduped.customer_name, '--') as customer_name,
+        COUNT(*) as total,
+        SUM(CASE WHEN deduped.status = 'completed' THEN 1 ELSE 0 END) as completed,
+        SUM(CASE WHEN deduped.status = 'quoted' THEN 1 ELSE 0 END) as quoted,
+        SUM(CASE WHEN deduped.status = 'pending' THEN 1 ELSE 0 END) as pending,
+        SUM(CASE WHEN deduped.status = 'demand' THEN 1 ELSE 0 END) as demand,
+        SUM(CASE WHEN deduped.status = 'confirmed' THEN 1 ELSE 0 END) as confirmed
+      FROM (
+        SELECT DISTINCT od.id, od.customer_name, od.status
+        FROM order_details od
+        JOIN orders o ON od.order_id = o.id
+        JOIN users u ON o.sale_by = u.id
+        WHERE od.deleted_at IS NULL
+          ${blacklistFilter}
+          AND od.created_at >= ?
+          AND od.created_at <= ?
+          AND DAYOFWEEK(od.created_at) != 1
+          ${permissionFilter}
+          ${employeeFilter}
+          ${departmentFilter}
+      ) deduped
+      GROUP BY deduped.customer_name
       ORDER BY total DESC
       LIMIT 1000
     `;
@@ -545,41 +569,55 @@ export class TransactionStatsService {
   ): Promise<EmployeeStat[]> {
     const permissionFilter = this.buildPermissionFilter(params.user);
     const blacklistFilter = this.buildBlacklistFilter(params.user);
+    
+    // Build EXISTS filters for employees and departments (avoid JOIN fan-out)
     const employeeFilter = params.employees
-      ? `AND u.id IN (${params.employees})`
+      ? `AND EXISTS (SELECT 1 FROM orders o2 WHERE o2.id = od.order_id AND o2.sale_by IN (${params.employees}))`
       : '';
     const departmentFilter = params.departments
-      ? `AND d.id IN (${params.departments})`
+      ? `AND EXISTS (
+          SELECT 1 FROM orders o2 
+          JOIN users u2 ON o2.sale_by = u2.id
+          JOIN users_departments ud2 ON u2.id = ud2.user_id 
+          WHERE o2.id = od.order_id AND ud2.department_id IN (${params.departments})
+        )`
       : '';
 
+    // Use subquery to deduplicate first, then aggregate without DISTINCT
     const query = `
       SELECT 
-        u.id,
-        COALESCE(u.full_name, u.username, CONCAT('NV ', u.id)) as name,
-        COUNT(DISTINCT od.id) as orders,
-        COUNT(DISTINCT CASE WHEN od.customer_name IS NOT NULL THEN od.customer_name END) as customers,
-        COUNT(DISTINCT CASE WHEN od.status = 'completed' THEN od.id END) as completed,
-        COUNT(DISTINCT CASE WHEN od.status = 'quoted' THEN od.id END) as quoted,
+        deduped.user_id as id,
+        deduped.user_name as name,
+        COUNT(*) as orders,
+        COUNT(DISTINCT deduped.customer_name) as customers,
+        SUM(CASE WHEN deduped.status = 'completed' THEN 1 ELSE 0 END) as completed,
+        SUM(CASE WHEN deduped.status = 'quoted' THEN 1 ELSE 0 END) as quoted,
         CASE 
-          WHEN (COUNT(DISTINCT CASE WHEN od.status IN ('completed', 'quoted') THEN od.id END)) > 0
-          THEN (COUNT(DISTINCT CASE WHEN od.status = 'completed' THEN od.id END) * 100.0) / 
-               (COUNT(DISTINCT CASE WHEN od.status IN ('completed', 'quoted') THEN od.id END))
+          WHEN SUM(CASE WHEN deduped.status IN ('completed', 'quoted') THEN 1 ELSE 0 END) > 0
+          THEN (SUM(CASE WHEN deduped.status = 'completed' THEN 1 ELSE 0 END) * 100.0) / 
+               SUM(CASE WHEN deduped.status IN ('completed', 'quoted') THEN 1 ELSE 0 END)
           ELSE 0
         END as conversion
-      FROM order_details od
-      JOIN orders o ON od.order_id = o.id
-      JOIN users u ON o.sale_by = u.id
-      LEFT JOIN users_departments ud ON u.id = ud.user_id
-      LEFT JOIN departments d ON ud.department_id = d.id
-      WHERE od.deleted_at IS NULL
-        ${blacklistFilter}
-        AND od.created_at >= ?
-        AND od.created_at <= ?
-        AND DAYOFWEEK(od.created_at) != 1
-        ${permissionFilter}
-        ${employeeFilter}
-        ${departmentFilter}
-      GROUP BY u.id, u.full_name, u.username
+      FROM (
+        SELECT DISTINCT 
+          od.id, 
+          od.customer_name, 
+          od.status,
+          u.id as user_id,
+          COALESCE(u.full_name, u.username, CONCAT('NV ', u.id)) as user_name
+        FROM order_details od
+        JOIN orders o ON od.order_id = o.id
+        JOIN users u ON o.sale_by = u.id
+        WHERE od.deleted_at IS NULL
+          ${blacklistFilter}
+          AND od.created_at >= ?
+          AND od.created_at <= ?
+          AND DAYOFWEEK(od.created_at) != 1
+          ${permissionFilter}
+          ${employeeFilter}
+          ${departmentFilter}
+      ) deduped
+      GROUP BY deduped.user_id, deduped.user_name
       ORDER BY orders DESC
       LIMIT 100
     `;
@@ -610,34 +648,43 @@ export class TransactionStatsService {
   ): Promise<ExpiredStats> {
     const permissionFilter = this.buildPermissionFilter(params.user);
     const blacklistFilter = this.buildBlacklistFilter(params.user);
+    
+    // Build EXISTS filters for employees and departments (avoid JOIN fan-out)
     const employeeFilter = params.employees
-      ? `AND u.id IN (${params.employees})`
+      ? `AND EXISTS (SELECT 1 FROM orders o2 WHERE o2.id = od.order_id AND o2.sale_by IN (${params.employees}))`
       : '';
     const departmentFilter = params.departments
-      ? `AND d.id IN (${params.departments})`
+      ? `AND EXISTS (
+          SELECT 1 FROM orders o2 
+          JOIN users u2 ON o2.sale_by = u2.id
+          JOIN users_departments ud2 ON u2.id = ud2.user_id 
+          WHERE o2.id = od.order_id AND ud2.department_id IN (${params.departments})
+        )`
       : '';
 
+    // Use subquery to deduplicate first, then aggregate without DISTINCT
     const query = `
       SELECT 
-        COUNT(DISTINCT CASE 
-          WHEN DATEDIFF(DATE_ADD(DATE(od.created_at), INTERVAL COALESCE(od.extended, 4) DAY), CURDATE()) = 1
-          THEN od.id ELSE NULL 
+        SUM(CASE 
+          WHEN DATEDIFF(DATE_ADD(DATE(deduped.created_at), INTERVAL COALESCE(deduped.extended, 4) DAY), CURDATE()) = 1
+          THEN 1 ELSE 0 
         END) as expired_today,
-        COUNT(DISTINCT CASE 
-          WHEN DATEDIFF(DATE_ADD(DATE(od.created_at), INTERVAL COALESCE(od.extended, 4) DAY), CURDATE()) < 1
-          THEN od.id ELSE NULL 
+        SUM(CASE 
+          WHEN DATEDIFF(DATE_ADD(DATE(deduped.created_at), INTERVAL COALESCE(deduped.extended, 4) DAY), CURDATE()) < 1
+          THEN 1 ELSE 0 
         END) as overdue
-      FROM order_details od
-      JOIN orders o ON od.order_id = o.id
-      JOIN users u ON o.sale_by = u.id
-      LEFT JOIN users_departments ud ON u.id = ud.user_id
-      LEFT JOIN departments d ON ud.department_id = d.id
-      WHERE od.deleted_at IS NULL
-        ${blacklistFilter}
-        AND od.status IN ('pending', 'demand', 'quoted')
-        ${permissionFilter}
-        ${employeeFilter}
-        ${departmentFilter}
+      FROM (
+        SELECT DISTINCT od.id, od.created_at, od.extended
+        FROM order_details od
+        JOIN orders o ON od.order_id = o.id
+        JOIN users u ON o.sale_by = u.id
+        WHERE od.deleted_at IS NULL
+          ${blacklistFilter}
+          AND od.status IN ('pending', 'demand', 'quoted')
+          ${permissionFilter}
+          ${employeeFilter}
+          ${departmentFilter}
+      ) deduped
     `;
 
     const result = await this.orderDetailRepository.query(query);
@@ -669,7 +716,7 @@ export class TransactionStatsService {
     );
     if (hasManagerRole) {
       if (user.departments?.length > 0) {
-        // Lọc chỉ phòng ban chính (có server_ip)
+        // Lọc chỉ phòng ban chính (có server_ip) - use EXISTS to avoid JOIN fan-out
         const mainDepts = user.departments.filter(
           (d: any) => d.server_ip && d.server_ip.trim() !== '',
         );
@@ -808,14 +855,28 @@ export class TransactionStatsService {
     // Order by creation date
     query += ` ORDER BY od.created_at DESC`;
 
-    // Get total count first
-    const countQuery = query.replace(
-      /SELECT[\s\S]*?FROM/,
-      'SELECT COUNT(DISTINCT od.id) as total FROM',
-    );
+    // Get total count first - optimize to avoid duplicates from JOINs
+    const countQuery = `
+      SELECT COUNT(DISTINCT od.id) as total
+      FROM order_details od
+      LEFT JOIN orders o ON od.order_id = o.id
+      LEFT JOIN users u ON o.sale_by = u.id
+      WHERE od.deleted_at IS NULL
+        ${blacklistFilter}
+        AND od.created_at >= ? AND od.created_at <= ?
+        AND DAYOFWEEK(od.created_at) != 1
+        ${status && status !== 'all' ? 'AND od.status = ?' : ''}
+        ${permissionFilter}
+    `;
+    
+    const countParams: any[] = [periodStart, periodEnd];
+    if (status && status !== 'all') {
+      countParams.push(status);
+    }
+    
     const countResult = await this.orderDetailRepository.query(
       countQuery,
-      queryParams,
+      countParams,
     );
     const total = parseInt(countResult[0].total) || 0;
 
