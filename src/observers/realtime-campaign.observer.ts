@@ -43,10 +43,6 @@ export class RealTimeCampaignObserver implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   async onModuleInit() {
-    this.logger.log(
-      '🚀 [RealTimeCampaignObserver] Starting real-time campaign monitoring...',
-    );
-
     // Get last processed ID từ database
     const lastLog = await this.changeLogRepo.findOne({
       where: { processed: true },
@@ -59,10 +55,6 @@ export class RealTimeCampaignObserver implements OnModuleInit, OnModuleDestroy {
 
     this.isRunning = true;
     this.startProcessing();
-
-    this.logger.log(
-      '✅ [RealTimeCampaignObserver] Real-time campaign monitoring started',
-    );
   }
 
   async onModuleDestroy() {
@@ -70,7 +62,6 @@ export class RealTimeCampaignObserver implements OnModuleInit, OnModuleDestroy {
     if (this.processingInterval) {
       clearInterval(this.processingInterval);
     }
-    this.logger.log('🛑 [RealTimeCampaignObserver] Stopped');
   }
 
   private startProcessing() {
@@ -461,9 +452,6 @@ export class RealTimeCampaignObserver implements OnModuleInit, OnModuleDestroy {
       // Custom sync logic for campaigns
       // Example: When campaign status changes, might need to update related schedules
       if (changes.status) {
-        this.logger.log(
-          `Campaign ${campaign.id} status changed from ${changes.status.old} to ${changes.status.new}`,
-        );
 
         // Add any automatic sync logic here
         // For example: if campaign becomes inactive, pause all schedules
@@ -487,9 +475,6 @@ export class RealTimeCampaignObserver implements OnModuleInit, OnModuleDestroy {
       // Custom sync logic for interaction logs
       // Example: When customer replies, update campaign stats
       if (changes.customer_replied_at && changes.customer_replied_at.new) {
-        this.logger.log(
-          `Customer replied to campaign ${interactionLog.campaign?.id} interaction ${interactionLog.id}`,
-        );
 
         // Add any automatic sync logic here
         // For example: update campaign response rates
@@ -497,9 +482,6 @@ export class RealTimeCampaignObserver implements OnModuleInit, OnModuleDestroy {
 
       // Example: When staff handles interaction, update performance metrics
       if (changes.staff_handled_at && changes.staff_handled_at.new) {
-        this.logger.log(
-          `Staff handled interaction ${interactionLog.id} for campaign ${interactionLog.campaign?.id}`,
-        );
 
         // Add any automatic sync logic here
       }
@@ -515,10 +497,6 @@ export class RealTimeCampaignObserver implements OnModuleInit, OnModuleDestroy {
       // Custom sync logic for schedules
       // Example: When schedule dates change, validate campaign timeline
       if (changes.start_date || changes.end_date) {
-        this.logger.log(
-          `Schedule ${schedule.id} dates changed for campaign ${schedule.campaign?.id}`,
-        );
-
         // Add any automatic sync logic here
         // For example: validate that start_date < end_date
         // Or update campaign status based on schedule changes
@@ -554,17 +532,11 @@ export class RealTimeCampaignObserver implements OnModuleInit, OnModuleDestroy {
   }
 
   async forceProcessAll() {
-    this.logger.log(
-      '🔄 [RealTimeCampaignObserver] Force processing all unprocessed campaign changes...',
-    );
     this.lastProcessedId = 0; // Reset to process all
     await this.processNewChanges();
   }
 
   async flushAllQueues() {
-    this.logger.log(
-      '🚿 [RealTimeCampaignObserver] Manually flushing all WS queues...',
-    );
     this.flushWsEventsCampaign();
     this.flushWsEventsInteractionLog();
     this.flushWsEventsSchedule();

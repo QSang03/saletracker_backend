@@ -25,6 +25,9 @@ export class ProductService {
     page?: number;
     pageSize?: number;
     user?: any;
+    pmCustomMode?: string; // 'true' hoặc 'false' để xác định chế độ PM
+    pmPermissions?: string; // PM permissions từ frontend
+    rolePermissions?: string; // Thông tin từng role từ frontend
   }) {
     const qb = this.productRepository
       .createQueryBuilder('p')
@@ -50,8 +53,100 @@ export class ProductService {
             .map(p => slugify(p, { lower: true, strict: true }))
             .filter(Boolean);
 
-        // If no explicit pm_brand_/pm_cat_ permissions => deny (private mode requires explicit grants)
-        if (brandSlugs.length === 0 && categorySlugs.length === 0) {
+        // ✅ Kiểm tra chế độ PM từ filter
+        const pmCustomMode = filter.pmCustomMode === 'true';
+        
+        if (pmCustomMode) {
+          // ✅ Chế độ tổ hợp riêng: chỉ tổ hợp permissions trong cùng 1 role
+          console.log('🔍 [Product PM Custom Mode] Starting role-based combination logic');
+          
+
+          // Tạo danh sách tất cả combinations từ từng role riêng biệt
+          const allCombinations: string[] = [];
+          const allSingleSlugs: string[] = [];
+
+          // Parse rolePermissions từ query parameter thay vì từ database
+          if (filter.rolePermissions) {
+            try {
+              const rolePermissionsData = JSON.parse(filter.rolePermissions);
+              console.log('📥 [Product PM Custom Mode] Received rolePermissions:', rolePermissionsData);
+              
+              // Xử lý từng role riêng biệt
+              Object.entries(rolePermissionsData).forEach(([roleName, roleData]: [string, any]) => {
+                console.log(`\n🔑 [Product PM Custom Mode] Processing role: ${roleName}`);
+                
+                const roleBrands = roleData.brands || [];
+                const roleCategories = roleData.categories || [];
+
+                // Convert permissions to slugs
+                const brandSlugs: string[] = [];
+                const categorySlugs: string[] = [];
+                
+                roleBrands.forEach((brand: string) => {
+                  if (brand.startsWith('pm_brand_')) {
+                    const slug = slugify(brand.replace('pm_brand_', ''), { lower: true, strict: true });
+                    brandSlugs.push(slug);
+                  }
+                });
+                
+                roleCategories.forEach((category: string) => {
+                  if (category.startsWith('pm_cat_')) {
+                    const slug = slugify(category.replace('pm_cat_', ''), { lower: true, strict: true });
+                    categorySlugs.push(slug);
+                  }
+                });
+                
+                // Tổ hợp chỉ trong role này
+                if (categorySlugs.length > 0 && brandSlugs.length > 0) {
+                  categorySlugs.forEach(cat => {
+                    brandSlugs.forEach(brand => {
+                      const combination = `${cat}+${brand}`;
+                      allCombinations.push(combination);
+                      console.log(`  ✅ Added combination: ${combination}`);
+                    });
+                  });
+                } else {
+                  // Role chỉ có 1 loại permission
+                  const singleSlugs = [...categorySlugs, ...brandSlugs];
+                  allSingleSlugs.push(...singleSlugs);
+                }
+              });
+              
+            } catch (error) {
+              console.error('❌ [Product PM Custom Mode] Error parsing rolePermissions:', error);
+            }
+          }
+
+          console.log(`\n🎯 [Product PM Custom Mode] Final results:`);
+          console.log(`  📊 Total combinations: ${allCombinations.length}`, allCombinations);
+          console.log(`  📋 Total single slugs: ${allSingleSlugs.length}`, allSingleSlugs);
+
+          // Áp dụng filter
+          if (allCombinations.length > 0) {
+            console.log(`🔍 [Product PM Custom Mode] Applying combination filter with ${allCombinations.length} combinations`);
+            qb.andWhere(
+              'CONCAT(c.slug, "+", b.slug) IN (:...allCombinations)',
+              { allCombinations }
+            );
+          }
+          
+          if (allSingleSlugs.length > 0) {
+            console.log(`🔍 [Product PM Custom Mode] Applying single slug filter with ${allSingleSlugs.length} slugs`);
+            qb.andWhere(
+              '(b.slug IN (:...allSingleSlugs) OR c.slug IN (:...allSingleSlugs))',
+              { allSingleSlugs }
+            );
+          }
+
+          if (allCombinations.length === 0 && allSingleSlugs.length === 0) {
+            console.log('❌ [Product PM Custom Mode] No valid permissions found, returning empty result');
+            // Không có permissions hợp lệ → trả về empty
+            return { data: [], total: 0 };
+          }
+        } else {
+          // ✅ Chế độ tổ hợp chung: tổ hợp tự do như cũ
+          // If no explicit pm_brand_/pm_cat_ permissions => deny (private mode requires explicit grants)
+          if (brandSlugs.length === 0 && categorySlugs.length === 0) {
           qb.andWhere('1=0');
         } else {
           const brands = await this.brandRepo.find({ select: ['id', 'name'] });
@@ -73,6 +168,7 @@ export class ProductService {
           } else if (allowedCategoryIds.length > 0) {
             qb.andWhere('c.id IN (:...allowedCategoryIds)', { allowedCategoryIds });
           }
+        }
         }
       }
     }

@@ -129,6 +129,8 @@ export class OrderController {
     @Query('quantity') quantity?: string,
     @Query('conversationType') conversationType?: string,
     @Query('includeHidden') includeHidden?: string,
+    @Query('pmCustomMode') pmCustomMode?: string, // Thêm parameter cho chế độ PM
+    @Query('rolePermissions') rolePermissions?: string, // Thêm parameter cho thông tin từng role
     @Req() req?: any,
   ): Promise<{
     data: OrderDetail[];
@@ -151,6 +153,10 @@ export class OrderController {
         parsedDateRange = undefined;
       }
     }
+      console.log('🔍 [Order Controller] Received pmCustomMode:', pmCustomMode);
+      console.log('🔍 [Order Controller] Received brandCategories:', brandCategories);
+      console.log('🔍 [Order Controller] Received rolePermissions:', rolePermissions);
+    
     return this.orderService.findAllPaginatedForPM({
       page: pageNum,
       pageSize: pageSizeNum,
@@ -171,6 +177,8 @@ export class OrderController {
       sortField: sortField || null,
       sortDirection: sortDirection || null,
       includeHidden,
+      pmCustomMode,
+      rolePermissions, // Truyền chế độ PM
       user: req.user,
     });
   }

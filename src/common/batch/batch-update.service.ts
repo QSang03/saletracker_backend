@@ -144,10 +144,6 @@ export class BatchUpdateService {
 
     // Clear the batch
     this.batches.delete(type);
-
-    this.logger.log(
-      `Processed batch for type ${type}: ${batch.length} items`
-    );
   }
 
   /**
@@ -190,9 +186,6 @@ export class BatchUpdateService {
         timestamp: Date.now(),
       });
 
-      this.logger.log(
-        `Emitted batch event for ${type} (${priority}): ${items.length} items`
-      );
     } catch (error) {
       this.logger.error(
         `Error processing batch for ${type} (${priority}):`,
@@ -239,7 +232,6 @@ export class BatchUpdateService {
    */
   updateConfig(newConfig: Partial<BatchUpdateConfig>): void {
     Object.assign(this.config, newConfig);
-    this.logger.log('Batch update configuration updated:', this.config);
   }
 
   /**

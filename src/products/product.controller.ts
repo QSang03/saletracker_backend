@@ -15,9 +15,12 @@ export class ProductController {
     @Query('brands') brandsCsv?: string, // comma-separated brand names
     @Query('categoryIds') categoryIdsCsv?: string, // comma-separated category IDs
     @Query('page') page?: string,
-    @Query('pageSize') pageSize?: string,
-    @Req() req?: Request,
-  ) {
+      @Query('pageSize') pageSize?: string,
+      @Query('pmCustomMode') pmCustomMode?: string, // Thêm parameter cho chế độ PM
+      @Query('pmPermissions') pmPermissions?: string, // Thêm parameter cho PM permissions
+      @Query('rolePermissions') rolePermissions?: string, // Thêm parameter cho thông tin từng role
+      @Req() req?: Request,
+    ) {
     const brands = brandsCsv
       ? brandsCsv
           .split(',')
@@ -32,7 +35,11 @@ export class ProductController {
       : undefined;
     const pageNum = page ? Number(page) : undefined;
     const pageSizeNum = pageSize ? Number(pageSize) : undefined;
-  return this.productService.findAll({ search, brands, categoryIds, page: pageNum, pageSize: pageSizeNum, user: (req as any)?.user });
+      console.log('🔍 [Product Controller] Received pmCustomMode:', pmCustomMode);
+      console.log('🔍 [Product Controller] Received pmPermissions:', pmPermissions);
+      console.log('🔍 [Product Controller] Received rolePermissions:', rolePermissions);
+  
+  return this.productService.findAll({ search, brands, categoryIds, page: pageNum, pageSize: pageSizeNum, user: (req as any)?.user, pmCustomMode, pmPermissions, rolePermissions });
   }
 
   @Get(':id')

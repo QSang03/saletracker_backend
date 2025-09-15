@@ -120,7 +120,6 @@ export class DebtStatisticService {
           original_updated_at = VALUES(original_updated_at)
       `;
       await this.debtStatisticRepository.query(query, [today]);
-      this.logger.log(`Captured snapshot for ${today} into debt_statistics (upsert).`);
     } catch (error) {
       this.logger.error(`Failed to capture debt statistics for ${today}:`, error);
       throw error;

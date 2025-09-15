@@ -1,12 +1,13 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { DatabaseChangeLog } from '../observers/change_log.entity';
+import { WinstonLogger } from '../common/winston.logger';
 
 @Injectable()
 export class DatabaseCleanupCronjobService {
-  private readonly logger = new Logger(DatabaseCleanupCronjobService.name);
+  private readonly logger = new WinstonLogger(DatabaseCleanupCronjobService.name);
 
   constructor(
     @InjectRepository(DatabaseChangeLog)

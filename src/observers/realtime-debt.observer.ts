@@ -43,10 +43,6 @@ export class RealTimeDebtObserver implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   async onModuleInit() {
-    this.logger.log(
-      '🚀 [RealTimeDebtObserver] Starting real-time monitoring...',
-    );
-
     // Get last processed ID từ database
     const lastLog = await this.changeLogRepo.findOne({
       where: { processed: true },
@@ -59,8 +55,6 @@ export class RealTimeDebtObserver implements OnModuleInit, OnModuleDestroy {
 
     this.isRunning = true;
     this.startProcessing();
-
-    this.logger.log('✅ [RealTimeDebtObserver] Real-time monitoring started');
   }
 
   async onModuleDestroy() {
@@ -68,7 +62,6 @@ export class RealTimeDebtObserver implements OnModuleInit, OnModuleDestroy {
     if (this.processingInterval) {
       clearInterval(this.processingInterval);
     }
-    this.logger.log('🛑 [RealTimeDebtObserver] Stopped');
   }
 
   private startProcessing() {
@@ -125,12 +118,6 @@ export class RealTimeDebtObserver implements OnModuleInit, OnModuleDestroy {
       new_values,
       changed_fields,
     } = change;
-
-    // // Không xử lý action insert
-    // if (action === ChangeAction.INSERT) {
-    //   this.logger.log(`[RealTimeDebtObserver] Skip insert for table: ${table_name}`);
-    //   return;
-    // }
 
     if (table_name === 'debt_logs') {
       await this.handleDebtLogChange(
@@ -457,9 +444,6 @@ export class RealTimeDebtObserver implements OnModuleInit, OnModuleDestroy {
   }
 
   async forceProcessAll() {
-    this.logger.log(
-      '🔄 [RealTimeDebtObserver] Force processing all unprocessed changes...',
-    );
     this.lastProcessedId = 0; // Reset to process all
     await this.processNewChanges();
   }

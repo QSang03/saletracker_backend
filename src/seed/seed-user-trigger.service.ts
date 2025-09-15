@@ -14,11 +14,9 @@ export class SeedUserTriggerService {
     try {
       const existing = await this.checkExistingTrigger();
       if (existing) {
-        this.logger.log(`⚠️  User trigger already exists: ${this.UPDATE_TRIGGER_NAME}`);
         return;
       }
       await this.createTrigger();
-      this.logger.log('✅ Created user zalo_link_status trigger');
     } catch (err) {
       this.logger.error('Failed to seed user trigger', err.stack);
     }

@@ -30,6 +30,8 @@ interface OrderFilters {
   quantity?: string;
   conversationType?: string;
   warningLevel?: string;
+  pmCustomMode?: string; // 'true' hoặc 'false' để xác định chế độ PM
+  rolePermissions?: string; // Thông tin từng role từ frontend
   sortField?:
     | 'quantity'
     | 'unit_price'
@@ -702,8 +704,6 @@ export class OrderService {
         .limit(limit)
         .getMany();
 
-      this.logger.debug(`Found ${products.length} total products`);
-      
       return { products };
     } catch (error) {
       this.logger.error('Error getting all products:', error);
@@ -714,15 +714,11 @@ export class OrderService {
   // ✅ Tìm kiếm products theo product_code
   async searchProducts(query: string, limit: number = 10): Promise<{ products: any[] }> {
     try {
-      this.logger.log(`🔍 SEARCH PRODUCTS CALLED: query="${query}", limit=${limit}`);
-      
       if (!query || query.trim().length < 1) {
-        this.logger.log(`❌ Empty query, returning empty results`);
         return { products: [] };
       }
 
       const searchQuery = `%${query.trim()}%`;
-      this.logger.log(`🔍 Searching products with query: "${searchQuery}"`);
 
       const products = await this.productRepository
         .createQueryBuilder('product')
@@ -732,8 +728,6 @@ export class OrderService {
         .orderBy('product.product_code', 'ASC')
         .limit(limit)
         .getMany();
-
-      this.logger.log(`✅ Found ${products.length} products for query: "${searchQuery}"`);
       
       return { products };
     } catch (error) {
@@ -844,7 +838,6 @@ export class OrderService {
         const logLine = JSON.stringify(logData) + '\n';
         fs.appendFileSync(logFilePath, logLine, 'utf8');
 
-        this.logger.log(`Product code change logged: ${oldProductCode} -> ${productCode.trim()}`);
       } catch (logError) {
         this.logger.error('Error writing product code change log:', logError);
         // Không throw error vì đây chỉ là logging, không ảnh hưởng đến chức năng chính
@@ -1915,40 +1908,86 @@ export class OrderService {
         );
 
         if (pmPermissions.length > 0) {
-          // ✅ Tạo đúng các tổ hợp từ PM permissions
-          const categories: string[] = [];
-          const brands: string[] = [];
-          const combinations: string[] = [];
+          // ✅ Kiểm tra chế độ PM từ query parameter
+          const pmCustomMode = filters.pmCustomMode === 'true';
           
-          pmPermissions.forEach(p => {
-            const lower = p.toLowerCase();
-            if (lower.startsWith('pm_cat_')) {
-              categories.push(lower);
-            } else if (lower.startsWith('pm_brand_')) {
-              brands.push(lower);
-            }
-          });
-          
-          if (categories.length > 0 && brands.length > 0) {
-            // ✅ PM có cả categories và brands: chỉ lấy combination (đúng cả 2)
-            categories.forEach(cat => {
-              brands.forEach(brand => {
-                combinations.push(`${cat}+${brand}`);
-              });
+          if (pmCustomMode) {
+            // ✅ Chế độ tổ hợp riêng: chỉ tổ hợp permissions trong cùng 1 role
+            // Backend sẽ nhận được tất cả permissions từ frontend và tự xử lý logic tổ hợp
+            // Không tổ hợp chéo giữa các role khác nhau
+            
+            // Tạo danh sách tất cả combinations có thể từ permissions
+            const categories: string[] = [];
+            const brands: string[] = [];
+            const combinations: string[] = [];
+            
+            pmPermissions.forEach(p => {
+              const lower = p.toLowerCase();
+              if (lower.startsWith('pm_cat_')) {
+                categories.push(lower);
+              } else if (lower.startsWith('pm_brand_')) {
+                brands.push(lower);
+              }
             });
             
-            // Chỉ check combination, không check riêng lẻ
-            qb.andWhere(
-              'CONCAT(CONCAT("pm_cat_", category.slug), "+", CONCAT("pm_brand_", brand.slug)) IN (:...combinations)',
-              { combinations }
-            );
+            if (categories.length > 0 && brands.length > 0) {
+              // ✅ Chế độ tổ hợp riêng: chỉ tạo combinations từ permissions có sẵn
+              // Không tổ hợp chéo giữa các role
+              categories.forEach(cat => {
+                brands.forEach(brand => {
+                  combinations.push(`${cat}+${brand}`);
+                });
+              });
+              
+              // Chỉ check combination, không check riêng lẻ
+              qb.andWhere(
+                'CONCAT(CONCAT("pm_cat_", category.slug), "+", CONCAT("pm_brand_", brand.slug)) IN (:...combinations)',
+                { combinations }
+              );
+            } else {
+              // ✅ PM chỉ có 1 loại: check riêng lẻ
+              const allPermissions = [...categories, ...brands];
+              qb.andWhere(
+                '(CONCAT("pm_cat_", category.slug) IN (:...allPermissions) OR CONCAT("pm_brand_", brand.slug) IN (:...allPermissions))',
+                { allPermissions }
+              );
+            }
           } else {
-            // ✅ PM chỉ có 1 loại: check riêng lẻ
-            const allPermissions = [...categories, ...brands];
-            qb.andWhere(
-              '(CONCAT("pm_cat_", category.slug) IN (:...allPermissions) OR CONCAT("pm_brand_", brand.slug) IN (:...allPermissions))',
-              { allPermissions }
-            );
+            // ✅ Chế độ tổ hợp chung: tổ hợp tự do như cũ
+            const categories: string[] = [];
+            const brands: string[] = [];
+            const combinations: string[] = [];
+            
+            pmPermissions.forEach(p => {
+              const lower = p.toLowerCase();
+              if (lower.startsWith('pm_cat_')) {
+                categories.push(lower);
+              } else if (lower.startsWith('pm_brand_')) {
+                brands.push(lower);
+              }
+            });
+            
+            if (categories.length > 0 && brands.length > 0) {
+              // ✅ PM có cả categories và brands: chỉ lấy combination (đúng cả 2)
+              categories.forEach(cat => {
+                brands.forEach(brand => {
+                  combinations.push(`${cat}+${brand}`);
+                });
+              });
+              
+              // Chỉ check combination, không check riêng lẻ
+              qb.andWhere(
+                'CONCAT(CONCAT("pm_cat_", category.slug), "+", CONCAT("pm_brand_", brand.slug)) IN (:...combinations)',
+                { combinations }
+              );
+            } else {
+              // ✅ PM chỉ có 1 loại: check riêng lẻ
+              const allPermissions = [...categories, ...brands];
+              qb.andWhere(
+                '(CONCAT("pm_cat_", category.slug) IN (:...allPermissions) OR CONCAT("pm_brand_", brand.slug) IN (:...allPermissions))',
+                { allPermissions }
+              );
+            }
           }
         } else {
           // PM không có permissions hợp lệ → trả về empty
@@ -2068,29 +2107,27 @@ export class OrderService {
       qb.andWhere('details.hidden_at IS NULL');
     }
 
-    // Apply sorting
-    if (sortField && sortDirection) {
-      switch (sortField) {
-        case 'quantity':
-          qb.orderBy('details.quantity', sortDirection.toUpperCase() as 'ASC' | 'DESC');
-          break;
-        case 'unit_price':
-          qb.orderBy('details.unit_price', sortDirection.toUpperCase() as 'ASC' | 'DESC');
-          break;
-        case 'created_at':
-          qb.orderBy('details.created_at', sortDirection.toUpperCase() as 'ASC' | 'DESC');
-          break;
-        case 'conversation_start':
-          qb.orderBy('conversation_start', sortDirection.toUpperCase() as 'ASC' | 'DESC');
-          break;
-        case 'conversation_end':
-          qb.orderBy('conversation_end', sortDirection.toUpperCase() as 'ASC' | 'DESC');
-          break;
-        default:
-          qb.orderBy('details.created_at', 'DESC');
+    // Sorting Logic - Only prioritize dynamicExtended when no sortField specified
+    const dir = sortDirection?.toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+    
+    if (sortField) {
+      // When sortField is specified, sort by that field only (no dynamicExtended priority)
+      if (sortField === 'created_at') {
+      qb.orderBy('details.created_at', dir).addOrderBy('details.id', 'DESC');
+      } else if (sortField === 'conversation_start') {
+      qb.orderBy('conversation_start', dir).addOrderBy('details.created_at', 'DESC');
+      } else if (sortField === 'conversation_end') {
+      qb.orderBy('conversation_end', dir).addOrderBy('details.created_at', 'DESC');
+      } else if (sortField === 'quantity') {
+      qb.orderBy('details.quantity', dir).addOrderBy('details.created_at', 'DESC');
+      } else if (sortField === 'unit_price') {
+      qb.orderBy('details.unit_price', dir).addOrderBy('details.created_at', 'DESC');
+      } else if (sortField === 'extended' || sortField === 'dynamicExtended') {
+      qb.orderBy('dynamicExtended', dir).addOrderBy('details.created_at', 'DESC');
       }
     } else {
-      qb.orderBy('details.created_at', 'DESC');
+      // Default sort: prioritize dynamicExtended (ngày_tạo + extend - ngày_hiện_tại)
+      qb.orderBy('dynamicExtended', 'DESC').addOrderBy('conversation_start', 'DESC').addOrderBy('details.created_at', 'DESC');
     }
 
     // Apply pagination
@@ -2529,54 +2566,31 @@ export class OrderService {
       }
     }
 
-    // Sorting
+    // Sorting Logic - Only prioritize dynamicExtended when no sortField specified
     const dir = sortDirection?.toLowerCase() === 'asc' ? 'ASC' : 'DESC';
-    // If no sortField provided, default to conversation_start as requested
-    if (sortField === 'created_at') {
-      qb.orderBy('details.created_at', dir).addOrderBy('details.id', 'DESC');
-    } else if (sortField === 'conversation_start' || !sortField) {
-      // Order by computed conversation_start; if null, fallback to details.created_at
-      qb.orderBy('conversation_start', dir).addOrderBy(
-        'details.created_at',
-        'DESC',
-      );
-    } else if (sortField === 'conversation_end') {
-      // Order by computed conversation_end; if null, fallback to details.created_at
-      qb.orderBy('conversation_end', dir).addOrderBy(
-        'details.created_at',
-        'DESC',
-      );
-    } else if (sortField === 'quantity') {
-      qb.orderBy('details.quantity', dir).addOrderBy(
-        'details.created_at',
-        'DESC',
-      );
-    } else if (sortField === 'unit_price') {
-      qb.orderBy('details.unit_price', dir).addOrderBy(
-        'details.created_at',
-        'DESC',
-      );
+    
+    if (sortField) {
+      // When sortField is specified, sort by that field only (no dynamicExtended priority)
+      if (sortField === 'created_at') {
+        qb.orderBy('details.created_at', dir).addOrderBy('details.id', 'DESC');
+      } else if (sortField === 'conversation_start') {
+        qb.orderBy('conversation_start', dir).addOrderBy('details.created_at', 'DESC');
+      } else if (sortField === 'conversation_end') {
+        qb.orderBy('conversation_end', dir).addOrderBy('details.created_at', 'DESC');
+      } else if (sortField === 'quantity') {
+        qb.orderBy('details.quantity', dir).addOrderBy('details.created_at', 'DESC');
+      } else if (sortField === 'unit_price') {
+        qb.orderBy('details.unit_price', dir).addOrderBy('details.created_at', 'DESC');
+      } else if (sortField === 'extended' || sortField === 'dynamicExtended') {
+        qb.orderBy('dynamicExtended', dir).addOrderBy('details.created_at', 'DESC');
+      }
     } else {
-      // default: dynamicExtended then created_at desc
-      qb.orderBy('dynamicExtended', dir).addOrderBy(
-        'details.created_at',
-        'DESC',
-      );
-    }
-
-    // Log generated SQL for debugging filter behavior
-    try {
-      this.logger.debug(`OrderService.findAllPaginated - SQL: ${qb.getSql()}`);
-    } catch (e) {
-      // ignore if getSql fails for some QB configurations
+      // Default sort: prioritize dynamicExtended (ngày_tạo + extend - ngày_hiện_tại)
+      qb.orderBy('dynamicExtended', 'DESC').addOrderBy('conversation_start', 'DESC').addOrderBy('details.created_at', 'DESC');
     }
 
     // Pagination with count at DB level
     const [data, total] = await qb.skip(skip).take(pageSize).getManyAndCount();
-
-    this.logger.debug(
-      `OrderService.findAllPaginated: fetched ${data.length} rows (page ${page}) total ${total}`,
-    );
 
     return { data, total, page, pageSize };
   }

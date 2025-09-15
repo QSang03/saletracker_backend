@@ -29,7 +29,6 @@ export class UserLinkStatusLogObserver {
         changed_fields: ['zalo_link_status'],
       });
       await this.changeLogRepo.save(log);
-      this.logger.log(`Logged zalo_link_status change for user ${event.userId}: ${event.oldStatus} -> ${event.newStatus}`);
       // Emit websocket event to rooms or specific user
       try {
         this.wsGateway.emitToUser(String(event.userId), 'zalo_link_status:changed', {

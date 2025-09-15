@@ -1,12 +1,13 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { DebtStatistic } from '../debt_statistics/debt_statistic.entity';
+import { WinstonLogger } from '../common/winston.logger';
 
 @Injectable()
 export class DebtStatisticsCronjobService {
-  private readonly logger = new Logger(DebtStatisticsCronjobService.name);
+  private readonly logger = new WinstonLogger(DebtStatisticsCronjobService.name);
 
   constructor(
     @InjectRepository(DebtStatistic)

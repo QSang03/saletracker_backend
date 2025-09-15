@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull } from 'typeorm';
@@ -7,10 +7,11 @@ import {
   OrderDetail,
 } from '../order-details/order-detail.entity';
 import { SystemConfig } from '../system_config/system_config.entity';
+import { WinstonLogger } from '../common/winston.logger';
 
 @Injectable()
 export class OrderCleanupCronjobService {
-  private readonly logger = new Logger(OrderCleanupCronjobService.name);
+  private readonly logger = new WinstonLogger(OrderCleanupCronjobService.name);
 
   constructor(
     @InjectRepository(OrderDetail)

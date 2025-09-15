@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { HttpService } from '@nestjs/axios';
 import { lastValueFrom } from 'rxjs';
@@ -10,10 +10,11 @@ import { Brand } from '../brands/brand.entity';
 import { Category } from '../categories/category.entity';
 import { PermissionService } from '../permissions/permission.service';
 import slugify from 'slugify';
+import { WinstonLogger } from '../common/winston.logger';
 
 @Injectable()
 export class ProductV2CronjobService {
-  private readonly logger = new Logger(ProductV2CronjobService.name);
+  private readonly logger = new WinstonLogger(ProductV2CronjobService.name);
 
   constructor(
     private readonly httpService: HttpService,

@@ -132,10 +132,6 @@ export class SeedDebtTriggerService implements OnModuleInit {
 
   public async seedTriggers() {
     try {
-      this.logger.log('🔧 [SeedDebtTriggerService] Checking and creating database triggers...');
-
-      // Always recreate triggers to ensure they are up to date
-      this.logger.log('🔄 [SeedDebtTriggerService] Recreating all triggers to ensure latest version...');
       
       // Drop all existing triggers first
       const existingTriggers = await this.checkExistingTriggers();
@@ -148,7 +144,6 @@ export class SeedDebtTriggerService implements OnModuleInit {
       // Create new triggers
       await this.createTriggers();
 
-      this.logger.log('✅ [SeedDebtTriggerService] Database triggers created successfully!');
     } catch (error) {
       this.logger.error(`❌ [SeedDebtTriggerService] Failed to seed triggers: ${error.message}`);
       throw error;
@@ -170,7 +165,6 @@ export class SeedDebtTriggerService implements OnModuleInit {
     const result = await this.dataSource.query(query);
     const existingTriggers = result.map(row => row.TRIGGER_NAME);
     const hasAll = allTriggers.every(trigger => existingTriggers.includes(trigger));
-    this.logger.log(`📋 [SeedDebtTriggerService] Found existing triggers: ${existingTriggers.join(', ') || 'none'}`);
     return {
       hasAll,
       triggers: existingTriggers
@@ -187,7 +181,6 @@ export class SeedDebtTriggerService implements OnModuleInit {
     for (const triggerName of allPossibleTriggers) {
       try {
         await this.dataSource.query(`DROP TRIGGER \`${triggerName}\``);
-        this.logger.log(`🗑️ [SeedDebtTriggerService] Dropped trigger: ${triggerName}`);
       } catch (error) {
         if (!error.message.includes("doesn't exist")) {
           this.logger.warn(`⚠️ [SeedDebtTriggerService] Warning dropping trigger ${triggerName}: ${error.message}`);
@@ -209,7 +202,6 @@ export class SeedDebtTriggerService implements OnModuleInit {
     for (const trigger of triggers) {
       try {
         await this.dataSource.query(trigger.sql);
-        this.logger.log(`✅ [SeedDebtTriggerService] Created trigger: ${trigger.name}`);
       } catch (error) {
         this.logger.error(`❌ [SeedDebtTriggerService] Failed to create trigger ${trigger.name}: ${error.message}`);
         throw error;
@@ -496,22 +488,16 @@ export class SeedDebtTriggerService implements OnModuleInit {
 
   // Public methods for manual trigger management
   async recreateTriggers() {
-    this.logger.log('🔄 [SeedDebtTriggerService] Manually recreating all triggers...');
     // Drop all triggers
     const existingTriggersResult = await this.checkExistingTriggers();
     await this.dropExistingTriggers(existingTriggersResult.triggers);
     // Sau khi drop, không trigger nào còn tồn tại
     await this.createTriggers([]);
-    this.logger.log('✅ [SeedDebtTriggerService] All triggers recreated successfully!');
   }
 
   async dropAllTriggers() {
-    this.logger.log('🗑️ [SeedDebtTriggerService] Dropping all triggers...');
-    
     const existingTriggers = await this.checkExistingTriggers();
     await this.dropExistingTriggers(existingTriggers.triggers);
-    
-    this.logger.log('✅ [SeedDebtTriggerService] All triggers dropped successfully!');
   }
 
   async getTriggersStatus() {
@@ -537,7 +523,6 @@ export class SeedDebtTriggerService implements OnModuleInit {
     debt_configs?: string[];
     debts?: string[];
   }) {
-    this.logger.log('🎯 [SeedDebtTriggerService] Creating selective triggers (insert & update) with field whitelisting...');
     const config = tableFieldConfig || this.ALLOWED_TRACKING_FIELDS;
     const existingTriggers = await this.checkExistingTriggers();
     if (existingTriggers.triggers.length > 0) {
@@ -550,9 +535,7 @@ export class SeedDebtTriggerService implements OnModuleInit {
       if (allowedFields.length === 0) {
         this.logger.warn(`⚠️ [SeedDebtTriggerService] No allowed fields specified for ${tableName}, skipping trigger creation`);
         continue;
-      }
-      this.logger.log(`📋 [SeedDebtTriggerService] Creating triggers for ${tableName} (insert & update) with fields: ${allowedFields.join(', ')}`);
-      // Insert trigger
+      }// Insert trigger
       let insertTriggerSQL: string;
       let updateTriggerSQL: string;
       switch (tableName) {
@@ -573,15 +556,12 @@ export class SeedDebtTriggerService implements OnModuleInit {
       }
       try {
         await this.dataSource.query(insertTriggerSQL);
-        this.logger.log(`✅ [SeedDebtTriggerService] Created selective trigger: ${tableName}_after_insert`);
         await this.dataSource.query(updateTriggerSQL);
-        this.logger.log(`✅ [SeedDebtTriggerService] Created selective trigger: ${tableName}_after_update`);
       } catch (error) {
         this.logger.error(`❌ [SeedDebtTriggerService] Failed to create selective triggers for ${tableName}: ${error.message}`);
         throw error;
       }
     }
-    this.logger.log('🎯 [SeedDebtTriggerService] Selective triggers (insert & update) created successfully!');
   }
 
   /**

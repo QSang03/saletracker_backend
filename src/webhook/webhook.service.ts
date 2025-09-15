@@ -15,9 +15,6 @@ export class WebhookService {
   constructor(private readonly ws: WebsocketGateway) {}
 
   async queueRenameContact(payload: RenameWebhookPayload) {
-    // In a real integration, push to a job queue or call external webhook here.
-    this.logger.log(`Queue rename contact: ${JSON.stringify(payload)}`);
-
     // Realtime notify requestor if provided
     if (payload.requestedByUserId) {
       this.ws.emitToUser(String(payload.requestedByUserId), 'autoReply:renameQueued', {

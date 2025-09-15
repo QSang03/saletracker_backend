@@ -71,10 +71,6 @@ export class OrderBlacklistService {
 
       const blacklist = this.orderBlacklistRepository.create(createDto);
       const saved = await this.orderBlacklistRepository.save(blacklist);
-
-      this.logger.log(
-        `Created blacklist entry: user ${createDto.userId}, contact ${createDto.zaloContactId}`,
-      );
       return saved;
     } catch (error) {
       this.logger.error('Error creating order blacklist entry:', error);
@@ -145,8 +141,6 @@ export class OrderBlacklistService {
 
       Object.assign(blacklist, updateDto);
       const updated = await this.orderBlacklistRepository.save(blacklist);
-
-      this.logger.log(`Updated blacklist entry ID ${id}`);
       return updated;
     } catch (error) {
       this.logger.error(
@@ -161,8 +155,6 @@ export class OrderBlacklistService {
     try {
       const blacklist = await this.findOne(id);
       await this.orderBlacklistRepository.remove(blacklist);
-
-      this.logger.log(`Removed blacklist entry ID ${id}`);
     } catch (error) {
       this.logger.error(
         `Error removing order blacklist entry with ID ${id}:`,

@@ -37,12 +37,12 @@ interface AuthenticatedSocket extends Socket {
   perMessageDeflate: {
     threshold: 32768,
     zlibInflateOptions: {
-      chunkSize: 10 * 1024
+      chunkSize: 10 * 1024,
     },
     zlibDeflateOptions: {
-      level: 6
-    }
-  }
+      level: 6,
+    },
+  },
 })
 export class WebsocketGateway
   implements OnGatewayConnection, OnGatewayDisconnect, OnModuleDestroy
@@ -52,33 +52,50 @@ export class WebsocketGateway
 
   private logger = new Logger('WebsocketGateway');
   private userSocketMap: Map<string, string> = new Map(); // userId <-> socketId
-  private connectionPool: Map<string, { socket: AuthenticatedSocket; lastHeartbeat: number }> = new Map();
+  private connectionPool: Map<
+    string,
+    { socket: AuthenticatedSocket; lastHeartbeat: number }
+  > = new Map();
   private heartbeatInterval: NodeJS.Timeout;
-  
+
   // Track users on campaign schedule page
-  private campaignScheduleUsers: Map<string, { userId: string; userName: string; socketId: string; joinedAt: Date }> = new Map();
-  
+  private campaignScheduleUsers: Map<
+    string,
+    { userId: string; userName: string; socketId: string; joinedAt: Date }
+  > = new Map();
+
   // Track users currently editing (persistent until they explicitly stop)
-  private editingUsers: Map<string, { userId: string; userName: string; socketId: string; cellId: string; startedAt: Date }> = new Map();
+  private editingUsers: Map<
+    string,
+    {
+      userId: string;
+      userName: string;
+      socketId: string;
+      cellId: string;
+      startedAt: Date;
+    }
+  > = new Map();
 
   constructor(
     private readonly jwtService: JwtService,
     private readonly userService: UserService,
     private readonly redisService: RedisService,
   ) {
-  // Start heartbeat monitoring
-  this.startHeartbeatMonitoring();
-  this.logger.debug('[WebSocket] WebsocketGateway initialized with cell selections handlers');
-  this.logger.debug('[WebSocket] Available handlers: schedule:cell:selections:update, schedule:cell:selections:clear, schedule:cell:selections:get, schedule:cell:selections:join, schedule:cell:selections:ping');
+    // Start heartbeat monitoring
+    this.startHeartbeatMonitoring();
+    this.logger.debug(
+      '[WebSocket] WebsocketGateway initialized with cell selections handlers',
+    );
+    this.logger.debug(
+      '[WebSocket] Available handlers: schedule:cell:selections:update, schedule:cell:selections:clear, schedule:cell:selections:get, schedule:cell:selections:join, schedule:cell:selections:ping',
+    );
   }
 
   async handleConnection(client: AuthenticatedSocket) {
     try {
       this.logger.debug('[WebSocket] New connection attempt', client.id);
       // Do not log handshake headers/auth (may contain sensitive cookies/tokens)
-      
 
-      
       const token =
         client.handshake.auth?.token ||
         client.handshake.headers['authorization']?.split(' ')[1];
@@ -87,20 +104,20 @@ export class WebsocketGateway
         client.disconnect();
         return;
       }
-      
+
       const payload = this.jwtService.verify(token, {
         secret: process.env.JWT_SECRET || 'your_default_secret',
       });
       client.user = payload;
-      
-  // Restore state from Redis if available
-  await this.restoreUserStateFromRedis(payload.sub, client.id);
-      
-  this.userSocketMap.set(payload.sub, client.id);
-  this.addToConnectionPool(client);
-  this.logger.log(`[WebSocket] User ${payload.sub} connected with socket ${client.id}`);
-      
 
+      // Restore state from Redis if available
+      await this.restoreUserStateFromRedis(payload.sub, client.id);
+
+      this.userSocketMap.set(payload.sub, client.id);
+      this.addToConnectionPool(client);
+      this.logger.log(
+        `[WebSocket] User ${payload.sub} connected with socket ${client.id}`,
+      );
     } catch (err) {
       this.logger.warn('[WebSocket] Connection rejected: invalid token');
       client.disconnect();
@@ -110,12 +127,15 @@ export class WebsocketGateway
   private async restoreUserStateFromRedis(userId: string, socketId: string) {
     try {
       // Restore campaign schedule users from Redis
-      const campaignScheduleUsers = await this.redisService.getCampaignScheduleUsers();
+      const campaignScheduleUsers =
+        await this.redisService.getCampaignScheduleUsers();
       for (const user of campaignScheduleUsers) {
-          if (user.userId === userId) {
+        if (user.userId === userId) {
           user.socketId = socketId;
           this.campaignScheduleUsers.set(userId, user);
-          this.logger.debug(`[WebSocket] Restored campaign schedule user ${userId} from Redis`);
+          this.logger.debug(
+            `[WebSocket] Restored campaign schedule user ${userId} from Redis`,
+          );
           break;
         }
       }
@@ -126,12 +146,14 @@ export class WebsocketGateway
         if (user.userId === userId) {
           user.socketId = socketId;
           this.editingUsers.set(userId, user);
-          this.logger.debug(`[WebSocket] Restored editing user ${userId} from Redis`);
+          this.logger.debug(
+            `[WebSocket] Restored editing user ${userId} from Redis`,
+          );
           break;
         }
       }
     } catch (error) {
-  this.logger.error('[WebSocket] Error restoring state from Redis', error);
+      this.logger.error('[WebSocket] Error restoring state from Redis', error);
     }
   }
 
@@ -140,23 +162,17 @@ export class WebsocketGateway
       const userId = client.user.sub;
       this.userSocketMap.delete(userId);
       this.removeFromConnectionPool(client.id);
-      
+
       // DON'T remove user from campaign schedule on disconnect
       // Only remove when they explicitly leave the page
       // This prevents losing users on temporary disconnections (reload, network issues)
-      
+
       // DON'T remove user from editing users on disconnect either
       // Only remove when they explicitly stop editing
       // This prevents losing editing state on temporary disconnections
-      
+
       // Keep users in both lists even when they disconnect
       // They will be restored when they reconnect
-      
-      this.logger.log(`User ${userId} disconnected`);
-      this.logger.log(`Connection pool size: ${this.connectionPool.size}`);
-      this.logger.log(`Users still in campaign schedule: ${this.campaignScheduleUsers.size}`);
-      this.logger.log(`Users still editing: ${this.editingUsers.size}`);
-      this.logger.log(`Users will be restored when they reconnect`);
     }
   }
 
@@ -164,7 +180,7 @@ export class WebsocketGateway
   private addToConnectionPool(client: AuthenticatedSocket) {
     this.connectionPool.set(client.id, {
       socket: client,
-      lastHeartbeat: Date.now()
+      lastHeartbeat: Date.now(),
     });
   }
 
@@ -180,7 +196,9 @@ export class WebsocketGateway
 
       for (const [clientId, connection] of this.connectionPool.entries()) {
         if (now - connection.lastHeartbeat > timeoutThreshold) {
-          this.logger.warn(`Client ${clientId} heartbeat timeout, disconnecting`);
+          this.logger.warn(
+            `Client ${clientId} heartbeat timeout, disconnecting`,
+          );
           connection.socket.disconnect();
           this.removeFromConnectionPool(clientId);
         }
@@ -210,7 +228,10 @@ export class WebsocketGateway
     @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() data: any,
   ) {
-  this.logger.debug('[TEST] Received test:cell:selections:', JSON.stringify(data));
+    this.logger.debug(
+      '[TEST] Received test:cell:selections:',
+      JSON.stringify(data),
+    );
     return { event: 'test:cell:selections:ack', data };
   }
 
@@ -223,17 +244,15 @@ export class WebsocketGateway
   }
 
   @SubscribeMessage('heartbeat')
-  async handleHeartbeat(
-    @ConnectedSocket() client: AuthenticatedSocket,
-  ) {
+  async handleHeartbeat(@ConnectedSocket() client: AuthenticatedSocket) {
     if (client.user?.sub) {
       // Update heartbeat in connection pool
       this.updateHeartbeat(client.id);
-      
+
       await this.userService.updateLastOnline(Number(client.user.sub));
-      client.emit('heartbeat_ack', { 
+      client.emit('heartbeat_ack', {
         serverTime: Date.now(),
-        connectionPoolSize: this.connectionPool.size
+        connectionPoolSize: this.connectionPool.size,
       });
     }
   }
@@ -258,59 +277,59 @@ export class WebsocketGateway
     @MessageBody() data: { userName: string },
   ) {
     if (!client.user?.sub) return;
-    
+
     const userId = client.user.sub;
     const userInfo = {
       userId,
       userName: data.userName,
       socketId: client.id,
-      joinedAt: new Date()
+      joinedAt: new Date(),
     };
-    
+
     // Add user to campaign schedule users (both memory and Redis)
     this.campaignScheduleUsers.set(userId, userInfo);
     await this.redisService.setCampaignScheduleUser(userId, userInfo);
-    
-  this.logger.log(`[WebSocket] User ${data.userName} joined campaign schedule page`);
-  this.logger.debug(`[WebSocket] Total users on campaign schedule: ${this.campaignScheduleUsers.size}`);
-    
+
+    this.logger.log(
+      `[WebSocket] User ${data.userName} joined campaign schedule page`,
+    );
+
     // Send current users list to the joining user
     const currentUsers = Array.from(this.campaignScheduleUsers.values())
-      .filter(user => user.userId !== userId) // Exclude current user
-      .map(user => ({
+      .filter((user) => user.userId !== userId) // Exclude current user
+      .map((user) => ({
         userId: user.userId,
         userName: user.userName,
-        joinedAt: user.joinedAt
+        joinedAt: user.joinedAt,
       }));
-    
+
     client.emit('campaign:schedule:current-users', currentUsers);
-    
+
     // Notify other users about the new user
     this.server.emit('campaign:schedule:user-joined', {
       userId,
       userName: data.userName,
-      joinedAt: userInfo.joinedAt
+      joinedAt: userInfo.joinedAt,
     });
   }
 
   @SubscribeMessage('campaign:schedule:leave')
-  handleCampaignScheduleLeave(
-    @ConnectedSocket() client: AuthenticatedSocket,
-  ) {
+  handleCampaignScheduleLeave(@ConnectedSocket() client: AuthenticatedSocket) {
     if (!client.user?.sub) return;
-    
+
     const userId = client.user.sub;
     const userInfo = this.campaignScheduleUsers.get(userId);
-    
+
     if (userInfo) {
       this.campaignScheduleUsers.delete(userId);
-  this.logger.log(`[WebSocket] User ${userInfo.userName} left campaign schedule page`);
-  this.logger.debug(`[WebSocket] Total users on campaign schedule: ${this.campaignScheduleUsers.size}`);
-      
+      this.logger.log(
+        `[WebSocket] User ${userInfo.userName} left campaign schedule page`,
+      );
+
       // Notify other users about the user leaving
       this.server.emit('campaign:schedule:user-left', {
         userId,
-        userName: userInfo.userName
+        userName: userInfo.userName,
       });
     }
   }
@@ -320,35 +339,33 @@ export class WebsocketGateway
     @ConnectedSocket() client: AuthenticatedSocket,
   ) {
     if (!client.user?.sub) return;
-    
+
     const userId = client.user.sub;
     const currentUsers = Array.from(this.campaignScheduleUsers.values())
-      .filter(user => user.userId !== userId) // Exclude current user
-      .map(user => ({
+      .filter((user) => user.userId !== userId) // Exclude current user
+      .map((user) => ({
         userId: user.userId,
         userName: user.userName,
-        joinedAt: user.joinedAt
+        joinedAt: user.joinedAt,
       }));
-    
+
     client.emit('campaign:schedule:current-users', currentUsers);
   }
 
   @SubscribeMessage('schedule:get-editing-users')
-  handleGetEditingUsers(
-    @ConnectedSocket() client: AuthenticatedSocket,
-  ) {
+  handleGetEditingUsers(@ConnectedSocket() client: AuthenticatedSocket) {
     if (!client.user?.sub) return;
-    
+
     const userId = client.user.sub;
     const editingUsers = Array.from(this.editingUsers.values())
-      .filter(user => user.userId !== userId) // Exclude current user
-      .map(user => ({
+      .filter((user) => user.userId !== userId) // Exclude current user
+      .map((user) => ({
         userId: user.userId,
         userName: user.userName,
         cellId: user.cellId,
-        startedAt: user.startedAt
+        startedAt: user.startedAt,
       }));
-    
+
     client.emit('schedule:current-editing-users', editingUsers);
   }
 
@@ -358,10 +375,10 @@ export class WebsocketGateway
     @MessageBody() data: { cellId: string },
   ) {
     if (!client.user?.sub) return;
-    
+
     const userId = client.user.sub;
     const userInfo = this.campaignScheduleUsers.get(userId);
-    
+
     if (userInfo) {
       // Restore editing state for reconnected user
       this.editingUsers.set(userId, {
@@ -369,47 +386,54 @@ export class WebsocketGateway
         userName: userInfo.userName,
         socketId: client.id,
         cellId: data.cellId,
-        startedAt: new Date() // Update start time for reconnection
+        startedAt: new Date(), // Update start time for reconnection
       });
-      
-  this.logger.debug(`[WebSocket] User ${userInfo.userName} restored editing state for cell ${data.cellId}`);
-      
+
+      this.logger.debug(
+        `[WebSocket] User ${userInfo.userName} restored editing state for cell ${data.cellId}`,
+      );
+
       // Notify other users about the restored editing state
       this.server.emit('schedule:edit:start', {
         cellId: data.cellId,
         userId,
-        userName: userInfo.userName
+        userName: userInfo.userName,
       });
     } else {
       // If user is not in campaign schedule, add them first
-  this.logger.debug(`[WebSocket] User ${userId} not in campaign schedule, adding them first`);
-      
+      this.logger.debug(
+        `[WebSocket] User ${userId} not in campaign schedule, adding them first`,
+      );
+
       // Get user info from database or use default
-      const userName = client.user?.name || client.user?.username || 'Unknown User';
-      
+      const userName =
+        client.user?.name || client.user?.username || 'Unknown User';
+
       this.campaignScheduleUsers.set(userId, {
         userId,
         userName,
         socketId: client.id,
-        joinedAt: new Date()
+        joinedAt: new Date(),
       });
-      
+
       // Now restore editing state
       this.editingUsers.set(userId, {
         userId,
         userName,
         socketId: client.id,
         cellId: data.cellId,
-        startedAt: new Date()
+        startedAt: new Date(),
       });
-      
-  this.logger.debug(`[WebSocket] User ${userName} restored editing state for cell ${data.cellId}`);
-      
+
+      this.logger.debug(
+        `[WebSocket] User ${userName} restored editing state for cell ${data.cellId}`,
+      );
+
       // Notify other users about the restored editing state
       this.server.emit('schedule:edit:start', {
         cellId: data.cellId,
         userId,
-        userName
+        userName,
       });
     }
   }
@@ -420,13 +444,15 @@ export class WebsocketGateway
     @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() data: any,
   ) {
-  this.logger.debug('[WebSocket] Received schedule:presence:update');
-  this.logger.debug(`[WebSocket] Connected clients count: ${this.server.sockets.sockets.size}`);
-    
+    this.logger.debug('[WebSocket] Received schedule:presence:update');
+    this.logger.debug(
+      `[WebSocket] Connected clients count: ${this.server.sockets.sockets.size}`,
+    );
+
     // Broadcast presence update to all connected clients
     this.server.emit('schedule:presence:update', data);
-    
-  this.logger.debug('[WebSocket] Broadcast completed');
+
+    this.logger.debug('[WebSocket] Broadcast completed');
   }
 
   @SubscribeMessage('schedule:edit:start')
@@ -435,32 +461,33 @@ export class WebsocketGateway
     @MessageBody() data: { cellId: string },
   ) {
     if (!client.user?.sub) return;
-    
+
     const userId = client.user.sub;
     const userInfo = this.campaignScheduleUsers.get(userId);
-    
+
     if (userInfo) {
       const editingUserData = {
         userId,
         userName: userInfo.userName,
         socketId: client.id,
         cellId: data.cellId,
-        startedAt: new Date()
+        startedAt: new Date(),
       };
-      
+
       // Add to editing users (both memory and Redis)
       this.editingUsers.set(userId, editingUserData);
       await this.redisService.setEditingUser(userId, editingUserData);
-      
-  this.logger.log(`[WebSocket] User ${userInfo.userName} started editing cell ${data.cellId}`);
-  this.logger.debug(`[WebSocket] Total editing users: ${this.editingUsers.size}`);
+
+      this.logger.log(
+        `[WebSocket] User ${userInfo.userName} started editing cell ${data.cellId}`,
+      );
     }
-    
+
     // Broadcast edit start to all connected clients
     this.server.emit('schedule:edit:start', {
       ...data,
       userId,
-      userName: userInfo?.userName
+      userName: userInfo?.userName,
     });
   }
 
@@ -479,24 +506,25 @@ export class WebsocketGateway
     @MessageBody() data: { cellId: string },
   ) {
     if (!client.user?.sub) return;
-    
+
     const userId = client.user.sub;
     const userInfo = this.campaignScheduleUsers.get(userId);
-    
+
     // Remove from editing users (both memory and Redis)
     this.editingUsers.delete(userId);
     await this.redisService.removeEditingUser(userId);
-    
+
     if (userInfo) {
-  this.logger.log(`[WebSocket] User ${userInfo.userName} stopped editing cell ${data.cellId}`);
-  this.logger.debug(`[WebSocket] Total editing users: ${this.editingUsers.size}`);
+      this.logger.log(
+        `[WebSocket] User ${userInfo.userName} stopped editing cell ${data.cellId}`,
+      );
     }
-    
+
     // Broadcast edit stop to all connected clients
     this.server.emit('schedule:edit:stop', {
       ...data,
       userId,
-      userName: userInfo?.userName
+      userName: userInfo?.userName,
     });
   }
 
@@ -530,44 +558,69 @@ export class WebsocketGateway
   // Cell selection management
   @SubscribeMessage('schedule:cell:selections:update')
   async onUpdate(@MessageBody() { roomId, userId, selections }) {
-    this.logger.debug(`[SERVER] UPDATE received room=${roomId} user=${userId}`);
     this.logger.log(`[REDIS] HSET room=${roomId} field=user:${userId}`);
-    await this.redisService.setCellSelections(String(userId), selections, roomId);
+    await this.redisService.setCellSelections(
+      String(userId),
+      selections,
+      roomId,
+    );
     const after = await this.redisService.getAllCellSelections(roomId);
     this.logger.log(`[REDIS] HGETALL room=${roomId} -> ${after.length} fields`);
-    this.server.to(roomId).emit('schedule:cell:selections:update', { roomId, userId, selections });
+    this.server
+      .to(roomId)
+      .emit('schedule:cell:selections:update', { roomId, userId, selections });
   }
 
   @SubscribeMessage('schedule:cell:selections:clear')
   async onClear(@MessageBody() { roomId, userId, reason, editingCells }) {
-    this.logger.debug(`[SERVER] CLEAR received room=${roomId} user=${userId} reason=${reason} editingCells=${editingCells?.length || 0}`);
-    if (!['explicit','leave','hidden','inactivity'].includes(reason)) return;
-    this.logger.log(`[REDIS] HDEL room=${roomId} field=user:${userId} reason=${reason} cells=${editingCells?.length || 0}`);
+    this.logger.debug(
+      `[SERVER] CLEAR received room=${roomId} user=${userId} reason=${reason} editingCells=${editingCells?.length || 0}`,
+    );
+    if (!['explicit', 'leave', 'hidden', 'inactivity'].includes(reason)) return;
+    this.logger.log(
+      `[REDIS] HDEL room=${roomId} field=user:${userId} reason=${reason} cells=${editingCells?.length || 0}`,
+    );
     await this.redisService.removeCellSelections(String(userId), roomId);
-    
+
     // Broadcast to ALL clients in the room, including the sender
-    this.server.in(roomId).emit('schedule:cell:selections:clear', { roomId, userId, editingCells });
-    
+    this.server
+      .in(roomId)
+      .emit('schedule:cell:selections:clear', { roomId, userId, editingCells });
+
     // Also broadcast to all connected clients as fallback
-    this.server.emit('schedule:cell:selections:clear', { roomId, userId, editingCells });
+    this.server.emit('schedule:cell:selections:clear', {
+      roomId,
+      userId,
+      editingCells,
+    });
   }
 
   @SubscribeMessage('schedule:cell:selections:get')
-  async onGet(@MessageBody() { roomId }, @ConnectedSocket() client: AuthenticatedSocket) {
+  async onGet(
+    @MessageBody() { roomId },
+    @ConnectedSocket() client: AuthenticatedSocket,
+  ) {
     this.logger.debug(`[SERVER] GET received room=${roomId}`);
     const entries = await this.redisService.getAllCellSelections(roomId);
-    this.logger.log(`[REDIS] HGETALL room=${roomId} -> ${entries.length} fields`);
+    this.logger.log(
+      `[REDIS] HGETALL room=${roomId} -> ${entries.length} fields`,
+    );
     client.emit('schedule:cell:selections:current', { roomId, entries });
   }
 
   @SubscribeMessage('schedule:cell:selections:join')
-  async onJoin(@MessageBody() { roomId, userId }, @ConnectedSocket() client: AuthenticatedSocket) {
+  async onJoin(
+    @MessageBody() { roomId, userId },
+    @ConnectedSocket() client: AuthenticatedSocket,
+  ) {
     this.logger.debug(`[SERVER] JOIN received room=${roomId} user=${userId}`);
-    client.join(roomId); 
-    client.data.roomId = roomId; 
+    client.join(roomId);
+    client.data.roomId = roomId;
     client.data.userId = userId;
     const entries = await this.redisService.getAllCellSelections(roomId);
-    this.logger.log(`[REDIS] HGETALL room=${roomId} -> ${entries.length} fields`);
+    this.logger.log(
+      `[REDIS] HGETALL room=${roomId} -> ${entries.length} fields`,
+    );
     client.emit('schedule:cell:selections:current', { roomId, entries });
   }
 
@@ -577,18 +630,26 @@ export class WebsocketGateway
     @MessageBody() data: { roomId: string },
   ) {
     if (!client.user?.sub) return;
-    
+
     const userId = client.user.sub;
-    
+
     // Refresh TTL for user's cell selections
     const roomId = data.roomId;
-    const existingSelections = await this.redisService.getCellSelectionByUser(userId, roomId);
+    const existingSelections = await this.redisService.getCellSelectionByUser(
+      userId,
+      roomId,
+    );
     if (existingSelections) {
-      await this.redisService.setCellSelections(userId, existingSelections, roomId);
-      this.logger.debug(`[WebSocket] Refreshed TTL for user ${userId} cell selections in room ${roomId}`);
+      await this.redisService.setCellSelections(
+        userId,
+        existingSelections,
+        roomId,
+      );
+      this.logger.debug(
+        `[WebSocket] Refreshed TTL for user ${userId} cell selections in room ${roomId}`,
+      );
     }
   }
-
 
   emitToUsers(userIds: string[], event: string, data: any) {
     userIds.forEach((userId) => this.emitToUser(userId, event, data));
