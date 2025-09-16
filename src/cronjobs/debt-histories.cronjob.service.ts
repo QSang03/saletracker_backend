@@ -61,7 +61,7 @@ export class DebtHistoriesCronjobService {
     }
   }
 
-  @Cron(process.env.CRON_DEBT_LOGS_TIME || '0 23 * * *')
+  @Cron(process.env.CRON_DEBT_LOGS_TIME || '30 23 * * *')
   async snapshotAndResetDebtLogs() {
     const today = new Date();
     const vietnamTime = new Date(today.getTime() + 7 * 60 * 60 * 1000);
