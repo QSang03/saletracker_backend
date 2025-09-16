@@ -395,10 +395,19 @@ export class OrderDetailController {
     @Body() orderDetailData: Partial<OrderDetail>,
     @Req() req?: any,
   ): Promise<OrderDetail | null> {
-    // Chỉ chủ sở hữu mới được sửa
     const existing = await this.orderDetailService.findById(id);
     if (!existing) throw new NotFoundException('Order detail not found');
-    if (existing.order?.sale_by?.id !== req.user?.id) {
+    
+    // Kiểm tra quyền sở hữu hoặc quyền PM
+    const isOwner = existing.order?.sale_by?.id === req.user?.id;
+    const isPM = req.user?.roles?.some((r: any) => 
+      typeof r === 'string' ? r.toLowerCase() === 'pm' : (r.name || '').toLowerCase() === 'pm'
+    );
+    const isAdmin = req.user?.roles?.some((r: any) => 
+      typeof r === 'string' ? r.toLowerCase() === 'admin' : (r.name || '').toLowerCase() === 'admin'
+    );
+    
+    if (!isOwner && !isPM && !isAdmin) {
       throw new ForbiddenException('Bạn không có quyền sửa order này');
     }
 
