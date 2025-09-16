@@ -364,7 +364,8 @@ export class OrderDetailService {
     // Determine if we need the current row
     const needsExisting =
       orderDetailData.extended !== undefined ||
-      typeof orderDetailData.notes === 'string';
+      typeof orderDetailData.notes === 'string' ||
+      orderDetailData.product_id === null; // Cần lấy thông tin hiện tại khi xóa mã sản phẩm
     const currentOrderDetail = needsExisting ? await this.findById(id) : null;
 
     // ✅ Xử lý đặc biệt cho trường extended - cộng thêm thay vì ghi đè
@@ -405,6 +406,43 @@ export class OrderDetailService {
       });
     } else {
       await this.orderDetailRepository.update(id, orderDetailData);
+    }
+
+    // ✅ Ghi log xóa mã sản phẩm nếu product_id được set thành null
+    if (orderDetailData.product_id === null && currentOrderDetail?.product?.productCode) {
+      try {
+        const logData = {
+          code_new: null,
+          code_old: currentOrderDetail.product.productCode,
+          raw_item: currentOrderDetail.raw_item || '',
+          timestamp: new Date().toISOString(),
+          user_id: user?.id || null,
+          user_name: user?.fullName || user?.username || 'Unknown',
+          order_detail_id: id,
+          order_id: currentOrderDetail.order?.id || null,
+          action: 'delete_product_code', // Đánh dấu đây là hành động xóa mã sản phẩm
+        };
+
+        // Tạo thư mục logs nếu chưa tồn tại
+        const fs = require('fs');
+        const path = require('path');
+        const logsDir = path.join(process.cwd(), 'logs');
+        if (!fs.existsSync(logsDir)) {
+          fs.mkdirSync(logsDir, { recursive: true });
+        }
+
+        // Tạo tên file theo ngày
+        const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+        const logFileName = `product_code_changes_${today}.jsonl`;
+        const logFilePath = path.join(logsDir, logFileName);
+
+        // Ghi log vào file JSONL (mỗi dòng là một JSON object)
+        const logLine = JSON.stringify(logData) + '\n';
+        fs.appendFileSync(logFilePath, logLine, 'utf8');
+      } catch (logError) {
+        this.logger.error('Error writing product code deletion log:', logError);
+        // Không throw error vì đây chỉ là logging, không ảnh hưởng đến chức năng chính
+      }
     }
 
     return this.findById(id);
