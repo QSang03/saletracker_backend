@@ -579,10 +579,38 @@ export class CampaignService {
       }
     }
 
-    // ✅ Original logic for non-3-day campaigns
-    const nearestSlotData = validSlots[0];
-    const nearestSlot = nearestSlotData.slot;
-    const targetDate = nearestSlotData.date;
+    // ✅ UPDATED: Find slot that contains the configured campaign time
+    let nearestSlotData: { date: Date; slot: any } | null = null;
+
+    // If campaign has specific time configuration, find the slot that contains it
+    if (campaignConfig?.time_of_day) {
+      const campaignTime = campaignConfig.time_of_day;
+      const campaignTimeMinutes = this.parseTime(campaignTime);
+      
+      // Find slots that contain the campaign time
+      const matchingSlots = validSlots.filter((slotData) => {
+        const slotStartMinutes = this.parseTime(slotData.slot.start_time);
+        const slotEndMinutes = this.parseTime(slotData.slot.end_time);
+        return campaignTimeMinutes >= slotStartMinutes && campaignTimeMinutes < slotEndMinutes;
+      });
+      
+      if (matchingSlots.length > 0) {
+        // Use the earliest slot that contains the campaign time
+        nearestSlotData = matchingSlots[0];
+        this.logger.log(`✅ Found slot containing campaign time ${campaignTime}: ${nearestSlotData!.slot.start_time}-${nearestSlotData!.slot.end_time}`);
+      } else {
+        this.logger.warn(`⚠️ No slot found containing campaign time ${campaignTime}, falling back to earliest slot`);
+      }
+    }
+    
+    // Fallback to earliest slot if no specific time match found
+    if (!nearestSlotData) {
+      nearestSlotData = validSlots[0];
+      this.logger.log(`✅ Using earliest available slot: ${nearestSlotData!.slot.start_time}-${nearestSlotData!.slot.end_time}`);
+    }
+
+    const nearestSlot = nearestSlotData!.slot;
+    const targetDate = nearestSlotData!.date;
 
     // Calculate start_date and end_date based on campaign type
     let startDate: Date;
@@ -606,8 +634,36 @@ export class CampaignService {
       });
 
       if (slotsForTargetDay.length > 0) {
-        // ✅ SỬA: Tìm nhóm slots liền kề lớn nhất thay vì min-max tất cả
-        const consecutiveGroup = this.findLargestConsecutiveSlotGroup(slotsForTargetDay);
+        // ✅ NEW: Enhanced logic - find consecutive group containing campaign time or largest group
+        let consecutiveGroup: { start_time: string; end_time: string };
+        
+        // If campaign has specific time config, find group containing that time
+        if (campaignConfig?.time_of_day) {
+          const campaignTime = campaignConfig.time_of_day;
+          const campaignTimeMinutes = this.parseTime(campaignTime);
+          
+          // Find all slots that could be part of a consecutive group containing campaign time
+          const candidateSlots = slotsForTargetDay.filter((slot) => {
+            const slotStart = this.parseTime(slot.start_time);
+            const slotEnd = this.parseTime(slot.end_time);
+            return campaignTimeMinutes >= slotStart && campaignTimeMinutes < slotEnd;
+          });
+          
+          if (candidateSlots.length > 0) {
+            // Find all adjacent slots that connect to the matching slot(s)
+            const expandedSlots = this.findAllConnectedSlots(slotsForTargetDay, candidateSlots);
+            consecutiveGroup = this.findLargestConsecutiveSlotGroup(expandedSlots);
+            
+            this.logger.log(`✅ Found consecutive group containing campaign time ${campaignTime}: ${consecutiveGroup.start_time}-${consecutiveGroup.end_time}`);
+          } else {
+            // Fallback to largest consecutive group
+            consecutiveGroup = this.findLargestConsecutiveSlotGroup(slotsForTargetDay);
+            this.logger.warn(`⚠️ No slot contains campaign time ${campaignTime}, using largest consecutive group: ${consecutiveGroup.start_time}-${consecutiveGroup.end_time}`);
+          }
+        } else {
+          // No specific time - use largest consecutive group
+          consecutiveGroup = this.findLargestConsecutiveSlotGroup(slotsForTargetDay);
+        }
         
         startDate = new Date(targetDate);
         const [startHour, startMin] = consecutiveGroup.start_time.split(':').map(Number);
@@ -649,8 +705,37 @@ export class CampaignService {
       let latestEndTime = nearestSlot.end_time;
 
       if (slotsForThisDay.length > 0) {
-        // ✅ SỬA: Tìm nhóm slots liền kề lớn nhất thay vì min-max tất cả
-        const consecutiveGroup = this.findLargestConsecutiveSlotGroup(slotsForThisDay);
+        // ✅ NEW: Enhanced logic for weekly campaigns - find group containing campaign time
+        let consecutiveGroup: { start_time: string; end_time: string };
+        
+        // If campaign has specific time config, find group containing that time
+        if (campaignConfig?.time_of_day) {
+          const campaignTime = campaignConfig.time_of_day;
+          const campaignTimeMinutes = this.parseTime(campaignTime);
+          
+          // Find all slots that could be part of a consecutive group containing campaign time
+          const candidateSlots = slotsForThisDay.filter((slot) => {
+            const slotStart = this.parseTime(slot.start_time);
+            const slotEnd = this.parseTime(slot.end_time);
+            return campaignTimeMinutes >= slotStart && campaignTimeMinutes < slotEnd;
+          });
+          
+          if (candidateSlots.length > 0) {
+            // Find all adjacent slots that connect to the matching slot(s)
+            const expandedSlots = this.findAllConnectedSlots(slotsForThisDay, candidateSlots);
+            consecutiveGroup = this.findLargestConsecutiveSlotGroup(expandedSlots);
+            
+            this.logger.log(`✅ Weekly: Found consecutive group containing campaign time ${campaignTime}: ${consecutiveGroup.start_time}-${consecutiveGroup.end_time}`);
+          } else {
+            // Fallback to largest consecutive group
+            consecutiveGroup = this.findLargestConsecutiveSlotGroup(slotsForThisDay);
+            this.logger.warn(`⚠️ Weekly: No slot contains campaign time ${campaignTime}, using largest consecutive group: ${consecutiveGroup.start_time}-${consecutiveGroup.end_time}`);
+          }
+        } else {
+          // No specific time - use largest consecutive group
+          consecutiveGroup = this.findLargestConsecutiveSlotGroup(slotsForThisDay);
+        }
+        
         earliestStartTime = consecutiveGroup.start_time;
         latestEndTime = consecutiveGroup.end_time;
       }
@@ -839,7 +924,7 @@ export class CampaignService {
     }
 
     // ✅ NEW: Tìm time range chung cho tất cả ngày
-    const commonTimeRange = this.findCommon3DayTimeRange(allDaySlots);
+    const commonTimeRange = this.findCommon3DayTimeRange(allDaySlots, campaignTime);
     
     if (!commonTimeRange) {
       this.logger.error(`❌ [calculate3DayDateRange] No common time range found for all 3 days`);
@@ -1573,11 +1658,16 @@ export class CampaignService {
   }
 
   /**
-   * ✅ NEW: Tìm time range chung lớn nhất cho tất cả ngày trong 3-day campaign
-   * @param allDaySlots - Object chứa slots của từng ngày
+   * ✅ UPDATED: Tìm time range chung cho tất cả ngày trong 3-day campaign
+   * Ưu tiên chọn time range chứa thời gian cấu hình của campaign
+   * @param allDaySlots - Object chứa slots của từng ngày  
+   * @param campaignTime - Thời gian cấu hình của campaign (optional)
    * @returns Common time range hoặc null nếu không có
    */
-  private findCommon3DayTimeRange(allDaySlots: { [dateKey: string]: any[] }): { start_time: string; end_time: string } | null {
+  private findCommon3DayTimeRange(
+    allDaySlots: { [dateKey: string]: any[] }, 
+    campaignTime?: string
+  ): { start_time: string; end_time: string } | null {
     const dateKeys = Object.keys(allDaySlots);
     if (dateKeys.length === 0) return null;
 
@@ -1627,20 +1717,47 @@ export class CampaignService {
       }
     }
 
-    // Chọn common group lớn nhất
-    let largestGroup = commonGroups[0];
-    let largestDuration = this.parseTime(largestGroup.end_time) - this.parseTime(largestGroup.start_time);
-
-    for (const group of commonGroups) {
-      const duration = this.parseTime(group.end_time) - this.parseTime(group.start_time);
-      if (duration > largestDuration) {
-        largestGroup = group;
-        largestDuration = duration;
+    // ✅ UPDATED: Chọn common group phù hợp
+    let selectedGroup: { start_time: string; end_time: string };
+    
+    if (campaignTime) {
+      // Ưu tiên chọn group chứa thời gian cấu hình của campaign
+      const campaignTimeMinutes = this.parseTime(campaignTime);
+      const matchingGroups = commonGroups.filter(group => {
+        const startMinutes = this.parseTime(group.start_time);
+        const endMinutes = this.parseTime(group.end_time);
+        return campaignTimeMinutes >= startMinutes && campaignTimeMinutes < endMinutes;
+      });
+      
+      if (matchingGroups.length > 0) {
+        // Nếu có nhiều group chứa campaign time, chọn group lớn nhất trong số đó
+        selectedGroup = matchingGroups.reduce((largest, current) => {
+          const largestDuration = this.parseTime(largest.end_time) - this.parseTime(largest.start_time);
+          const currentDuration = this.parseTime(current.end_time) - this.parseTime(current.start_time);
+          return currentDuration > largestDuration ? current : largest;
+        });
+        
+        this.logger.log(`✅ [3-day] Found time range containing campaign time ${campaignTime}: ${selectedGroup.start_time}-${selectedGroup.end_time}`);
+      } else {
+        // Fallback: chọn group lớn nhất
+        selectedGroup = commonGroups.reduce((largest, current) => {
+          const largestDuration = this.parseTime(largest.end_time) - this.parseTime(largest.start_time);
+          const currentDuration = this.parseTime(current.end_time) - this.parseTime(current.start_time);
+          return currentDuration > largestDuration ? current : largest;
+        });
+        
+        this.logger.warn(`⚠️ [3-day] No time range contains campaign time ${campaignTime}, using largest: ${selectedGroup.start_time}-${selectedGroup.end_time}`);
       }
+    } else {
+      // Không có campaign time - chọn group lớn nhất (logic cũ)
+      selectedGroup = commonGroups.reduce((largest, current) => {
+        const largestDuration = this.parseTime(largest.end_time) - this.parseTime(largest.start_time);
+        const currentDuration = this.parseTime(current.end_time) - this.parseTime(current.start_time);
+        return currentDuration > largestDuration ? current : largest;
+      });
     }
 
-  // debug logs removed
-    return largestGroup;
+    return selectedGroup;
   }
 
   /**
@@ -1709,6 +1826,52 @@ export class CampaignService {
   // debug logs removed
 
     return result;
+  }
+
+  /**
+   * ✅ NEW: Find all slots connected to the given candidate slots
+   * @param allSlots - All available slots for the day
+   * @param candidateSlots - Slots that match the campaign time
+   * @returns Array of all connected slots including the candidates
+   */
+  private findAllConnectedSlots(allSlots: any[], candidateSlots: any[]): any[] {
+    if (candidateSlots.length === 0) {
+      return [];
+    }
+
+    // Sort all slots by start time
+    const sortedSlots = allSlots.sort((a, b) => 
+      this.parseTime(a.start_time) - this.parseTime(b.start_time)
+    );
+
+    // Find all slots that are connected to any candidate slot
+    const connectedSlots = new Set<any>();
+    
+    // Add all candidate slots
+    candidateSlots.forEach(slot => connectedSlots.add(slot));
+    
+    // Expand backwards and forwards to find all connected slots
+    let foundNew = true;
+    while (foundNew) {
+      foundNew = false;
+      const currentConnected = Array.from(connectedSlots);
+      
+      for (const connectedSlot of currentConnected) {
+        // Find slots that connect to this slot (either before or after)
+        for (const slot of sortedSlots) {
+          if (!connectedSlots.has(slot)) {
+            // Check if this slot connects to any connected slot
+            if (slot.end_time === connectedSlot.start_time || 
+                slot.start_time === connectedSlot.end_time) {
+              connectedSlots.add(slot);
+              foundNew = true;
+            }
+          }
+        }
+      }
+    }
+    
+    return Array.from(connectedSlots);
   }
 
   /**

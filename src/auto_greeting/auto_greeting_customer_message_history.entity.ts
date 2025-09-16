@@ -8,11 +8,11 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import { Customer } from './customer.entity';
+import { AutoGreetingCustomer } from './auto_greeting_customer.entity';
 
-@Entity({ name: 'customer_message_history' })
-@Index('idx_cmh_customer_sent_at', ['customerId', 'sentAt'])
-export class CustomerMessageHistory {
+@Entity({ name: 'auto_greeting_customer_message_history' })
+@Index('idx_agcmh_customer_sent_at', ['customerId', 'sentAt'])
+export class AutoGreetingCustomerMessageHistory {
   // BIGINT UNSIGNED AUTO_INCREMENT
   @PrimaryGeneratedColumn({ type: 'bigint', unsigned: true })
   id: string; // string for bigint
@@ -21,11 +21,11 @@ export class CustomerMessageHistory {
   @Column({ name: 'customer_id', type: 'bigint', unsigned: true })
   customerId: string;
 
-  @ManyToOne(() => Customer, (customer) => customer.messageHistories, {
+  @ManyToOne(() => AutoGreetingCustomer, (autoGreetingCustomer) => autoGreetingCustomer.messageHistories, {
     onDelete: 'CASCADE',
   })
   @JoinColumn({ name: 'customer_id', referencedColumnName: 'id' })
-  customer: Customer;
+  autoGreetingCustomer: AutoGreetingCustomer;
 
   @Column({ type: 'text' })
   content: string;
