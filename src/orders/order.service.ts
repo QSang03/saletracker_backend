@@ -2699,9 +2699,10 @@ export class OrderService {
     }
 
     if (search) {
+      const searchTerm = `%${String(search).trim()}%`;
       qb.andWhere(
-        '(CAST(details.id AS CHAR) LIKE :search OR LOWER(details.customer_name) LIKE LOWER(:search) OR LOWER(details.raw_item) LIKE LOWER(:search))',
-        { search: `%${String(search).trim()}%` },
+        '(CAST(details.id AS CHAR) LIKE :search OR LOWER(details.customer_name) LIKE LOWER(:search) OR LOWER(details.raw_item) LIKE LOWER(:search) OR LOWER(product.productCode) LIKE LOWER(:search) OR LOWER(product.productName) LIKE LOWER(:search) OR LOWER(sale_by.fullName) LIKE LOWER(:search) OR LOWER(sale_by.username) LIKE LOWER(:search) OR LOWER(details.notes) LIKE LOWER(:search) OR LOWER(JSON_UNQUOTE(JSON_EXTRACT(details.metadata, "$.customer_name"))) LIKE LOWER(:search) OR LOWER(JSON_UNQUOTE(JSON_EXTRACT(details.metadata, "$.customer_phone"))) LIKE LOWER(:search))',
+        { search: searchTerm },
       );
     }
 
