@@ -39,3 +39,4 @@ export class AutoGreetingCustomerMessageHistory {
   @CreateDateColumn()
   created_at: Date;
 }
+

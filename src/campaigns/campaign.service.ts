@@ -3141,10 +3141,10 @@ export class CampaignService {
     // Kiểm tra quyền truy cập
     const campaign = await this.checkCampaignAccess(id, user);
 
-    // ✅ CHỈ CHO PHÉP XÓA CAMPAIGN Ở TRẠNG THÁI DRAFT
-    if (campaign.status !== CampaignStatus.DRAFT) {
+    // ✅ CHO PHÉP XÓA CAMPAIGN Ở TRẠNG THÁI DRAFT VÀ PAUSED
+    if (campaign.status !== CampaignStatus.DRAFT && campaign.status !== CampaignStatus.PAUSED) {
       throw new BadRequestException(
-        `Không thể xóa chiến dịch ở trạng thái ${campaign.status}. Chỉ có thể xóa chiến dịch ở trạng thái bản nháp.`,
+        `Không thể xóa chiến dịch ở trạng thái ${campaign.status}. Chỉ có thể xóa chiến dịch ở trạng thái bản nháp hoặc tạm dừng.`,
       );
     }
 

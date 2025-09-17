@@ -33,6 +33,7 @@ interface OrderFilters {
   quantity?: string;
   conversationType?: string;
   warningLevel?: string;
+  productCode?: string; // 'has' | 'no' để lọc đơn có/không có mã sản phẩm
   pmCustomMode?: string; // 'true' hoặc 'false' để xác định chế độ PM
   rolePermissions?: string; // Thông tin từng role từ frontend
   sortField?:
@@ -226,12 +227,38 @@ export class OrderService {
 
       // Apply filters
       if (filters?.search) {
-        query += ` AND (
-          LOWER(details.customer_name) LIKE LOWER(?) OR 
-          LOWER(details.raw_item) LIKE LOWER(?) OR
-          CAST(details.id AS CHAR) LIKE ?
-        )`;
-        const searchTerm = `%${filters.search}%`;
+        const trimmedSearch = String(filters.search).trim();
+        
+        // ✅ Hỗ trợ exact match khi search term được bao quanh bởi dấu ngoặc kép
+        let searchTerm: string;
+        let isExactMatch = false;
+        
+        if (trimmedSearch.startsWith('"') && trimmedSearch.endsWith('"') && trimmedSearch.length > 2) {
+          // Exact match: loại bỏ dấu ngoặc kép
+          searchTerm = trimmedSearch.slice(1, -1);
+          isExactMatch = true;
+        } else {
+          // Pattern match: thêm % như cũ
+          searchTerm = `%${trimmedSearch}%`;
+          isExactMatch = false;
+        }
+        
+        if (isExactMatch) {
+          // Exact match: sử dụng = thay vì LIKE
+          query += ` AND (
+            LOWER(details.customer_name) = LOWER(?) OR 
+            LOWER(details.raw_item) = LOWER(?) OR
+            CAST(details.id AS CHAR) = ?
+          )`;
+        } else {
+          // Pattern match: sử dụng LIKE như cũ
+          query += ` AND (
+            LOWER(details.customer_name) LIKE LOWER(?) OR 
+            LOWER(details.raw_item) LIKE LOWER(?) OR
+            CAST(details.id AS CHAR) LIKE ?
+          )`;
+        }
+        
         params.push(searchTerm, searchTerm, searchTerm);
       }
 
@@ -282,12 +309,38 @@ export class OrderService {
 
       const countParams: any[] = [];
       if (filters?.search) {
-        countQuery += ` AND (
-          LOWER(details.customer_name) LIKE LOWER(?) OR 
-          LOWER(details.raw_item) LIKE LOWER(?) OR
-          CAST(details.id AS CHAR) LIKE ?
-        )`;
-        const searchTerm = `%${filters.search}%`;
+        const trimmedSearch = String(filters.search).trim();
+        
+        // ✅ Hỗ trợ exact match khi search term được bao quanh bởi dấu ngoặc kép
+        let searchTerm: string;
+        let isExactMatch = false;
+        
+        if (trimmedSearch.startsWith('"') && trimmedSearch.endsWith('"') && trimmedSearch.length > 2) {
+          // Exact match: loại bỏ dấu ngoặc kép
+          searchTerm = trimmedSearch.slice(1, -1);
+          isExactMatch = true;
+        } else {
+          // Pattern match: thêm % như cũ
+          searchTerm = `%${trimmedSearch}%`;
+          isExactMatch = false;
+        }
+        
+        if (isExactMatch) {
+          // Exact match: sử dụng = thay vì LIKE
+          countQuery += ` AND (
+            LOWER(details.customer_name) = LOWER(?) OR 
+            LOWER(details.raw_item) = LOWER(?) OR
+            CAST(details.id AS CHAR) = ?
+          )`;
+        } else {
+          // Pattern match: sử dụng LIKE như cũ
+          countQuery += ` AND (
+            LOWER(details.customer_name) LIKE LOWER(?) OR 
+            LOWER(details.raw_item) LIKE LOWER(?) OR
+            CAST(details.id AS CHAR) LIKE ?
+          )`;
+        }
+        
         countParams.push(searchTerm, searchTerm, searchTerm);
       }
       if (filters?.status) {
@@ -2324,11 +2377,35 @@ export class OrderService {
 
     // Apply search
     if (search && search.trim()) {
-      const searchTerm = `%${String(search).trim()}%`;
-      qb.andWhere(
-        '(CAST(details.id AS CHAR) LIKE :search OR LOWER(details.customer_name) LIKE LOWER(:search) OR LOWER(details.raw_item) LIKE LOWER(:search) OR LOWER(product.productCode) LIKE LOWER(:search) OR LOWER(product.productName) LIKE LOWER(:search) OR LOWER(sale_by.fullName) LIKE LOWER(:search) OR LOWER(sale_by.username) LIKE LOWER(:search) OR LOWER(details.notes) LIKE LOWER(:search) OR LOWER(JSON_UNQUOTE(JSON_EXTRACT(details.metadata, "$.customer_name"))) LIKE LOWER(:search) OR LOWER(JSON_UNQUOTE(JSON_EXTRACT(details.metadata, "$.customer_phone"))) LIKE LOWER(:search))',
-        { search: searchTerm },
-      );
+      const trimmedSearch = String(search).trim();
+      
+      // ✅ Hỗ trợ exact match khi search term được bao quanh bởi dấu ngoặc kép
+      let searchTerm: string;
+      let isExactMatch = false;
+      
+      if (trimmedSearch.startsWith('"') && trimmedSearch.endsWith('"') && trimmedSearch.length > 2) {
+        // Exact match: loại bỏ dấu ngoặc kép
+        searchTerm = trimmedSearch.slice(1, -1);
+        isExactMatch = true;
+      } else {
+        // Pattern match: thêm % như cũ
+        searchTerm = `%${trimmedSearch}%`;
+        isExactMatch = false;
+      }
+      
+      if (isExactMatch) {
+        // Exact match: sử dụng = thay vì LIKE
+        qb.andWhere(
+          '(CAST(details.id AS CHAR) = :search OR LOWER(details.customer_name) = LOWER(:search) OR LOWER(details.raw_item) = LOWER(:search) OR LOWER(product.productCode) = LOWER(:search) OR LOWER(product.productName) = LOWER(:search) OR LOWER(sale_by.fullName) = LOWER(:search) OR LOWER(sale_by.username) = LOWER(:search) OR LOWER(details.notes) = LOWER(:search) OR LOWER(JSON_UNQUOTE(JSON_EXTRACT(details.metadata, "$.customer_name"))) = LOWER(:search) OR LOWER(JSON_UNQUOTE(JSON_EXTRACT(details.metadata, "$.customer_phone"))) = LOWER(:search))',
+          { search: searchTerm },
+        );
+      } else {
+        // Pattern match: sử dụng LIKE như cũ
+        qb.andWhere(
+          '(CAST(details.id AS CHAR) LIKE :search OR LOWER(details.customer_name) LIKE LOWER(:search) OR LOWER(details.raw_item) LIKE LOWER(:search) OR LOWER(product.productCode) LIKE LOWER(:search) OR LOWER(product.productName) LIKE LOWER(:search) OR LOWER(sale_by.fullName) LIKE LOWER(:search) OR LOWER(sale_by.username) LIKE LOWER(:search) OR LOWER(details.notes) LIKE LOWER(:search) OR LOWER(JSON_UNQUOTE(JSON_EXTRACT(details.metadata, "$.customer_name"))) LIKE LOWER(:search) OR LOWER(JSON_UNQUOTE(JSON_EXTRACT(details.metadata, "$.customer_phone"))) LIKE LOWER(:search))',
+          { search: searchTerm },
+        );
+      }
     }
 
     // Apply status filter
@@ -2526,6 +2603,7 @@ export class OrderService {
       warningLevel,
       quantity,
       conversationType,
+      productCode,
       sortField,
       sortDirection,
       user,
@@ -2698,12 +2776,48 @@ export class OrderService {
         qb.andWhere('details.quantity >= :minQty', { minQty });
     }
 
+    // Product code filter
+    if (filters.productCode && filters.productCode.trim()) {
+      const productCodeFilter = filters.productCode.trim();
+      if (productCodeFilter === 'has') {
+        // Lọc đơn có mã sản phẩm (product_id không null và productCode không rỗng)
+        qb.andWhere('details.product_id IS NOT NULL AND product.productCode IS NOT NULL AND product.productCode != ""');
+      } else if (productCodeFilter === 'no') {
+        // Lọc đơn không có mã sản phẩm (product_id null hoặc productCode rỗng)
+        qb.andWhere('(details.product_id IS NULL OR product.productCode IS NULL OR product.productCode = "")');
+      }
+    }
+
     if (search) {
-      const searchTerm = `%${String(search).trim()}%`;
-      qb.andWhere(
-        '(CAST(details.id AS CHAR) LIKE :search OR LOWER(details.customer_name) LIKE LOWER(:search) OR LOWER(details.raw_item) LIKE LOWER(:search) OR LOWER(product.productCode) LIKE LOWER(:search) OR LOWER(product.productName) LIKE LOWER(:search) OR LOWER(sale_by.fullName) LIKE LOWER(:search) OR LOWER(sale_by.username) LIKE LOWER(:search) OR LOWER(details.notes) LIKE LOWER(:search) OR LOWER(JSON_UNQUOTE(JSON_EXTRACT(details.metadata, "$.customer_name"))) LIKE LOWER(:search) OR LOWER(JSON_UNQUOTE(JSON_EXTRACT(details.metadata, "$.customer_phone"))) LIKE LOWER(:search))',
-        { search: searchTerm },
-      );
+      const trimmedSearch = String(search).trim();
+      
+      // ✅ Hỗ trợ exact match khi search term được bao quanh bởi dấu ngoặc kép
+      let searchTerm: string;
+      let isExactMatch = false;
+      
+      if (trimmedSearch.startsWith('"') && trimmedSearch.endsWith('"') && trimmedSearch.length > 2) {
+        // Exact match: loại bỏ dấu ngoặc kép
+        searchTerm = trimmedSearch.slice(1, -1);
+        isExactMatch = true;
+      } else {
+        // Pattern match: thêm % như cũ
+        searchTerm = `%${trimmedSearch}%`;
+        isExactMatch = false;
+      }
+      
+      if (isExactMatch) {
+        // Exact match: sử dụng = thay vì LIKE
+        qb.andWhere(
+          '(CAST(details.id AS CHAR) = :search OR LOWER(details.customer_name) = LOWER(:search) OR LOWER(details.raw_item) = LOWER(:search) OR LOWER(product.productCode) = LOWER(:search) OR LOWER(product.productName) = LOWER(:search) OR LOWER(sale_by.fullName) = LOWER(:search) OR LOWER(sale_by.username) = LOWER(:search) OR LOWER(details.notes) = LOWER(:search) OR LOWER(JSON_UNQUOTE(JSON_EXTRACT(details.metadata, "$.customer_name"))) = LOWER(:search) OR LOWER(JSON_UNQUOTE(JSON_EXTRACT(details.metadata, "$.customer_phone"))) = LOWER(:search))',
+          { search: searchTerm },
+        );
+      } else {
+        // Pattern match: sử dụng LIKE như cũ
+        qb.andWhere(
+          '(CAST(details.id AS CHAR) LIKE :search OR LOWER(details.customer_name) LIKE LOWER(:search) OR LOWER(details.raw_item) LIKE LOWER(:search) OR LOWER(product.productCode) LIKE LOWER(:search) OR LOWER(product.productName) LIKE LOWER(:search) OR LOWER(sale_by.fullName) LIKE LOWER(:search) OR LOWER(sale_by.username) LIKE LOWER(:search) OR LOWER(details.notes) LIKE LOWER(:search) OR LOWER(JSON_UNQUOTE(JSON_EXTRACT(details.metadata, "$.customer_name"))) LIKE LOWER(:search) OR LOWER(JSON_UNQUOTE(JSON_EXTRACT(details.metadata, "$.customer_phone"))) LIKE LOWER(:search))',
+          { search: searchTerm },
+        );
+      }
     }
 
     if (status && status.trim()) {
@@ -3107,10 +3221,35 @@ export class OrderService {
 
     // Apply basic filters (search, status, date, etc.) - giữ nguyên logic filter cơ bản
     if (search) {
-      qb.andWhere(
-        '(CAST(details.id AS CHAR) LIKE :search OR details.customer_name LIKE :search OR details.raw_item LIKE :search)',
-        { search: `%${search}%` },
-      );
+      const trimmedSearch = String(search).trim();
+      
+      // ✅ Hỗ trợ exact match khi search term được bao quanh bởi dấu ngoặc kép
+      let searchTerm: string;
+      let isExactMatch = false;
+      
+      if (trimmedSearch.startsWith('"') && trimmedSearch.endsWith('"') && trimmedSearch.length > 2) {
+        // Exact match: loại bỏ dấu ngoặc kép
+        searchTerm = trimmedSearch.slice(1, -1);
+        isExactMatch = true;
+      } else {
+        // Pattern match: thêm % như cũ
+        searchTerm = `%${trimmedSearch}%`;
+        isExactMatch = false;
+      }
+      
+      if (isExactMatch) {
+        // Exact match: sử dụng = thay vì LIKE
+        qb.andWhere(
+          '(CAST(details.id AS CHAR) = :search OR details.customer_name = :search OR details.raw_item = :search)',
+          { search: searchTerm },
+        );
+      } else {
+        // Pattern match: sử dụng LIKE như cũ
+        qb.andWhere(
+          '(CAST(details.id AS CHAR) LIKE :search OR details.customer_name LIKE :search OR details.raw_item LIKE :search)',
+          { search: searchTerm },
+        );
+      }
     }
 
     if (status) {

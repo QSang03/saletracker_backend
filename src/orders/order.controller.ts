@@ -55,6 +55,7 @@ export class OrderController {
     @Query('sortDirection') sortDirection?: 'asc' | 'desc',
     @Query('quantity') quantity?: string,
     @Query('conversationType') conversationType?: string,
+    @Query('productCode') productCode?: string,
     @Query('includeHidden') includeHidden?: string,
     @Req() req?: any,
   ): Promise<{
@@ -95,6 +96,7 @@ export class OrderController {
       warningLevel,
       quantity,
       conversationType,
+      productCode,
       sortField: sortField || null,
       sortDirection: sortDirection || null,
       includeHidden,

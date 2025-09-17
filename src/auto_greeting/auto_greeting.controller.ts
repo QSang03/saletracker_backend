@@ -323,6 +323,7 @@ export class AutoGreetingController {
   async exportCustomersFiltered(@Body() filters: {
     searchTerm?: string;
     statusFilter?: string;
+    conversationTypeFilter?: string;
     dateFilter?: string;
   }, @Query('userId') userId?: string, @Req() req?: any) {
     // Lấy tất cả customers trước
@@ -348,6 +349,10 @@ export class AutoGreetingController {
 
     if (filters.statusFilter && filters.statusFilter !== 'all') {
       customers = customers.filter((customer) => customer.customerStatus === filters.statusFilter);
+    }
+
+    if (filters.conversationTypeFilter && filters.conversationTypeFilter !== 'all') {
+      customers = customers.filter((customer) => customer.conversationType === filters.conversationTypeFilter);
     }
 
     if (filters.dateFilter) {
