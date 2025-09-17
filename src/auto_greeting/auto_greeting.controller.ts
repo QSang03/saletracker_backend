@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Patch,
+  Delete,
   Body,
   Param,
   Query,
@@ -10,6 +11,10 @@ import {
   UseInterceptors,
   UploadedFile,
   Req,
+  Res,
+  Headers,
+  HttpException,
+  HttpStatus,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { AuthGuard } from '@nestjs/passport';
@@ -21,7 +26,31 @@ import * as ExcelJS from 'exceljs';
 @Controller('auto-greeting')
 @UseGuards(AuthGuard('jwt'))
 export class AutoGreetingController {
-  constructor(private readonly autoGreetingService: AutoGreetingService) {}
+  constructor(private readonly autoGreetingService: AutoGreetingService) {  }
+
+  /**
+   * Xóa khách hàng
+   */
+  @Delete('customers/:customerId')
+  async deleteCustomer(
+    @Param('customerId') customerId: string,
+    @Req() req: any,
+    @Headers('x-master-key') masterKey: string,
+  ): Promise<{ message: string }> {
+    // Kiểm tra X-Master-Key
+    const expectedMasterKey = process.env.MASTER_KEY || 'nkcai';
+    if (!masterKey || masterKey !== expectedMasterKey) {
+      throw new HttpException('Unauthorized: Invalid or missing X-Master-Key', HttpStatus.UNAUTHORIZED);
+    }
+
+    const userId = req.user?.id;
+    if (!userId) {
+      throw new Error('User not authenticated');
+    }
+
+    await this.autoGreetingService.deleteCustomer(customerId, userId);
+    return { message: 'Khách hàng đã được xóa thành công' };
+  }
 
   /**
    * Lấy cấu hình auto-greeting
@@ -106,7 +135,13 @@ export class AutoGreetingController {
   async importCustomers(
     @UploadedFile() file: Express.Multer.File,
     @Req() req: any,
+    @Headers('x-master-key') masterKey: string,
   ): Promise<{ success: number; failed: number; errors: string[]; message: string }> {
+    // Kiểm tra X-Master-Key
+    const expectedMasterKey = process.env.MASTER_KEY || 'nkcai';
+    if (!masterKey || masterKey !== expectedMasterKey) {
+      throw new HttpException('Unauthorized: Invalid or missing X-Master-Key', HttpStatus.UNAUTHORIZED);
+    }
     if (!file) {
       return {
         success: 0,
@@ -141,38 +176,69 @@ export class AutoGreetingController {
         };
       }
 
-      console.log('Worksheet found, row count:', worksheet.rowCount);
-
       const data: any[] = [];
       const headers: { [key: number]: string } = {};
-      
-      // Get headers from first row
-      const headerRow = worksheet.getRow(1);
+
+      // Helper: extract plain text from ExcelJS cell value
+      const getText = (val: any): string => {
+        if (val === null || val === undefined) return '';
+        if (typeof val === 'string' || typeof val === 'number') return String(val).trim();
+        if (val instanceof Date) return val.toISOString();
+        if (typeof val === 'object') {
+          if (typeof (val as any).text === 'string') return String((val as any).text).trim();
+          if (Array.isArray((val as any).richText)) {
+            return (val as any).richText.map((t: any) => t.text || '').join('').trim();
+          }
+          if ((val as any).result !== undefined) return String((val as any).result).trim();
+        }
+        return String(val).trim();
+      };
+
+      // Detect header row by scanning first 10 rows
+      let headerRowIndex = 1;
+      const expectedHeaders = ['Tên hiển thị Zalo', 'Xưng hô', 'Tin nhắn chào'];
+      const maxScan = Math.min(10, worksheet.rowCount);
+      for (let r = 1; r <= maxScan; r++) {
+        const row = worksheet.getRow(r);
+        const values: string[] = [];
+        row.eachCell((cell) => values.push(getText(cell.value)));
+        const hit = expectedHeaders.every((h) => values.includes(h));
+        if (hit) {
+          headerRowIndex = r;
+          break;
+        }
+      }
+
+      // Build headers map from detected header row
+      const headerRow = worksheet.getRow(headerRowIndex);
       headerRow.eachCell((cell, colNumber) => {
-        headers[colNumber] = String(cell.value || '');
+        headers[colNumber] = getText(cell.value);
       });
-      
-      console.log('Headers:', headers);
-      
-      // Process data rows
-      worksheet.eachRow((row, rowNumber) => {
-        if (rowNumber === 1) return; // Skip header row
-        
+
+      // Process data rows after header
+      for (let r = headerRowIndex + 1; r <= worksheet.rowCount; r++) {
+        const row = worksheet.getRow(r);
+        let hasData = false;
         const rowData: any = {};
-        row.eachCell((cell, colNumber) => {
+        row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
           const headerName = headers[colNumber];
-          if (headerName && cell.value !== null && cell.value !== undefined) {
-            rowData[headerName] = cell.value;
+          const text = getText(cell.value);
+          if (headerName && text) {
+            rowData[headerName] = text;
+            hasData = true;
           }
         });
-        
-        // Chỉ thêm row nếu có dữ liệu và có ít nhất tên khách hàng
-        if (Object.keys(rowData).length > 0 && rowData['Tên hiển thị Zalo']) {
+
+        // Skip empty rows and footer line
+        const name = rowData['Tên hiển thị Zalo'];
+        if (
+          hasData &&
+          name &&
+          !String(name).toLowerCase().startsWith('tổng số khách hàng')
+        ) {
           data.push(rowData);
         }
-      });
-      
-      console.log('Processed data:', data);
+      }
 
       if (!data || data.length === 0) {
         return {
@@ -210,7 +276,16 @@ export class AutoGreetingController {
    * Lấy lịch sử tin nhắn của khách hàng
    */
   @Get('customers/:customerId/message-history')
-  async getCustomerMessageHistory(@Param('customerId') customerId: string) {
+  async getCustomerMessageHistory(
+    @Param('customerId') customerId: string,
+    @Headers('x-master-key') masterKey: string,
+  ) {
+    // Kiểm tra X-Master-Key
+    const expectedMasterKey = process.env.MASTER_KEY || 'nkcai';
+    if (!masterKey || masterKey !== expectedMasterKey) {
+      throw new HttpException('Unauthorized: Invalid or missing X-Master-Key', HttpStatus.UNAUTHORIZED);
+    }
+
     const history = await this.autoGreetingService.getCustomerMessageHistory(customerId);
     return history.map(h => ({
       id: Number(h.id),
@@ -463,6 +538,208 @@ export class AutoGreetingController {
         return 'Bình thường';
       default:
         return 'Bình thường';
+    }
+  }
+
+  /**
+   * Nhập khách hàng từ danh bạ contacts và tạo file Excel
+   */
+  @Post('import-from-contacts')
+  @UseGuards(AuthGuard('jwt'))
+  async importFromContacts(@Req() req: any, @Res() res: any) {
+    try {
+      const userId = req.user?.id;
+      if (!userId) {
+        throw new Error('User ID not found');
+      }
+
+      const authHeader = req.headers?.authorization || req.headers?.Authorization;
+      const result = await this.autoGreetingService.importFromContacts(userId, authHeader);
+      
+      console.log('Import result:', result);
+      console.log('Data count:', result.count);
+      console.log('Data sample:', result.data.slice(0, 2));
+      
+      // Tạo file Excel từ dữ liệu contacts
+      const workbook = new ExcelJS.Workbook();
+      const worksheet = workbook.addWorksheet('Danh sách khách hàng từ danh bạ');
+
+      // Định nghĩa columns với formatting đẹp
+      worksheet.columns = [
+        { header: 'Tên hiển thị Zalo', key: 'name', width: 30 },
+        { header: 'Xưng hô', key: 'salutation', width: 20 },
+        { header: 'Tin nhắn chào', key: 'greeting', width: 50 },
+      ];
+
+      // Style cho header row (chỉ 3 ô A-C, tránh tô màu dư cột)
+      const headerRow = worksheet.getRow(1);
+      for (let col = 1; col <= 3; col++) {
+        const cell = headerRow.getCell(col);
+        cell.font = {
+          name: 'Arial',
+          size: 12,
+          bold: true,
+          color: { argb: 'FFFFFF' },
+        };
+        cell.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: '4472C4' }, // Blue background
+        };
+        cell.alignment = {
+          vertical: 'middle',
+          horizontal: 'center',
+        };
+        cell.border = {
+          top: { style: 'thin', color: { argb: '000000' } },
+          left: { style: 'thin', color: { argb: '000000' } },
+          bottom: { style: 'thin', color: { argb: '000000' } },
+          right: { style: 'thin', color: { argb: '000000' } },
+        };
+      }
+      headerRow.height = 25;
+
+      // Thêm dữ liệu với formatting đẹp
+      result.data.forEach((row: any, index: number) => {
+        const excelRow = worksheet.addRow({
+          name: row['Tên hiển thị Zalo'],
+          salutation: row['Xưng hô'],
+          greeting: row['Tin nhắn chào']
+        });
+
+        // Font + alignment cho 3 ô đầu (A-C)
+        for (let col = 1; col <= 3; col++) {
+          const cell = excelRow.getCell(col);
+          cell.font = { name: 'Arial', size: 10 };
+          cell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
+          cell.border = {
+            top: { style: 'thin', color: { argb: 'D3D3D3' } },
+            left: { style: 'thin', color: { argb: 'D3D3D3' } },
+            bottom: { style: 'thin', color: { argb: 'D3D3D3' } },
+            right: { style: 'thin', color: { argb: 'D3D3D3' } },
+          };
+          // Alternating row colors (zebra) chỉ áp cho 3 cột
+          cell.fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: index % 2 === 0 ? 'F2F2F2' : 'FFFFFF' },
+          };
+        }
+
+        // Đảm bảo các cột sau C không bị tô
+        excelRow.eachCell({ includeEmpty: true }, (c, col) => {
+          if (col > 3) {
+            c.fill = undefined as any;
+            c.border = undefined as any;
+            c.font = { name: 'Arial', size: 10 };
+            c.alignment = { vertical: 'middle', horizontal: 'left' };
+          }
+        });
+
+        // Row height
+        excelRow.height = 20;
+      });
+
+      // Thêm title cho worksheet (merge đúng 3 cột A-C)
+      worksheet.insertRow(1, ['']);
+      const titleRow = worksheet.getRow(1);
+      worksheet.mergeCells('A1:C1');
+      const titleCell = worksheet.getCell('A1');
+      titleCell.value = 'DANH SÁCH KHÁCH HÀNG TỪ DANH BẠ ZALO';
+      titleCell.font = { 
+        name: 'Arial', 
+        size: 16, 
+        bold: true, 
+        color: { argb: '2F4F4F' }
+      };
+      titleCell.alignment = { 
+        vertical: 'middle', 
+        horizontal: 'center' 
+      };
+      titleCell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'E6F3FF' } // Light blue background
+      };
+      titleRow.height = 30;
+
+      // Thêm thông tin ngày tạo (merge đúng 3 cột A-C)
+      worksheet.insertRow(2, ['']);
+      const dateRow = worksheet.getRow(2);
+      worksheet.mergeCells('A2:C2');
+      const dateCell = worksheet.getCell('A2');
+      dateCell.value = `Ngày tạo: ${new Date().toLocaleDateString('vi-VN')} ${new Date().toLocaleTimeString('vi-VN')}`;
+      dateCell.font = { 
+        name: 'Arial', 
+        size: 10, 
+        italic: true,
+        color: { argb: '666666' }
+      };
+      dateCell.alignment = { 
+        vertical: 'middle', 
+        horizontal: 'center' 
+      };
+      dateRow.height = 20;
+
+      // Thêm row trống
+      worksheet.insertRow(3, ['']);
+      
+      // Freeze header row (bây giờ là row 4)
+      worksheet.views = [
+        { 
+          state: 'frozen', 
+          ySplit: 4 // Freeze first 4 rows (title, date, empty, header)
+        }
+      ];
+
+      // Auto-fit columns nhưng giữ minimum width
+      worksheet.columns.forEach(column => {
+        if (column.width) {
+          column.width = Math.max(column.width, 15);
+        }
+      });
+
+      // Thêm footer với tổng số records (merge đúng 3 cột A-C)
+      const lastRowNum = worksheet.rowCount + 1;
+      worksheet.addRow(['']);
+      const footerRow = worksheet.getRow(lastRowNum);
+      worksheet.mergeCells(`A${lastRowNum}:C${lastRowNum}`);
+      const footerCell = worksheet.getCell(`A${lastRowNum}`);
+      footerCell.value = `Tổng số khách hàng: ${result.count}`;
+      footerCell.font = { 
+        name: 'Arial', 
+        size: 10, 
+        bold: true,
+        color: { argb: '4472C4' }
+      };
+      footerCell.alignment = { 
+        vertical: 'middle', 
+        horizontal: 'center' 
+      };
+      footerCell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'F0F8FF' } // Very light blue
+      };
+      footerRow.height = 25;
+
+      // Tạo buffer
+      const buffer = await workbook.xlsx.writeBuffer();
+      const filename = `danh-sach-khach-hang-tu-danh-ba-${new Date().toISOString().split('T')[0]}.xlsx`;
+
+      // Set headers cho file download
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.setHeader('Content-Length', Buffer.byteLength(buffer));
+
+      // Gửi buffer trực tiếp
+      return res.send(buffer);
+    } catch (error) {
+      console.error('Error importing from contacts:', error);
+      throw new HttpException(
+        error.message || 'Failed to import from contacts',
+        HttpStatus.INTERNAL_SERVER_ERROR
+      );
     }
   }
 }

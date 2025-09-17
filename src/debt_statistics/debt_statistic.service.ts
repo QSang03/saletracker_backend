@@ -356,13 +356,6 @@ export class DebtStatisticService {
         throw new Error('Either date or to parameter is required');
       }
       const isHistoricalDate = D < today;
-      
-      // Log để debug sự khác biệt giữa chart và modal
-      console.log('🔍 [getDetailedDebts] Date requested:', D);
-      console.log('🔍 [getDetailedDebts] Today:', today);
-      console.log('🔍 [getDetailedDebts] Is historical date:', isHistoricalDate);
-      console.log('🔍 [getDetailedDebts] Status filter:', status);
-      console.log('🔍 [getDetailedDebts] Mode:', mode);
 
       // New: support range-based details to align with range aggregations (e.g., pay-later delay buckets)
       const isRange = !date && !!from && !!to;
@@ -769,11 +762,6 @@ export class DebtStatisticService {
           limit,
           totalPages: Math.ceil(total / limit),
         };
-        
-        // Log kết quả để debug
-        console.log('🔍 [getDetailedDebts] Final result - Data source: debts (current)');
-        console.log('🔍 [getDetailedDebts] Final result - Total records:', result.total);
-        console.log('🔍 [getDetailedDebts] Final result - Data count:', result.data?.length || 0);
         
         return result;
       }

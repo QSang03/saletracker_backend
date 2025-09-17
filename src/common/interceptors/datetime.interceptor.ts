@@ -41,14 +41,32 @@ const FIELDS = [
   'end_time',
 ];
 
-function convertDates(obj: any): any {
+function convertDates(obj: any, seen = new WeakSet<any>()): any {
   // Handle undefined/null case
   if (obj === undefined || obj === null) {
     return obj === undefined ? {} : null;
   }
   
+  // Skip Buffer/ArrayBuffer/Uint8Array/Streams to avoid corrupting binary responses
+  if (
+    typeof Buffer !== 'undefined' && Buffer.isBuffer(obj) ||
+    obj instanceof ArrayBuffer ||
+    obj instanceof Uint8Array ||
+    (typeof obj === 'object' && typeof (obj as any).pipe === 'function')
+  ) {
+    return obj;
+  }
+
+  // Prevent infinite recursion on circular structures
+  if (typeof obj === 'object') {
+    if (seen.has(obj)) {
+      return obj;
+    }
+    seen.add(obj);
+  }
+
   if (Array.isArray(obj)) {
-    return obj.map(convertDates);
+    return obj.map((item) => convertDates(item, seen));
   }
   
   if (obj && typeof obj === 'object') {
@@ -64,7 +82,7 @@ function convertDates(obj: any): any {
           .tz('Asia/Ho_Chi_Minh')
           .format('YYYY-MM-DD HH:mm:ss');
       } else if (typeof value === 'object' && value !== null) {
-        result[key] = convertDates(value);
+        result[key] = convertDates(value, seen);
       } else {
         result[key] = value;
       }

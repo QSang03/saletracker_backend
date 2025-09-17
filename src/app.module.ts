@@ -3,8 +3,6 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { MulterModule } from '@nestjs/platform-express';
-import { AppController } from './app.controller';
-import { AppService } from './app.service';
 import { UserModule } from './users/user.module';
 import { AuthModule } from './auth/auth.module';
 import { RoleModule } from './roles/role.module';
@@ -38,6 +36,7 @@ import { CampaignScheduleModule } from './campaign_schedules/campaign_schedule.m
 import { CampaignContentModule } from './campaign_contents/campaign_content.module';
 import { CampaignDepartmentsSchedulesModule } from './campaign_departments_schedules/campaign_departments_schedules.module';
 import { OrderBlacklistModule } from './order-blacklist/order-blacklist.module';
+import { AnalysisBlockModule } from './analysis-block/analysis-block.module';
 import { AutoReplyModule } from './auto_reply/auto_reply.module';
 import { AutoGreetingModule } from './auto_greeting/auto_greeting.module';
 import { CommonModule } from './common/common.module';
@@ -74,6 +73,7 @@ import { CommonModule } from './common/common.module';
     OrderModule,
     OrderDetailModule,
     OrderBlacklistModule,
+    AnalysisBlockModule,
     WebhookModule,
     DebtStatisticModule,
     WebsocketModule,
@@ -89,7 +89,5 @@ import { CommonModule } from './common/common.module';
     AutoGreetingModule,
     CommonModule,
   ],
-  controllers: [AppController],
-  providers: [AppService],
 })
 export class AppModule {}

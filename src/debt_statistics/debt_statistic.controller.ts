@@ -258,11 +258,6 @@ export class DebtStatisticController {
     
     const result = await this.debtStatisticService.getDetailedDebts(filters);
     
-    // Log để debug sự khác biệt giữa chart và modal
-    console.log('🔍 [getDetailedDebts] Request filters:', filters);
-    console.log('🔍 [getDetailedDebts] Response total:', result.total);
-    console.log('🔍 [getDetailedDebts] Response data count:', result.data?.length || 0);
-    
     return result;
   }
 

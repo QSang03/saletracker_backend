@@ -2136,11 +2136,6 @@ export class OrderService {
           const pmCustomMode = filters.pmCustomMode === 'true';
 
           if (pmCustomMode) {
-            // ✅ Chế độ tổ hợp riêng: xử lý từng role riêng biệt từ rolePermissions parameter
-            this.logger.log(
-              '🔍 [Order PM Custom Mode] Starting role-based combination logic',
-            );
-
             const allCombinations: string[] = [];
             const allSinglePermissions: string[] = [];
 
@@ -2271,10 +2266,6 @@ export class OrderService {
       (filters.brands && filters.brands.trim()) ||
       (filters.categories && filters.categories.trim())
     ) {
-      this.logger.log(
-        '🔍 [Order Filter] User selected specific brands/categories, applying targeted filter',
-      );
-
       // Lấy tất cả permissions của user để kiểm tra quyền
       const permissions = (user.permissions || []).map((p: any) =>
         typeof p === 'string' ? p : p.name || '',
@@ -2324,14 +2315,7 @@ export class OrderService {
               qb.andWhere('brand.slug IN (:...validBrandSlugs)', {
                 validBrandSlugs,
               });
-              this.logger.log(
-                `🔍 [Order Filter] Applied brand filter (within permissions): ${validBrandSlugs.join(', ')}`,
-              );
             } else {
-              // User chọn brands không có quyền → trả về empty
-              this.logger.log(
-                '🔍 [Order Filter] User selected brands without permission, returning empty',
-              );
               return { data: [], total: 0, page, pageSize };
             }
           }
@@ -2356,14 +2340,7 @@ export class OrderService {
               qb.andWhere('category.slug IN (:...validCategorySlugs)', {
                 validCategorySlugs,
               });
-              this.logger.log(
-                `🔍 [Order Filter] Applied category filter (within permissions): ${validCategorySlugs.join(', ')}`,
-              );
             } else {
-              // User chọn categories không có quyền → trả về empty
-              this.logger.log(
-                '🔍 [Order Filter] User selected categories without permission, returning empty',
-              );
               return { data: [], total: 0, page, pageSize };
             }
           }

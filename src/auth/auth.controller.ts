@@ -27,7 +27,6 @@ export class AuthController {
 
       return result;
     } catch (error) {
-      console.error('❌ [Login] Login failed:', error.message);
       throw error;
     }
   }
@@ -117,11 +116,6 @@ export class AuthController {
       const result = await this.authService.refreshToken(refreshTokenDto);
       return result;
     } catch (error) {
-      console.error('❌ [AuthController] Refresh token failed:', error.message);
-      console.error(
-        '❌ [AuthController] Error stack:',
-        error.stack?.substring(0, 200),
-      );
       throw error; // Re-throw to let NestJS handle the response
     }
   }

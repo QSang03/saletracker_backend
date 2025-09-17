@@ -27,7 +27,7 @@ export class ProductV2CronjobService {
     private readonly permissionService: PermissionService,
   ) {}
 
-  @Cron(process.env.CRON_PRODUCT_TIME || '0 0 * * *')
+  @Cron(process.env.CRON_PRODUCT_TIME || '0 22 * * *')
   async syncProductsV2() {
     const apiUrl = process.env.VNK_API_PRODUCT_URL_V2;
     const token = process.env.VNK_API_TOKEN;

@@ -53,15 +53,9 @@ export class ProductService {
             .map(p => slugify(p, { lower: true, strict: true }))
             .filter(Boolean);
 
-        // ✅ Kiểm tra chế độ PM từ filter
         const pmCustomMode = filter.pmCustomMode === 'true';
         
         if (pmCustomMode) {
-          // ✅ Chế độ tổ hợp riêng: chỉ tổ hợp permissions trong cùng 1 role
-          console.log('🔍 [Product PM Custom Mode] Starting role-based combination logic');
-          
-
-          // Tạo danh sách tất cả combinations từ từng role riêng biệt
           const allCombinations: string[] = [];
           const allSingleSlugs: string[] = [];
 
@@ -69,12 +63,7 @@ export class ProductService {
           if (filter.rolePermissions) {
             try {
               const rolePermissionsData = JSON.parse(filter.rolePermissions);
-              console.log('📥 [Product PM Custom Mode] Received rolePermissions:', rolePermissionsData);
-              
-              // Xử lý từng role riêng biệt
               Object.entries(rolePermissionsData).forEach(([roleName, roleData]: [string, any]) => {
-                console.log(`\n🔑 [Product PM Custom Mode] Processing role: ${roleName}`);
-                
                 const roleBrands = roleData.brands || [];
                 const roleCategories = roleData.categories || [];
 
@@ -102,7 +91,6 @@ export class ProductService {
                     brandSlugs.forEach(brand => {
                       const combination = `${cat}+${brand}`;
                       allCombinations.push(combination);
-                      console.log(`  ✅ Added combination: ${combination}`);
                     });
                   });
                 } else {
@@ -117,13 +105,8 @@ export class ProductService {
             }
           }
 
-          console.log(`\n🎯 [Product PM Custom Mode] Final results:`);
-          console.log(`  📊 Total combinations: ${allCombinations.length}`, allCombinations);
-          console.log(`  📋 Total single slugs: ${allSingleSlugs.length}`, allSingleSlugs);
-
           // Áp dụng filter
           if (allCombinations.length > 0) {
-            console.log(`🔍 [Product PM Custom Mode] Applying combination filter with ${allCombinations.length} combinations`);
             qb.andWhere(
               'CONCAT(c.slug, "+", b.slug) IN (:...allCombinations)',
               { allCombinations }
@@ -131,7 +114,6 @@ export class ProductService {
           }
           
           if (allSingleSlugs.length > 0) {
-            console.log(`🔍 [Product PM Custom Mode] Applying single slug filter with ${allSingleSlugs.length} slugs`);
             qb.andWhere(
               '(b.slug IN (:...allSingleSlugs) OR c.slug IN (:...allSingleSlugs))',
               { allSingleSlugs }
@@ -139,8 +121,6 @@ export class ProductService {
           }
 
           if (allCombinations.length === 0 && allSingleSlugs.length === 0) {
-            console.log('❌ [Product PM Custom Mode] No valid permissions found, returning empty result');
-            // Không có permissions hợp lệ → trả về empty
             return { data: [], total: 0 };
           }
         } else {

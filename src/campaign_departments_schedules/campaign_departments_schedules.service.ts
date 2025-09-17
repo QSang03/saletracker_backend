@@ -35,10 +35,6 @@ export class CampaignDepartmentsSchedulesService {
         throw new BadRequestException('User ID is required');
       }
 
-      console.log('🔍 VALIDATING SCHEDULE CONFIG');
-      console.log('📝 Schedule type:', createDto.schedule_type);
-      console.log('📋 Config:', JSON.stringify(createDto.schedule_config, null, 2));
-
       // Validate schedule configuration
       const isValidConfig = await this.validateScheduleConfig(
         createDto.schedule_config,
@@ -46,11 +42,8 @@ export class CampaignDepartmentsSchedulesService {
       );
 
       if (!isValidConfig) {
-        console.log('❌ INVALID SCHEDULE CONFIG');
         throw new BadRequestException('Invalid schedule configuration');
       }
-
-      console.log('✅ SCHEDULE CONFIG VALID');
 
       const schedule = this.departmentScheduleRepository.create({
         ...createDto,
@@ -63,14 +56,12 @@ export class CampaignDepartmentsSchedulesService {
         await this.departmentScheduleRepository.save(schedule);
       return savedSchedule;
     } catch (error) {
-      console.error('=== CREATE SCHEDULE ERROR ===');
-      console.error('Error details:', error);
-      console.error('Error message:', error.message);
-      console.error('Error stack:', error.stack);
       if (error instanceof BadRequestException) {
         throw error;
       }
-      throw new BadRequestException(`Failed to create department schedule: ${error.message}`);
+      throw new BadRequestException(
+        `Failed to create department schedule: ${error.message}`,
+      );
     }
   }
 
@@ -225,85 +216,68 @@ export class CampaignDepartmentsSchedulesService {
     schedule_type: string,
   ): Promise<boolean> {
     try {
-      console.log('🔍 VALIDATING CONFIG FOR TYPE:', schedule_type);
-      console.log('📋 Config received:', JSON.stringify(schedule_config, null, 2));
-
       if (schedule_type === 'daily_dates') {
-        console.log('📅 Validating daily_dates config');
         if (!schedule_config.dates || !Array.isArray(schedule_config.dates)) {
-          console.log('❌ No dates array found');
           return false;
         }
 
         for (const date of schedule_config.dates) {
-          console.log('🔍 Checking date:', date);
           if (
             !date.day_of_month ||
             date.day_of_month < 1 ||
             date.day_of_month > 31
           ) {
-            console.log('❌ Invalid day_of_month:', date.day_of_month);
             return false;
           }
           if (date.month && (date.month < 1 || date.month > 12)) {
-            console.log('❌ Invalid month:', date.month);
             return false;
           }
         }
-        console.log('✅ daily_dates validation passed');
       } else if (schedule_type === 'hourly_slots') {
-        console.log('⏰ Validating hourly_slots config');
         if (!schedule_config.slots || !Array.isArray(schedule_config.slots)) {
-          console.log('❌ No slots array found');
           return false;
         }
 
         for (const slot of schedule_config.slots) {
-          console.log('🔍 Checking slot:', slot);
           if (!slot.start_time || !slot.end_time) {
-            console.log('❌ Missing start_time or end_time:', { start_time: slot.start_time, end_time: slot.end_time });
             return false;
           }
           if (
             slot.day_of_week !== undefined &&
             (slot.day_of_week < 2 || slot.day_of_week > 7)
           ) {
-            console.log('❌ Invalid day_of_week (must be 2-7, no Sunday):', slot.day_of_week);
             return false;
           }
         }
-        console.log('✅ hourly_slots validation passed');
       }
 
       return true;
     } catch (error) {
-      console.log('❌ Validation error:', error);
       return false;
     }
   }
 
   // Kiểm tra quyền thao tác department của user (create/update/delete)
-  async canUserAccessDepartment(userId: number, departmentId: number): Promise<boolean> {
+  async canUserAccessDepartment(
+    userId: number,
+    departmentId: number,
+  ): Promise<boolean> {
     try {
-      console.log('🔍 CAN USER ACCESS DEPARTMENT');
-      console.log('👤 User ID:', userId);
-      console.log('🏢 Department ID:', departmentId);
-
       const editableDepartmentIds = await this.getEditableDepartmentIds(userId);
-      console.log('📋 Editable department IDs:', editableDepartmentIds);
 
       const canAccess = editableDepartmentIds.includes(departmentId);
-      console.log('✅ Can access result:', canAccess);
 
       return canAccess;
     } catch (error) {
-      console.error('❌ Error checking department access:', error);
       return false;
     }
   }
 
   // Lấy tất cả schedules với filter theo quyền user
-  async findAllForUser(query: QueryDepartmentScheduleDto, userId: number): Promise<{
+  async findAllForUser(
+    query: QueryDepartmentScheduleDto,
+    userId: number,
+  ): Promise<{
     data: DepartmentSchedule[];
     total: number;
     page: number;
@@ -312,7 +286,7 @@ export class CampaignDepartmentsSchedulesService {
   }> {
     // Tất cả user đều có thể view tất cả schedules của departments có server_ip
     const accessibleDepartmentIds = await this.getAllDepartmentsWithServerIP();
-    
+
     if (accessibleDepartmentIds.length === 0) {
       return {
         data: [],
@@ -333,10 +307,12 @@ export class CampaignDepartmentsSchedulesService {
   }
 
   // Lấy active schedules với filter theo quyền user
-  async getActiveSchedulesForUser(userId: number): Promise<DepartmentSchedule[]> {
+  async getActiveSchedulesForUser(
+    userId: number,
+  ): Promise<DepartmentSchedule[]> {
     // Tất cả user đều có thể view tất cả active schedules của departments có server_ip
     const accessibleDepartmentIds = await this.getAllDepartmentsWithServerIP();
-    
+
     if (accessibleDepartmentIds.length === 0) {
       return [];
     }
@@ -347,7 +323,9 @@ export class CampaignDepartmentsSchedulesService {
       .leftJoinAndSelect('schedule.created_by', 'created_by')
       .where('schedule.status = :status', { status: ScheduleStatus.ACTIVE })
       .andWhere('schedule.deleted_at IS NULL')
-      .andWhere('department.id IN (:...departmentIds)', { departmentIds: accessibleDepartmentIds })
+      .andWhere('department.id IN (:...departmentIds)', {
+        departmentIds: accessibleDepartmentIds,
+      })
       .orderBy('schedule.created_at', 'DESC')
       .getMany();
   }
@@ -358,9 +336,8 @@ export class CampaignDepartmentsSchedulesService {
       const departments = await this.departmentRepository.find({
         where: { server_ip: Not(IsNull()) },
       });
-      return departments.map(dept => dept.id);
+      return departments.map((dept) => dept.id);
     } catch (error) {
-      console.error('Error getting departments with server IP:', error);
       return [];
     }
   }
@@ -368,64 +345,57 @@ export class CampaignDepartmentsSchedulesService {
   // Helper method để lấy danh sách department IDs mà user có quyền thao tác (không phải chỉ view)
   private async getEditableDepartmentIds(userId: number): Promise<number[]> {
     try {
-      console.log('🔍 Getting editable departments for user:', userId);
-      
       const user = await this.userRepository.findOne({
         where: { id: userId },
         relations: ['roles'],
       });
 
       if (!user) {
-        console.log('❌ User not found');
         return [];
       }
 
-      console.log('👤 User roles:', user.roles.map(r => r.name));
-
-      const isAdminOrScheduler = user.roles.some(role => 
-        role.name === 'admin' || role.name === 'scheduler'
+      const isAdminOrScheduler = user.roles.some(
+        (role) => role.name === 'admin' || role.name === 'scheduler',
       );
-
-      console.log('🔑 Is admin or scheduler:', isAdminOrScheduler);
 
       if (isAdminOrScheduler) {
         // Admin và scheduler có thể thao tác tất cả departments có server_ip
         const departments = await this.departmentRepository.find({
           where: { server_ip: Not(IsNull()) },
         });
-        console.log('🏢 Admin can access departments:', departments.map(d => ({ id: d.id, name: d.name, slug: d.slug })));
-        return departments.map(dept => dept.id);
+        return departments.map((dept) => dept.id);
       }
 
       // Lấy departments mà user là manager
-      const managerRoles = user.roles.filter(role => role.name.startsWith('manager-'));
-      console.log('👔 Manager roles found:', managerRoles.map(r => r.name));
-      
-      const departmentSlugs = managerRoles.map(role => role.name.replace('manager-', ''));
-      console.log('📂 Department slugs:', departmentSlugs);
-      
+      const managerRoles = user.roles.filter((role) =>
+        role.name.startsWith('manager-'),
+      );
+
+      const departmentSlugs = managerRoles.map((role) =>
+        role.name.replace('manager-', ''),
+      );
+
       if (departmentSlugs.length === 0) {
-        console.log('⚠️ No manager roles found');
         return [];
       }
 
       const departments = await this.departmentRepository.find({
-        where: { 
+        where: {
           slug: In(departmentSlugs),
-          server_ip: Not(IsNull())
+          server_ip: Not(IsNull()),
         },
       });
 
-      console.log('🏢 Manager can access departments:', departments.map(d => ({ id: d.id, name: d.name, slug: d.slug })));
-      return departments.map(dept => dept.id);
+      return departments.map((dept) => dept.id);
     } catch (error) {
-      console.error('❌ Error getting editable departments:', error);
       return [];
     }
   }
 
   // Helper method để find all với filter departments
-  private async findAllWithDepartmentFilter(query: QueryDepartmentScheduleDto & { department_ids?: number[] }): Promise<{
+  private async findAllWithDepartmentFilter(
+    query: QueryDepartmentScheduleDto & { department_ids?: number[] },
+  ): Promise<{
     data: DepartmentSchedule[];
     total: number;
     page: number;

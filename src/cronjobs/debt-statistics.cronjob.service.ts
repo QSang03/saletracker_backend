@@ -14,11 +14,11 @@ export class DebtStatisticsCronjobService {
     private debtStatisticRepo: Repository<DebtStatistic>,
   ) {
     this.logger.log(
-      '🎯 [DebtStatisticsCronjobService] Service đã được khởi tạo - Cronjob debt statistics sẽ chạy lúc 23h hàng ngày',
+      '🎯 [DebtStatisticsCronjobService] Service đã được khởi tạo - Insert cronjob sẽ chạy lúc 22:30, Cleanup cronjob sẽ chạy lúc 23:15 hàng ngày',
     );
   }
 
-  @Cron(process.env.CRON_DEBT_STATISTICS_TIME || '0 23 * * *')
+  @Cron(process.env.CRON_DEBT_STATISTICS_TIME || '30 22 * * *')
   async handleDebtStatisticsCron() {
     const executionStartTime = new Date();
     // Xác định ngày tại VN (UTC+7) và phạm vi thời gian [start, end) theo UTC để truy vấn
@@ -75,6 +75,52 @@ export class DebtStatisticsCronjobService {
       try {
         const { dayStr } = this.getVietnamDayRangeStrings();
         const lockKey = `debt_stats:${dayStr}`;
+        await this.debtStatisticRepo.query('SELECT RELEASE_LOCK(?)', [lockKey]);
+      } catch (e) {
+        // ignore
+      }
+    }
+  }
+
+  @Cron(process.env.CRON_DEBT_STATISTICS_CLEANUP_TIME || '15 23 * * *')
+  async handleDebtStatisticsCleanupCron() {
+    const executionStartTime = new Date();
+    const { dayStr: todayStr } = this.getVietnamDayRangeStrings();
+
+    this.logger.log('=== BẮT ĐẦU DEBT STATISTICS CLEANUP CRONJOB ===');
+    this.logger.log(`🗑️ [Debt Cleanup Cron] Thực hiện cleanup cho ngày: ${todayStr}`);
+    this.logger.log(`🕐 Thời gian bắt đầu: ${this.formatDateTime(executionStartTime)}`);
+
+    try {
+      // Bảo vệ chạy trùng bằng MySQL advisory lock riêng cho cleanup
+      const lockKey = `debt_cleanup:${todayStr}`;
+      const lockRes = await this.debtStatisticRepo.query('SELECT GET_LOCK(?, 0) AS got', [lockKey]);
+      const gotLock = Number(lockRes?.[0]?.got) === 1;
+      if (!gotLock) {
+        this.logger.warn(`⛔ [Debt Cleanup Cron] Bỏ qua vì không lấy được lock cho key ${lockKey} (đang có tác vụ khác chạy)`);
+        return;
+      }
+
+      // Chạy cleanup
+      const deletedCount = await this.cleanupOldRecords(todayStr);
+
+      const executionEndTime = new Date();
+      const executionTime = executionEndTime.getTime() - executionStartTime.getTime();
+
+      this.logger.log('=== KẾT QUẢ DEBT STATISTICS CLEANUP CRONJOB ===');
+      this.logger.log(`🗑️ Đã cleanup: ${deletedCount} bản ghi cũ cho ngày ${todayStr}`);
+      this.logger.log(`⏱️ Thời gian thực hiện: ${executionTime}ms`);
+      this.logger.log(`🕐 Hoàn thành lúc: ${this.formatDateTime(executionEndTime)}`);
+      this.logger.log('=== KẾT THÚC DEBT STATISTICS CLEANUP CRONJOB ===');
+
+    } catch (error) {
+      this.logger.error('❌ [Debt Cleanup Cron] Lỗi trong quá trình thực hiện:', error.stack);
+      throw error;
+    } finally {
+      // Release lock
+      try {
+        const { dayStr } = this.getVietnamDayRangeStrings();
+        const lockKey = `debt_cleanup:${dayStr}`;
         await this.debtStatisticRepo.query('SELECT RELEASE_LOCK(?)', [lockKey]);
       } catch (e) {
         // ignore
@@ -279,6 +325,96 @@ export class DebtStatisticsCronjobService {
     const MM = pad(d.getUTCMinutes());
     const SS = pad(d.getUTCSeconds());
     return `${yyyy}-${mm}-${dd} ${HH}:${MM}:${SS}`;
+  }
+
+  /**
+   * Cleanup các bản ghi cũ không còn phù hợp sau khi insert
+   * Chạy câu lệnh DELETE với win0 = ngày hiện tại của cronjob
+   */
+  private async cleanupOldRecords(todayStr: string): Promise<number> {
+    this.logger.log(`🗑️ [Cleanup] Bắt đầu dọn dẹp các bản ghi cũ cho ngày ${todayStr}`);
+
+    try {
+      // Sử dụng todayStr làm win0 (ngày hiện tại của cronjob)
+      const win0 = todayStr; // YYYY-MM-DD format
+      
+      this.logger.log(`📅 [Cleanup] Sử dụng win0 = ${win0}`);
+
+      // Đếm số bản ghi sẽ bị xóa trước khi thực hiện
+      const countQuery = `
+        SELECT COUNT(*) AS total
+        FROM \`debt_statistics\`
+        WHERE created_at >= ?
+          AND created_at < DATE_ADD(?, INTERVAL 1 DAY)
+          AND original_updated_at < ?
+          AND NOT (updated_at >= DATE_ADD(?, INTERVAL 1 DAY) AND updated_at < DATE_ADD(?, INTERVAL 2 DAY))
+      `;
+      
+      const countResult = await this.debtStatisticRepo.query(countQuery, [win0, win0, win0, win0, win0]);
+      const totalToDelete = countResult[0]?.total || 0;
+
+      this.logger.log(`🔢 [Cleanup] Số bản ghi sẽ bị xóa: ${totalToDelete}`);
+
+      if (totalToDelete === 0) {
+        this.logger.log(`⚠️ [Cleanup] Không có bản ghi nào cần cleanup cho ngày ${todayStr}`);
+        return 0;
+      }
+
+      // Cleanup theo batch 1000 records mỗi lần
+      const BATCH_SIZE = 1000;
+      let totalDeleted = 0;
+      let batchNumber = 1;
+
+      while (totalDeleted < totalToDelete) {
+        this.logger.log(`🔄 [Cleanup] Đang xử lý batch ${batchNumber} (đã xóa: ${totalDeleted}/${totalToDelete})`);
+
+        try {
+          const deleteQuery = `
+            DELETE FROM \`debt_statistics\`
+            WHERE id IN (
+              SELECT id FROM (
+                SELECT id
+                FROM \`debt_statistics\`
+                WHERE created_at >= ?
+                  AND created_at < DATE_ADD(?, INTERVAL 1 DAY)
+                  AND original_updated_at < ?
+                  AND NOT (updated_at >= DATE_ADD(?, INTERVAL 1 DAY) AND updated_at < DATE_ADD(?, INTERVAL 2 DAY))
+                LIMIT ?
+              ) AS t
+            )
+          `;
+
+          const result: any = await this.debtStatisticRepo.query(deleteQuery, [win0, win0, win0, win0, win0, BATCH_SIZE]);
+          const batchDeleted = Number(result?.affectedRows || 0);
+          totalDeleted += batchDeleted;
+
+          this.logger.log(`✅ [Cleanup] Batch ${batchNumber}: Đã xóa ${batchDeleted} records (Total: ${totalDeleted})`);
+
+          // Nếu batch này xóa ít hơn BATCH_SIZE thì đã hết data hoặc gặp vấn đề
+          if (batchDeleted < BATCH_SIZE) {
+            this.logger.log(`📦 [Cleanup] Batch ${batchNumber} là batch cuối cùng hoặc không còn records thỏa mãn điều kiện`);
+            break;
+          }
+
+          batchNumber++;
+
+          // Delay nhỏ giữa các batch để tránh overload
+          await this.delay(200); // 200ms delay
+
+        } catch (error) {
+          this.logger.error(`❌ [Cleanup] Lỗi trong batch ${batchNumber}:`, error.message);
+          throw error;
+        }
+      }
+
+      this.logger.log(`🎯 [Cleanup] Hoàn thành: ${totalDeleted} records trong ${batchNumber} batch(es) (dự kiến: ${totalToDelete})`);
+
+      return totalDeleted;
+
+    } catch (error) {
+      this.logger.error(`❌ [Cleanup] Lỗi khi cleanup bản ghi cũ:`, error.message);
+      throw error;
+    }
   }
 
   /**

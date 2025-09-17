@@ -23,7 +23,7 @@ export interface CustomerWithLastMessage {
   lastMessageDate?: string; // ISO string format - từ customer_message_history
   customerLastMessageDate?: string; // ISO string format - từ customers.last_message_date
   customerStatus?: 'urgent' | 'reminder' | 'normal'; // Trạng thái từ bảng customers
-  daysSinceLastMessage: number;
+  daysSinceLastMessage: number | null;
   status: 'ready' | 'urgent' | 'stable'; // Trạng thái tính toán dựa trên ngày
 }
 
@@ -138,23 +138,23 @@ export class AutoGreetingService {
     const result: CustomerWithLastMessage[] = [];
 
     for (const customer of customers) {
-      let lastMessageDate: Date | undefined = undefined;
+      let customerLastMessageDate: Date | undefined = undefined;
       
-      if (customer.lastMessageDate) {
+      // Sử dụng customer_last_message_date thay vì lastMessageDate
+      if (customer.customer_last_message_date) {
         // Parse date string thành Date object
-        lastMessageDate = new Date(customer.lastMessageDate);
+        customerLastMessageDate = new Date(customer.customer_last_message_date);
         
         // Kiểm tra nếu date không hợp lệ
-        if (isNaN(lastMessageDate.getTime())) {
-          console.warn(`Invalid date for customer ${customer.customer_id}: ${customer.lastMessageDate}`);
-          lastMessageDate = undefined;
+        if (isNaN(customerLastMessageDate.getTime())) {
+          customerLastMessageDate = undefined;
         }
       }
-      let daysSinceLastMessage: number;
-      if (!lastMessageDate) {
-        daysSinceLastMessage = 999; // Nếu chưa có tin nhắn nào, coi như rất lâu
+      let daysSinceLastMessage: number | null;
+      if (!customerLastMessageDate) {
+        daysSinceLastMessage = null; // Nếu chưa có tin nhắn nào từ khách hàng
       } else {
-        const diffTime = now.getTime() - lastMessageDate.getTime();
+        const diffTime = now.getTime() - customerLastMessageDate.getTime();
         daysSinceLastMessage = Math.floor(diffTime / (1000 * 60 * 60 * 24));
         
         // Nếu ngày trong tương lai (có thể lỗi dữ liệu), coi như 0 ngày
@@ -164,19 +164,12 @@ export class AutoGreetingService {
       }
 
       let status: 'ready' | 'urgent' | 'stable' = 'stable';
-      if (daysSinceLastMessage >= config.cycleDays * 2) {
+      if (daysSinceLastMessage === null) {
+        status = 'urgent'; // Nếu chưa có tin nhắn nào, coi như urgent
+      } else if (daysSinceLastMessage >= config.cycleDays * 2) {
         status = 'urgent';
       } else if (daysSinceLastMessage >= config.cycleDays) {
         status = 'ready';
-      }
-
-      // Parse customer last message date
-      let customerLastMessageDate: Date | undefined = undefined;
-      if (customer.customer_last_message_date) {
-        customerLastMessageDate = new Date(customer.customer_last_message_date);
-        if (isNaN(customerLastMessageDate.getTime())) {
-          customerLastMessageDate = undefined;
-        }
       }
 
       result.push({
@@ -186,7 +179,7 @@ export class AutoGreetingService {
         salutation: customer.customer_salutation,
         greetingMessage: customer.customer_greeting_message,
         conversationType: customer.customer_conversation_type,
-        lastMessageDate: lastMessageDate ? lastMessageDate.toISOString() : undefined,
+        lastMessageDate: customer.lastMessageDate ? new Date(customer.lastMessageDate).toISOString() : undefined,
         customerLastMessageDate: customerLastMessageDate ? customerLastMessageDate.toISOString() : undefined,
         customerStatus: customer.customer_status,
         daysSinceLastMessage,
@@ -318,5 +311,84 @@ export class AutoGreetingService {
       order: { created_at: 'DESC' },
       take: 100,
     });
+  }
+
+  /**
+   * Nhập khách hàng từ danh bạ contacts và tạo file Excel
+   */
+  async importFromContacts(userId: number, authHeader?: string): Promise<{ count: number; data: any[] }> {
+    try {
+      // Gọi đúng API swagger: /contacts?page=1&limit=...&user_id=...
+      const primaryBase = process.env.CONTACTS_API_BASE_URL || process.env.API_BASE_URL;
+      if (!primaryBase) {
+        throw new Error('CONTACTS_API_BASE_URL is not set. Please set the external contacts API base URL.');
+      }
+      const limit = 1000;
+
+      // Attempt 1: /contacts (swagger style)
+      const urlSwagger = `${primaryBase}/contacts?page=1&limit=${limit}&user_id=${userId}`;
+      let contacts: any[] = [];
+      const headers: any = { Accept: 'application/json' };
+      if (authHeader) headers.Authorization = authHeader;
+      const res = await fetch(urlSwagger, { headers });
+      if (!res.ok) {
+        throw new Error(`Failed to fetch contacts: ${res.status} ${res.statusText}`);
+      }
+      const json = await res.json();
+      contacts = json?.data || [];
+
+      console.log('Contacts fetched, sample:', contacts.slice(0, 2));
+      console.log('Contacts array:', contacts);
+      console.log('Contacts length:', contacts.length);
+
+      if (!contacts || contacts.length === 0) {
+        return { count: 0, data: [] };
+      }
+
+      // Tạo dữ liệu Excel theo format yêu cầu
+      const excelData = contacts.map((contact: any) => ({
+        'Tên hiển thị Zalo': contact.display_name || contact.name || contact.zaloName || 'Chưa có tên',
+        'Xưng hô': '', // Để trống như yêu cầu
+        'Tin nhắn chào': '', // Để trống như yêu cầu
+      }));
+
+      console.log('Excel data created:', excelData);
+      console.log('Excel data length:', excelData.length);
+      console.log('First excel row:', excelData[0]);
+
+      this.logger.log(`Successfully processed ${contacts.length} contacts for user ${userId}`);
+      
+      return {
+        count: contacts.length,
+        data: excelData,
+      };
+    } catch (error) {
+      this.logger.error('Error importing from contacts:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Xóa khách hàng
+   */
+  async deleteCustomer(customerId: string, userId: number): Promise<void> {
+    // Kiểm tra xem khách hàng có thuộc về user này không
+    const customer = await this.autoGreetingCustomerRepo.findOne({
+      where: {
+        id: customerId,
+        userId: userId,
+      },
+    });
+
+    if (!customer) {
+      throw new Error('Khách hàng không tồn tại hoặc không thuộc về bạn');
+    }
+
+    // Xóa khách hàng (soft delete)
+    await this.autoGreetingCustomerRepo.update(customerId, {
+      deleted_at: new Date(),
+    });
+
+    this.logger.log(`Customer ${customerId} deleted by user ${userId}`);
   }
 }

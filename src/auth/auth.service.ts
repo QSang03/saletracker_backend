@@ -175,14 +175,6 @@ export class AuthService {
       expiresIn: '30d', // Cập nhật thành 30 ngày
     });
 
-    // In ra console để kiểm tra token admin
-    console.log('🔑 [ADMIN TOKEN] isAdmin:', isAdmin);
-    console.log('🔑 [ADMIN TOKEN] Token payload size:', JSON.stringify(payload).length, 'bytes');
-    console.log('🔑 [ADMIN TOKEN] Token length:', accessToken.length, 'characters');
-    if (isAdmin) {
-      console.log('🔑 [ADMIN TOKEN] Admin token created - departments and permissions excluded from payload');
-    }
-
     return {
       access_token: accessToken,
       refresh_token: refreshToken,
@@ -220,7 +212,6 @@ export class AuthService {
             this.configService.get<string>('JWT_SECRET'),
         });
       } catch (jwtError) {
-        console.error('❌ [RefreshToken] Invalid JWT:', jwtError.message);
         throw new ForbiddenException('Invalid refresh token format');
       }
 
@@ -243,7 +234,6 @@ export class AuthService {
         refreshingUsers.delete(userId);
       }
     } catch (e) {
-      console.error('❌ [RefreshToken] Refresh token error:', e);
       throw new ForbiddenException('Invalid refresh token');
     }
   }
@@ -254,12 +244,10 @@ export class AuthService {
     const user = await this.usersService.findOneWithDetailsAndRefreshToken(userId);
 
     if (!user) {
-      console.error('❌ [RefreshToken] User not found with ID:', userId);
       throw new ForbiddenException('Invalid refresh token - user not found');
     }
 
     if (!user.refreshToken) {
-      console.error('❌ [RefreshToken] User has no refresh token stored');
       throw new ForbiddenException('Invalid refresh token - no token stored');
     }
 
@@ -267,13 +255,11 @@ export class AuthService {
     const storedToken = user.refreshToken.trim();
     const providedToken = cleanRefreshToken;
     if (storedToken !== providedToken) {
-      console.error('❌ [RefreshToken] Token mismatch');
       throw new ForbiddenException('Invalid refresh token - token mismatch');
     }
 
     // Check if user is blocked
     if (user.isBlock) {
-      console.error('❌ [RefreshToken] User is blocked');
       throw new ForbiddenException('User is blocked');
     }
 
@@ -385,7 +371,6 @@ export class AuthService {
     
     try {
     } catch (error) {
-      console.error('❌ [Cleanup] Error during token cleanup:', error.message);
     }
   }
 
