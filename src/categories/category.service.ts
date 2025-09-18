@@ -23,13 +23,16 @@ export class CategoryService {
     const isPM = roles.includes('pm') || roles.some((r) => r.startsWith('pm-'));
     if (!isPM || isAdmin || isView) return rows;
 
-    const perms = getPermissions(user)
+    // Chỉ lấy permissions pm_cat_*
+    const catPerms = getPermissions(user)
       .map((p) => String(p || ''))
-      .filter((name) => /^pm[_-]/i.test(name))
-      .map((name) => name.replace(/^pm[_-]/i, ''))
+      .filter((name) => /^pm_cat_/i.test(name))
+      .map((name) => name.replace(/^pm_cat_/i, ''))
       .map((s) => slugify(s, { lower: true, strict: true }));
-    if (perms.length === 0) return [];
-    return rows.filter((c) => perms.includes(slugify(c.catName || '', { lower: true, strict: true })));
+    
+    if (catPerms.length === 0) return [];
+    
+    return rows.filter((c) => catPerms.includes(slugify(c.catName || '', { lower: true, strict: true })));
   }
 
   findOne(id: number) {

@@ -29,6 +29,123 @@ export class AutoGreetingController {
   constructor(private readonly autoGreetingService: AutoGreetingService) {  }
 
   /**
+   * Cập nhật hàng loạt khách hàng
+   */
+  @Patch('customers/bulk-update')
+  async bulkUpdateCustomers(
+    @Body() body: { customerIds: string[]; updateData: { salutation?: string; greetingMessage?: string } },
+    @Req() req: any,
+    @Headers('x-master-key') masterKey: string,
+  ): Promise<{ message: string; updatedCount: number }> {
+    // Kiểm tra X-Master-Key
+    const expectedMasterKey = process.env.MASTER_KEY || 'nkcai';
+    if (!masterKey || masterKey !== expectedMasterKey) {
+      throw new HttpException('Unauthorized: Invalid or missing X-Master-Key', HttpStatus.UNAUTHORIZED);
+    }
+
+    const userId = req.user?.id;
+    if (!userId) {
+      throw new Error('User not authenticated');
+    }
+
+    // Đảm bảo userId là number
+    const userIdNumber = typeof userId === 'string' ? parseInt(userId) : userId;
+    
+    console.log('Bulk update request received:', {
+      userId: userIdNumber,
+      userIdType: typeof userIdNumber,
+      customerIds: body.customerIds,
+      updateData: body.updateData,
+      userInfo: req.user
+    });
+
+    const { customerIds, updateData } = body;
+    const updatedCount = await this.autoGreetingService.bulkUpdateCustomers(customerIds, userIdNumber, updateData);
+    return { 
+      message: `Đã cập nhật ${updatedCount} khách hàng thành công`,
+      updatedCount 
+    };
+  }
+
+  /**
+   * Cập nhật thông tin khách hàng
+   */
+  @Patch('customers/:customerId')
+  async updateCustomer(
+    @Param('customerId') customerId: string,
+    @Body() updateData: { zaloDisplayName?: string; salutation?: string; greetingMessage?: string },
+    @Req() req: any,
+  ): Promise<{ message: string }> {
+    const userId = req.user?.id;
+    if (!userId) {
+      throw new Error('User not authenticated');
+    }
+
+    // Đảm bảo userId là number
+    const userIdNumber = typeof userId === 'string' ? parseInt(userId) : userId;
+    
+    console.log('Update customer request received:', {
+      customerId,
+      userId: userIdNumber,
+      userIdType: typeof userIdNumber,
+      updateData,
+      userInfo: req.user
+    });
+
+    await this.autoGreetingService.updateCustomer(customerId, userIdNumber, updateData);
+    return { message: 'Thông tin khách hàng đã được cập nhật thành công' };
+  }
+
+  /**
+   * Xóa hàng loạt khách hàng
+   */
+  @Delete('customers/bulk-delete')
+  async bulkDeleteCustomers(
+    @Body() body: { customerIds: string[] },
+    @Req() req: any,
+    @Headers('x-master-key') masterKey: string,
+  ): Promise<{ message: string; deletedCount: number }> {
+    // Kiểm tra X-Master-Key
+    const expectedMasterKey = process.env.MASTER_KEY || 'nkcai';
+    if (!masterKey || masterKey !== expectedMasterKey) {
+      throw new HttpException('Unauthorized: Invalid or missing X-Master-Key', HttpStatus.UNAUTHORIZED);
+    }
+
+    const userId = req.user?.id;
+    if (!userId) {
+      throw new Error('User not authenticated');
+    }
+
+    // Đảm bảo userId là number
+    const userIdNumber = typeof userId === 'string' ? parseInt(userId) : userId;
+
+    const { customerIds } = body;
+    const deletedCount = await this.autoGreetingService.bulkDeleteCustomers(customerIds, userIdNumber);
+    return { 
+      message: `Đã xóa ${deletedCount} khách hàng thành công`,
+      deletedCount 
+    };
+  }
+
+  /**
+   * Cập nhật lời chào của khách hàng
+   */
+  @Patch('customers/:customerId/greeting-message')
+  async updateCustomerGreetingMessage(
+    @Param('customerId') customerId: string,
+    @Body('greetingMessage') greetingMessage: string,
+    @Req() req: any,
+  ): Promise<{ message: string }> {
+    const userId = req.user?.id;
+    if (!userId) {
+      throw new Error('User not authenticated');
+    }
+
+    await this.autoGreetingService.updateCustomerGreetingMessage(customerId, userId, greetingMessage);
+    return { message: 'Lời chào đã được cập nhật thành công' };
+  }
+
+  /**
    * Xóa khách hàng
    */
   @Delete('customers/:customerId')

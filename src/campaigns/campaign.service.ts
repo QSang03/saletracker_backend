@@ -242,10 +242,6 @@ export class CampaignService {
       const representativeSchedule = departmentSchedules[0];
       return representativeSchedule;
     }
-
-    this.logger.warn(
-      `❌ [findBestMatchingScheduleFor3Day] No valid 3-day configuration found across ${departmentSchedules.length} schedules`,
-    );
     return null;
   }
 
@@ -277,10 +273,6 @@ export class CampaignService {
         return schedule;
       }
     }
-
-    this.logger.warn(
-      `❌ [findBestMatchingSchedule] No matching schedule found`,
-    );
     return null;
   }
 
@@ -402,9 +394,6 @@ export class CampaignService {
         requiredDaysOfWeek = campaignConfig.days_of_week;
         // ✅ VALIDATE: Kiểm tra 3 ngày có liên tiếp không
         if (!this.areConsecutiveDays(requiredDaysOfWeek)) {
-          this.logger.warn(
-            `❌ [3-day campaign] Days [${requiredDaysOfWeek.join(',')}] are not consecutive!`,
-          );
           throw new Error('3-day campaign requires consecutive days');
         }
       } else if (campaignConfig.type === 'hourly') {
@@ -552,11 +541,6 @@ export class CampaignService {
       validSlots.push(...slotDates);
     }
     if (validSlots.length === 0) {
-      this.logger.error(`❌ No valid future slots found. Debug info:`);
-      this.logger.error(`- All slots from all schedules:`, allSlots);
-      this.logger.error(`- Campaign config:`, campaignConfig);
-      this.logger.error(`- Required days of week:`, requiredDaysOfWeek);
-      this.logger.error(`- Current time:`, now.toISOString());
       throw new Error('No valid future slots found');
     }
 
@@ -574,9 +558,6 @@ export class CampaignService {
       if (consecutiveSequence) {
         return consecutiveSequence;
       } else {
-        this.logger.error(
-          `❌ [3-day] No valid consecutive 3-day sequence found`,
-        );
         throw new Error('No valid consecutive 3-day sequence found');
       }
     }
@@ -602,10 +583,6 @@ export class CampaignService {
       if (matchingSlots.length > 0) {
         // Use the earliest slot that contains the campaign time
         nearestSlotData = matchingSlots[0];
-      } else {
-        this.logger.warn(
-          `⚠️ No slot found containing campaign time ${campaignTime}, falling back to earliest slot`,
-        );
       }
     }
 
@@ -669,9 +646,6 @@ export class CampaignService {
             // Fallback to largest consecutive group
             consecutiveGroup =
               this.findLargestConsecutiveSlotGroup(slotsForTargetDay);
-            this.logger.warn(
-              `⚠️ No slot contains campaign time ${campaignTime}, using largest consecutive group: ${consecutiveGroup.start_time}-${consecutiveGroup.end_time}`,
-            );
           }
         } else {
           // No specific time - use largest consecutive group
@@ -753,9 +727,6 @@ export class CampaignService {
             // Fallback to largest consecutive group
             consecutiveGroup =
               this.findLargestConsecutiveSlotGroup(slotsForThisDay);
-            this.logger.warn(
-              `⚠️ Weekly: No slot contains campaign time ${campaignTime}, using largest consecutive group: ${consecutiveGroup.start_time}-${consecutiveGroup.end_time}`,
-            );
           }
         } else {
           // No specific time - use largest consecutive group
@@ -838,10 +809,6 @@ export class CampaignService {
               const applicableDateDay = this.getVietnamDayOfWeek(slotDate);
               if (applicableDateDay === slot.day_of_week) {
                 isValidSlot = true;
-              } else {
-                this.logger.warn(
-                  `⚠️ [calculate3DayDateRange] applicable_date ${slot.applicable_date} (day ${applicableDateDay}) doesn't match day_of_week ${slot.day_of_week} - skipping due to timezone mismatch`,
-                );
               }
             } else {
               // Không có applicable_date thì tìm ngày gần nhất có day_of_week này (theo VN timezone)
@@ -957,9 +924,6 @@ export class CampaignService {
     );
 
     if (!commonTimeRange) {
-      this.logger.error(
-        `❌ [calculate3DayDateRange] No common time range found for all 3 days`,
-      );
       throw new Error('No common time range found for all 3 days');
     }
 
@@ -1121,9 +1085,6 @@ export class CampaignService {
     // Check if we have all required days available
     for (const requiredDay of sortedDays) {
       if (!slotsByDayOfWeek.has(requiredDay)) {
-        this.logger.error(
-          `❌ [3-day sequence] Missing slots for day ${requiredDay}`,
-        );
         return null;
       }
     }
@@ -1264,10 +1225,6 @@ export class CampaignService {
         }
       }
     }
-
-    this.logger.error(
-      `❌ [3-day sequence] No valid consecutive sequence found within ${maxSearchDays} days`,
-    );
     return null;
   }
 
@@ -1309,9 +1266,6 @@ export class CampaignService {
   private isDateMatchDayOfWeek(date: Date, dayOfWeek: number): boolean {
     // Validate input
     if (dayOfWeek < 2 || dayOfWeek > 7) {
-      this.logger.warn(
-        `Invalid day_of_week: ${dayOfWeek}. Must be between 2-7`,
-      );
       return false;
     }
 
@@ -1346,10 +1300,6 @@ export class CampaignService {
     });
 
     if (!schedule) {
-      this.logger.warn(
-        `❌ [getDepartmentActiveSchedule] No active schedule found for department ${departmentId} with type ${requiredScheduleType}`,
-      );
-
       // Let's also check what schedules exist for this department
       const allSchedules = await this.departmentScheduleRepository.find({
         where: { department: { id: departmentId } },
@@ -1403,9 +1353,6 @@ export class CampaignService {
         }
       }
     } catch (error) {
-      this.logger.warn(
-        `Error validating campaign schedule config: ${error.message}`,
-      );
       return false;
     }
   }
@@ -1424,7 +1371,6 @@ export class CampaignService {
     // The campaign will run within the dates specified in department schedule
     // We just need to make sure department has valid dates
     if (!departmentConfig?.dates || !Array.isArray(departmentConfig.dates)) {
-      this.logger.warn(`Department schedule has no valid dates configuration`);
       return false;
     }
 
@@ -1439,7 +1385,6 @@ export class CampaignService {
     });
 
     if (!hasValidDates) {
-      this.logger.warn(`Department schedule has no valid future dates`);
       return false;
     }
 
@@ -1478,11 +1423,6 @@ export class CampaignService {
       });
 
       if (!found) {
-        this.logger.warn(
-          `Campaign slot day_of_week: ${campaignSlot.day_of_week}, ` +
-            `time: ${campaignSlot.start_time}-${campaignSlot.end_time} ` +
-            `not found within department schedule slots`,
-        );
         return false;
       }
     }
@@ -1505,7 +1445,6 @@ export class CampaignService {
       !campaignConfig?.time_of_day ||
       !departmentConfig?.slots
     ) {
-      this.logger.warn(`Missing required fields in weekly schedule config`);
       return false;
     }
 
@@ -1532,10 +1471,6 @@ export class CampaignService {
     });
 
     if (!found) {
-      this.logger.warn(
-        `❌ Weekly schedule invalid: day_of_week=${campaignDay}, time=${campaignTime} ` +
-          `not found within any department schedule slots`,
-      );
       return false;
     }
 
@@ -1557,7 +1492,6 @@ export class CampaignService {
       !campaignConfig?.end_time ||
       !departmentConfig?.slots
     ) {
-      this.logger.warn(`Missing required fields in hourly schedule config`);
       return false;
     }
 
@@ -1576,10 +1510,6 @@ export class CampaignService {
     });
 
     if (validSlots.length === 0) {
-      this.logger.warn(
-        `❌ Hourly schedule invalid: time range ${campaignStart}-${campaignEnd} ` +
-          `not found within any department schedule slots`,
-      );
       return false;
     }
 
@@ -1599,7 +1529,6 @@ export class CampaignService {
       !departmentSchedules ||
       departmentSchedules.length === 0
     ) {
-      this.logger.warn(`Missing required fields in 3-day schedule config`);
       return false;
     }
 
@@ -1638,9 +1567,6 @@ export class CampaignService {
       });
 
       if (!foundMatchingSlot) {
-        this.logger.warn(
-          `❌ [validate3DayScheduleConfig] No matching slot found for day_of_week=${dayOfWeek}, time=${campaignTime}`,
-        );
         return false;
       }
     }
@@ -1793,10 +1719,6 @@ export class CampaignService {
             this.parseTime(current.start_time);
           return currentDuration > largestDuration ? current : largest;
         });
-
-        this.logger.warn(
-          `⚠️ [3-day] No time range contains campaign time ${campaignTime}, using largest: ${selectedGroup.start_time}-${selectedGroup.end_time}`,
-        );
       }
     } else {
       // Không có campaign time - chọn group lớn nhất (logic cũ)
@@ -1958,9 +1880,6 @@ export class CampaignService {
         ScheduleCalculatorHelper.getScheduleTypeByCampaignType(
           campaign.campaign_type,
         );
-      this.logger.error(
-        `❌ [setupCampaignScheduleDates] No schedules found for department ${campaign.department.id}, required type: ${requiredScheduleType}`,
-      );
       throw new Error('chưa có lịch hoạt động');
     }
 
@@ -1983,9 +1902,6 @@ export class CampaignService {
       );
 
       if (!bestMatchingSchedule) {
-        this.logger.warn(
-          `⚠️ [setupCampaignScheduleDates] No matching schedule found - will set dates to null`,
-        );
         shouldSetNullDates = true;
       } else {
       }
@@ -2050,10 +1966,6 @@ export class CampaignService {
           dateRange.endDate,
         );
       } catch (error) {
-        this.logger.error(
-          `❌ [setupCampaignScheduleDates] Error calculating date range:`,
-          error,
-        );
         throw new Error('Lỗi tính toán thời gian');
       }
     }
@@ -2085,9 +1997,6 @@ export class CampaignService {
     const now = new Date();
 
     if (now < startDate || now > endDate) {
-      this.logger.error(
-        `❌ [validateCurrentTimeInSchedule] Time validation failed - outside allowed range`,
-      );
       throw new Error('không trong khung thời gian');
     }
 
@@ -3170,11 +3079,6 @@ export class CampaignService {
 
       return { success: true, data: result };
     } catch (error) {
-      this.logger.error(
-        `❌ [updateStatus] Error: ${error.message}`,
-        error.stack,
-      );
-
       // Trả về error ngắn gọn cho frontend
       let errorMessage = 'Không thể cập nhật trạng thái chiến dịch';
 

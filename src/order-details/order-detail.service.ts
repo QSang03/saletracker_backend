@@ -1307,13 +1307,18 @@ export class OrderDetailService {
       Math.min(Number(options?.pageSize) || 10, 10000),
     );
 
+    // ✅ THÊM: Logic giới hạn 14 ngày cho hidden orders
+    const now = new Date();
+    const fourteenDaysAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
+
     const qb = this.orderDetailRepository
       .createQueryBuilder('details')
       .leftJoinAndSelect('details.order', 'order')
       .leftJoinAndSelect('details.product', 'product')
       .leftJoinAndSelect('order.sale_by', 'sale_by')
       .leftJoinAndSelect('sale_by.departments', 'sale_by_departments')
-      .where('details.hidden_at IS NOT NULL');
+      .where('details.hidden_at IS NOT NULL')
+      .andWhere('details.hidden_at >= :fourteenDaysAgo', { fourteenDaysAgo });
 
     // ✅ Permission scoping (giữ nguyên logic hiện tại)
     const allowedUserIds = await this.getUserIdsByRole(user);
@@ -1386,16 +1391,37 @@ export class OrderDetailService {
       }
     }
 
-    // ✅ Filter 4: Hidden Date Range
+    // ✅ Filter 4: Hidden Date Range với giới hạn 14 ngày
     if (options?.hiddenDateRange?.start && options?.hiddenDateRange?.end) {
       const startDate = new Date(options.hiddenDateRange.start);
       const endDate = new Date(options.hiddenDateRange.end);
       endDate.setHours(23, 59, 59, 999);
 
-      qb.andWhere('details.hidden_at BETWEEN :hiddenStart AND :hiddenEnd', {
-        hiddenStart: startDate,
-        hiddenEnd: endDate,
-      });
+      // ✅ THÊM: Kiểm tra và giới hạn date range không vượt quá 14 ngày
+      const maxEndDate = new Date(now);
+      const minStartDate = new Date(fourteenDaysAgo);
+      
+      // Đảm bảo endDate không vượt quá hiện tại
+      const actualEndDate = endDate > maxEndDate ? maxEndDate : endDate;
+      
+      // Đảm bảo startDate không sớm hơn 14 ngày trước
+      const actualStartDate = startDate < minStartDate ? minStartDate : startDate;
+      
+      // Kiểm tra range không vượt quá 14 ngày
+      const rangeDays = Math.ceil((actualEndDate.getTime() - actualStartDate.getTime()) / (1000 * 60 * 60 * 24));
+      if (rangeDays > 14) {
+        // Nếu range > 14 ngày, giới hạn về 14 ngày từ endDate
+        const adjustedStartDate = new Date(actualEndDate.getTime() - 14 * 24 * 60 * 60 * 1000);
+        qb.andWhere('details.hidden_at BETWEEN :hiddenStart AND :hiddenEnd', {
+          hiddenStart: adjustedStartDate,
+          hiddenEnd: actualEndDate,
+        });
+      } else {
+        qb.andWhere('details.hidden_at BETWEEN :hiddenStart AND :hiddenEnd', {
+          hiddenStart: actualStartDate,
+          hiddenEnd: actualEndDate,
+        });
+      }
     }
 
     // ✅ Sorting

@@ -39,7 +39,9 @@ export class ProductService {
       const roles = getRoleNames(filter.user).map(r => String(r).toLowerCase());
       const isAdmin = roles.includes('admin');
       const isView = roles.includes('view');
-      const isPM = roles.includes('pm') || roles.some(r => r.startsWith('pm-') || r.startsWith('pm_'));
+      const isPM = roles.includes('pm') || roles.some(r => (r.startsWith('pm-') || r.startsWith('pm_')) && !r.startsWith('view_'));
+      
+      
       if (isPM && !isAdmin && !isView) {
         const rawPerms = getPermissions(filter.user).map(p => String(p || '').toLowerCase());
         const brandSlugs = rawPerms

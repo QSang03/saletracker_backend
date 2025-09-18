@@ -23,13 +23,16 @@ export class BrandService {
     const isPM = roles.includes('pm') || roles.some((r) => r.startsWith('pm-'));
     if (!isPM || isAdmin || isView) return rows;
 
-    const perms = getPermissions(user)
+    // Chỉ lấy permissions pm_brand_*
+    const brandPerms = getPermissions(user)
       .map((p) => String(p || ''))
-      .filter((name) => /^pm[_-]/i.test(name))
-      .map((name) => name.replace(/^pm[_-]/i, ''))
+      .filter((name) => /^pm_brand_/i.test(name))
+      .map((name) => name.replace(/^pm_brand_/i, ''))
       .map((s) => slugify(s, { lower: true, strict: true }));
-    if (perms.length === 0) return [];
-    return rows.filter((b) => perms.includes(slugify(b.name || '', { lower: true, strict: true })));
+    
+    if (brandPerms.length === 0) return [];
+    
+    return rows.filter((b) => brandPerms.includes(slugify(b.name || '', { lower: true, strict: true })));
   }
 
   findOne(id: number) {
