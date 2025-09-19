@@ -35,13 +35,7 @@ export class AutoGreetingController {
   async bulkUpdateCustomers(
     @Body() body: { customerIds: string[]; updateData: { salutation?: string; greetingMessage?: string } },
     @Req() req: any,
-    @Headers('x-master-key') masterKey: string,
   ): Promise<{ message: string; updatedCount: number }> {
-    // Kiểm tra X-Master-Key
-    const expectedMasterKey = process.env.MASTER_KEY || 'nkcai';
-    if (!masterKey || masterKey !== expectedMasterKey) {
-      throw new HttpException('Unauthorized: Invalid or missing X-Master-Key', HttpStatus.UNAUTHORIZED);
-    }
 
     const userId = req.user?.id;
     if (!userId) {
@@ -51,13 +45,6 @@ export class AutoGreetingController {
     // Đảm bảo userId là number
     const userIdNumber = typeof userId === 'string' ? parseInt(userId) : userId;
     
-    console.log('Bulk update request received:', {
-      userId: userIdNumber,
-      userIdType: typeof userIdNumber,
-      customerIds: body.customerIds,
-      updateData: body.updateData,
-      userInfo: req.user
-    });
 
     const { customerIds, updateData } = body;
     const updatedCount = await this.autoGreetingService.bulkUpdateCustomers(customerIds, userIdNumber, updateData);
@@ -73,7 +60,7 @@ export class AutoGreetingController {
   @Patch('customers/:customerId')
   async updateCustomer(
     @Param('customerId') customerId: string,
-    @Body() updateData: { zaloDisplayName?: string; salutation?: string; greetingMessage?: string },
+    @Body() updateData: { zaloDisplayName?: string; salutation?: string; greetingMessage?: string; isActive?: number },
     @Req() req: any,
   ): Promise<{ message: string }> {
     const userId = req.user?.id;
@@ -84,16 +71,31 @@ export class AutoGreetingController {
     // Đảm bảo userId là number
     const userIdNumber = typeof userId === 'string' ? parseInt(userId) : userId;
     
-    console.log('Update customer request received:', {
-      customerId,
-      userId: userIdNumber,
-      userIdType: typeof userIdNumber,
-      updateData,
-      userInfo: req.user
-    });
 
     await this.autoGreetingService.updateCustomer(customerId, userIdNumber, updateData);
     return { message: 'Thông tin khách hàng đã được cập nhật thành công' };
+  }
+
+  /**
+   * Toggle trạng thái kích hoạt của khách hàng
+   */
+  @Patch('customers/:customerId/toggle-active')
+  async toggleCustomerActive(
+    @Param('customerId') customerId: string,
+    @Body() body: { isActive: number },
+    @Req() req: any,
+  ): Promise<{ message: string }> {
+    const userId = req.user?.id;
+    if (!userId) {
+      throw new Error('User not authenticated');
+    }
+
+    // Đảm bảo userId là number
+    const userIdNumber = typeof userId === 'string' ? parseInt(userId) : userId;
+    
+
+    await this.autoGreetingService.toggleCustomerActive(customerId, userIdNumber, body.isActive, true);
+    return { message: `Khách hàng đã được ${body.isActive === 1 ? 'kích hoạt' : 'vô hiệu hóa'} thành công` };
   }
 
   /**
@@ -103,13 +105,7 @@ export class AutoGreetingController {
   async bulkDeleteCustomers(
     @Body() body: { customerIds: string[] },
     @Req() req: any,
-    @Headers('x-master-key') masterKey: string,
   ): Promise<{ message: string; deletedCount: number }> {
-    // Kiểm tra X-Master-Key
-    const expectedMasterKey = process.env.MASTER_KEY || 'nkcai';
-    if (!masterKey || masterKey !== expectedMasterKey) {
-      throw new HttpException('Unauthorized: Invalid or missing X-Master-Key', HttpStatus.UNAUTHORIZED);
-    }
 
     const userId = req.user?.id;
     if (!userId) {
@@ -152,13 +148,7 @@ export class AutoGreetingController {
   async deleteCustomer(
     @Param('customerId') customerId: string,
     @Req() req: any,
-    @Headers('x-master-key') masterKey: string,
   ): Promise<{ message: string }> {
-    // Kiểm tra X-Master-Key
-    const expectedMasterKey = process.env.MASTER_KEY || 'nkcai';
-    if (!masterKey || masterKey !== expectedMasterKey) {
-      throw new HttpException('Unauthorized: Invalid or missing X-Master-Key', HttpStatus.UNAUTHORIZED);
-    }
 
     const userId = req.user?.id;
     if (!userId) {
@@ -252,13 +242,7 @@ export class AutoGreetingController {
   async importCustomers(
     @UploadedFile() file: Express.Multer.File,
     @Req() req: any,
-    @Headers('x-master-key') masterKey: string,
-  ): Promise<{ success: number; failed: number; errors: string[]; message: string }> {
-    // Kiểm tra X-Master-Key
-    const expectedMasterKey = process.env.MASTER_KEY || 'nkcai';
-    if (!masterKey || masterKey !== expectedMasterKey) {
-      throw new HttpException('Unauthorized: Invalid or missing X-Master-Key', HttpStatus.UNAUTHORIZED);
-    }
+  ): Promise<{ success: number; failed: number; errors: string[]; message: string; statistics?: { active: number; inactive: number; undefined: number } }> {
     if (!file) {
       return {
         success: 0,
@@ -299,14 +283,30 @@ export class AutoGreetingController {
       // Helper: extract plain text from ExcelJS cell value
       const getText = (val: any): string => {
         if (val === null || val === undefined) return '';
-        if (typeof val === 'string' || typeof val === 'number') return String(val).trim();
+        if (typeof val === 'number') {
+          // Handle large numbers without scientific notation
+          if (Math.abs(val) > 1e15) {
+            return val.toFixed(0);
+          }
+          return String(val).trim();
+        }
+        if (typeof val === 'string') return val.trim();
         if (val instanceof Date) return val.toISOString();
         if (typeof val === 'object') {
           if (typeof (val as any).text === 'string') return String((val as any).text).trim();
           if (Array.isArray((val as any).richText)) {
             return (val as any).richText.map((t: any) => t.text || '').join('').trim();
           }
-          if ((val as any).result !== undefined) return String((val as any).result).trim();
+          if ((val as any).result !== undefined) {
+            if (typeof (val as any).result === 'number') {
+              // Handle large number results
+              if (Math.abs((val as any).result) > 1e15) {
+                return (val as any).result.toFixed(0);
+              }
+              return String((val as any).result).trim();
+            }
+            return String((val as any).result).trim();
+          }
         }
         return String(val).trim();
       };
@@ -314,13 +314,22 @@ export class AutoGreetingController {
       // Detect header row by scanning first 10 rows
       let headerRowIndex = 1;
       const expectedHeaders = ['Tên hiển thị Zalo', 'Xưng hô', 'Tin nhắn chào'];
+      const zaloIdHeaders = ['Zalo ID', 'zalo_id', 'zaloId', 'ZALO_ID', 'ZaloID', 'zalo ID', 'Zalo Id', 'zalo Id', 'ID', 'id'];
+      const activeHeaders = ['Trạng thái', 'trạng thái', 'Trạng Thái', 'TRẠNG THÁI', 'Kích hoạt', 'kích hoạt', 'Kích Hoạt', 'KÍCH HOẠT', 'Active', 'active', 'ACTIVE', 'Status', 'status', 'STATUS'];
       const maxScan = Math.min(10, worksheet.rowCount);
       for (let r = 1; r <= maxScan; r++) {
         const row = worksheet.getRow(r);
         const values: string[] = [];
         row.eachCell((cell) => values.push(getText(cell.value)));
-        const hit = expectedHeaders.every((h) => values.includes(h));
-        if (hit) {
+        
+        // Check if this row has the basic required headers (more flexible)
+        const hasBasicHeaders = expectedHeaders.some(header => values.includes(header));
+        
+        // Or check if it has zaloId or active headers (indicating it might be a header row)
+        const hasZaloIdHeader = zaloIdHeaders.some(header => values.includes(header));
+        const hasActiveHeader = activeHeaders.some(header => values.includes(header));
+        
+        if (hasBasicHeaders || hasZaloIdHeader || hasActiveHeader) {
           headerRowIndex = r;
           break;
         }
@@ -339,10 +348,30 @@ export class AutoGreetingController {
         const rowData: any = {};
         row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
           const headerName = headers[colNumber];
-          const text = getText(cell.value);
-          if (headerName && text) {
+          let text = getText(cell.value);
+          
+          // Special handling for Zalo ID column - handle large numbers
+          if (headerName === 'Zalo ID') {
+            // If the cell value is a number, convert it to string without scientific notation
+            if (typeof cell.value === 'number') {
+              text = cell.value.toFixed(0); // Convert to integer string
+            }
+            // If cell has a formula result that's numeric
+            else if (cell.value && typeof cell.value === 'object' && 'result' in cell.value && typeof cell.value.result === 'number') {
+              text = cell.value.result.toFixed(0);
+            }
+            // If the text is empty but raw value exists, try to convert it
+            else if ((!text || text === '') && cell.value !== null && cell.value !== undefined) {
+              text = String(cell.value).trim();
+            }
+          }
+          
+          // Include cells even if text is empty, but header exists (for potential numeric values)
+          if (headerName) {
             rowData[headerName] = text;
-            hasData = true;
+            if (text) {
+              hasData = true;
+            }
           }
         });
 
@@ -367,17 +396,82 @@ export class AutoGreetingController {
       }
 
       // Chuyển đổi dữ liệu theo format của campaign
-      const customers = data.map((row: any) => ({
-        zaloDisplayName: row['Tên hiển thị Zalo'] || row['zalo_display_name'] || row['name'] || row['Họ và tên'],
-        salutation: row['Xưng hô'] || row['salutation'] || row['title'],
-        greetingMessage: row['Tin nhắn chào'] || row['greeting_message'] || row['message'],
-      })).filter(customer => customer.zaloDisplayName); // Chỉ lấy những dòng có tên
+      const customers = data.map((row: any) => {
+        // Parse cột "Kích hoạt" để chuyển đổi đúng giá trị 0/1
+        let isActive: number | undefined = undefined;
+        
+        // Tìm giá trị từ các cột có thể chứa trạng thái active
+        let activeValue = row['Trạng thái'] || row['trạng thái'] || row['Trạng Thái'] || row['TRẠNG THÁI'] || 
+                         row['Kích hoạt'] || row['kích hoạt'] || row['Kích Hoạt'] || row['KÍCH HOẠT'] ||
+                         row['Active'] || row['active'] || row['ACTIVE'] || 
+                         row['Status'] || row['status'] || row['STATUS'];
+        
+        if (activeValue !== undefined && activeValue !== null && activeValue !== '') {
+          const activeStr = String(activeValue).trim();
+          
+          // So sánh chuỗi chính xác
+          if (activeStr === 'Chưa kích hoạt' || activeStr === 'chưa kích hoạt' || activeStr === 'CHƯA KÍCH HOẠT' ||
+              activeStr === 'false' || activeStr === 'False' || activeStr === 'FALSE' ||
+              activeStr === 'no' || activeStr === 'No' || activeStr === 'NO' ||
+              activeStr === 'không' || activeStr === 'Không' || activeStr === 'KHÔNG' ||
+              activeStr === 'tắt' || activeStr === 'Tắt' || activeStr === 'TẮT' ||
+              activeStr === 'disable' || activeStr === 'Disable' || activeStr === 'DISABLE' ||
+              activeStr === 'inactive' || activeStr === 'Inactive' || activeStr === 'INACTIVE' ||
+              activeStr === 'off' || activeStr === 'Off' || activeStr === 'OFF') {
+            isActive = 0;
+          } else if (activeStr === 'Kích hoạt' || activeStr === 'kích hoạt' || activeStr === 'KÍCH HOẠT' ||
+                     activeStr === 'true' || activeStr === 'True' || activeStr === 'TRUE' ||
+                     activeStr === 'yes' || activeStr === 'Yes' || activeStr === 'YES' ||
+                     activeStr === 'có' || activeStr === 'Có' || activeStr === 'CÓ' ||
+                     activeStr === 'bật' || activeStr === 'Bật' || activeStr === 'BẬT' ||
+                     activeStr === 'enable' || activeStr === 'Enable' || activeStr === 'ENABLE' ||
+                     activeStr === 'active' || activeStr === 'Active' || activeStr === 'ACTIVE' ||
+                     activeStr === 'on' || activeStr === 'On' || activeStr === 'ON') {
+            isActive = 1;
+          } else if (activeStr === '1' || activeStr === '0') {
+            isActive = parseInt(activeStr);
+          }
+        }
+        
+        // Tìm giá trị zaloId từ các cột có thể chứa nó
+        let zaloId = row['Zalo ID'] || row['zalo_id'] || row['zaloId'] || row['ZALO_ID'] || 
+                    row['ZaloID'] || row['zalo ID'] || row['Zalo Id'] || row['zalo Id'] ||
+                    row['ID'] || row['id'] || null;
+        
+        // Chuyển đổi zaloId thành string nếu có giá trị
+        if (zaloId !== null && zaloId !== undefined && zaloId !== '') {
+          zaloId = String(zaloId).trim();
+          if (zaloId === '') {
+            zaloId = null;
+          }
+        } else {
+          zaloId = null;
+        }
+        
+        return {
+          zaloDisplayName: row['Tên hiển thị Zalo'] || row['zalo_display_name'] || row['name'] || row['Họ và tên'],
+          salutation: row['Xưng hô'] || row['salutation'] || row['title'],
+          greetingMessage: row['Tin nhắn chào'] || row['greeting_message'] || row['message'],
+          zaloId: zaloId, // zaloId đã được xử lý ở trên
+          isActive: isActive, // Thêm isActive từ Excel
+        };
+      }).filter(customer => customer.zaloDisplayName); // Chỉ lấy những dòng có tên
 
+      // Thống kê trạng thái isActive
+      const activeStats = customers.reduce((stats, customer) => {
+        if (customer.isActive === 1) stats.active++;
+        else if (customer.isActive === 0) stats.inactive++;
+        else stats.undefined++;
+        return stats;
+      }, { active: 0, inactive: 0, undefined: 0 });
+      
+      
       const result = await this.autoGreetingService.importCustomersFromExcel(req.user?.id || 1, customers);
 
       return {
         ...result,
-        message: `Import hoàn tất: ${result.success} thành công, ${result.failed} thất bại`,
+        message: `Import hoàn tất: ${result.success} thành công, ${result.failed} thất bại. Trạng thái: ${activeStats.active} kích hoạt, ${activeStats.inactive} tắt, ${activeStats.undefined} chưa xác định`,
+        statistics: activeStats
       };
     } catch (error) {
       return {
@@ -395,13 +489,8 @@ export class AutoGreetingController {
   @Get('customers/:customerId/message-history')
   async getCustomerMessageHistory(
     @Param('customerId') customerId: string,
-    @Headers('x-master-key') masterKey: string,
+    @Req() req: any,
   ) {
-    // Kiểm tra X-Master-Key
-    const expectedMasterKey = process.env.MASTER_KEY || 'nkcai';
-    if (!masterKey || masterKey !== expectedMasterKey) {
-      throw new HttpException('Unauthorized: Invalid or missing X-Master-Key', HttpStatus.UNAUTHORIZED);
-    }
 
     const history = await this.autoGreetingService.getCustomerMessageHistory(customerId);
     return history.map(h => ({
@@ -451,6 +540,7 @@ export class AutoGreetingController {
       { header: 'Lần Cuối Gửi', key: 'lastMessageDate', width: 20 },
       { header: 'Số Ngày', key: 'daysSinceLastMessage', width: 10 },
       { header: 'Trạng Thái', key: 'customerStatus', width: 15 },
+      { header: 'Kích Hoạt', key: 'isActive', width: 10 },
     ];
 
     // Style cho header
@@ -479,6 +569,7 @@ export class AutoGreetingController {
           : 'Chưa gửi',
         daysSinceLastMessage: customer.daysSinceLastMessage === 999 ? '∞' : customer.daysSinceLastMessage,
         customerStatus: this.getCustomerStatusText(customer.customerStatus || 'normal'),
+        isActive: customer.isActive === 1 ? 'Kích hoạt' : 'Tắt',
       });
 
       // Style cho từng row
@@ -574,6 +665,7 @@ export class AutoGreetingController {
       { header: 'Lần Cuối Gửi', key: 'lastMessageDate', width: 20 },
       { header: 'Số Ngày', key: 'daysSinceLastMessage', width: 10 },
       { header: 'Trạng Thái', key: 'customerStatus', width: 15 },
+      { header: 'Kích Hoạt', key: 'isActive', width: 10 },
     ];
 
     // Style cho header
@@ -602,6 +694,7 @@ export class AutoGreetingController {
           : 'Chưa gửi',
         daysSinceLastMessage: customer.daysSinceLastMessage === 999 ? '∞' : customer.daysSinceLastMessage,
         customerStatus: this.getCustomerStatusText(customer.customerStatus || 'normal'),
+        isActive: customer.isActive === 1 ? 'Kích hoạt' : 'Tắt',
       });
 
       // Style cho từng row
@@ -663,8 +756,15 @@ export class AutoGreetingController {
    */
   @Post('import-from-contacts')
   @UseGuards(AuthGuard('jwt'))
-  async importFromContacts(@Req() req: any, @Res() res: any) {
+  async importFromContacts(@Req() req: any, @Res() res: any, @Headers('x-master-key') masterKey: string) {
     try {
+      
+      // Kiểm tra X-Master-Key
+      const expectedMasterKey = process.env.MASTER_KEY || 'nkcai';
+      if (!masterKey || masterKey !== expectedMasterKey) {
+        throw new HttpException('Unauthorized: Invalid or missing X-Master-Key', HttpStatus.UNAUTHORIZED);
+      }
+
       const userId = req.user?.id;
       if (!userId) {
         throw new Error('User ID not found');
@@ -672,10 +772,6 @@ export class AutoGreetingController {
 
       const authHeader = req.headers?.authorization || req.headers?.Authorization;
       const result = await this.autoGreetingService.importFromContacts(userId, authHeader);
-      
-      console.log('Import result:', result);
-      console.log('Data count:', result.count);
-      console.log('Data sample:', result.data.slice(0, 2));
       
       // Tạo file Excel từ dữ liệu contacts
       const workbook = new ExcelJS.Workbook();
@@ -686,11 +782,11 @@ export class AutoGreetingController {
         { header: 'Tên hiển thị Zalo', key: 'name', width: 30 },
         { header: 'Xưng hô', key: 'salutation', width: 20 },
         { header: 'Tin nhắn chào', key: 'greeting', width: 50 },
+        { header: 'Trạng thái', key: 'isActive', width: 15 },
       ];
-
-      // Style cho header row (chỉ 3 ô A-C, tránh tô màu dư cột)
+      // Style cho header row (4 ô A-D)
       const headerRow = worksheet.getRow(1);
-      for (let col = 1; col <= 3; col++) {
+      for (let col = 1; col <= 4; col++) {
         const cell = headerRow.getCell(col);
         cell.font = {
           name: 'Arial',
@@ -717,15 +813,18 @@ export class AutoGreetingController {
       headerRow.height = 25;
 
       // Thêm dữ liệu với formatting đẹp
+      
       result.data.forEach((row: any, index: number) => {
         const excelRow = worksheet.addRow({
           name: row['Tên hiển thị Zalo'],
           salutation: row['Xưng hô'],
-          greeting: row['Tin nhắn chào']
+          greeting: row['Tin nhắn chào'],
+          isActive: row['Trạng thái'] || '' // Đảm bảo luôn có giá trị, để trống nếu undefined
         });
+        
 
-        // Font + alignment cho 3 ô đầu (A-C)
-        for (let col = 1; col <= 3; col++) {
+        // Font + alignment cho 4 ô (A-D)
+        for (let col = 1; col <= 4; col++) {
           const cell = excelRow.getCell(col);
           cell.font = { name: 'Arial', size: 10 };
           cell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
@@ -743,9 +842,9 @@ export class AutoGreetingController {
           };
         }
 
-        // Đảm bảo các cột sau C không bị tô
+        // Đảm bảo các cột sau D không bị tô
         excelRow.eachCell({ includeEmpty: true }, (c, col) => {
-          if (col > 3) {
+          if (col > 4) {
             c.fill = undefined as any;
             c.border = undefined as any;
             c.font = { name: 'Arial', size: 10 };
@@ -757,10 +856,10 @@ export class AutoGreetingController {
         excelRow.height = 20;
       });
 
-      // Thêm title cho worksheet (merge đúng 3 cột A-C)
+      // Thêm title cho worksheet (merge đúng 4 cột A-D)
       worksheet.insertRow(1, ['']);
       const titleRow = worksheet.getRow(1);
-      worksheet.mergeCells('A1:C1');
+      worksheet.mergeCells('A1:D1');
       const titleCell = worksheet.getCell('A1');
       titleCell.value = 'DANH SÁCH KHÁCH HÀNG TỪ DANH BẠ ZALO';
       titleCell.font = { 
@@ -780,10 +879,10 @@ export class AutoGreetingController {
       };
       titleRow.height = 30;
 
-      // Thêm thông tin ngày tạo (merge đúng 3 cột A-C)
+      // Thêm thông tin ngày tạo (merge đúng 4 cột A-D)
       worksheet.insertRow(2, ['']);
       const dateRow = worksheet.getRow(2);
-      worksheet.mergeCells('A2:C2');
+      worksheet.mergeCells('A2:D2');
       const dateCell = worksheet.getCell('A2');
       dateCell.value = `Ngày tạo: ${new Date().toLocaleDateString('vi-VN')} ${new Date().toLocaleTimeString('vi-VN')}`;
       dateCell.font = { 
@@ -816,11 +915,11 @@ export class AutoGreetingController {
         }
       });
 
-      // Thêm footer với tổng số records (merge đúng 3 cột A-C)
+      // Thêm footer với tổng số records (merge đúng 4 cột A-D)
       const lastRowNum = worksheet.rowCount + 1;
       worksheet.addRow(['']);
       const footerRow = worksheet.getRow(lastRowNum);
-      worksheet.mergeCells(`A${lastRowNum}:C${lastRowNum}`);
+      worksheet.mergeCells(`A${lastRowNum}:D${lastRowNum}`);
       const footerCell = worksheet.getCell(`A${lastRowNum}`);
       footerCell.value = `Tổng số khách hàng: ${result.count}`;
       footerCell.font = { 
@@ -841,6 +940,7 @@ export class AutoGreetingController {
       footerRow.height = 25;
 
       // Tạo buffer
+      
       const buffer = await workbook.xlsx.writeBuffer();
       const filename = `danh-sach-khach-hang-tu-danh-ba-${new Date().toISOString().split('T')[0]}.xlsx`;
 
@@ -852,7 +952,6 @@ export class AutoGreetingController {
       // Gửi buffer trực tiếp
       return res.send(buffer);
     } catch (error) {
-      console.error('Error importing from contacts:', error);
       throw new HttpException(
         error.message || 'Failed to import from contacts',
         HttpStatus.INTERNAL_SERVER_ERROR

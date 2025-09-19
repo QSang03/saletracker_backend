@@ -26,6 +26,7 @@ export interface CustomerWithLastMessage {
   customerStatus?: 'urgent' | 'reminder' | 'normal'; // Trạng thái từ bảng customers
   daysSinceLastMessage: number | null;
   status: 'ready' | 'urgent' | 'stable'; // Trạng thái tính toán dựa trên ngày
+  isActive: number; // 1: active, 0: inactive
 }
 
 @Injectable()
@@ -125,6 +126,7 @@ export class AutoGreetingService {
         c.conversation_type as customer_conversation_type,
         c.last_message_date as customer_last_message_date,
         c.status as customer_status,
+        c.is_active as customer_is_active,
         (SELECT MAX(h.sent_at) FROM auto_greeting_customer_message_history h WHERE h.customer_id = c.id) as lastMessageDate
       FROM auto_greeting_customers c
       WHERE c.deleted_at IS NULL
@@ -176,6 +178,11 @@ export class AutoGreetingService {
         status = 'ready';
       }
 
+      // Debug log for customer 304
+      if (customer.customer_id === '304') {
+        this.logger.log(`Customer 304 debug: customer_is_active=${customer.customer_is_active}, type=${typeof customer.customer_is_active}`);
+      }
+      
       result.push({
         id: customer.customer_id,
         userId: customer.customer_user_id,
@@ -188,6 +195,7 @@ export class AutoGreetingService {
         customerStatus: customer.customer_status,
         daysSinceLastMessage,
         status,
+        isActive: customer.customer_is_active !== null && customer.customer_is_active !== undefined ? customer.customer_is_active : 1,
       });
     }
 
@@ -265,6 +273,8 @@ export class AutoGreetingService {
     zaloDisplayName: string;
     salutation?: string;
     greetingMessage?: string;
+    zaloId?: string; // Thêm zaloId field
+    isActive?: number;
   }>): Promise<{ success: number; failed: number; errors: string[] }> {
     let success = 0;
     let failed = 0;
@@ -272,7 +282,7 @@ export class AutoGreetingService {
 
     for (const customerData of customers) {
         try {
-          // Kiểm tra xem khách hàng đã tồn tại chưa
+          // Debug log để kiểm tra dữ liệu từ Excel
           const existingAutoGreetingCustomer = await this.autoGreetingCustomerRepo.findOne({
             where: {
               userId,
@@ -281,18 +291,28 @@ export class AutoGreetingService {
           });
 
           if (existingAutoGreetingCustomer) {
-            // Cập nhật thông tin
-            await this.autoGreetingCustomerRepo.update(existingAutoGreetingCustomer.id, {
+            // Cập nhật thông tin - ƯU TIÊN dữ liệu từ file Excel để đè lên hệ thống
+            const updateData: any = {
               salutation: customerData.salutation,
               greetingMessage: customerData.greetingMessage,
-            });
+            };
+            if (customerData.zaloId !== undefined && customerData.zaloId !== null) {
+              updateData.zaloId = customerData.zaloId;
+              }
+            // Chỉ cập nhật isActive khi file Excel có giá trị (ưu tiên file user)
+            if (customerData.isActive !== undefined) {
+              updateData.isActive = customerData.isActive;
+            }
+            await this.autoGreetingCustomerRepo.update(existingAutoGreetingCustomer.id, updateData);
           } else {
-            // Tạo mới
+            // Tạo mới - ƯU TIÊN dữ liệu từ file Excel
             const newAutoGreetingCustomer = this.autoGreetingCustomerRepo.create({
               userId,
               zaloDisplayName: customerData.zaloDisplayName,
               salutation: customerData.salutation,
               greetingMessage: customerData.greetingMessage,
+              zaloId: customerData.zaloId || null, // Thêm zaloId khi tạo mới
+              isActive: customerData.isActive, // Chỉ dùng giá trị từ Excel, không có mặc định
             });
             await this.autoGreetingCustomerRepo.save(newAutoGreetingCustomer);
           }
@@ -341,24 +361,57 @@ export class AutoGreetingService {
       const json = await res.json();
       contacts = json?.data || [];
 
-      console.log('Contacts fetched, sample:', contacts.slice(0, 2));
-      console.log('Contacts array:', contacts);
-      console.log('Contacts length:', contacts.length);
-
       if (!contacts || contacts.length === 0) {
         return { count: 0, data: [] };
       }
 
-      // Tạo dữ liệu Excel theo format yêu cầu
-      const excelData = contacts.map((contact: any) => ({
-        'Tên hiển thị Zalo': contact.display_name || contact.name || contact.zaloName || 'Chưa có tên',
-        'Xưng hô': '', // Để trống như yêu cầu
-        'Tin nhắn chào': '', // Để trống như yêu cầu
-      }));
+      // Lấy danh sách khách hàng đã được cấu hình trước đó
+      const existingCustomers = await this.autoGreetingCustomerRepo.find({
+        where: { userId },
+        select: ['zaloDisplayName', 'isActive']
+      });
 
-      console.log('Excel data created:', excelData);
-      console.log('Excel data length:', excelData.length);
-      console.log('First excel row:', excelData[0]);
+      // Tạo map để tra cứu nhanh
+      const existingCustomerMap = new Map();
+      existingCustomers.forEach(customer => {
+        if (customer.zaloDisplayName) {
+          existingCustomerMap.set(customer.zaloDisplayName.toLowerCase().trim(), customer.isActive);
+        }
+      });
+
+      // Tạo dữ liệu Excel theo format yêu cầu
+      const excelData = contacts.map((contact: any) => {
+        const displayName = contact.display_name || contact.name || contact.zaloName || 'Chưa có tên';
+        const normalizedName = displayName.toLowerCase().trim();
+        
+        // Kiểm tra trong danh sách đã import trước đó
+        const existingIsActive = existingCustomerMap.get(normalizedName);
+        
+        // Lấy isActive từ API contact (nếu có)
+        const apiIsActive = contact.contact_is_active;
+        
+        // Luôn luôn tạo cột Kích hoạt, ưu tiên: 1. Danh sách đã import (hệ thống), 2. Để trống
+        let finalIsActive = ''; // Mặc định để trống
+        if (existingIsActive !== undefined) {
+          // Đã có trong danh sách import trước đó - ƯU TIÊN HỆ THỐNG
+          finalIsActive = existingIsActive === 1 ? 'Kích hoạt' : 'Chưa kích hoạt';
+        }
+        // Không dùng contact_is_active từ API vì đó là trạng thái khác
+        // Nếu không có trong hệ thống, finalIsActive sẽ là chuỗi rỗng ''
+        
+        return {
+          'Tên hiển thị Zalo': displayName,
+          'Xưng hô': '', // Để trống như yêu cầu
+          'Tin nhắn chào': '', // Để trống như yêu cầu
+          'Trạng thái': finalIsActive,
+        };
+      });
+      
+      // Xác nhận tất cả rows đều có cột Kích hoạt
+      const allRowsHaveActiveColumn = excelData.every(row => 'Kích hoạt' in row);
+      
+      // Debug: Log contacts with contact_is_active
+      const contactsWithActive = contacts.filter(c => c.contact_is_active !== undefined);
 
       this.logger.log(`Successfully processed ${contacts.length} contacts for user ${userId}`);
       
@@ -378,7 +431,7 @@ export class AutoGreetingService {
   async updateCustomer(
     customerId: string, 
     userId: number, 
-    updateData: { zaloDisplayName?: string; salutation?: string; greetingMessage?: string }
+    updateData: { zaloDisplayName?: string; salutation?: string; greetingMessage?: string; isActive?: number }
   ): Promise<void> {
     this.logger.log(`Update customer request: customerId=${customerId}, userId=${userId}, updateData=${JSON.stringify(updateData)}`);
     
@@ -411,11 +464,44 @@ export class AutoGreetingService {
     if (updateData.greetingMessage !== undefined) {
       updateFields.greetingMessage = updateData.greetingMessage;
     }
+    if (updateData.isActive !== undefined) {
+      updateFields.isActive = updateData.isActive;
+    }
 
     // Cập nhật thông tin
     await this.autoGreetingCustomerRepo.update(customerId, updateFields);
 
     this.logger.log(`Customer ${customerId} updated by user ${userId}: ${JSON.stringify(updateFields)}`);
+  }
+
+  /**
+   * Toggle trạng thái kích hoạt của khách hàng
+   */
+  async toggleCustomerActive(customerId: string, userId: number, isActive: number, bypassOwnershipCheck: boolean = false): Promise<void> {
+    this.logger.log(`Toggle customer active request: customerId=${customerId}, userId=${userId}, isActive=${isActive}, bypassOwnershipCheck=${bypassOwnershipCheck}`);
+    
+    // Kiểm tra xem khách hàng có tồn tại không
+    const customer = await this.autoGreetingCustomerRepo.findOne({
+      where: {
+        id: customerId,
+      },
+    });
+
+    if (!customer) {
+      this.logger.error(`Customer ${customerId} not found in database`);
+      throw new Error('Khách hàng không tồn tại');
+    }
+
+    // Kiểm tra quyền sở hữu (chỉ khi không bypass)
+    if (!bypassOwnershipCheck && customer.userId !== userId) {
+      this.logger.error(`Customer ${customerId} owned by user ${customer.userId}, but request from user ${userId}`);
+      throw new Error('Khách hàng không thuộc về bạn');
+    }
+
+    // Cập nhật trạng thái is_active
+    await this.autoGreetingCustomerRepo.update(customerId, { isActive });
+
+    this.logger.log(`Customer ${customerId} active status updated by user ${userId}: isActive=${isActive}`);
   }
 
   /**

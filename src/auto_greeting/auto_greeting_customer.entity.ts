@@ -33,6 +33,16 @@ export class AutoGreetingCustomer {
 
   @Index()
   @Column({
+    name: 'zalo_id',
+    type: 'varchar',
+    length: 100,
+    nullable: true,
+    unique: true,
+  })
+  zaloId?: string | null;
+
+  @Index()
+  @Column({
     name: 'zalo_display_name',
     type: 'varchar',
     length: 255,
@@ -70,6 +80,15 @@ export class AutoGreetingCustomer {
     default: 'normal'
   })
   status?: 'urgent' | 'reminder' | 'normal' | null;
+
+  @Column({ 
+    name: 'is_active', 
+    type: 'tinyint',
+    unsigned: true,
+    nullable: true,
+    comment: '1: active, 0: inactive'
+  })
+  isActive: number;
 
   @OneToMany(
     () => AutoGreetingCustomerMessageHistory,
