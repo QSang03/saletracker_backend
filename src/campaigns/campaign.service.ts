@@ -3601,7 +3601,7 @@ export class CampaignService {
           customer_id: Number(customerId),
         },
         {
-          full_name: data.full_name.trim(),
+          full_name: data.full_name?.trim() || '',
           salutation: data.salutation?.trim() || undefined,
         },
       );

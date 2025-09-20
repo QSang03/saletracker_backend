@@ -34,9 +34,8 @@ export class SeedUserTriggerService {
       AFTER UPDATE ON \`users\`
       FOR EACH ROW
       BEGIN
-        IF (OLD.zalo_link_status IS NULL AND NEW.zalo_link_status IS NOT NULL)
-           OR (OLD.zalo_link_status IS NOT NULL AND NEW.zalo_link_status IS NULL)
-           OR (OLD.zalo_link_status <> NEW.zalo_link_status) THEN
+        -- Chỉ trigger khi zalo_link_status thực sự thay đổi
+        IF OLD.zalo_link_status IS DISTINCT FROM NEW.zalo_link_status THEN
           INSERT INTO \`database_change_log\`(
             \`table_name\`, \`record_id\`, \`action\`, \`old_values\`, \`new_values\`, \`changed_fields\`, \`triggered_at\`
           ) VALUES (

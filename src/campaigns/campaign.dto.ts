@@ -16,9 +16,57 @@ import {
 import { Type } from 'class-transformer';
 import { CampaignType, CampaignStatus, SendMethod } from './campaign.entity';
 
+export class ImageDataDto {
+  @IsString()
+  @IsNotEmpty()
+  base64: string;
+
+  @IsString()
+  @IsOptional()
+  filename?: string;
+
+  @IsNumber()
+  @IsOptional()
+  size?: number;
+
+  @IsString()
+  @IsOptional()
+  type?: string;
+}
+
+export class FileDataDto {
+  @IsString()
+  @IsNotEmpty()
+  base64: string;
+
+  @IsString()
+  @IsNotEmpty()
+  filename: string;
+
+  @IsNumber()
+  @IsOptional()
+  size?: number;
+
+  @IsString()
+  @IsOptional()
+  type?: string;
+}
+
+export class LinkDataDto {
+  @IsString()
+  @IsNotEmpty()
+  url: string;
+
+  @IsString()
+  @IsOptional()
+  title?: string;
+}
+
 export class AttachmentDto {
   @IsString()
-  type: 'image' | 'link' | 'file';
+  @IsIn(['image', 'link', 'file'])
+  @IsOptional()
+  type?: 'image' | 'link' | 'file';
 
   @IsString()
   @IsOptional()
@@ -31,10 +79,32 @@ export class AttachmentDto {
   @IsString()
   @IsOptional()
   filename?: string;
+
+  // Support multiple images (max 5)
+  @IsArray()
+  @IsOptional()
+  @ValidateNested({ each: true })
+  @Type(() => ImageDataDto)
+  images?: ImageDataDto[];
+
+  // Support multiple files (max 5)
+  @IsArray()
+  @IsOptional()
+  @ValidateNested({ each: true })
+  @Type(() => FileDataDto)
+  files?: FileDataDto[];
+
+  // Support multiple links (max 5)
+  @IsArray()
+  @IsOptional()
+  @ValidateNested({ each: true })
+  @Type(() => LinkDataDto)
+  links?: LinkDataDto[];
 }
 
 export class MessageDto {
   @IsString()
+  @IsIn(['initial'])
   type: 'initial';
 
   @IsString()
@@ -83,13 +153,14 @@ export class ReminderDto {
   content: string;
 
   @IsNumber()
-  minutes: number;
+  @IsOptional()
+  minutes?: number;
 }
 
 export class EmailReportsDto {
   @IsString()
-  @IsNotEmpty()
-  recipients_to: string;
+  @IsOptional()
+  recipients_to?: string;
 
   @IsArray()
   @IsOptional()
@@ -104,10 +175,12 @@ export class EmailReportsDto {
   stop_sending_at_time?: string;
 
   @IsBoolean()
-  is_active: boolean;
+  @IsOptional()
+  is_active?: boolean;
 
   @IsBoolean()
-  send_when_campaign_completed: boolean;
+  @IsOptional()
+  send_when_campaign_completed?: boolean;
 }
 
 export class CustomerDto {
@@ -118,8 +191,8 @@ export class CustomerDto {
   phone_number: string;
 
   @IsString()
-  @IsNotEmpty({ message: 'Họ tên không được để trống' })
-  full_name: string;
+  @IsOptional()
+  full_name?: string;
 
   @IsString()
   @IsOptional()
@@ -142,11 +215,11 @@ export class CreateCampaignDto {
   @IsOptional()
   send_method?: SendMethod;
 
-  @IsNumberString()
+  @IsString()
   @IsOptional()
   department_id?: string;
 
-  @IsNumberString()
+  @IsString()
   @IsOptional()
   created_by?: string;
 
@@ -203,7 +276,7 @@ export class UpdateCampaignDto {
   @IsOptional()
   send_method?: SendMethod;
 
-  @IsNumberString()
+  @IsString()
   @IsOptional()
   department_id?: string;
 
