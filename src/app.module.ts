@@ -2,6 +2,7 @@ import { WebsocketModule } from './websocket/websocket.module';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { EventEmitterModule } from '@nestjs/event-emitter';
+import { ScheduleModule } from '@nestjs/schedule';
 import { MulterModule } from '@nestjs/platform-express';
 import { UserModule } from './users/user.module';
 import { AuthModule } from './auth/auth.module';
@@ -44,6 +45,7 @@ import { CommonModule } from './common/common.module';
 @Module({
   imports: [
     EventEmitterModule.forRoot(),
+    ScheduleModule.forRoot(),
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: '.env',

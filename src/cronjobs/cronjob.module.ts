@@ -23,12 +23,16 @@ import { PermissionModule } from '../permissions/permission.module';
 import { ScheduleStatusUpdaterService } from './schedule-status-updater.service';
 import { OrderDetail } from 'src/order-details/order-detail.entity';
 import { SystemConfig } from 'src/system_config/system_config.entity';
+import { ZaloLinkMonitorCronjob } from './zalo-link-monitor.cronjob';
+import { User } from '../users/user.entity';
+import { UserModule } from '../users/user.module';
 
 @Module({
   imports: [
     ScheduleModule.forRoot(),
     HttpModule,
     PermissionModule,
+    UserModule, // Import UserModule để có UserStatusObserver
     TypeOrmModule.forFeature([
       NKCProduct,
       Product,
@@ -43,6 +47,7 @@ import { SystemConfig } from 'src/system_config/system_config.entity';
       CampaignSchedule,
       OrderDetail, // Entity cho order details
       SystemConfig,
+      User, // Thêm User entity
     ]),
   ],
   providers: [
@@ -54,6 +59,7 @@ import { SystemConfig } from 'src/system_config/system_config.entity';
     OrderCleanupCronjobService,
     DatabaseCleanupCronjobService,
     ProductV2CronjobService,
+    ZaloLinkMonitorCronjob, // Thêm cronjob monitor Zalo link
   ],
   exports: [
     CronjobService,
@@ -63,6 +69,7 @@ import { SystemConfig } from 'src/system_config/system_config.entity';
     OrderCleanupCronjobService,
     DatabaseCleanupCronjobService,
     ProductV2CronjobService,
+    ZaloLinkMonitorCronjob,
   ],
 })
 export class CronjobModule {}

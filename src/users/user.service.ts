@@ -35,7 +35,8 @@ export class UserService {
     @Inject(forwardRef(() => WebsocketGateway))
     private readonly wsGateway: WebsocketGateway,
     private readonly rolesPermissionsService: RolesPermissionsService, // Inject service
-  private readonly userStatusObserver: UserStatusObserver,
+    @Inject(forwardRef(() => UserStatusObserver))
+    private readonly userStatusObserver: UserStatusObserver,
   @InjectRepository(DatabaseChangeLog)
   private readonly changeLogRepo: Repository<DatabaseChangeLog>,
   ) {}

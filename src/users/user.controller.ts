@@ -17,6 +17,8 @@ import { UserService } from './user.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { UserStatusObserver } from '../observers/user-status.observer';
+import { forwardRef, Inject } from '@nestjs/common';
 import { JwtUserPayload } from 'src/auth/interfaces/jwt-payload.interface';
 import { AdminAuthGuard } from '../common/guards/admin-auth.guard';
 import { getRoleNames } from '../common/utils/user-permission.helper';
@@ -33,6 +35,8 @@ export class UserController {
   constructor(
     private readonly userService: UserService,
     private readonly rolesPermissionsService: RolesPermissionsService, // Inject service
+    @Inject(forwardRef(() => UserStatusObserver))
+    private readonly userStatusObserver: UserStatusObserver,
   ) {}
 
   @Get()
@@ -416,5 +420,159 @@ export class UserController {
     @Query('limit') limit = '10',
   ) {
     return this.userService.getZaloLinkStatusLogs(id, Number(page), Number(limit));
+  }
+
+  @Post(':id/trigger-zalo-link-error')
+  @UseGuards(AdminAuthGuard)
+  async triggerZaloLinkError(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: { errorType?: string },
+    @Req() req: CustomRequest,
+  ) {
+    const success = await this.userStatusObserver.triggerZaloLinkError(
+      id, 
+      body.errorType || 'manual_trigger',
+      `admin_${req.user.id}`
+    );
+    
+    if (success) {
+      return {
+        success: true,
+        message: `Đã trigger lỗi liên kết cho user ${id}`,
+        timestamp: new Date()
+      };
+    } else {
+      return {
+        success: false,
+        message: `Không thể trigger lỗi liên kết cho user ${id}`,
+        timestamp: new Date()
+      };
+    }
+  }
+
+  @Get('zalo-link-monitor/status')
+  @UseGuards(AdminAuthGuard)
+  async getZaloLinkMonitorStatus() {
+    // Import ZaloLinkMonitorCronjob để lấy status
+    const { ZaloLinkMonitorCronjob } = await import('../cronjobs/zalo-link-monitor.cronjob');
+    return {
+      message: 'Zalo Link Monitor đang chạy mỗi 30 giây',
+      processedUsers: [], // Sẽ được implement sau
+      timestamp: new Date()
+    };
+  }
+
+  @Get('test-python-api')
+  @UseGuards(AdminAuthGuard)
+  async testPythonApi() {
+    try {
+      const pythonApiUrl = process.env.CONTACTS_API_BASE_URL || 'http://192.168.117.19:5555';
+      const testPayload = {
+        userId: 999,
+        errorType: 'test',
+        errorMessage: 'Test connection to Python API',
+        userInfo: {
+          username: 'test',
+          fullName: 'Test User',
+          email: 'test@example.com',
+          employeeCode: 'TEST-001'
+        }
+      };
+
+      const axios = await import('axios');
+      const response = await axios.default.post(`${pythonApiUrl}/send-error-notification`, testPayload, {
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.PYTHON_API_TOKEN || ''}`,
+          'X-Master-Key': process.env.NEXT_PUBLIC_MASTER_KEY || process.env.MASTER_KEY || ''
+        },
+        timeout: 5000
+      });
+
+      return {
+        success: true,
+        message: 'Python API connection successful',
+        response: response.data,
+        timestamp: new Date()
+      };
+
+    } catch (error: any) {
+      return {
+        success: false,
+        message: 'Python API connection failed',
+        error: error.message,
+        details: {
+          url: `${process.env.CONTACTS_API_BASE_URL || 'http://192.168.117.19:5555'}/send-error-notification`,
+          token: process.env.PYTHON_API_TOKEN ? 'Configured' : 'Not configured',
+          responseStatus: error.response?.status || 'No response',
+          responseData: error.response?.data || null,
+          responseHeaders: error.response?.headers || null
+        },
+        timestamp: new Date()
+      };
+    }
+  }
+
+  @Get('test-python-api-real-user')
+  @UseGuards(AdminAuthGuard)
+  async testPythonApiWithRealUser() {
+    try {
+      const pythonApiUrl = process.env.CONTACTS_API_BASE_URL || 'http://192.168.117.19:5555';
+      
+      // Lấy user thật từ database để test
+      const realUser = await this.userService.findOneWithDetails(12);
+      if (!realUser) {
+        return {
+          success: false,
+          message: 'User 12 not found',
+          timestamp: new Date()
+        };
+      }
+
+      const testPayload = {
+        userId: realUser.id,
+        errorType: 'session_invalid',
+        errorMessage: 'Tài khoản đang lỗi liên kết',
+        userInfo: {
+          username: realUser.username,
+          fullName: realUser.fullName,
+          email: realUser.email,
+          employeeCode: realUser.employeeCode || ''
+        }
+      };
+
+      const axios = await import('axios');
+      const response = await axios.default.post(`${pythonApiUrl}/send-error-notification`, testPayload, {
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.PYTHON_API_TOKEN || ''}`,
+          'X-Master-Key': process.env.NEXT_PUBLIC_MASTER_KEY || process.env.MASTER_KEY || ''
+        },
+        timeout: 5000
+      });
+
+      return {
+        success: true,
+        message: 'Python API connection successful with real user',
+        payload: testPayload,
+        response: response.data,
+        timestamp: new Date()
+      };
+
+    } catch (error: any) {
+      return {
+        success: false,
+        message: 'Python API connection failed with real user',
+        error: error.message,
+        details: {
+          url: `${process.env.CONTACTS_API_BASE_URL || 'http://192.168.117.19:5555'}/send-error-notification`,
+          token: process.env.PYTHON_API_TOKEN ? 'Configured' : 'Not configured',
+          responseStatus: error.response?.status || 'No response',
+          responseData: error.response?.data || null,
+          responseHeaders: error.response?.headers || null
+        },
+        timestamp: new Date()
+      };
+    }
   }
 }
