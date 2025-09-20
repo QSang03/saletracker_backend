@@ -4,8 +4,10 @@ import {
   Column,
   CreateDateColumn,
   UpdateDateColumn,
+  Index,
 } from 'typeorm';
 
+@Index('idx_system_config_name_status', ['name', 'status'])
 @Entity('system_config')
 export class SystemConfig {
   @PrimaryGeneratedColumn()

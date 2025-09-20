@@ -75,6 +75,24 @@ export class UserStatusObserver {
         return;
       }
 
+      // Kiểm tra user có bị ban không
+      if (user.isBlock === true) {
+        this.logger.log(`⏭️ Bỏ qua user ${user.id} (${user.username}) - đã bị ban (is_block = true)`);
+        return;
+      }
+
+      // Kiểm tra user có phải là thietpn không
+      if (user.username === 'thietpn' || user.email === 'thietpn@nguyenkimvn.vn') {
+        this.logger.log(`⏭️ Bỏ qua user ${user.id} (${user.username}) - tài khoản thietpn không được phép gửi`);
+        return;
+      }
+
+      // Kiểm tra user có email không
+      if (!user.email || user.email.trim() === '') {
+        this.logger.log(`⏭️ Bỏ qua user ${user.id} (${user.username}) - không có email`);
+        return;
+      }
+
       // Chuẩn bị dữ liệu gửi cho Python API
       payload = {
         userId: user.id,
@@ -100,11 +118,11 @@ export class UserStatusObserver {
       });
 
       const result = response.data;
+      this.logger.log(`✅ Gửi API thành công cho user ${user.id} (${user.username})`);
 
     } catch (error: any) {
-      this.logger.error(`Lỗi khi gọi Python API cho user ${event.userId}: ${error.message}`);
+      this.logger.error(`❌ Lỗi khi gọi Python API cho user ${event.userId}: ${error.message}`);
       this.logger.error(`Error details: ${JSON.stringify(error)}`);
-      
       
       // Không throw error để không làm gián đoạn flow chính
     }
