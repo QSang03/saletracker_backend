@@ -88,20 +88,6 @@ export class UserStatusObserver {
         }
       };
 
-      this.logger.log(`Gọi Python API cho user ${user.id}: ${JSON.stringify(payload)}`);
-      this.logger.log(`Python API URL: ${this.pythonApiUrl}/send-error-notification`);
-      this.logger.log(`EmployeeCode đã fix: "${user.employeeCode}" -> "${user.employeeCode || ''}"`);
-      
-      // Log X-Master-Key (ẩn một phần để bảo mật)
-      const masterKey = process.env.NEXT_PUBLIC_MASTER_KEY || process.env.MASTER_KEY || '';
-      const maskedKey = masterKey ? `${masterKey.substring(0, 4)}****${masterKey.substring(masterKey.length - 4)}` : 'Not configured';
-      this.logger.log(`X-Master-Key: ${maskedKey}`);
-
-      // Kiểm tra Contacts API URL
-      if (!this.pythonApiUrl || this.pythonApiUrl === 'http://192.168.117.19:5555') {
-        this.logger.log(`Đang sử dụng Contacts API URL: ${this.pythonApiUrl}`);
-        this.logger.log(`Để thay đổi, cấu hình CONTACTS_API_BASE_URL trong .env file`);
-      }
 
       // Gọi API Python
       const response = await axios.post(`${this.pythonApiUrl}/send-error-notification`, payload, {
@@ -114,24 +100,11 @@ export class UserStatusObserver {
       });
 
       const result = response.data;
-      this.logger.log(`Python API response cho user ${user.id}: ${JSON.stringify(result)}`);
 
     } catch (error: any) {
       this.logger.error(`Lỗi khi gọi Python API cho user ${event.userId}: ${error.message}`);
       this.logger.error(`Error details: ${JSON.stringify(error)}`);
       
-      // Log thêm thông tin về request
-      this.logger.error(`Request URL: ${this.pythonApiUrl}/send-error-notification`);
-      if (payload) {
-        this.logger.error(`Request payload: ${JSON.stringify(payload)}`);
-      }
-      
-      // Log response details nếu có
-      if (error.response) {
-        this.logger.error(`Response status: ${error.response.status}`);
-        this.logger.error(`Response data: ${JSON.stringify(error.response.data)}`);
-        this.logger.error(`Response headers: ${JSON.stringify(error.response.headers)}`);
-      }
       
       // Không throw error để không làm gián đoạn flow chính
     }
