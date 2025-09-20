@@ -16,6 +16,7 @@ export interface UserStatusChangeEvent {
 export class UserStatusObserver {
   private readonly logger = new Logger(UserStatusObserver.name);
   private readonly pythonApiUrl = process.env.CONTACTS_API_BASE_URL || 'http://192.168.117.19:5555';
+  private readonly processedUsers = new Map<number, number>(); // userId -> timestamp
 
   constructor(
     private readonly eventEmitter: EventEmitter2,
@@ -67,6 +68,16 @@ export class UserStatusObserver {
     let payload: any;
     
     try {
+      // Kiểm tra user đã được xử lý gần đây chưa (trong vòng 5 phút)
+      const now = Date.now();
+      const lastProcessed = this.processedUsers.get(event.userId);
+      if (lastProcessed && (now - lastProcessed) < 300000) { // 5 phút = 300000ms
+        this.logger.log(`⏭️ Bỏ qua user ${event.userId} - đã được xử lý cách đây ${Math.round((now - lastProcessed) / 1000)}s`);
+        return;
+      }
+      
+      // Đánh dấu user đang được xử lý
+      this.processedUsers.set(event.userId, now);
       // Lấy thông tin chi tiết của user
       const user = await this.userService.findOneWithDetails(event.userId);
       
@@ -167,10 +178,14 @@ export class UserStatusObserver {
         return false;
       }
 
-      // Cập nhật trạng thái user (sẽ tự động trigger notifyUserStatusChange)
-      await this.userService.updateUser(userId, {
-        zaloLinkStatus: 2
-      }, undefined);
+      // Gọi trực tiếp API Python thay vì update user (để tránh duplicate event)
+      await this.callPythonApiForLinkError({
+        userId: user.id,
+        oldStatus: user.zaloLinkStatus,
+        newStatus: 2,
+        updatedBy: updatedBy,
+        timestamp: new Date(),
+      });
 
       this.logger.log(`Đã trigger lỗi liên kết cho user ${userId}`);
       return true;

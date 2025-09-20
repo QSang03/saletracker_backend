@@ -10,6 +10,8 @@ import { SystemConfig } from '../system_config/system_config.entity';
 export class ZaloLinkMonitorCronjob {
   private readonly logger = new Logger(ZaloLinkMonitorCronjob.name);
   private isRunning = false; // Lock để tránh duplicate execution
+  private lastRunTime = 0; // Thời gian chạy cuối cùng
+  private processedUsers = new Set<number>(); // Set để track user đã xử lý trong phiên này
 
   constructor(
     @InjectRepository(User)
@@ -25,9 +27,17 @@ export class ZaloLinkMonitorCronjob {
  
   @Cron(process.env.ZALO_LINK_MONITOR_CRON || '*/5 * * * *')
   async monitorZaloLinkStatus() {
+    const currentTime = Date.now();
+    
     // Kiểm tra lock để tránh duplicate execution
     if (this.isRunning) {
       this.logger.warn(`⚠️ Cronjob đang chạy, bỏ qua lần này để tránh duplicate`);
+      return;
+    }
+    
+    // Kiểm tra thời gian chạy cuối cùng (tránh chạy quá gần nhau)
+    if (currentTime - this.lastRunTime < 60000) { // 60 giây
+      this.logger.warn(`⚠️ Cronjob vừa chạy cách đây ${Math.round((currentTime - this.lastRunTime) / 1000)}s, bỏ qua để tránh duplicate`);
       return;
     }
 
@@ -39,6 +49,7 @@ export class ZaloLinkMonitorCronjob {
     }
 
     this.isRunning = true;
+    this.lastRunTime = currentTime;
     const startTime = Date.now();
     
     try {
@@ -61,8 +72,17 @@ export class ZaloLinkMonitorCronjob {
       this.logger.log(`📊 Tìm thấy ${allUsersWithError.length} users có lỗi liên kết, sau khi lọc thietpn và không có email còn ${usersWithError.length} users`);
 
       for (const user of usersWithError) {
+        // Kiểm tra user đã được xử lý trong phiên này chưa
+        if (this.processedUsers.has(user.id)) {
+          this.logger.log(`⏭️ Bỏ qua user ${user.id} (${user.username}) - đã được xử lý trong phiên này`);
+          continue;
+        }
+        
         // Gọi API Python để xử lý lỗi liên kết
         await this.handleZaloLinkError(user);
+        
+        // Đánh dấu user đã được xử lý
+        this.processedUsers.add(user.id);
       }
 
     } catch (error) {
@@ -70,18 +90,22 @@ export class ZaloLinkMonitorCronjob {
     } finally {
       // Luôn reset lock trong finally block
       this.isRunning = false;
+      
+      // Clear processed users sau mỗi lần chạy
+      this.processedUsers.clear();
     }
   }
 
   private async handleZaloLinkError(user: User) {
     try {
-      // Trigger notifyUserStatusChange để handleUserStatusChange xử lý
-      await this.userStatusObserver.notifyUserStatusChange(
-        user.id,
-        user.zaloLinkStatus, // Trạng thái hiện tại
-        2, // Lỗi liên kết
-        'database_monitor'
-      );
+      // Gọi trực tiếp API Python thay vì trigger event (để tránh duplicate)
+      await this.userStatusObserver.callPythonApiForLinkError({
+        userId: user.id,
+        oldStatus: user.zaloLinkStatus,
+        newStatus: 2,
+        updatedBy: 'database_monitor',
+        timestamp: new Date(),
+      });
     } catch (error) {
       this.logger.error(`Lỗi khi xử lý lỗi liên kết cho user ${user.id}: ${error.message}`);
     }
