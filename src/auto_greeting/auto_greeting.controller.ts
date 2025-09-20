@@ -29,6 +29,19 @@ export class AutoGreetingController {
   constructor(private readonly autoGreetingService: AutoGreetingService) {  }
 
   /**
+   * Helper function để kiểm tra user có quyền xem thông tin người sở hữu không
+   */
+  private canViewOwnerInfo(req: any): boolean {
+    const userRoles = req.user?.roles || [];
+    return userRoles.some((role: any) => 
+      role.name === 'admin' || 
+      role.name === 'Admin' || 
+      role.name === 'view' || 
+      role.name === 'View'
+    );
+  }
+
+  /**
    * Cập nhật hàng loạt khách hàng
    */
   @Patch('customers/bulk-update')
@@ -45,9 +58,15 @@ export class AutoGreetingController {
     // Đảm bảo userId là number
     const userIdNumber = typeof userId === 'string' ? parseInt(userId) : userId;
     
+    // Kiểm tra quyền admin
+    const userRoles = req.user?.roles || [];
+    const isAdmin = userRoles.some((role: any) => 
+      role.name === 'admin' || 
+      role.name === 'Admin'
+    );
 
     const { customerIds, updateData } = body;
-    const updatedCount = await this.autoGreetingService.bulkUpdateCustomers(customerIds, userIdNumber, updateData);
+    const updatedCount = await this.autoGreetingService.bulkUpdateCustomers(customerIds, userIdNumber, updateData, isAdmin);
     return { 
       message: `Đã cập nhật ${updatedCount} khách hàng thành công`,
       updatedCount 
@@ -71,8 +90,11 @@ export class AutoGreetingController {
     // Đảm bảo userId là number
     const userIdNumber = typeof userId === 'string' ? parseInt(userId) : userId;
     
+    // Kiểm tra nếu user là admin thì có thể chỉnh sửa khách hàng của bất kỳ ai
+    const userRoles = req.user?.roles || [];
+    const isAdmin = userRoles.some((role: any) => role.name === 'admin' || role.name === 'Admin');
 
-    await this.autoGreetingService.updateCustomer(customerId, userIdNumber, updateData);
+    await this.autoGreetingService.updateCustomer(customerId, userIdNumber, updateData, isAdmin);
     return { message: 'Thông tin khách hàng đã được cập nhật thành công' };
   }
 
@@ -93,8 +115,11 @@ export class AutoGreetingController {
     // Đảm bảo userId là number
     const userIdNumber = typeof userId === 'string' ? parseInt(userId) : userId;
     
+    // Kiểm tra nếu user là admin thì có thể chỉnh sửa khách hàng của bất kỳ ai
+    const userRoles = req.user?.roles || [];
+    const isAdmin = userRoles.some((role: any) => role.name === 'admin' || role.name === 'Admin');
 
-    await this.autoGreetingService.toggleCustomerActive(customerId, userIdNumber, body.isActive, true);
+    await this.autoGreetingService.toggleCustomerActive(customerId, userIdNumber, body.isActive, true, isAdmin);
     return { message: `Khách hàng đã được ${body.isActive === 1 ? 'kích hoạt' : 'vô hiệu hóa'} thành công` };
   }
 
@@ -115,8 +140,15 @@ export class AutoGreetingController {
     // Đảm bảo userId là number
     const userIdNumber = typeof userId === 'string' ? parseInt(userId) : userId;
 
+    // Kiểm tra quyền admin
+    const userRoles = req.user?.roles || [];
+    const isAdmin = userRoles.some((role: any) => 
+      role.name === 'admin' || 
+      role.name === 'Admin'
+    );
+
     const { customerIds } = body;
-    const deletedCount = await this.autoGreetingService.bulkDeleteCustomers(customerIds, userIdNumber);
+    const deletedCount = await this.autoGreetingService.bulkDeleteCustomers(customerIds, userIdNumber, isAdmin);
     return { 
       message: `Đã xóa ${deletedCount} khách hàng thành công`,
       deletedCount 
@@ -200,7 +232,7 @@ export class AutoGreetingController {
       }
     }
     
-    return this.autoGreetingService.getCustomersForGreeting(parsedUserId);
+    return this.autoGreetingService.getCustomersForGreeting(parsedUserId, this.canViewOwnerInfo(req));
   }
 
   /**
@@ -252,6 +284,10 @@ export class AutoGreetingController {
       };
     }
 
+    // Đọc file Excel sử dụng ExcelJS
+    const workbook = new ExcelJS.Workbook();
+    let worksheet: ExcelJS.Worksheet | undefined;
+
     try {
       // Kiểm tra file type
       if (!file.originalname.match(/\.(xlsx|xls)$/i)) {
@@ -262,17 +298,24 @@ export class AutoGreetingController {
           message: 'Định dạng file không hợp lệ',
         };
       }
-
-      // Đọc file Excel sử dụng ExcelJS
-      const workbook = new ExcelJS.Workbook();
-      await workbook.xlsx.load(file.buffer as any);
       
-      const worksheet = workbook.getWorksheet(1);
-      if (!worksheet) {
+      try {
+        await workbook.xlsx.load(file.buffer as any);
+        
+        worksheet = workbook.getWorksheet(1);
+        if (!worksheet) {
+          return {
+            success: 0,
+            failed: 0,
+            errors: ['File Excel không có worksheet'],
+            message: 'File Excel không hợp lệ',
+          };
+        }
+      } catch (excelError) {
         return {
           success: 0,
           failed: 0,
-          errors: ['File Excel không có worksheet'],
+          errors: [`Lỗi đọc file Excel: ${excelError.message}`],
           message: 'File Excel không hợp lệ',
         };
       }
@@ -316,6 +359,15 @@ export class AutoGreetingController {
       const expectedHeaders = ['Tên hiển thị Zalo', 'Xưng hô', 'Tin nhắn chào'];
       const zaloIdHeaders = ['Zalo ID', 'zalo_id', 'zaloId', 'ZALO_ID', 'ZaloID', 'zalo ID', 'Zalo Id', 'zalo Id', 'ID', 'id'];
       const activeHeaders = ['Trạng thái', 'trạng thái', 'Trạng Thái', 'TRẠNG THÁI', 'Kích hoạt', 'kích hoạt', 'Kích Hoạt', 'KÍCH HOẠT', 'Active', 'active', 'ACTIVE', 'Status', 'status', 'STATUS'];
+      if (!worksheet) {
+        return {
+          success: 0,
+          failed: 0,
+          errors: ['Worksheet không tồn tại'],
+          message: 'File Excel không hợp lệ',
+        };
+      }
+
       const maxScan = Math.min(10, worksheet.rowCount);
       for (let r = 1; r <= maxScan; r++) {
         const row = worksheet.getRow(r);
@@ -468,12 +520,27 @@ export class AutoGreetingController {
       
       const result = await this.autoGreetingService.importCustomersFromExcel(req.user?.id || 1, customers);
 
+      // Cleanup workbook để tránh memory leak
+      workbook.removeWorksheet(1);
+      
       return {
         ...result,
         message: `Import hoàn tất: ${result.success} thành công, ${result.failed} thất bại. Trạng thái: ${activeStats.active} kích hoạt, ${activeStats.inactive} tắt, ${activeStats.undefined} chưa xác định`,
         statistics: activeStats
       };
     } catch (error) {
+      // Cleanup workbook trong trường hợp lỗi
+      try {
+        if (workbook) {
+          const ws = workbook.getWorksheet(1);
+          if (ws) {
+            workbook.removeWorksheet(1);
+          }
+        }
+      } catch (cleanupError) {
+        // Ignore cleanup errors
+      }
+      
       return {
         success: 0,
         failed: 0,
@@ -521,18 +588,27 @@ export class AutoGreetingController {
   @Get('export-customers')
   async exportCustomers(@Query('userId') userId?: string, @Req() req?: any) {
     const customers = await this.autoGreetingService.getCustomersForGreeting(
-      userId ? parseInt(userId) : undefined
+      userId ? parseInt(userId) : undefined,
+      this.canViewOwnerInfo(req)
     );
 
     // Tạo workbook mới
     const workbook = new ExcelJS.Workbook();
     const worksheet = workbook.addWorksheet('Danh sách khách hàng');
 
-    // Định nghĩa columns
-    worksheet.columns = [
+    // Kiểm tra quyền xem thông tin người sở hữu
+    const canViewOwner = this.canViewOwnerInfo(req);
+
+    // Định nghĩa columns dựa trên quyền
+    const baseColumns = [
       { header: 'STT', key: 'index', width: 5 },
       { header: 'Mã Khách Hàng', key: 'id', width: 15 },
       { header: 'Tên Zalo Khách', key: 'zaloDisplayName', width: 25 },
+    ];
+
+    const ownerColumn = { header: 'Người Sở Hữu', key: 'userDisplayName', width: 20 };
+    
+    const remainingColumns = [
       { header: 'Xưng hô', key: 'salutation', width: 10 },
       { header: 'Lời Chào', key: 'greetingMessage', width: 40 },
       { header: 'Loại Hội Thoại', key: 'conversationType', width: 15 },
@@ -542,6 +618,13 @@ export class AutoGreetingController {
       { header: 'Trạng Thái', key: 'customerStatus', width: 15 },
       { header: 'Kích Hoạt', key: 'isActive', width: 10 },
     ];
+
+    // Chỉ thêm cột "Người Sở Hữu" nếu user có quyền
+    const allColumns = canViewOwner 
+      ? [...baseColumns, ownerColumn, ...remainingColumns]
+      : [...baseColumns, ...remainingColumns];
+
+    worksheet.columns = allColumns;
 
     // Style cho header
     worksheet.getRow(1).font = { bold: true };
@@ -553,7 +636,7 @@ export class AutoGreetingController {
 
     // Thêm dữ liệu
     customers.forEach((customer, index) => {
-      const row = worksheet.addRow({
+      const baseData = {
         index: index + 1,
         id: customer.id,
         zaloDisplayName: customer.zaloDisplayName,
@@ -570,7 +653,14 @@ export class AutoGreetingController {
         daysSinceLastMessage: customer.daysSinceLastMessage === 999 ? '∞' : customer.daysSinceLastMessage,
         customerStatus: this.getCustomerStatusText(customer.customerStatus || 'normal'),
         isActive: customer.isActive === 1 ? 'Kích hoạt' : 'Tắt',
-      });
+      };
+
+      // Chỉ thêm userDisplayName nếu user có quyền
+      const rowData = canViewOwner 
+        ? { ...baseData, userDisplayName: customer.userDisplayName || `User ${customer.userId}` }
+        : baseData;
+
+      const row = worksheet.addRow(rowData);
 
       // Style cho từng row
       if (index % 2 === 0) {
@@ -611,8 +701,12 @@ export class AutoGreetingController {
   }, @Query('userId') userId?: string, @Req() req?: any) {
     // Lấy tất cả customers trước
     let customers = await this.autoGreetingService.getCustomersForGreeting(
-      userId ? parseInt(userId) : undefined
+      userId ? parseInt(userId) : undefined,
+      this.canViewOwnerInfo(req)
     );
+
+    // Kiểm tra quyền xem thông tin người sở hữu
+    const canViewOwner = this.canViewOwnerInfo(req);
 
     // Áp dụng bộ lọc
     if (filters.searchTerm?.trim()) {
@@ -621,6 +715,7 @@ export class AutoGreetingController {
         return (
           customer.id.toLowerCase().includes(searchLower) ||
           customer.zaloDisplayName.toLowerCase().includes(searchLower) ||
+          (customer.userDisplayName && customer.userDisplayName.toLowerCase().includes(searchLower)) ||
           (customer.salutation && customer.salutation.toLowerCase().includes(searchLower)) ||
           (customer.greetingMessage && customer.greetingMessage.toLowerCase().includes(searchLower)) ||
           customer.userId.toString().includes(searchLower) ||
@@ -653,11 +748,16 @@ export class AutoGreetingController {
     const workbook = new ExcelJS.Workbook();
     const worksheet = workbook.addWorksheet('Danh sách khách hàng (đã lọc)');
 
-    // Định nghĩa columns
-    worksheet.columns = [
+    // Định nghĩa columns dựa trên quyền
+    const baseColumns = [
       { header: 'STT', key: 'index', width: 5 },
       { header: 'Mã Khách Hàng', key: 'id', width: 15 },
       { header: 'Tên Zalo Khách', key: 'zaloDisplayName', width: 25 },
+    ];
+
+    const ownerColumn = { header: 'Người Sở Hữu', key: 'userDisplayName', width: 20 };
+    
+    const remainingColumns = [
       { header: 'Xưng hô', key: 'salutation', width: 10 },
       { header: 'Lời Chào', key: 'greetingMessage', width: 40 },
       { header: 'Loại Hội Thoại', key: 'conversationType', width: 15 },
@@ -667,6 +767,13 @@ export class AutoGreetingController {
       { header: 'Trạng Thái', key: 'customerStatus', width: 15 },
       { header: 'Kích Hoạt', key: 'isActive', width: 10 },
     ];
+
+    // Chỉ thêm cột "Người Sở Hữu" nếu user có quyền
+    const allColumns = canViewOwner 
+      ? [...baseColumns, ownerColumn, ...remainingColumns]
+      : [...baseColumns, ...remainingColumns];
+
+    worksheet.columns = allColumns;
 
     // Style cho header
     worksheet.getRow(1).font = { bold: true };
@@ -678,7 +785,7 @@ export class AutoGreetingController {
 
     // Thêm dữ liệu
     customers.forEach((customer, index) => {
-      const row = worksheet.addRow({
+      const baseData = {
         index: index + 1,
         id: customer.id,
         zaloDisplayName: customer.zaloDisplayName,
@@ -695,7 +802,14 @@ export class AutoGreetingController {
         daysSinceLastMessage: customer.daysSinceLastMessage === 999 ? '∞' : customer.daysSinceLastMessage,
         customerStatus: this.getCustomerStatusText(customer.customerStatus || 'normal'),
         isActive: customer.isActive === 1 ? 'Kích hoạt' : 'Tắt',
-      });
+      };
+
+      // Chỉ thêm userDisplayName nếu user có quyền
+      const rowData = canViewOwner 
+        ? { ...baseData, userDisplayName: customer.userDisplayName || `User ${customer.userId}` }
+        : baseData;
+
+      const row = worksheet.addRow(rowData);
 
       // Style cho từng row
       if (index % 2 === 0) {

@@ -14,6 +14,7 @@ import { User } from '../users/user.entity';
 import { AutoGreetingCustomerMessageHistory } from './auto_greeting_customer_message_history.entity';
 
 @Index('idx_auto_greeting_customers_user_zalo', ['userId', 'zaloDisplayName'])
+@Index('idx_auto_greeting_customers_user_zalo_id', ['userId', 'zaloId'], { unique: true })
 @Index('idx_auto_greeting_customers_created_at', ['created_at'])
 @Index('idx_auto_greeting_customers_deleted_at', ['deleted_at'])
 @Entity({ name: 'auto_greeting_customers' })
@@ -37,7 +38,6 @@ export class AutoGreetingCustomer {
     type: 'varchar',
     length: 100,
     nullable: true,
-    unique: true,
   })
   zaloId?: string | null;
 

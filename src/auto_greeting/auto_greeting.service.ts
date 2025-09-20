@@ -27,6 +27,7 @@ export interface CustomerWithLastMessage {
   daysSinceLastMessage: number | null;
   status: 'ready' | 'urgent' | 'stable'; // Trạng thái tính toán dựa trên ngày
   isActive: number; // 1: active, 0: inactive
+  userDisplayName?: string; // Tên hiển thị của user sở hữu
 }
 
 @Injectable()
@@ -109,7 +110,7 @@ export class AutoGreetingService {
   /**
    * Lấy danh sách khách hàng cần gửi tin nhắn
    */
-  async getCustomersForGreeting(userId?: number): Promise<CustomerWithLastMessage[]> {
+  async getCustomersForGreeting(userId?: number, includeOwnerInfo: boolean = true): Promise<CustomerWithLastMessage[]> {
     const config = await this.getConfig();
     if (!config.enabled) {
       return [];
@@ -127,8 +128,10 @@ export class AutoGreetingService {
         c.last_message_date as customer_last_message_date,
         c.status as customer_status,
         c.is_active as customer_is_active,
+        ${includeOwnerInfo ? 'u.zalo_name as user_display_name,' : 'NULL as user_display_name,'}
         (SELECT MAX(h.sent_at) FROM auto_greeting_customer_message_history h WHERE h.customer_id = c.id) as lastMessageDate
       FROM auto_greeting_customers c
+      ${includeOwnerInfo ? 'LEFT JOIN users u ON c.user_id = u.id' : ''}
       WHERE c.deleted_at IS NULL
     `;
     
@@ -196,6 +199,7 @@ export class AutoGreetingService {
         daysSinceLastMessage,
         status,
         isActive: customer.customer_is_active !== null && customer.customer_is_active !== undefined ? customer.customer_is_active : 1,
+        userDisplayName: customer.user_display_name || `User ${customer.customer_user_id}`,
       });
     }
 
@@ -247,7 +251,7 @@ export class AutoGreetingService {
    * Gửi tin nhắn chào cho tất cả khách hàng cần gửi
    */
   async sendGreetingsToAllCustomers(userId?: number): Promise<{ success: number; failed: number }> {
-    const customers = await this.getCustomersForGreeting(userId);
+    const customers = await this.getCustomersForGreeting(userId, false); // Không cần owner info cho việc gửi tin nhắn
     const readyCustomers = customers.filter(c => c.status === 'ready' || c.status === 'urgent');
 
     let success = 0;
@@ -280,46 +284,105 @@ export class AutoGreetingService {
     let failed = 0;
     const errors: string[] = [];
 
-    for (const customerData of customers) {
-        try {
-          // Debug log để kiểm tra dữ liệu từ Excel
-          const existingAutoGreetingCustomer = await this.autoGreetingCustomerRepo.findOne({
-            where: {
-              userId,
-              zaloDisplayName: customerData.zaloDisplayName,
-            },
-          });
+    // Deduplicate data trong cùng một lần import
+    const uniqueCustomers = new Map<string, {
+      zaloDisplayName: string;
+      salutation?: string;
+      greetingMessage?: string;
+      zaloId?: string;
+      isActive?: number;
+    }>();
 
-          if (existingAutoGreetingCustomer) {
-            // Cập nhật thông tin - ƯU TIÊN dữ liệu từ file Excel để đè lên hệ thống
-            const updateData: any = {
-              salutation: customerData.salutation,
-              greetingMessage: customerData.greetingMessage,
-            };
-            if (customerData.zaloId !== undefined && customerData.zaloId !== null) {
-              updateData.zaloId = customerData.zaloId;
-              }
-            // Chỉ cập nhật isActive khi file Excel có giá trị (ưu tiên file user)
-            if (customerData.isActive !== undefined) {
-              updateData.isActive = customerData.isActive;
-            }
-            await this.autoGreetingCustomerRepo.update(existingAutoGreetingCustomer.id, updateData);
-          } else {
-            // Tạo mới - ƯU TIÊN dữ liệu từ file Excel
-            const newAutoGreetingCustomer = this.autoGreetingCustomerRepo.create({
-              userId,
-              zaloDisplayName: customerData.zaloDisplayName,
-              salutation: customerData.salutation,
-              greetingMessage: customerData.greetingMessage,
-              zaloId: customerData.zaloId || null, // Thêm zaloId khi tạo mới
-              isActive: customerData.isActive, // Chỉ dùng giá trị từ Excel, không có mặc định
+    for (const customer of customers) {
+      // Tạo key unique dựa trên userId + zaloId hoặc userId + zaloDisplayName
+      const key = customer.zaloId 
+        ? `${userId}-${customer.zaloId}` 
+        : `${userId}-${customer.zaloDisplayName}`;
+      
+      // Nếu đã tồn tại, ưu tiên dữ liệu mới hơn (ghi đè)
+      uniqueCustomers.set(key, customer);
+    }
+
+    const deduplicatedCustomers = Array.from(uniqueCustomers.values());
+    this.logger.log(`Deduplicated ${customers.length} customers to ${deduplicatedCustomers.length} unique customers`);
+
+    // Batch processing để tránh quá nhiều database queries
+    const batchSize = 50;
+    const batches: Array<{
+      zaloDisplayName: string;
+      salutation?: string;
+      greetingMessage?: string;
+      zaloId?: string;
+      isActive?: number;
+    }[]> = [];
+    for (let i = 0; i < deduplicatedCustomers.length; i += batchSize) {
+      batches.push(deduplicatedCustomers.slice(i, i + batchSize));
+    }
+
+    for (const batch of batches) {
+      try {
+        // Xử lý batch
+        for (const customerData of batch) {
+          try {
+            // Tìm khách hàng theo zaloDisplayName và userId
+            let existingAutoGreetingCustomer = await this.autoGreetingCustomerRepo.findOne({
+              where: {
+                userId,
+                zaloDisplayName: customerData.zaloDisplayName,
+              },
             });
-            await this.autoGreetingCustomerRepo.save(newAutoGreetingCustomer);
+
+            // Nếu có zaloId, cũng kiểm tra theo zaloId VÀ userId (cùng chủ sở hữu)
+            if (!existingAutoGreetingCustomer && customerData.zaloId) {
+              existingAutoGreetingCustomer = await this.autoGreetingCustomerRepo.findOne({
+                where: {
+                  userId,
+                  zaloId: customerData.zaloId,
+                },
+              });
+            }
+
+            if (existingAutoGreetingCustomer) {
+              // Cập nhật thông tin - ƯU TIÊN dữ liệu từ file Excel để đè lên hệ thống
+              const updateData: any = {
+                salutation: customerData.salutation,
+                greetingMessage: customerData.greetingMessage,
+              };
+              if (customerData.zaloId !== undefined && customerData.zaloId !== null) {
+                updateData.zaloId = customerData.zaloId;
+              }
+              // Chỉ cập nhật isActive khi file Excel có giá trị (ưu tiên file user)
+              if (customerData.isActive !== undefined) {
+                updateData.isActive = customerData.isActive;
+              }
+              await this.autoGreetingCustomerRepo.update(existingAutoGreetingCustomer.id, updateData);
+            } else {
+              // Tạo mới - ƯU TIÊN dữ liệu từ file Excel
+              const newAutoGreetingCustomer = this.autoGreetingCustomerRepo.create({
+                userId,
+                zaloDisplayName: customerData.zaloDisplayName,
+                salutation: customerData.salutation,
+                greetingMessage: customerData.greetingMessage,
+                zaloId: customerData.zaloId || null, // Thêm zaloId khi tạo mới
+                isActive: customerData.isActive, // Chỉ dùng giá trị từ Excel, không có mặc định
+              });
+              await this.autoGreetingCustomerRepo.save(newAutoGreetingCustomer);
+            }
+            success++;
+          } catch (error) {
+            failed++;
+            errors.push(`Error processing ${customerData.zaloDisplayName}: ${error.message}`);
           }
-        success++;
-      } catch (error) {
-        failed++;
-        errors.push(`Error processing ${customerData.zaloDisplayName}: ${error.message}`);
+        }
+        
+        // Thêm delay nhỏ giữa các batch để tránh overload database
+        if (batches.indexOf(batch) < batches.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+      } catch (batchError) {
+        this.logger.error(`Batch processing error: ${batchError.message}`);
+        failed += batch.length;
+        errors.push(`Batch processing error: ${batchError.message}`);
       }
     }
 
@@ -431,7 +494,8 @@ export class AutoGreetingService {
   async updateCustomer(
     customerId: string, 
     userId: number, 
-    updateData: { zaloDisplayName?: string; salutation?: string; greetingMessage?: string; isActive?: number }
+    updateData: { zaloDisplayName?: string; salutation?: string; greetingMessage?: string; isActive?: number },
+    isAdmin: boolean = false
   ): Promise<void> {
     this.logger.log(`Update customer request: customerId=${customerId}, userId=${userId}, updateData=${JSON.stringify(updateData)}`);
     
@@ -447,8 +511,8 @@ export class AutoGreetingService {
       throw new Error('Khách hàng không tồn tại');
     }
 
-    // Kiểm tra quyền sở hữu
-    if (customer.userId !== userId) {
+    // Kiểm tra quyền sở hữu (admin có thể chỉnh sửa khách hàng của bất kỳ ai)
+    if (!isAdmin && customer.userId !== userId) {
       this.logger.error(`Customer ${customerId} owned by user ${customer.userId}, but request from user ${userId}`);
       throw new Error('Khách hàng không thuộc về bạn');
     }
@@ -477,7 +541,7 @@ export class AutoGreetingService {
   /**
    * Toggle trạng thái kích hoạt của khách hàng
    */
-  async toggleCustomerActive(customerId: string, userId: number, isActive: number, bypassOwnershipCheck: boolean = false): Promise<void> {
+  async toggleCustomerActive(customerId: string, userId: number, isActive: number, bypassOwnershipCheck: boolean = false, isAdmin: boolean = false): Promise<void> {
     this.logger.log(`Toggle customer active request: customerId=${customerId}, userId=${userId}, isActive=${isActive}, bypassOwnershipCheck=${bypassOwnershipCheck}`);
     
     // Kiểm tra xem khách hàng có tồn tại không
@@ -492,8 +556,8 @@ export class AutoGreetingService {
       throw new Error('Khách hàng không tồn tại');
     }
 
-    // Kiểm tra quyền sở hữu (chỉ khi không bypass)
-    if (!bypassOwnershipCheck && customer.userId !== userId) {
+    // Kiểm tra quyền sở hữu (admin có thể chỉnh sửa khách hàng của bất kỳ ai, hoặc bypass check)
+    if (!bypassOwnershipCheck && !isAdmin && customer.userId !== userId) {
       this.logger.error(`Customer ${customerId} owned by user ${customer.userId}, but request from user ${userId}`);
       throw new Error('Khách hàng không thuộc về bạn');
     }
@@ -534,9 +598,10 @@ export class AutoGreetingService {
   async bulkUpdateCustomers(
     customerIds: string[], 
     userId: number, 
-    updateData: { salutation?: string; greetingMessage?: string }
+    updateData: { salutation?: string; greetingMessage?: string },
+    isAdmin: boolean = false
   ): Promise<number> {
-    this.logger.log(`Bulk update request: customerIds=${JSON.stringify(customerIds)}, userId=${userId}, updateData=${JSON.stringify(updateData)}`);
+    this.logger.log(`Bulk update request: customerIds=${JSON.stringify(customerIds)}, userId=${userId}, updateData=${JSON.stringify(updateData)}, isAdmin=${isAdmin}`);
     
     if (customerIds.length === 0) {
       return 0;
@@ -559,15 +624,17 @@ export class AutoGreetingService {
       throw new Error(`Một số khách hàng không tồn tại: ${missingIds.join(', ')}`);
     }
 
-    // Kiểm tra quyền sở hữu
-    const ownedCustomers = allCustomers.filter(c => c.userId === userId);
-    this.logger.log(`Owned customers: ${ownedCustomers.length}, Requested: ${customerIds.length}, UserId: ${userId}`);
-    this.logger.log(`Customer ownership details: ${JSON.stringify(allCustomers.map(c => ({ id: c.id, userId: c.userId, isOwned: c.userId === userId })))}`);
-    
-    if (ownedCustomers.length !== customerIds.length) {
-      const notOwnedIds = allCustomers.filter(c => c.userId !== userId).map(c => c.id);
-      this.logger.error(`Not owned customers: ${JSON.stringify(notOwnedIds)}`);
-      throw new Error(`Một số khách hàng không thuộc về bạn: ${notOwnedIds.join(', ')}`);
+    // Kiểm tra quyền sở hữu (chỉ khi không phải admin)
+    if (!isAdmin) {
+      const ownedCustomers = allCustomers.filter(c => c.userId === userId);
+      this.logger.log(`Owned customers: ${ownedCustomers.length}, Requested: ${customerIds.length}, UserId: ${userId}`);
+      this.logger.log(`Customer ownership details: ${JSON.stringify(allCustomers.map(c => ({ id: c.id, userId: c.userId, isOwned: c.userId === userId })))}`);
+      
+      if (ownedCustomers.length !== customerIds.length) {
+        const notOwnedIds = allCustomers.filter(c => c.userId !== userId).map(c => c.id);
+        this.logger.error(`Not owned customers: ${JSON.stringify(notOwnedIds)}`);
+        throw new Error(`Một số khách hàng không thuộc về bạn: ${notOwnedIds.join(', ')}`);
+      }
     }
 
     // Chuẩn bị dữ liệu cập nhật
@@ -582,42 +649,55 @@ export class AutoGreetingService {
     this.logger.log(`Update fields: ${JSON.stringify(updateFields)}`);
 
     // Cập nhật hàng loạt
+    const updateCondition: any = { id: In(customerIds) };
+    if (!isAdmin) {
+      updateCondition.userId = userId;
+    }
+
     const result = await this.autoGreetingCustomerRepo.update(
-      { id: In(customerIds), userId: userId },
+      updateCondition,
       updateFields
     );
 
-    this.logger.log(`Bulk updated ${result.affected} customers by user ${userId}: ${JSON.stringify(updateFields)}`);
+    this.logger.log(`Bulk updated ${result.affected} customers by user ${userId}${isAdmin ? ' (admin)' : ''}: ${JSON.stringify(updateFields)}`);
     return result.affected || 0;
   }
 
   /**
    * Xóa hàng loạt khách hàng
    */
-  async bulkDeleteCustomers(customerIds: string[], userId: number): Promise<number> {
+  async bulkDeleteCustomers(customerIds: string[], userId: number, isAdmin: boolean = false): Promise<number> {
     if (customerIds.length === 0) {
       return 0;
     }
 
     // Kiểm tra quyền sở hữu cho tất cả khách hàng
+    const whereCondition: any = {
+      id: In(customerIds),
+    };
+
+    // Nếu không phải admin, chỉ cho phép xóa khách hàng của chính mình
+    if (!isAdmin) {
+      whereCondition.userId = userId;
+    }
+
     const customers = await this.autoGreetingCustomerRepo.find({
-      where: {
-        id: In(customerIds),
-        userId: userId,
-      },
+      where: whereCondition,
     });
 
     if (customers.length !== customerIds.length) {
       throw new Error('Một số khách hàng không tồn tại hoặc không thuộc về bạn');
     }
 
-    // Xóa hàng loạt (soft delete)
-    const result = await this.autoGreetingCustomerRepo.update(
-      { id: In(customerIds), userId: userId },
-      { deleted_at: new Date() }
-    );
+    // Xóa hàng loạt (hard delete)
+    const deleteCondition: any = { id: In(customerIds) };
+    if (!isAdmin) {
+      deleteCondition.userId = userId;
+    }
 
-    this.logger.log(`Bulk deleted ${result.affected} customers by user ${userId}`);
+    const result = await this.autoGreetingCustomerRepo.delete(deleteCondition);
+
+    this.logger.log(`Bulk hard deleted ${result.affected} customers by user ${userId}${isAdmin ? ' (admin)' : ''}`);
     return result.affected || 0;
   }
 
@@ -637,11 +717,9 @@ export class AutoGreetingService {
       throw new Error('Khách hàng không tồn tại hoặc không thuộc về bạn');
     }
 
-    // Xóa khách hàng (soft delete)
-    await this.autoGreetingCustomerRepo.update(customerId, {
-      deleted_at: new Date(),
-    });
+    // Xóa khách hàng (hard delete)
+    await this.autoGreetingCustomerRepo.delete(customerId);
 
-    this.logger.log(`Customer ${customerId} deleted by user ${userId}`);
+    this.logger.log(`Customer ${customerId} hard deleted by user ${userId}`);
   }
 }
