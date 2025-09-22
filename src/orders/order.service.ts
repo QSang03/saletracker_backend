@@ -2776,8 +2776,8 @@ export class OrderService {
       .addSelect(`
         CASE 
           WHEN product.product_code IS NOT NULL 
-           AND details.raw_item_prefix IS NOT NULL 
-           AND TRIM(product.product_code) = TRIM(details.raw_item_prefix)
+           AND details.raw_item IS NOT NULL 
+           AND TRIM(product.product_code) = TRIM(details.raw_item)
           THEN product.product_name
           ELSE details.raw_item
         END
