@@ -36,7 +36,9 @@ export class SeedUserTriggerService {
       FOR EACH ROW
       BEGIN
         -- Chỉ trigger khi zalo_link_status thực sự thay đổi
-        IF OLD.zalo_link_status IS DISTINCT FROM NEW.zalo_link_status THEN
+        IF (OLD.zalo_link_status IS NULL AND NEW.zalo_link_status IS NOT NULL) OR 
+           (OLD.zalo_link_status IS NOT NULL AND NEW.zalo_link_status IS NULL) OR 
+           (OLD.zalo_link_status IS NOT NULL AND NEW.zalo_link_status IS NOT NULL AND OLD.zalo_link_status != NEW.zalo_link_status) THEN
           
           -- Kiểm tra xem đã có log gần đây chưa (trong vòng 5 giây) để tránh duplicate
           -- Sử dụng logic kiểm tra chặt chẽ hơn
