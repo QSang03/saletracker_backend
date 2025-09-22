@@ -131,7 +131,6 @@ export class OrderController {
     @Query('quantity') quantity?: string,
     @Query('conversationType') conversationType?: string,
     @Query('includeHidden') includeHidden?: string,
-    @Query('hiddenOrdersDateRange') hiddenOrdersDateRange?: string, // Date range for filtering hidden orders
     @Query('pmCustomMode') pmCustomMode?: string, // Thêm parameter cho chế độ PM
     @Query('rolePermissions') rolePermissions?: string, // Thêm parameter cho thông tin từng role
     @Req() req?: any,
@@ -177,7 +176,6 @@ export class OrderController {
       sortField: sortField || null,
       sortDirection: sortDirection || null,
       includeHidden,
-      hiddenOrdersDateRange,
       pmCustomMode,
       rolePermissions, // Truyền chế độ PM
       user: req.user,
