@@ -3341,8 +3341,11 @@ export class OrderService {
 
     const mappedData = (data as any[]).map((d: any) => {
       if (d && Object.prototype.hasOwnProperty.call(d, 'display_raw_item')) {
-        // assign computed display value to raw_item (overrides only for response object)
+        const display = d.display_raw_item;
+        console.log('Display raw item:', display);
+        if (display !== null && display !== undefined && String(display).trim() !== '') {
         d.raw_item = d.display_raw_item;
+        }
       }
       return d;
     });

@@ -39,6 +39,31 @@ export class UserController {
     private readonly userStatusObserver: UserStatusObserver,
   ) {}
 
+  @Get('roles-with-permissions')
+  async getUserRolesWithPermissions(@Req() req: CustomRequest) {
+    const userId = req.user.id;
+    const user = await this.userService.findOneWithDetails(userId);
+    
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    return {
+      roles: user.roles?.map((role) => ({
+        id: role.id,
+        name: role.name,
+        display_name: role.display_name,
+        rolePermissions: role.rolePermissions?.map((rp) => ({
+          isActive: rp.isActive,
+          permission: rp.permission ? {
+            name: rp.permission.name,
+            action: rp.permission.action,
+          } : null,
+        })) || [],
+      })) || [],
+    };
+  }
+
   @Get()
   async findAll(
     @Req() req: CustomRequest,

@@ -121,15 +121,6 @@ export class AuthService {
           id: role.id,
           name: role.name,
           display_name: role.display_name,
-          ...(isAdmin ? {} : {
-          rolePermissions: role.rolePermissions?.map((rp) => ({
-            isActive: rp.isActive,
-            permission: rp.permission ? {
-              name: rp.permission.name,
-              action: rp.permission.action,
-            } : null,
-          })) || [],
-        }),
         })) || [],
       // Chỉ chứa departments và permissions nếu không phải admin
       ...(isAdmin ? {} : {
@@ -322,15 +313,6 @@ export class AuthService {
           id: role.id,
           name: role.name,
           display_name: role.display_name,
-          ...(isAdmin ? {} : {
-          rolePermissions: role.rolePermissions?.map((rp) => ({
-            isActive: rp.isActive,
-            permission: rp.permission ? {
-              name: rp.permission.name,
-              action: rp.permission.action,
-            } : null,
-          })) || [],
-        }),
         })) || [],
       // Chỉ chứa departments và permissions nếu không phải admin
       ...(isAdmin ? {} : {
@@ -443,13 +425,6 @@ export class AuthService {
           id: role.id,
           name: role.name,
           display_name: role.display_name,
-          rolePermissions: role.rolePermissions?.map((rp) => ({
-            isActive: rp.isActive,
-            permission: rp.permission ? {
-              name: rp.permission.name,
-              action: rp.permission.action,
-            } : null,
-          })) || [],
         })) || [],
       // Chỉ chứa departments và permissions nếu không phải admin
       ...(isAdmin ? {} : {
@@ -550,13 +525,6 @@ export class AuthService {
           id: role.id,
           name: role.name,
           display_name: role.display_name,
-          rolePermissions: role.rolePermissions?.map((rp) => ({
-            isActive: rp.isActive,
-            permission: rp.permission ? {
-              name: rp.permission.name,
-              action: rp.permission.action,
-            } : null,
-          })) || [],
         })) || [],
       // Chỉ chứa departments và permissions nếu không phải admin
       ...(isAdmin ? {} : {
