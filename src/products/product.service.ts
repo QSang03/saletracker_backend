@@ -102,6 +102,7 @@ export class ProductService {
                 }
               });
               
+              
             } catch (error) {
               console.error('❌ [Product PM Custom Mode] Error parsing rolePermissions:', error);
             }

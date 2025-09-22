@@ -229,12 +229,16 @@ export class OrderService {
       // Apply filters
       if (filters?.search) {
         const trimmedSearch = String(filters.search).trim();
-        
+
         // ✅ Hỗ trợ exact match khi search term được bao quanh bởi dấu ngoặc kép
         let searchTerm: string;
         let isExactMatch = false;
-        
-        if (trimmedSearch.startsWith('"') && trimmedSearch.endsWith('"') && trimmedSearch.length > 2) {
+
+        if (
+          trimmedSearch.startsWith('"') &&
+          trimmedSearch.endsWith('"') &&
+          trimmedSearch.length > 2
+        ) {
           // Exact match: loại bỏ dấu ngoặc kép
           searchTerm = trimmedSearch.slice(1, -1);
           isExactMatch = true;
@@ -243,7 +247,7 @@ export class OrderService {
           searchTerm = `%${trimmedSearch}%`;
           isExactMatch = false;
         }
-        
+
         if (isExactMatch) {
           // Exact match: sử dụng = thay vì LIKE
           query += ` AND (
@@ -259,7 +263,7 @@ export class OrderService {
             CAST(details.id AS CHAR) LIKE ?
           )`;
         }
-        
+
         params.push(searchTerm, searchTerm, searchTerm);
       }
 
@@ -311,12 +315,16 @@ export class OrderService {
       const countParams: any[] = [];
       if (filters?.search) {
         const trimmedSearch = String(filters.search).trim();
-        
+
         // ✅ Hỗ trợ exact match khi search term được bao quanh bởi dấu ngoặc kép
         let searchTerm: string;
         let isExactMatch = false;
-        
-        if (trimmedSearch.startsWith('"') && trimmedSearch.endsWith('"') && trimmedSearch.length > 2) {
+
+        if (
+          trimmedSearch.startsWith('"') &&
+          trimmedSearch.endsWith('"') &&
+          trimmedSearch.length > 2
+        ) {
           // Exact match: loại bỏ dấu ngoặc kép
           searchTerm = trimmedSearch.slice(1, -1);
           isExactMatch = true;
@@ -325,7 +333,7 @@ export class OrderService {
           searchTerm = `%${trimmedSearch}%`;
           isExactMatch = false;
         }
-        
+
         if (isExactMatch) {
           // Exact match: sử dụng = thay vì LIKE
           countQuery += ` AND (
@@ -341,7 +349,7 @@ export class OrderService {
             CAST(details.id AS CHAR) LIKE ?
           )`;
         }
-        
+
         countParams.push(searchTerm, searchTerm, searchTerm);
       }
       if (filters?.status) {
@@ -970,7 +978,7 @@ export class OrderService {
   // NEW: Helper method to calculate days remaining using generated column
   private getDaysRemainingFromExpiry(expiryDays: number | null): number | null {
     if (!expiryDays) return null;
-    
+
     // Calculate current days since epoch (MySQL TO_DAYS format)
     const currentDays = Math.floor(Date.now() / (1000 * 60 * 60 * 24)) + 719163; // JS epoch to MySQL days offset
     return expiryDays - currentDays;
@@ -979,14 +987,19 @@ export class OrderService {
   // NEW: Helper methods for expiry_days range queries (optimized for index usage)
   private getExpiryDaysForWarningLevels(levels: number[]): string {
     // Convert warning levels to expiry_days values for better index usage
-    // level 0 = expires today = TO_DAYS(CURDATE())  
+    // level 0 = expires today = TO_DAYS(CURDATE())
     // level -1 = expired yesterday = TO_DAYS(CURDATE()) - 1
     // level 1 = expires tomorrow = TO_DAYS(CURDATE()) + 1
-    const expiryDaysValues = levels.map(level => `(TO_DAYS(CURDATE()) + ${level})`).join(',');
+    const expiryDaysValues = levels
+      .map((level) => `(TO_DAYS(CURDATE()) + ${level})`)
+      .join(',');
     return `details.expiry_days IN (${expiryDaysValues})`;
   }
 
-  private getExpiryDaysRangeCondition(fromLevel: number, toLevel: number): string {
+  private getExpiryDaysRangeCondition(
+    fromLevel: number,
+    toLevel: number,
+  ): string {
     // For range queries: expiry_days BETWEEN (TO_DAYS(CURDATE()) + fromLevel) AND (TO_DAYS(CURDATE()) + toLevel)
     return `details.expiry_days BETWEEN (TO_DAYS(CURDATE()) + ${fromLevel}) AND (TO_DAYS(CURDATE()) + ${toLevel})`;
   }
@@ -999,7 +1012,7 @@ export class OrderService {
   private getOverdueCondition(): string {
     // Overdue: expiry_days < TO_DAYS(CURDATE())
     return `details.expiry_days < TO_DAYS(CURDATE())`;
-  }  // Helper method để lấy category và brand IDs từ PM permissions
+  } // Helper method để lấy category và brand IDs từ PM permissions
   private async getCategoryAndBrandIdsFromPMPermissions(user: any): Promise<{
     categoryIds: number[];
     brandIds: number[];
@@ -2069,7 +2082,19 @@ export class OrderService {
       .leftJoinAndSelect('product.brand', 'brand')
       .leftJoinAndSelect('order.sale_by', 'sale_by')
       .leftJoinAndSelect('sale_by.departments', 'sale_by_departments')
-      .addSelect(`${dynamicExpr}`, 'dynamicExtended');
+      .addSelect(`${dynamicExpr}`, 'dynamicExtended')
+      .addSelect(
+        `
+        CASE 
+          WHEN product.product_code IS NOT NULL 
+           AND details.raw_item IS NOT NULL 
+           AND TRIM(product.product_code) = TRIM(details.raw_item)
+          THEN product.product_name
+          ELSE details.raw_item
+        END
+      `,
+        'display_raw_item',
+      );
 
     // ✅ Logic PM thuần túy: không check manager
     let allowedUserIds;
@@ -2145,10 +2170,18 @@ export class OrderService {
             if (filters.rolePermissions) {
               try {
                 const rolePermissionsData = JSON.parse(filters.rolePermissions);
+                console.log(
+                  '🔍 [Backend PM] Received rolePermissions:',
+                  rolePermissionsData,
+                );
 
                 // Xử lý từng role riêng biệt
                 Object.entries(rolePermissionsData).forEach(
                   ([roleName, roleData]: [string, any]) => {
+                    console.log(
+                      `🔍 [Backend PM] Processing role ${roleName}:`,
+                      roleData,
+                    );
                     const roleBrands = roleData.brands || [];
                     const roleCategories = roleData.categories || [];
 
@@ -2182,14 +2215,30 @@ export class OrderService {
                         brandSlugs.forEach((brand) => {
                           const combination = `${cat}+${brand}`;
                           allCombinations.push(combination);
+                          console.log(
+                            `🔍 [Backend PM] Role ${roleName} combination: ${combination}`,
+                          );
                         });
                       });
                     } else {
                       // Role chỉ có 1 loại permission
                       const singleSlugs = [...categorySlugs, ...brandSlugs];
                       allSinglePermissions.push(...singleSlugs);
+                      console.log(
+                        `🔍 [Backend PM] Role ${roleName} single permissions:`,
+                        singleSlugs,
+                      );
                     }
                   },
+                );
+
+                console.log(
+                  '🔍 [Backend PM] Final allCombinations:',
+                  allCombinations,
+                );
+                console.log(
+                  '🔍 [Backend PM] Final allSinglePermissions:',
+                  allSinglePermissions,
                 );
               } catch (error) {
                 this.logger.error(
@@ -2357,12 +2406,16 @@ export class OrderService {
     // Apply search
     if (search && search.trim()) {
       const trimmedSearch = String(search).trim();
-      
+
       // ✅ Hỗ trợ exact match khi search term được bao quanh bởi dấu ngoặc kép
       let searchTerm: string;
       let isExactMatch = false;
-      
-      if (trimmedSearch.startsWith('"') && trimmedSearch.endsWith('"') && trimmedSearch.length > 2) {
+
+      if (
+        trimmedSearch.startsWith('"') &&
+        trimmedSearch.endsWith('"') &&
+        trimmedSearch.length > 2
+      ) {
         // Exact match: loại bỏ dấu ngoặc kép
         searchTerm = trimmedSearch.slice(1, -1);
         isExactMatch = true;
@@ -2371,7 +2424,7 @@ export class OrderService {
         searchTerm = `%${trimmedSearch}%`;
         isExactMatch = false;
       }
-      
+
       if (isExactMatch) {
         // Exact match: sử dụng = thay vì LIKE
         qb.andWhere(
@@ -2554,7 +2607,9 @@ export class OrderService {
         .filter((n) => !isNaN(n));
       if (levels.length > 0) {
         // Convert levels to expiry_days values: expiry_days = TO_DAYS(CURDATE()) + level
-        const expiryDaysValues = levels.map(level => `(TO_DAYS(CURDATE()) + ${level})`).join(',');
+        const expiryDaysValues = levels
+          .map((level) => `(TO_DAYS(CURDATE()) + ${level})`)
+          .join(',');
         qb.andWhere(`details.expiry_days IN (${expiryDaysValues})`);
       }
     }
@@ -2620,8 +2675,8 @@ export class OrderService {
               '(details.hidden_at IS NULL OR details.hidden_at BETWEEN :hiddenStartDate AND :hiddenEndDate)',
               {
                 hiddenStartDate: hiddenDateRange.start + ' 00:00:00',
-                hiddenEndDate: hiddenDateRange.end + ' 23:59:59'
-              }
+                hiddenEndDate: hiddenDateRange.end + ' 23:59:59',
+              },
             );
           } else {
             // Show all hidden orders if date range is invalid
@@ -2629,7 +2684,10 @@ export class OrderService {
           }
         } catch (e) {
           // If parsing fails, show all hidden orders
-          this.logger.warn('Failed to parse hiddenOrdersDateRange:', hiddenOrdersDateRange);
+          this.logger.warn(
+            'Failed to parse hiddenOrdersDateRange:',
+            hiddenOrdersDateRange,
+          );
         }
       }
       // If no date range specified, show all orders (including all hidden ones)
@@ -2676,17 +2734,52 @@ export class OrderService {
     }
 
     // Apply pagination
+    const total = await qb.getCount();
     qb.skip(skip).take(pageSize);
 
-    // Execute query
-    const [data, total] = await qb.getManyAndCount();
+    const rawAndEntities: any = await qb.getRawAndEntities();
+    const raws: any[] = rawAndEntities.raw || [];
+    const entities: any[] = rawAndEntities.entities || [];
 
-    return {
-      data,
-      total,
-      page,
-      pageSize,
-    };
+    const displayMap = new Map<number, any>();
+
+    for (const r of raws) {
+      // try common id keys produced by TypeORM raw (e.g. details_id, detailsId, details_id_1...)
+      const idKey = Object.keys(r).find(
+        (k) =>
+          /(^|\.)?details?_?id$/i.test(k) ||
+          /details[_A-Za-z0-9]*[_]?id$/i.test(k),
+      );
+      const id = idKey ? Number(r[idKey]) : NaN;
+      if (isNaN(id)) continue;
+
+      // find display_raw_item key (raw may contain alias with table prefix)
+      const displayKey =
+        Object.keys(r).find((k) =>
+          k.toLowerCase().includes('display_raw_item'),
+        ) || 'display_raw_item';
+
+      if (Object.prototype.hasOwnProperty.call(r, displayKey)) {
+        displayMap.set(id, r[displayKey]);
+      }
+    }
+
+    const mappedData = entities.map((e: any) => {
+      const id = Number(e?.id);
+      if (!isNaN(id) && displayMap.has(id)) {
+        const display = displayMap.get(id);
+        if (
+          display !== null &&
+          display !== undefined &&
+          String(display).trim() !== ''
+        ) {
+          e.raw_item = display;
+        }
+      }
+      return e;
+    });
+
+    return { data: mappedData as any, total, page, pageSize };
   }
 
   private async findAllPaginatedInternal(
@@ -2773,7 +2866,8 @@ export class OrderService {
       .leftJoinAndSelect('order.sale_by', 'sale_by')
       .leftJoinAndSelect('sale_by.departments', 'sale_by_departments')
       .addSelect(`${dynamicExpr}`, 'dynamicExtended')
-      .addSelect(`
+      .addSelect(
+        `
         CASE 
           WHEN product.product_code IS NOT NULL 
            AND details.raw_item IS NOT NULL 
@@ -2781,7 +2875,9 @@ export class OrderService {
           THEN product.product_name
           ELSE details.raw_item
         END
-      `, 'display_raw_item');
+      `,
+        'display_raw_item',
+      );
 
     // Permissions
     let allowedUserIds;
@@ -2904,21 +3000,29 @@ export class OrderService {
       const productCodeFilter = filters.productCode.trim();
       if (productCodeFilter === 'has') {
         // Lọc đơn có mã sản phẩm (product_id không null và productCode không rỗng)
-        qb.andWhere('details.product_id IS NOT NULL AND product.productCode IS NOT NULL AND product.productCode != ""');
+        qb.andWhere(
+          'details.product_id IS NOT NULL AND product.productCode IS NOT NULL AND product.productCode != ""',
+        );
       } else if (productCodeFilter === 'no') {
         // Lọc đơn không có mã sản phẩm (product_id null hoặc productCode rỗng)
-        qb.andWhere('(details.product_id IS NULL OR product.productCode IS NULL OR product.productCode = "")');
+        qb.andWhere(
+          '(details.product_id IS NULL OR product.productCode IS NULL OR product.productCode = "")',
+        );
       }
     }
 
     if (search) {
       const trimmedSearch = String(search).trim();
-      
+
       // ✅ Hỗ trợ exact match khi search term được bao quanh bởi dấu ngoặc kép
       let searchTerm: string;
       let isExactMatch = false;
-      
-      if (trimmedSearch.startsWith('"') && trimmedSearch.endsWith('"') && trimmedSearch.length > 2) {
+
+      if (
+        trimmedSearch.startsWith('"') &&
+        trimmedSearch.endsWith('"') &&
+        trimmedSearch.length > 2
+      ) {
         // Exact match: loại bỏ dấu ngoặc kép
         searchTerm = trimmedSearch.slice(1, -1);
         isExactMatch = true;
@@ -2927,7 +3031,7 @@ export class OrderService {
         searchTerm = `%${trimmedSearch}%`;
         isExactMatch = false;
       }
-      
+
       if (isExactMatch) {
         // Exact match: sử dụng = thay vì LIKE
         qb.andWhere(
@@ -3051,32 +3155,34 @@ export class OrderService {
         .split(',')
         .map((name) => name.trim())
         .filter((name) => name);
-      
+
       if (brandNames.length > 0 && categoryNames.length > 0) {
         // Tạo tất cả tổ hợp có thể: mỗi brand phải kết hợp với mỗi category
         const combinationConds: string[] = [];
         const combinationParams: Record<string, any> = {};
         let comboIdx = 0;
-        
-        brandNames.forEach(brand => {
-          categoryNames.forEach(category => {
+
+        brandNames.forEach((brand) => {
+          categoryNames.forEach((category) => {
             combinationConds.push(
-              `(brand.name = :brand${comboIdx} AND category.catName = :category${comboIdx})`
+              `(brand.name = :brand${comboIdx} AND category.catName = :category${comboIdx})`,
             );
             combinationParams[`brand${comboIdx}`] = brand;
             combinationParams[`category${comboIdx}`] = category;
             comboIdx++;
           });
         });
-        
+
         if (combinationConds.length > 0) {
           qb.andWhere(`(${combinationConds.join(' OR ')})`, combinationParams);
-          this.logger.debug(`[PM] Brand-Category combinations: ${combinationConds.length} combinations created`);
+          this.logger.debug(
+            `[PM] Brand-Category combinations: ${combinationConds.length} combinations created`,
+          );
         }
       }
     } else {
       // Chỉ có brands hoặc chỉ có categories: xử lý riêng lẻ như cũ
-      
+
       // Brands filter - filter by product brands
       if (brands) {
         const brandNames = brands
@@ -3260,8 +3366,8 @@ export class OrderService {
               '(details.hidden_at IS NULL OR details.hidden_at BETWEEN :hiddenStartDate AND :hiddenEndDate)',
               {
                 hiddenStartDate: hiddenDateRange.start + ' 00:00:00',
-                hiddenEndDate: hiddenDateRange.end + ' 23:59:59'
-              }
+                hiddenEndDate: hiddenDateRange.end + ' 23:59:59',
+              },
             );
           } else {
             // Show all hidden orders if date range is invalid
@@ -3269,7 +3375,10 @@ export class OrderService {
           }
         } catch (e) {
           // If parsing fails, show all hidden orders
-          this.logger.warn('Failed to parse hiddenOrdersDateRange:', hiddenOrdersDateRange);
+          this.logger.warn(
+            'Failed to parse hiddenOrdersDateRange:',
+            hiddenOrdersDateRange,
+          );
         }
       }
       // If no date range specified, show all orders (including all hidden ones)
@@ -3327,7 +3436,10 @@ export class OrderService {
         );
       } else if (sortField === 'extended' || sortField === 'dynamicExtended') {
         // OPTIMIZED: Sort by expiry_days instead of computed dynamicExtended for better index usage
-        qb.orderBy('details.expiry_days', dir).addOrderBy('details.created_at', 'DESC');
+        qb.orderBy('details.expiry_days', dir).addOrderBy(
+          'details.created_at',
+          'DESC',
+        );
       }
     } else {
       // Default sort: prioritize dynamicExtended (ngày_tạo + extend - ngày_hiện_tại)
@@ -3337,17 +3449,62 @@ export class OrderService {
     }
 
     // Pagination with count at DB level
-    const [data, total] = await qb.skip(skip).take(pageSize).getManyAndCount();
+    // const [data, total] = await qb.skip(skip).take(pageSize).getManyAndCount();
 
-    const mappedData = (data as any[]).map((d: any) => {
-      if (d && Object.prototype.hasOwnProperty.call(d, 'display_raw_item')) {
-        const display = d.display_raw_item;
-        console.log('Display raw item:', display);
-        if (display !== null && display !== undefined && String(display).trim() !== '') {
-        d.raw_item = d.display_raw_item;
+    // const mappedData = (data as any[]).map((d: any) => {
+    //   if (d && Object.prototype.hasOwnProperty.call(d, 'display_raw_item')) {
+    //     const display = d.display_raw_item;
+    //     console.log('Display raw item:', display);
+    //     if (display !== null && display !== undefined && String(display).trim() !== '') {
+    //     d.raw_item = d.display_raw_item;
+    //     }
+    //   }
+    //   return d;
+    // });
+
+    const total = await qb.getCount();
+    qb.skip(skip).take(pageSize);
+
+    const rawAndEntities: any = await qb.getRawAndEntities();
+    const raws: any[] = rawAndEntities.raw || [];
+    const entities: any[] = rawAndEntities.entities || [];
+
+    const displayMap = new Map<number, any>();
+
+    for (const r of raws) {
+      // try common id keys produced by TypeORM raw (e.g. details_id, detailsId, details_id_1...)
+      const idKey = Object.keys(r).find(
+        (k) =>
+          /(^|\.)?details?_?id$/i.test(k) ||
+          /details[_A-Za-z0-9]*[_]?id$/i.test(k),
+      );
+      const id = idKey ? Number(r[idKey]) : NaN;
+      if (isNaN(id)) continue;
+
+      // find display_raw_item key (raw may contain alias with table prefix)
+      const displayKey =
+        Object.keys(r).find((k) =>
+          k.toLowerCase().includes('display_raw_item'),
+        ) || 'display_raw_item';
+
+      if (Object.prototype.hasOwnProperty.call(r, displayKey)) {
+        displayMap.set(id, r[displayKey]);
+      }
+    }
+
+    const mappedData = entities.map((e: any) => {
+      const id = Number(e?.id);
+      if (!isNaN(id) && displayMap.has(id)) {
+        const display = displayMap.get(id);
+        if (
+          display !== null &&
+          display !== undefined &&
+          String(display).trim() !== ''
+        ) {
+          e.raw_item = display;
         }
       }
-      return d;
+      return e;
     });
 
     return { data: mappedData as any, total, page, pageSize };
@@ -3445,12 +3602,16 @@ export class OrderService {
     // Apply basic filters (search, status, date, etc.) - giữ nguyên logic filter cơ bản
     if (search) {
       const trimmedSearch = String(search).trim();
-      
+
       // ✅ Hỗ trợ exact match khi search term được bao quanh bởi dấu ngoặc kép
       let searchTerm: string;
       let isExactMatch = false;
-      
-      if (trimmedSearch.startsWith('"') && trimmedSearch.endsWith('"') && trimmedSearch.length > 2) {
+
+      if (
+        trimmedSearch.startsWith('"') &&
+        trimmedSearch.endsWith('"') &&
+        trimmedSearch.length > 2
+      ) {
         // Exact match: loại bỏ dấu ngoặc kép
         searchTerm = trimmedSearch.slice(1, -1);
         isExactMatch = true;
@@ -3459,7 +3620,7 @@ export class OrderService {
         searchTerm = `%${trimmedSearch}%`;
         isExactMatch = false;
       }
-      
+
       if (isExactMatch) {
         // Exact match: sử dụng = thay vì LIKE
         qb.andWhere(
@@ -3788,7 +3949,10 @@ export class OrderService {
         if (bl.size > 0) {
           // OPTIMIZED: Use generated column meta_customer_id instead of JSON_EXTRACT
           const blacklistConditions = Array.from(bl)
-            .map(() => `(details.meta_customer_id IS NULL OR details.meta_customer_id != ?)`)
+            .map(
+              () =>
+                `(details.meta_customer_id IS NULL OR details.meta_customer_id != ?)`,
+            )
             .join(' AND ');
           baseQuery += ` AND (${blacklistConditions})`;
           queryParams.push(...Array.from(bl));
@@ -3803,7 +3967,10 @@ export class OrderService {
         if (bl.size > 0) {
           // OPTIMIZED: Use generated column meta_customer_id instead of JSON_EXTRACT
           const blacklistConditions = Array.from(bl)
-            .map(() => `(details.meta_customer_id IS NULL OR details.meta_customer_id != ?)`)
+            .map(
+              () =>
+                `(details.meta_customer_id IS NULL OR details.meta_customer_id != ?)`,
+            )
             .join(' AND ');
           baseQuery += ` AND (${blacklistConditions})`;
           queryParams.push(...Array.from(bl));
