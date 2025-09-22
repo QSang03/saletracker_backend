@@ -48,7 +48,6 @@ interface OrderFilters {
   sortDirection?: 'asc' | 'desc' | null;
   user?: any; // truyền cả user object
   includeHidden?: string; // '1' | 'true' to include hidden items (admin only)
-  hiddenOrdersDateRange?: string; // JSON string with start/end dates for hidden orders filtering
 }
 
 @Injectable()
@@ -2036,7 +2035,6 @@ export class OrderService {
       sortDirection,
       user,
       includeHidden,
-      hiddenOrdersDateRange,
     } = filters;
 
     const skip = (page - 1) * pageSize;
@@ -2496,46 +2494,9 @@ export class OrderService {
       });
     }
 
-    // Apply hidden filter with date range support
-    const wantsHidden = (includeHidden || '').toString().toLowerCase();
-    const includeHiddenFlag = wantsHidden === '1' || wantsHidden === 'true';
-    // Determine role-based permission: allow includeHidden for admins or PMs with pm-{dept} roles
-    const roleNamesForHidden = (user?.roles || []).map((r: any) =>
-      typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
-    );
-    const isAdminUser = roleNamesForHidden.includes('admin');
-    const hasPmRole = roleNamesForHidden.some((r: string) =>
-      r.startsWith('pm-'),
-    );
-    const allowHiddenByRole = isAdminUser || hasPmRole;
-
-    if (!(includeHiddenFlag && allowHiddenByRole)) {
+    // Apply hidden filter
+    if (includeHidden !== '1') {
       qb.andWhere('details.hidden_at IS NULL');
-    } else if (includeHiddenFlag && allowHiddenByRole) {
-      // If including hidden orders and user has permission
-      if (hiddenOrdersDateRange) {
-        try {
-          // Parse the date range for hidden orders filtering
-          const hiddenDateRange = JSON.parse(hiddenOrdersDateRange);
-          if (hiddenDateRange.start && hiddenDateRange.end) {
-            // Show only hidden orders within the specified date range
-            qb.andWhere(
-              '(details.hidden_at IS NULL OR details.hidden_at BETWEEN :hiddenStartDate AND :hiddenEndDate)',
-              {
-                hiddenStartDate: hiddenDateRange.start + ' 00:00:00',
-                hiddenEndDate: hiddenDateRange.end + ' 23:59:59'
-              }
-            );
-          } else {
-            // Show all hidden orders if date range is invalid
-            // No additional filter needed - all orders (including hidden) will be shown
-          }
-        } catch (e) {
-          // If parsing fails, show all hidden orders
-          this.logger.warn('Failed to parse hiddenOrdersDateRange:', hiddenOrdersDateRange);
-        }
-      }
-      // If no date range specified, show all orders (including all hidden ones)
     }
 
     // Sorting Logic - Only prioritize dynamicExtended when no sortField specified
@@ -2624,7 +2585,6 @@ export class OrderService {
       sortDirection,
       user,
       includeHidden,
-      hiddenOrdersDateRange,
     } = filters;
 
     const skip = (page - 1) * pageSize;
@@ -3078,31 +3038,6 @@ export class OrderService {
     if (!(includeHiddenFlag && allowHiddenByRole)) {
       // Phase 2.6: Tối ưu hóa - Sử dụng composite index cho hidden_at + status
       qb.andWhere('details.hidden_at IS NULL');
-    } else if (includeHiddenFlag && allowHiddenByRole) {
-      // If including hidden orders and user has permission
-      if (hiddenOrdersDateRange) {
-        try {
-          // Parse the date range for hidden orders filtering
-          const hiddenDateRange = JSON.parse(hiddenOrdersDateRange);
-          if (hiddenDateRange.start && hiddenDateRange.end) {
-            // Show only hidden orders within the specified date range
-            qb.andWhere(
-              '(details.hidden_at IS NULL OR details.hidden_at BETWEEN :hiddenStartDate AND :hiddenEndDate)',
-              {
-                hiddenStartDate: hiddenDateRange.start + ' 00:00:00',
-                hiddenEndDate: hiddenDateRange.end + ' 23:59:59'
-              }
-            );
-          } else {
-            // Show all hidden orders if date range is invalid
-            // No additional filter needed - all orders (including hidden) will be shown
-          }
-        } catch (e) {
-          // If parsing fails, show all hidden orders
-          this.logger.warn('Failed to parse hiddenOrdersDateRange:', hiddenOrdersDateRange);
-        }
-      }
-      // If no date range specified, show all orders (including all hidden ones)
     }
 
     // Apply blacklist filtering in SQL - OPTIMIZED: Use generated column meta_customer_id
