@@ -14,9 +14,10 @@ export class SeedUserTriggerService {
     try {
       const existing = await this.checkExistingTrigger();
       if (existing) {
-        return;
+        this.logger.log('User trigger already exists, recreating to ensure latest version...');
       }
       await this.createTrigger();
+      this.logger.log('User trigger created/updated successfully');
     } catch (err) {
       this.logger.error('Failed to seed user trigger', err.stack);
     }
@@ -36,15 +37,29 @@ export class SeedUserTriggerService {
       BEGIN
         -- Chỉ trigger khi zalo_link_status thực sự thay đổi
         IF OLD.zalo_link_status IS DISTINCT FROM NEW.zalo_link_status THEN
-          INSERT INTO \`database_change_log\`(
-            \`table_name\`, \`record_id\`, \`action\`, \`old_values\`, \`new_values\`, \`changed_fields\`, \`triggered_at\`
-          ) VALUES (
-            'users', NEW.id, 'UPDATE',
-            JSON_OBJECT('zalo_link_status', OLD.zalo_link_status),
-            JSON_OBJECT('zalo_link_status', NEW.zalo_link_status),
-            JSON_ARRAY('zalo_link_status'),
-            NOW()
-          );
+          
+          -- Kiểm tra xem đã có log gần đây chưa (trong vòng 5 giây) để tránh duplicate
+          -- Sử dụng logic kiểm tra chặt chẽ hơn
+          IF NOT EXISTS (
+            SELECT 1 FROM \`database_change_log\` 
+            WHERE \`table_name\` = 'users' 
+              AND \`record_id\` = NEW.id 
+              AND \`action\` = 'UPDATE'
+              AND \`triggered_at\` > DATE_SUB(NOW(), INTERVAL 5 SECOND)
+              AND JSON_EXTRACT(\`changed_fields\`, '$[0]') = 'zalo_link_status'
+              AND JSON_EXTRACT(\`old_values\`, '$.zalo_link_status') = OLD.zalo_link_status
+              AND JSON_EXTRACT(\`new_values\`, '$.zalo_link_status') = NEW.zalo_link_status
+          ) THEN
+            INSERT INTO \`database_change_log\`(
+              \`table_name\`, \`record_id\`, \`action\`, \`old_values\`, \`new_values\`, \`changed_fields\`, \`triggered_at\`
+            ) VALUES (
+              'users', NEW.id, 'UPDATE',
+              JSON_OBJECT('zalo_link_status', OLD.zalo_link_status),
+              JSON_OBJECT('zalo_link_status', NEW.zalo_link_status),
+              JSON_ARRAY('zalo_link_status'),
+              NOW()
+            );
+          END IF;
         END IF;
       END
     `;

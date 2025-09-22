@@ -5005,7 +5005,7 @@ export class CampaignService {
       reminder_metadata: any;
       conversation_metadata: any;
       error_details: any;
-      attachment_sent: any;
+      attachment_sent: Record<string, any> | Record<string, any>[];
     }
 
     interface DetailedCustomer {

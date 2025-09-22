@@ -38,7 +38,7 @@ export class CampaignInteractionLog {
   message_content_sent: string;
 
   @Column({ type: 'json', nullable: true })
-  attachment_sent?: Record<string, any>;
+  attachment_sent?: Record<string, any> | Record<string, any>[];
 
   @Column({ type: 'enum', enum: LogStatus })
   @Index()
