@@ -48,6 +48,7 @@ interface OrderFilters {
   sortDirection?: 'asc' | 'desc' | null;
   user?: any; // truyền cả user object
   includeHidden?: string; // '1' | 'true' to include hidden items (admin only)
+  hiddenOrdersDateRange?: string; // JSON string with start/end dates for hidden orders filtering
 }
 
 @Injectable()
@@ -2035,6 +2036,7 @@ export class OrderService {
       sortDirection,
       user,
       includeHidden,
+      hiddenOrdersDateRange,
     } = filters;
 
     const skip = (page - 1) * pageSize;
@@ -2433,17 +2435,114 @@ export class OrderService {
       }
     }
 
-    // Apply brand/category filters
+    // ✅ SỬA: Apply brand/category filters với logic tổ hợp bắt buộc
+    // Hỗ trợ cú pháp kết hợp:
+    // 1. Format cũ: pm_cat_<slug>+pm_brand_<slug>
+    // 2. Format mới: pm_brand_<slug>_pm_cat_<slug>
     if (brandCategories && brandCategories.trim()) {
-      const brandCatList = brandCategories
+      const tokens = brandCategories
         .split(',')
-        .map((bc) => bc.trim())
-        .filter(Boolean);
-      if (brandCatList.length > 0) {
-        qb.andWhere(
-          '(CONCAT("pm_cat_", category.slug) IN (:...brandCatList) OR CONCAT("pm_brand_", brand.slug) IN (:...brandCatList) OR CONCAT(CONCAT("pm_cat_", category.slug), "+", CONCAT("pm_brand_", brand.slug)) IN (:...brandCatList))',
-          { brandCatList },
-        );
+        .map((t) => t.trim())
+        .filter((t) => t.length > 0);
+      if (tokens.length > 0) {
+        const pairConds: string[] = [];
+        const params: Record<string, any> = {};
+        const brandSlugs: string[] = [];
+        const categorySlugs: string[] = [];
+        let pairIdx = 0;
+        tokens.forEach((tok) => {
+          // ✅ SỬA: Hỗ trợ cả 2 format:
+          // 1. Format cũ: pm_cat_<slug>+pm_brand_<slug>
+          // 2. Format mới: pm_brand_<slug>_pm_cat_<slug>
+          if (tok.includes('+')) {
+            // Format cũ: pm_cat_<slug>+pm_brand_<slug>
+            const parts = tok
+              .split('+')
+              .map((p) => p.trim())
+              .filter(Boolean);
+            let bSlug: string | null = null;
+            let cSlug: string | null = null;
+            parts.forEach((p) => {
+              const lower = p.toLowerCase();
+              if (lower.startsWith('pm_brand_')) {
+                bSlug = slugify(lower.replace('pm_brand_', ''), {
+                  lower: true,
+                  strict: true,
+                });
+              } else if (lower.startsWith('pm_cat_')) {
+                cSlug = slugify(lower.replace('pm_cat_', ''), {
+                  lower: true,
+                  strict: true,
+                });
+              }
+            });
+            if (bSlug && cSlug) {
+              pairConds.push(
+                `(brand.slug = :b${pairIdx} AND category.slug = :c${pairIdx})`,
+              );
+              params[`b${pairIdx}`] = bSlug;
+              params[`c${pairIdx}`] = cSlug;
+              pairIdx++;
+            }
+          } else if (tok.includes('_pm_cat_') && tok.startsWith('pm_brand_')) {
+            // ✅ Format mới: pm_brand_<slug>_pm_cat_<slug>
+            const lower = tok.toLowerCase();
+            const brandCatMatch = lower.match(/^pm_brand_(.+)_pm_cat_(.+)$/);
+            if (brandCatMatch) {
+              const bSlug = slugify(brandCatMatch[1], {
+                lower: true,
+                strict: true,
+              });
+              const cSlug = slugify(brandCatMatch[2], {
+                lower: true,
+                strict: true,
+              });
+              pairConds.push(
+                `(brand.slug = :b${pairIdx} AND category.slug = :c${pairIdx})`,
+              );
+              params[`b${pairIdx}`] = bSlug;
+              params[`c${pairIdx}`] = cSlug;
+              pairIdx++;
+            }
+          } else {
+            const lower = tok.toLowerCase();
+            if (lower.startsWith('pm_brand_')) {
+              brandSlugs.push(
+                slugify(lower.replace('pm_brand_', ''), {
+                  lower: true,
+                  strict: true,
+                }),
+              );
+            } else if (lower.startsWith('pm_cat_')) {
+              categorySlugs.push(
+                slugify(lower.replace('pm_cat_', ''), {
+                  lower: true,
+                  strict: true,
+                }),
+              );
+            } else {
+              // Fallback: treat as plain name -> match either brand.name or category.catName case-insensitively
+              // Use simple OR name conditions (added later)
+              const plain = tok;
+              // Store as slugs for attempt matching slug fields too
+              brandSlugs.push(slugify(plain, { lower: true, strict: true }));
+              categorySlugs.push(slugify(plain, { lower: true, strict: true }));
+            }
+          }
+        });
+        const orBlocks: string[] = [];
+        if (pairConds.length > 0) orBlocks.push(pairConds.join(' OR '));
+        if (brandSlugs.length > 0) {
+          orBlocks.push('brand.slug IN (:...filterBrandSlugs)');
+          params.filterBrandSlugs = Array.from(new Set(brandSlugs));
+        }
+        if (categorySlugs.length > 0) {
+          orBlocks.push('category.slug IN (:...filterCatSlugs)');
+          params.filterCatSlugs = Array.from(new Set(categorySlugs));
+        }
+        if (orBlocks.length > 0) {
+          qb.andWhere(`(${orBlocks.join(' OR ')})`, params);
+        }
       }
     }
 
@@ -2494,9 +2593,46 @@ export class OrderService {
       });
     }
 
-    // Apply hidden filter
-    if (includeHidden !== '1') {
+    // Apply hidden filter with date range support
+    const wantsHidden = (includeHidden || '').toString().toLowerCase();
+    const includeHiddenFlag = wantsHidden === '1' || wantsHidden === 'true';
+    // Determine role-based permission: allow includeHidden for admins or PMs with pm-{dept} roles
+    const roleNamesForHidden = (user?.roles || []).map((r: any) =>
+      typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
+    );
+    const isAdminUser = roleNamesForHidden.includes('admin');
+    const hasPmRole = roleNamesForHidden.some((r: string) =>
+      r.startsWith('pm-'),
+    );
+    const allowHiddenByRole = isAdminUser || hasPmRole;
+
+    if (!(includeHiddenFlag && allowHiddenByRole)) {
       qb.andWhere('details.hidden_at IS NULL');
+    } else if (includeHiddenFlag && allowHiddenByRole) {
+      // If including hidden orders and user has permission
+      if (hiddenOrdersDateRange) {
+        try {
+          // Parse the date range for hidden orders filtering
+          const hiddenDateRange = JSON.parse(hiddenOrdersDateRange);
+          if (hiddenDateRange.start && hiddenDateRange.end) {
+            // Show only hidden orders within the specified date range
+            qb.andWhere(
+              '(details.hidden_at IS NULL OR details.hidden_at BETWEEN :hiddenStartDate AND :hiddenEndDate)',
+              {
+                hiddenStartDate: hiddenDateRange.start + ' 00:00:00',
+                hiddenEndDate: hiddenDateRange.end + ' 23:59:59'
+              }
+            );
+          } else {
+            // Show all hidden orders if date range is invalid
+            // No additional filter needed - all orders (including hidden) will be shown
+          }
+        } catch (e) {
+          // If parsing fails, show all hidden orders
+          this.logger.warn('Failed to parse hiddenOrdersDateRange:', hiddenOrdersDateRange);
+        }
+      }
+      // If no date range specified, show all orders (including all hidden ones)
     }
 
     // Sorting Logic - Only prioritize dynamicExtended when no sortField specified
@@ -2585,6 +2721,7 @@ export class OrderService {
       sortDirection,
       user,
       includeHidden,
+      hiddenOrdersDateRange,
     } = filters;
 
     const skip = (page - 1) * pageSize;
@@ -2918,7 +3055,9 @@ export class OrderService {
       }
     }
 
-    // Brand Categories filter - hỗ trợ cú pháp kết hợp: pm_cat_<slug>+pm_brand_<slug>
+    // Brand Categories filter - hỗ trợ cú pháp kết hợp:
+    // 1. Format cũ: pm_cat_<slug>+pm_brand_<slug>
+    // 2. Format mới: pm_brand_<slug>_pm_cat_<slug>
     if (brandCategories) {
       const tokens = brandCategories
         .split(',')
@@ -2931,7 +3070,11 @@ export class OrderService {
         const categorySlugs: string[] = [];
         let pairIdx = 0;
         tokens.forEach((tok) => {
+          // ✅ SỬA: Hỗ trợ cả 2 format:
+          // 1. Format cũ: pm_cat_<slug>+pm_brand_<slug>
+          // 2. Format mới: pm_brand_<slug>_pm_cat_<slug>
           if (tok.includes('+')) {
+            // Format cũ: pm_cat_<slug>+pm_brand_<slug>
             const parts = tok
               .split('+')
               .map((p) => p.trim())
@@ -2953,6 +3096,26 @@ export class OrderService {
               }
             });
             if (bSlug && cSlug) {
+              pairConds.push(
+                `(brand.slug = :b${pairIdx} AND category.slug = :c${pairIdx})`,
+              );
+              params[`b${pairIdx}`] = bSlug;
+              params[`c${pairIdx}`] = cSlug;
+              pairIdx++;
+            }
+          } else if (tok.includes('_pm_cat_') && tok.startsWith('pm_brand_')) {
+            // ✅ Format mới: pm_brand_<slug>_pm_cat_<slug>
+            const lower = tok.toLowerCase();
+            const brandCatMatch = lower.match(/^pm_brand_(.+)_pm_cat_(.+)$/);
+            if (brandCatMatch) {
+              const bSlug = slugify(brandCatMatch[1], {
+                lower: true,
+                strict: true,
+              });
+              const cSlug = slugify(brandCatMatch[2], {
+                lower: true,
+                strict: true,
+              });
               pairConds.push(
                 `(brand.slug = :b${pairIdx} AND category.slug = :c${pairIdx})`,
               );
@@ -3038,6 +3201,31 @@ export class OrderService {
     if (!(includeHiddenFlag && allowHiddenByRole)) {
       // Phase 2.6: Tối ưu hóa - Sử dụng composite index cho hidden_at + status
       qb.andWhere('details.hidden_at IS NULL');
+    } else if (includeHiddenFlag && allowHiddenByRole) {
+      // If including hidden orders and user has permission
+      if (hiddenOrdersDateRange) {
+        try {
+          // Parse the date range for hidden orders filtering
+          const hiddenDateRange = JSON.parse(hiddenOrdersDateRange);
+          if (hiddenDateRange.start && hiddenDateRange.end) {
+            // Show only hidden orders within the specified date range
+            qb.andWhere(
+              '(details.hidden_at IS NULL OR details.hidden_at BETWEEN :hiddenStartDate AND :hiddenEndDate)',
+              {
+                hiddenStartDate: hiddenDateRange.start + ' 00:00:00',
+                hiddenEndDate: hiddenDateRange.end + ' 23:59:59'
+              }
+            );
+          } else {
+            // Show all hidden orders if date range is invalid
+            // No additional filter needed - all orders (including hidden) will be shown
+          }
+        } catch (e) {
+          // If parsing fails, show all hidden orders
+          this.logger.warn('Failed to parse hiddenOrdersDateRange:', hiddenOrdersDateRange);
+        }
+      }
+      // If no date range specified, show all orders (including all hidden ones)
     }
 
     // Apply blacklist filtering in SQL - OPTIMIZED: Use generated column meta_customer_id
