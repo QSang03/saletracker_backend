@@ -2170,18 +2170,10 @@ export class OrderService {
             if (filters.rolePermissions) {
               try {
                 const rolePermissionsData = JSON.parse(filters.rolePermissions);
-                console.log(
-                  '🔍 [Backend PM] Received rolePermissions:',
-                  rolePermissionsData,
-                );
 
                 // Xử lý từng role riêng biệt
                 Object.entries(rolePermissionsData).forEach(
                   ([roleName, roleData]: [string, any]) => {
-                    console.log(
-                      `🔍 [Backend PM] Processing role ${roleName}:`,
-                      roleData,
-                    );
                     const roleBrands = roleData.brands || [];
                     const roleCategories = roleData.categories || [];
 
@@ -2215,31 +2207,16 @@ export class OrderService {
                         brandSlugs.forEach((brand) => {
                           const combination = `${cat}+${brand}`;
                           allCombinations.push(combination);
-                          console.log(
-                            `🔍 [Backend PM] Role ${roleName} combination: ${combination}`,
-                          );
                         });
                       });
                     } else {
                       // Role chỉ có 1 loại permission
                       const singleSlugs = [...categorySlugs, ...brandSlugs];
                       allSinglePermissions.push(...singleSlugs);
-                      console.log(
-                        `🔍 [Backend PM] Role ${roleName} single permissions:`,
-                        singleSlugs,
-                      );
                     }
                   },
                 );
 
-                console.log(
-                  '🔍 [Backend PM] Final allCombinations:',
-                  allCombinations,
-                );
-                console.log(
-                  '🔍 [Backend PM] Final allSinglePermissions:',
-                  allSinglePermissions,
-                );
               } catch (error) {
                 this.logger.error(
                   '❌ [Order PM Custom Mode] Error parsing rolePermissions:',

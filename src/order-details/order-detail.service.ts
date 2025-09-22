@@ -4,12 +4,15 @@ import { Repository } from 'typeorm';
 import { ExtendReason, OrderDetail } from './order-detail.entity';
 import { Department } from 'src/departments/department.entity';
 import { User } from 'src/users/user.entity';
+import { Brand } from 'src/brands/brand.entity';
+import { Category } from 'src/categories/category.entity';
 import { OrderBlacklistService } from '../order-blacklist/order-blacklist.service';
 import { TransactionStatsService } from './transaction-stats.service';
 import {
   TransactionStatsParams,
   TransactionStatsResponse,
 } from './transaction-stats.interface';
+import slugify from 'slugify';
 
 interface HiddenOrderOptions {
   page?: number;
@@ -34,6 +37,10 @@ export class OrderDetailService {
     private departmentRepository: Repository<Department>,
     @InjectRepository(User)
     private userRepository: Repository<User>,
+    @InjectRepository(Brand)
+    private brandRepository: Repository<Brand>,
+    @InjectRepository(Category)
+    private categoryRepository: Repository<Category>,
     private orderBlacklistService: OrderBlacklistService,
     private transactionStatsService: TransactionStatsService,
   ) {}
@@ -129,7 +136,8 @@ export class OrderDetailService {
       // Kiểm tra có role pm_{phong_ban} nào không
       const pmRoles = roleNames.filter((r: string) => r.startsWith('pm-'));
       if (pmRoles.length === 0) {
-        return []; // Chỉ có PM mà không có pm_{phong_ban} → trả về mảng rỗng
+        // Chỉ có PM mà không có pm_{phong_ban} → chỉ xem đơn của chính họ
+        return [user.id];
       }
 
       // Có role pm_{phong_ban} → lọc theo phòng ban đó
