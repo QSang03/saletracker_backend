@@ -121,6 +121,7 @@ export class AuthService {
           id: role.id,
           name: role.name,
           display_name: role.display_name,
+          ...(isAdmin ? {} : {
           rolePermissions: role.rolePermissions?.map((rp) => ({
             isActive: rp.isActive,
             permission: rp.permission ? {
@@ -128,6 +129,7 @@ export class AuthService {
               action: rp.permission.action,
             } : null,
           })) || [],
+        }),
         })) || [],
       // Chỉ chứa departments và permissions nếu không phải admin
       ...(isAdmin ? {} : {
