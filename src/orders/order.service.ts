@@ -2772,7 +2772,16 @@ export class OrderService {
       .leftJoinAndSelect('product.brand', 'brand')
       .leftJoinAndSelect('order.sale_by', 'sale_by')
       .leftJoinAndSelect('sale_by.departments', 'sale_by_departments')
-      .addSelect(`${dynamicExpr}`, 'dynamicExtended');
+      .addSelect(`${dynamicExpr}`, 'dynamicExtended')
+      .addSelect(`
+        CASE 
+          WHEN product.product_code IS NOT NULL 
+           AND details.raw_item_prefix IS NOT NULL 
+           AND TRIM(product.product_code) = TRIM(details.raw_item_prefix)
+          THEN product.product_name
+          ELSE details.raw_item
+        END
+      `, 'raw_item');
 
     // Permissions
     let allowedUserIds;
@@ -3031,27 +3040,65 @@ export class OrderService {
         qb.andWhere('details.product_id IN (:...productIds)', { productIds });
     }
 
-    // Brands filter - filter by product brands
-    if (brands) {
+    // ✅ SỬA: Logic tổ hợp bắt buộc brands + categories
+    // Nếu có cả brands và categories: tạo tổ hợp bắt buộc thay vì xử lý riêng lẻ
+    if (brands && categories) {
       const brandNames = brands
         .split(',')
         .map((name) => name.trim())
         .filter((name) => name);
-      if (brandNames.length > 0) {
-        qb.andWhere('brand.name IN (:...brandNames)', { brandNames });
-      }
-    }
-
-    // Categories filter - filter by product categories
-    if (categories) {
       const categoryNames = categories
         .split(',')
         .map((name) => name.trim())
         .filter((name) => name);
-      if (categoryNames.length > 0) {
-        qb.andWhere('category.catName IN (:...categoryNames)', {
-          categoryNames,
+      
+      if (brandNames.length > 0 && categoryNames.length > 0) {
+        // Tạo tất cả tổ hợp có thể: mỗi brand phải kết hợp với mỗi category
+        const combinationConds: string[] = [];
+        const combinationParams: Record<string, any> = {};
+        let comboIdx = 0;
+        
+        brandNames.forEach(brand => {
+          categoryNames.forEach(category => {
+            combinationConds.push(
+              `(brand.name = :brand${comboIdx} AND category.catName = :category${comboIdx})`
+            );
+            combinationParams[`brand${comboIdx}`] = brand;
+            combinationParams[`category${comboIdx}`] = category;
+            comboIdx++;
+          });
         });
+        
+        if (combinationConds.length > 0) {
+          qb.andWhere(`(${combinationConds.join(' OR ')})`, combinationParams);
+          this.logger.debug(`[PM] Brand-Category combinations: ${combinationConds.length} combinations created`);
+        }
+      }
+    } else {
+      // Chỉ có brands hoặc chỉ có categories: xử lý riêng lẻ như cũ
+      
+      // Brands filter - filter by product brands
+      if (brands) {
+        const brandNames = brands
+          .split(',')
+          .map((name) => name.trim())
+          .filter((name) => name);
+        if (brandNames.length > 0) {
+          qb.andWhere('brand.name IN (:...brandNames)', { brandNames });
+        }
+      }
+
+      // Categories filter - filter by product categories
+      if (categories) {
+        const categoryNames = categories
+          .split(',')
+          .map((name) => name.trim())
+          .filter((name) => name);
+        if (categoryNames.length > 0) {
+          qb.andWhere('category.catName IN (:...categoryNames)', {
+            categoryNames,
+          });
+        }
       }
     }
 

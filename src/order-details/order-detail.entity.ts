@@ -45,10 +45,16 @@ export enum ExtendReason {
 @Index('idx_order_details_expiry_days', ['expiry_days', 'created_at', 'id'])
 // Optimized index for expiry-based filtering with status
 @Index('idx_expiry_days_status', ['expiry_days', 'status', 'id'])
+// Index for raw_item prefix to optimize product code comparison
+@Index('idx_order_details_raw_item_prefix', ['raw_item_prefix'])
+// Composite index for optimizing product code comparison with generated column
+@Index('idx_order_details_product_raw_prefix', ['product_id', 'raw_item_prefix'])
 // Indexes for conversation timestamps
 @Index('idx_conversation_start', ['conversation_start'])
 @Index('idx_conversation_end', ['conversation_end'])
 @Index('idx_conversation_duration', ['conversation_start', 'conversation_end'])
+// Fulltext index for raw_item search optimization
+@Index('ft_order_details_raw_item', ['raw_item'], { fulltext: true })
 @Entity('order_details')
 export class OrderDetail {
   @PrimaryGeneratedColumn('increment', { type: 'bigint' })
@@ -102,7 +108,7 @@ export class OrderDetail {
   @Column({ type: 'longtext', nullable: true })
   customer_request_summary: string;
 
-  @Column('longtext', { nullable: true })
+  @Column('text', { nullable: true })
   raw_item: string;
 
   @Column('longtext', { nullable: true })
@@ -168,6 +174,16 @@ export class OrderDetail {
     generatedType: 'STORED',
   })
   expiry_days: number | null;
+
+  // Generated column for raw_item prefix to optimize product code comparison
+  @Column({
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+    asExpression: "LEFT(TRIM(`raw_item`), 255)",
+    generatedType: 'STORED',
+  })
+  raw_item_prefix: string | null;
 
   // Generated columns for conversation timestamps
   // conversation_start: phần tử đầu
