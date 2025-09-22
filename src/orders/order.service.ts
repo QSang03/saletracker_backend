@@ -2781,7 +2781,7 @@ export class OrderService {
           THEN product.product_name
           ELSE details.raw_item
         END
-      `, 'raw_item');
+      `, 'display_raw_item');
 
     // Permissions
     let allowedUserIds;
@@ -3339,7 +3339,15 @@ export class OrderService {
     // Pagination with count at DB level
     const [data, total] = await qb.skip(skip).take(pageSize).getManyAndCount();
 
-    return { data, total, page, pageSize };
+    const mappedData = (data as any[]).map((d: any) => {
+      if (d && Object.prototype.hasOwnProperty.call(d, 'display_raw_item')) {
+        // assign computed display value to raw_item (overrides only for response object)
+        d.raw_item = d.display_raw_item;
+      }
+      return d;
+    });
+
+    return { data: mappedData as any, total, page, pageSize };
   }
 
   async findAllPaginatedForPMWithoutProduct(filters: OrderFilters): Promise<{
