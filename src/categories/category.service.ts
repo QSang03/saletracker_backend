@@ -14,7 +14,7 @@ export class CategoryService {
 
   async findAll(filter?: { user?: any }) {
     // Lightweight list for filters
-    const rows = await this.categoryRepository.find({ select: ['id', 'catName'] });
+    const rows = await this.categoryRepository.find({ select: ['id', 'catName', 'slug'] });
     const user = filter?.user;
     if (!user) return rows;
     const roles = getRoleNames(user).map((r) => String(r).toLowerCase());
@@ -32,7 +32,7 @@ export class CategoryService {
     
     if (catPerms.length === 0) return [];
     
-    return rows.filter((c) => catPerms.includes(slugify(c.catName || '', { lower: true, strict: true })));
+    return rows.filter((c) => catPerms.includes(c.slug || slugify(c.catName || '', { lower: true, strict: true })));
   }
 
   findOne(id: number) {

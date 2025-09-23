@@ -2294,82 +2294,160 @@ export class OrderService {
       (filters.brands && filters.brands.trim()) ||
       (filters.categories && filters.categories.trim())
     ) {
-      // Lấy tất cả permissions của user để kiểm tra quyền
-      const permissions = (user.permissions || []).map((p: any) =>
-        typeof p === 'string' ? p : p.name || '',
+      // Kiểm tra role của user
+      const roleNames = (user.roles || []).map((r: any) =>
+        typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
       );
+      const isAdminUser = roleNames.includes('admin');
+      const isViewRole = roleNames.includes('view');
 
-      const pmPermissions = permissions.filter((p: string) =>
-        p.toLowerCase().startsWith('pm_'),
-      );
-
-      if (pmPermissions.length > 0) {
-        // Tạo danh sách brands/categories mà user có quyền
-        const allowedBrands: string[] = [];
-        const allowedCategories: string[] = [];
-
-        pmPermissions.forEach((permission) => {
-          if (permission.toLowerCase().startsWith('pm_brand_')) {
-            const slug = slugify(permission.replace('pm_brand_', ''), {
-              lower: true,
-              strict: true,
-            });
-            allowedBrands.push(slug);
-          } else if (permission.toLowerCase().startsWith('pm_cat_')) {
-            const slug = slugify(permission.replace('pm_cat_', ''), {
-              lower: true,
-              strict: true,
-            });
-            allowedCategories.push(slug);
-          }
-        });
-
-        // Áp dụng filter brands (chỉ trong phạm vi quyền được phép)
+      if (isAdminUser || isViewRole) {
+        // Admin hoặc View role: áp dụng filter trực tiếp không cần check permissions
+        console.log('[DEBUG] Admin/View role - applying filters directly');
+        
+        // Xử lý brands filter cho admin/view
         if (filters.brands && filters.brands.trim()) {
-          const brandList = filters.brands
+          const brandSlugs = filters.brands
             .split(',')
-            .map((b) => b.trim())
-            .filter(Boolean);
-          if (brandList.length > 0) {
-            const brandSlugs = brandList.map((brand) =>
-              slugify(brand, { lower: true, strict: true }),
-            );
-
-            // Chỉ lọc brands mà user có quyền
-            const validBrandSlugs = brandSlugs.filter((slug) =>
-              allowedBrands.includes(slug),
-            );
-            if (validBrandSlugs.length > 0) {
-              qb.andWhere('brand.slug IN (:...validBrandSlugs)', {
-                validBrandSlugs,
-              });
+            .map((slug) => slug.trim())
+            .filter((slug) => slug);
+          
+          console.log('[DEBUG] Brand filter for admin/view:', { brandSlugs });
+          
+          if (brandSlugs.length > 0) {
+            // Truy vấn ngược: brands → products → order_details
+            const productIds = await this.productRepository
+              .createQueryBuilder('product')
+              .leftJoin('product.brand', 'brand')
+              .select('product.id')
+              .where('brand.slug IN (:...brandSlugs)', { brandSlugs })
+              .getRawMany();
+            
+            console.log('[DEBUG] Found products for brands (admin/view):', { 
+              brandSlugs, 
+              productCount: productIds.length,
+              productIds: productIds.map(p => p.product_id)
+            });
+            
+            const productIdList = productIds.map(p => p.product_id);
+            if (productIdList.length > 0) {
+              qb.andWhere('details.product_id IN (:...productIdList)', { productIdList });
             } else {
-              return { data: [], total: 0, page, pageSize };
+              qb.andWhere('1 = 0');
             }
           }
         }
 
-        // Áp dụng filter categories (chỉ trong phạm vi quyền được phép)
+        // Xử lý categories filter cho admin/view
         if (filters.categories && filters.categories.trim()) {
-          const categoryList = filters.categories
+          const categorySlugs = filters.categories
             .split(',')
-            .map((c) => c.trim())
-            .filter(Boolean);
-          if (categoryList.length > 0) {
-            const categorySlugs = categoryList.map((category) =>
-              slugify(category, { lower: true, strict: true }),
-            );
-
-            // Chỉ lọc categories mà user có quyền
-            const validCategorySlugs = categorySlugs.filter((slug) =>
-              allowedCategories.includes(slug),
-            );
-            if (validCategorySlugs.length > 0) {
-              qb.andWhere('category.slug IN (:...validCategorySlugs)', {
-                validCategorySlugs,
-              });
+            .map((slug) => slug.trim())
+            .filter((slug) => slug);
+          
+          console.log('[DEBUG] Category filter for admin/view:', { categorySlugs });
+          
+          if (categorySlugs.length > 0) {
+            // Truy vấn ngược: categories → products → order_details
+            const productIds = await this.productRepository
+              .createQueryBuilder('product')
+              .leftJoin('product.category', 'category')
+              .select('product.id')
+              .where('category.slug IN (:...categorySlugs)', { categorySlugs })
+              .getRawMany();
+            
+            console.log('[DEBUG] Found products for categories (admin/view):', { 
+              categorySlugs, 
+              productCount: productIds.length,
+              productIds: productIds.map(p => p.product_id)
+            });
+            
+            const productIdList = productIds.map(p => p.product_id);
+            if (productIdList.length > 0) {
+              qb.andWhere('details.product_id IN (:...productIdList)', { productIdList });
             } else {
-              return { data: [], total: 0, page, pageSize };
+              qb.andWhere('1 = 0');
+            }
+          }
+        }
+      } else {
+        // PM role: cần check permissions
+        const permissions = (user.permissions || []).map((p: any) =>
+          typeof p === 'string' ? p : p.name || '',
+        );
+
+        const pmPermissions = permissions.filter((p: string) =>
+          p.toLowerCase().startsWith('pm_'),
+        );
+
+        if (pmPermissions.length > 0) {
+          // Tạo danh sách brands/categories mà user có quyền
+          const allowedBrands: string[] = [];
+          const allowedCategories: string[] = [];
+
+          pmPermissions.forEach((permission) => {
+            if (permission.toLowerCase().startsWith('pm_brand_')) {
+              const slug = slugify(permission.replace('pm_brand_', ''), {
+                lower: true,
+                strict: true,
+              });
+              allowedBrands.push(slug);
+            } else if (permission.toLowerCase().startsWith('pm_cat_')) {
+              const slug = slugify(permission.replace('pm_cat_', ''), {
+                lower: true,
+                strict: true,
+              });
+              allowedCategories.push(slug);
+            }
+          });
+
+          // Áp dụng filter brands (chỉ trong phạm vi quyền được phép)
+          if (filters.brands && filters.brands.trim()) {
+            const brandList = filters.brands
+              .split(',')
+              .map((b) => b.trim())
+              .filter(Boolean);
+            if (brandList.length > 0) {
+              const brandSlugs = brandList.map((brand) =>
+                slugify(brand, { lower: true, strict: true }),
+              );
+
+              // Chỉ lọc brands mà user có quyền
+              const validBrandSlugs = brandSlugs.filter((slug) =>
+                allowedBrands.includes(slug),
+              );
+              if (validBrandSlugs.length > 0) {
+                qb.andWhere('brand.slug IN (:...validBrandSlugs)', {
+                  validBrandSlugs,
+                });
+              } else {
+                return { data: [], total: 0, page, pageSize };
+              }
+            }
+          }
+
+          // Áp dụng filter categories (chỉ trong phạm vi quyền được phép)
+          if (filters.categories && filters.categories.trim()) {
+            const categoryList = filters.categories
+              .split(',')
+              .map((c) => c.trim())
+              .filter(Boolean);
+            if (categoryList.length > 0) {
+              const categorySlugs = categoryList.map((category) =>
+                slugify(category, { lower: true, strict: true }),
+              );
+
+              // Chỉ lọc categories mà user có quyền
+              const validCategorySlugs = categorySlugs.filter((slug) =>
+                allowedCategories.includes(slug),
+              );
+              if (validCategorySlugs.length > 0) {
+                qb.andWhere('category.slug IN (:...validCategorySlugs)', {
+                  validCategorySlugs,
+                });
+              } else {
+                return { data: [], total: 0, page, pageSize };
+              }
             }
           }
         }
@@ -3124,37 +3202,32 @@ export class OrderService {
     // ✅ SỬA: Logic tổ hợp bắt buộc brands + categories
     // Nếu có cả brands và categories: tạo tổ hợp bắt buộc thay vì xử lý riêng lẻ
     if (brands && categories) {
-      const brandNames = brands
+      const brandSlugs = brands
         .split(',')
-        .map((name) => name.trim())
-        .filter((name) => name);
-      const categoryNames = categories
+        .map((slug) => slug.trim())
+        .filter((slug) => slug);
+      const categorySlugs = categories
         .split(',')
-        .map((name) => name.trim())
-        .filter((name) => name);
+        .map((slug) => slug.trim())
+        .filter((slug) => slug);
 
-      if (brandNames.length > 0 && categoryNames.length > 0) {
-        // Tạo tất cả tổ hợp có thể: mỗi brand phải kết hợp với mỗi category
-        const combinationConds: string[] = [];
-        const combinationParams: Record<string, any> = {};
-        let comboIdx = 0;
-
-        brandNames.forEach((brand) => {
-          categoryNames.forEach((category) => {
-            combinationConds.push(
-              `(brand.name = :brand${comboIdx} AND category.catName = :category${comboIdx})`,
-            );
-            combinationParams[`brand${comboIdx}`] = brand;
-            combinationParams[`category${comboIdx}`] = category;
-            comboIdx++;
-          });
-        });
-
-        if (combinationConds.length > 0) {
-          qb.andWhere(`(${combinationConds.join(' OR ')})`, combinationParams);
-          this.logger.debug(
-            `[PM] Brand-Category combinations: ${combinationConds.length} combinations created`,
-          );
+      if (brandSlugs.length > 0 && categorySlugs.length > 0) {
+        // Truy vấn ngược: brands + categories → products → order_details
+        const productIds = await this.productRepository
+          .createQueryBuilder('product')
+          .leftJoin('product.brand', 'brand')
+          .leftJoin('product.category', 'category')
+          .select('product.id')
+          .where('brand.slug IN (:...brandSlugs)', { brandSlugs })
+          .andWhere('category.slug IN (:...categorySlugs)', { categorySlugs })
+          .getRawMany();
+        
+        const productIdList = productIds.map(p => p.product_id);
+        if (productIdList.length > 0) {
+          qb.andWhere('details.product_id IN (:...productIdList)', { productIdList });
+        } else {
+          // Không có products nào khớp cả brand và category → trả về empty
+          qb.andWhere('1 = 0');
         }
       }
     } else {
@@ -3162,25 +3235,69 @@ export class OrderService {
 
       // Brands filter - filter by product brands
       if (brands) {
-        const brandNames = brands
+        const brandSlugs = brands
           .split(',')
-          .map((name) => name.trim())
-          .filter((name) => name);
-        if (brandNames.length > 0) {
-          qb.andWhere('brand.name IN (:...brandNames)', { brandNames });
+          .map((slug) => slug.trim())
+          .filter((slug) => slug);
+        if (brandSlugs.length > 0) {
+          // Truy vấn ngược: brands → products → order_details
+          console.log('[DEBUG] Brand filter:', { brandSlugs });
+          
+          const productIds = await this.productRepository
+            .createQueryBuilder('product')
+            .leftJoin('product.brand', 'brand')
+            .select('product.id')
+            .where('brand.slug IN (:...brandSlugs)', { brandSlugs })
+            .getRawMany();
+          
+          console.log('[DEBUG] Found products for brands:', { 
+            brandSlugs, 
+            productCount: productIds.length,
+            productIds: productIds.map(p => p.product_id)
+          });
+          
+          const productIdList = productIds.map(p => p.product_id);
+          if (productIdList.length > 0) {
+            qb.andWhere('details.product_id IN (:...productIdList)', { productIdList });
+          } else {
+            // Không có products nào khớp → trả về empty
+            console.log('[DEBUG] No products found for brands, returning empty result');
+            qb.andWhere('1 = 0');
+          }
         }
       }
 
       // Categories filter - filter by product categories
       if (categories) {
-        const categoryNames = categories
+        const categorySlugs = categories
           .split(',')
-          .map((name) => name.trim())
-          .filter((name) => name);
-        if (categoryNames.length > 0) {
-          qb.andWhere('category.catName IN (:...categoryNames)', {
-            categoryNames,
+          .map((slug) => slug.trim())
+          .filter((slug) => slug);
+        if (categorySlugs.length > 0) {
+          // Truy vấn ngược: categories → products → order_details
+          console.log('[DEBUG] Category filter:', { categorySlugs });
+          
+          const productIds = await this.productRepository
+            .createQueryBuilder('product')
+            .leftJoin('product.category', 'category')
+            .select('product.id')
+            .where('category.slug IN (:...categorySlugs)', { categorySlugs })
+            .getRawMany();
+          
+          console.log('[DEBUG] Found products for categories:', { 
+            categorySlugs, 
+            productCount: productIds.length,
+            productIds: productIds.map(p => p.product_id)
           });
+          
+          const productIdList = productIds.map(p => p.product_id);
+          if (productIdList.length > 0) {
+            qb.andWhere('details.product_id IN (:...productIdList)', { productIdList });
+          } else {
+            // Không có products nào khớp → trả về empty
+            console.log('[DEBUG] No products found for categories, returning empty result');
+            qb.andWhere('1 = 0');
+          }
         }
       }
     }

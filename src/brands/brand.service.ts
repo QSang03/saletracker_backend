@@ -14,7 +14,7 @@ export class BrandService {
 
   async findAll(filter?: { user?: any }) {
     // Return only basic fields for filter dropdowns
-    const rows = await this.brandRepository.find({ select: ['id', 'name'] });
+    const rows = await this.brandRepository.find({ select: ['id', 'name', 'slug'] });
     const user = filter?.user;
     if (!user) return rows;
     const roles = getRoleNames(user).map((r) => String(r).toLowerCase());
@@ -32,7 +32,7 @@ export class BrandService {
     
     if (brandPerms.length === 0) return [];
     
-    return rows.filter((b) => brandPerms.includes(slugify(b.name || '', { lower: true, strict: true })));
+    return rows.filter((b) => brandPerms.includes(b.slug || slugify(b.name || '', { lower: true, strict: true })));
   }
 
   findOne(id: number) {
