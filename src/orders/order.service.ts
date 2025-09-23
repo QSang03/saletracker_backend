@@ -2305,9 +2305,50 @@ export class OrderService {
         // Admin hoặc View role: áp dụng filter trực tiếp không cần check permissions
         console.log('[DEBUG] Admin/View role - applying filters directly');
         
-        // Xử lý brands filter cho admin/view
-        if (filters.brands && filters.brands.trim()) {
-          const brandSlugs = filters.brands
+        const hasBrands = filters.brands && filters.brands.trim();
+        const hasCategories = filters.categories && filters.categories.trim();
+        
+        if (hasBrands && hasCategories) {
+          // Có cả brands và categories: tạo tổ hợp bắt buộc
+          const brandSlugs = filters.brands!
+            .split(',')
+            .map((slug) => slug.trim())
+            .filter((slug) => slug);
+          const categorySlugs = filters.categories!
+            .split(',')
+            .map((slug) => slug.trim())
+            .filter((slug) => slug);
+          
+          console.log('[DEBUG] Combined brand+category filter for admin/view:', { brandSlugs, categorySlugs });
+          
+          if (brandSlugs.length > 0 && categorySlugs.length > 0) {
+            // Truy vấn ngược: brands + categories → products → order_details
+            const productIds = await this.productRepository
+              .createQueryBuilder('product')
+              .leftJoin('product.brand', 'brand')
+              .leftJoin('product.category', 'category')
+              .select('product.id')
+              .where('brand.slug IN (:...brandSlugs)', { brandSlugs })
+              .andWhere('category.slug IN (:...categorySlugs)', { categorySlugs })
+              .getRawMany();
+            
+            console.log('[DEBUG] Found products for combined filter (admin/view):', { 
+              brandSlugs, 
+              categorySlugs,
+              productCount: productIds.length,
+              productIds: productIds.map(p => p.product_id)
+            });
+            
+            const productIdList = productIds.map(p => p.product_id);
+            if (productIdList.length > 0) {
+              qb.andWhere('details.product_id IN (:...productIdList)', { productIdList });
+            } else {
+              qb.andWhere('1 = 0');
+            }
+          }
+        } else if (hasBrands) {
+          // Chỉ có brands
+          const brandSlugs = filters.brands!
             .split(',')
             .map((slug) => slug.trim())
             .filter((slug) => slug);
@@ -2336,11 +2377,9 @@ export class OrderService {
               qb.andWhere('1 = 0');
             }
           }
-        }
-
-        // Xử lý categories filter cho admin/view
-        if (filters.categories && filters.categories.trim()) {
-          const categorySlugs = filters.categories
+        } else if (hasCategories) {
+          // Chỉ có categories
+          const categorySlugs = filters.categories!
             .split(',')
             .map((slug) => slug.trim())
             .filter((slug) => slug);
