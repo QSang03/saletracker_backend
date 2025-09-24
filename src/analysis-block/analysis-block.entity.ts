@@ -13,7 +13,7 @@ import {
   @Entity('analysis_block')
   @Index(['userId', 'zaloContactId', 'blockType'], { unique: true })
   @Index(['userId'])
-  @Index(['zaloContactId'])
+  @Index(['zaloContactId'], { unique: true })
   @Index(['blockType'])
   @Index(['created_at'])
   @Index(['userId', 'created_at'])

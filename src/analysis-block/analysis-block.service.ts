@@ -54,18 +54,16 @@ export class AnalysisBlockService {
 
   async create(createDto: CreateAnalysisBlockDto): Promise<AnalysisBlock> {
     try {
-      // Kiểm tra xem đã tồn tại analysis block cho user, zalo contact và block type này chưa
+      // Kiểm tra xem đã tồn tại analysis block cho zalo contact này chưa (zaloContactId unique)
       const existing = await this.analysisBlockRepository.findOne({
         where: {
-          userId: createDto.userId,
           zaloContactId: createDto.zaloContactId,
-          blockType: createDto.blockType,
         },
       });
 
       if (existing) {
         throw new ConflictException(
-          `Analysis block already exists for user ${createDto.userId}, contact ${createDto.zaloContactId} and type ${createDto.blockType}`,
+          `Đã tồn tại analysis block cho zalo contact ${createDto.zaloContactId}. Không thể chặn lại đơn của contact này.`,
         );
       }
 
@@ -175,16 +173,14 @@ export class AnalysisBlockService {
     try {
       const count = await this.analysisBlockRepository.count({
         where: {
-          userId,
           zaloContactId,
-          blockType: blockType as 'analysis' | 'reporting' | 'stats',
         },
       });
 
       return count > 0;
     } catch (error) {
       this.logger.error(
-        `Error checking analysis block status for user ${userId}, contact ${zaloContactId}, type ${blockType}:`,
+        `Error checking analysis block status for contact ${zaloContactId}:`,
         error,
       );
       throw error;
@@ -193,7 +189,7 @@ export class AnalysisBlockService {
 
   async getBlockedContactsForUser(userId: number, blockType?: string): Promise<string[]> {
     try {
-      const where: any = { userId };
+      const where: any = {};
       if (blockType) where.blockType = blockType as 'analysis' | 'reporting' | 'stats';
 
       const blocks = await this.analysisBlockRepository.find({
@@ -204,7 +200,7 @@ export class AnalysisBlockService {
       return blocks.map((block) => block.zaloContactId);
     } catch (error) {
       this.logger.error(
-        `Error getting blocked contacts for user ${userId}:`,
+        `Error getting blocked contacts:`,
         error,
       );
       throw error;

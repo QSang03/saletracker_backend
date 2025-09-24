@@ -230,7 +230,7 @@ export class AnalysisBlockController {
           success: false, 
           zaloContactId, 
           blockType: data.blockType,
-          error: error.message 
+          error: error.message || 'Không thể tạo analysis block cho contact này'
         });
       }
     }
