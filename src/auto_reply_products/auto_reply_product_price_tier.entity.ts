@@ -5,6 +5,9 @@ import {
   ManyToOne,
   JoinColumn,
   Unique,
+  CreateDateColumn,
+  UpdateDateColumn,
+  DeleteDateColumn,
 } from 'typeorm';
 import { AutoReplyProduct } from './auto_reply_product.entity';
 
@@ -37,4 +40,22 @@ export class AutoReplyProductPriceTier {
     comment: 'Giá cho mỗi đơn vị sản phẩm ở mức này',
   })
   pricePerUnit: string;
+
+  @CreateDateColumn({
+    name: 'created_at',
+    comment: 'Thời gian tạo',
+  })
+  createdAt: Date;
+
+  @UpdateDateColumn({
+    name: 'updated_at',
+    comment: 'Thời gian cập nhật',
+  })
+  updatedAt: Date;
+
+  @DeleteDateColumn({
+    name: 'deleted_at',
+    comment: 'Thời gian xóa',
+  })
+  deletedAt: Date;
 }

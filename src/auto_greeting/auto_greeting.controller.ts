@@ -13,6 +13,8 @@ import {
   Req,
   Res,
   Headers,
+  DefaultValuePipe,
+  ParseIntPipe,
   HttpException,
   HttpStatus,
 } from '@nestjs/common';
@@ -209,10 +211,19 @@ export class AutoGreetingController {
   }
 
   /**
-   * Lấy danh sách khách hàng cần gửi tin nhắn
+   * Lấy danh sách khách hàng cần gửi tin nhắn với pagination
    */
   @Get('customers')
-  async getCustomers(@Query('userId') userId?: string, @Req() req?: any) {
+  async getCustomers(
+    @Query('userId') userId?: string,
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number = 1,
+    @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number = 10,
+    @Query('search') search?: string,
+    @Query('statusFilter') statusFilter?: string,
+    @Query('conversationTypeFilter') conversationTypeFilter?: string,
+    @Query('dateFilter') dateFilter?: string,
+    @Req() req?: any
+  ) {
     let parsedUserId: number | undefined;
     
     if (userId) {
@@ -232,7 +243,16 @@ export class AutoGreetingController {
       }
     }
     
-    return this.autoGreetingService.getCustomersForGreeting(parsedUserId, this.canViewOwnerInfo(req));
+    return this.autoGreetingService.getCustomersPaginated({
+      userId: parsedUserId,
+      page,
+      limit,
+      search,
+      statusFilter,
+      conversationTypeFilter,
+      dateFilter,
+      includeOwnerInfo: this.canViewOwnerInfo(req)
+    });
   }
 
   /**

@@ -193,6 +193,21 @@ export class AutoReplyService {
     return qb.getMany();
   }
 
+  // New method for admin to see all contacts
+  async listAllContacts(includeRestricted = false) {
+    const qb = this.contactRepo
+      .createQueryBuilder('c')
+      .leftJoinAndSelect('c.user', 'u')
+      .leftJoinAndSelect('c.assignedPersona', 'p')
+      .orderBy('c.updatedAt', 'DESC');
+    if (!includeRestricted) {
+      qb.andWhere('c.role NOT IN (:...roles)', {
+        roles: [ContactRole.SUPPLIER, ContactRole.INTERNAL],
+      });
+    }
+    return qb.getMany();
+  }
+
   async listContactsPaginated(opts: {
     userId?: number;
     mine?: boolean;
@@ -200,15 +215,20 @@ export class AutoReplyService {
     limit?: number;
     search?: string;
     excludeRoles?: string[];
+    isAdmin?: boolean;
   }) {
-    const { userId, mine, page = 1, limit = 50, search, excludeRoles } = opts || {};
+    const { userId, mine, page = 1, limit = 50, search, excludeRoles, isAdmin = false } = opts || {};
     const qb = this.contactRepo
       .createQueryBuilder('c')
       .leftJoinAndSelect('c.assignedPersona', 'p')
-      .leftJoin('c.user', 'u')
+      .leftJoinAndSelect('c.user', 'u') // Always include user info for admin
       .orderBy('c.updatedAt', 'DESC');
 
-    if (mine && userId) qb.andWhere('u.id = :userId', { userId });
+    // Admin sees all contacts, regular users see only their own
+    if (!isAdmin && mine && userId) {
+      qb.andWhere('u.id = :userId', { userId });
+    }
+    
     // Exclude restricted roles by default from selections; allow override via excludeRoles param
     const rolesToExclude = excludeRoles && excludeRoles.length
       ? excludeRoles
@@ -236,11 +256,24 @@ export class AutoReplyService {
   }
 
   async toggleContactAutoReply(contactId: number, enabled: boolean) {
-    await this.contactRepo.update({ contactId }, { autoReplyOn: enabled });
+    const updateData: any = { autoReplyOn: enabled };
+    
+    if (enabled) {
+      updateData.autoReplyEnabledAt = new Date();
+      updateData.autoReplyDisabledAt = null;
+    } else {
+      updateData.autoReplyDisabledAt = new Date();
+    }
+    
+    await this.contactRepo.update({ contactId }, updateData);
     const updated = await this.contactRepo.findOne({ where: { contactId } });
     this.ws.emitToAll('autoReply:contactUpdated', {
       contactId,
-      patch: { autoReplyOn: enabled },
+      patch: { 
+        autoReplyOn: enabled,
+        autoReplyEnabledAt: updateData.autoReplyEnabledAt,
+        autoReplyDisabledAt: updateData.autoReplyDisabledAt
+      },
     });
     return updated;
   }
@@ -262,15 +295,28 @@ export class AutoReplyService {
     const rows = await qb.getRawMany<{ contactId: number }>();
     const targets = rows.map((r) => Number(r.contactId));
     if (targets.length) {
+      const updateData: any = { autoReplyOn: enabled };
+      
+      if (enabled) {
+        updateData.autoReplyEnabledAt = new Date();
+        updateData.autoReplyDisabledAt = null;
+      } else {
+        updateData.autoReplyDisabledAt = new Date();
+      }
+      
       await this.contactRepo
         .createQueryBuilder()
         .update()
-        .set({ autoReplyOn: enabled })
+        .set(updateData)
         .whereInIds(targets)
         .execute();
       this.ws.emitToAll('autoReply:contactsBulkUpdated', {
         contactIds: targets,
-        patch: { autoReplyOn: enabled },
+        patch: { 
+          autoReplyOn: enabled,
+          autoReplyEnabledAt: updateData.autoReplyEnabledAt,
+          autoReplyDisabledAt: updateData.autoReplyDisabledAt
+        },
       });
     }
     return { success: true, count: targets.length };
@@ -455,9 +501,138 @@ export class AutoReplyService {
     };
   }
 
-  async importProductsFromExcel(fileBuffer: Buffer) {
+  async previewProductsFromExcel(fileBuffer: Buffer) {
+    // Validate file size (max 10MB)
+    if (fileBuffer.length > 10 * 1024 * 1024) {
+      return {
+        total: 0,
+        data: [],
+        errors: ['File quá lớn. Kích thước tối đa là 10MB'],
+      };
+    }
+
     const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.load(fileBuffer as any);
+    try {
+      await workbook.xlsx.load(fileBuffer as any);
+    } catch (error) {
+      return {
+        total: 0,
+        data: [],
+        errors: ['File Excel không hợp lệ hoặc bị hỏng'],
+      };
+    }
+
+    const sheet = workbook.worksheets[0];
+    if (!sheet)
+      return {
+        total: 0,
+        data: [],
+        errors: ['Không tìm thấy worksheet trong file Excel'],
+      };
+
+    // Detect header row by finding a row that contains all required headers
+    const requiredHeaders = ['MaHH', 'TenHH', 'NhanHang', 'NhomHang'];
+    let headerRowIdx = 1;
+    let headerMap: Record<string, number> = {};
+    for (let i = 1; i <= Math.min(sheet.rowCount, 10); i++) {
+      const row = sheet.getRow(i);
+      const values = row.values as any[];
+      const map: Record<string, number> = {};
+      for (let c = 1; c < values.length; c++) {
+        const v = (values[c] ?? '').toString().trim();
+        if (v) map[v] = c;
+      }
+      if (requiredHeaders.every((h) => map[h] !== undefined)) {
+        headerRowIdx = i;
+        headerMap = map;
+        break;
+      }
+    }
+    if (!headerMap['MaHH']) {
+      return {
+        total: 0,
+        data: [],
+        errors: ['Không tìm thấy header cần thiết. Vui lòng kiểm tra file mẫu để biết format đúng'],
+      };
+    }
+
+    // Validate minimum rows
+    if (sheet.rowCount < 2) {
+      return {
+        total: 0,
+        data: [],
+        errors: ['File không có dữ liệu. Cần ít nhất 1 dòng dữ liệu'],
+      };
+    }
+
+    const data: any[] = [];
+    const errors: string[] = [];
+
+    for (let r = headerRowIdx + 1; r <= Math.min(headerRowIdx + 10, sheet.rowCount); r++) { // Preview first 10 rows
+      const row = sheet.getRow(r);
+      const code = String(row.getCell(headerMap['MaHH']).value ?? '').trim();
+      if (!code) continue;
+      
+      const name = String(row.getCell(headerMap['TenHH']).value ?? '').trim();
+      const brand = String(
+        row.getCell(headerMap['NhanHang']).value ?? '',
+      ).trim();
+      const cate = String(
+        row.getCell(headerMap['NhomHang']).value ?? '',
+      ).trim();
+
+      // Validate required fields
+      const rowErrors: string[] = [];
+      if (!name) rowErrors.push('Tên sản phẩm không được để trống');
+      if (!brand) rowErrors.push('Thương hiệu không được để trống');
+      if (!cate) rowErrors.push('Danh mục không được để trống');
+      if (code.length > 100) rowErrors.push('Mã sản phẩm quá dài (tối đa 100 ký tự)');
+      if (name.length > 255) rowErrors.push('Tên sản phẩm quá dài (tối đa 255 ký tự)');
+
+      data.push({
+        row: r,
+        code,
+        name,
+        brand,
+        cate,
+        errors: rowErrors,
+        isValid: rowErrors.length === 0
+      });
+
+      if (rowErrors.length > 0) {
+        errors.push(`Dòng ${r}: ${rowErrors.join(', ')}`);
+      }
+    }
+
+    return {
+      total: data.length,
+      data,
+      errors
+    };
+  }
+
+  async importProductsFromExcel(fileBuffer: Buffer) {
+    // Validate file size (max 10MB)
+    if (fileBuffer.length > 10 * 1024 * 1024) {
+      return {
+        total: 0,
+        created: 0,
+        updated: 0,
+        errors: ['File quá lớn. Kích thước tối đa là 10MB'],
+      };
+    }
+
+    const workbook = new ExcelJS.Workbook();
+    try {
+      await workbook.xlsx.load(fileBuffer as any);
+    } catch (error) {
+      return {
+        total: 0,
+        created: 0,
+        updated: 0,
+        errors: ['File Excel không hợp lệ hoặc bị hỏng'],
+      };
+    }
 
     const sheet = workbook.worksheets[0];
     if (!sheet)
@@ -465,7 +640,7 @@ export class AutoReplyService {
         total: 0,
         created: 0,
         updated: 0,
-        errors: ['No worksheet found'],
+        errors: ['Không tìm thấy worksheet trong file Excel'],
       };
 
     // Detect header row by finding a row that contains all required headers
@@ -491,7 +666,17 @@ export class AutoReplyService {
         total: 0,
         created: 0,
         updated: 0,
-        errors: ['Headers not found: require MaHH, TenHH, NhanHang, NhomHang'],
+        errors: ['Không tìm thấy header cần thiết. Vui lòng kiểm tra file mẫu để biết format đúng'],
+      };
+    }
+
+    // Validate minimum rows
+    if (sheet.rowCount < 2) {
+      return {
+        total: 0,
+        created: 0,
+        updated: 0,
+        errors: ['File không có dữ liệu. Cần ít nhất 1 dòng dữ liệu'],
       };
     }
 
@@ -503,6 +688,7 @@ export class AutoReplyService {
       const row = sheet.getRow(r);
       const code = String(row.getCell(headerMap['MaHH']).value ?? '').trim();
       if (!code) continue;
+      
       const name = String(row.getCell(headerMap['TenHH']).value ?? '').trim();
       const brand = String(
         row.getCell(headerMap['NhanHang']).value ?? '',
@@ -510,6 +696,28 @@ export class AutoReplyService {
       const cate = String(
         row.getCell(headerMap['NhomHang']).value ?? '',
       ).trim();
+
+      // Validate required fields
+      if (!name) {
+        errors.push(`Dòng ${r}: Tên sản phẩm không được để trống`);
+        continue;
+      }
+      if (!brand) {
+        errors.push(`Dòng ${r}: Thương hiệu không được để trống`);
+        continue;
+      }
+      if (!cate) {
+        errors.push(`Dòng ${r}: Danh mục không được để trống`);
+        continue;
+      }
+      if (code.length > 100) {
+        errors.push(`Dòng ${r}: Mã sản phẩm quá dài (tối đa 100 ký tự)`);
+        continue;
+      }
+      if (name.length > 255) {
+        errors.push(`Dòng ${r}: Tên sản phẩm quá dài (tối đa 255 ký tự)`);
+        continue;
+      }
 
       try {
         let product = await this.productRepo.findOne({ where: { code } });

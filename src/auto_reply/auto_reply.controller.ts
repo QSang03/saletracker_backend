@@ -162,8 +162,18 @@ export class AutoReplyController {
     if (userId === undefined || userId === null) {
       throw new BadRequestException('Missing userId (JWT or ?userId=)');
     }
-    // Always scope contacts to the current user
-    return this.svc.listContactsForUser(userId);
+    
+    // Check if user is admin
+    const userRoles = req.user?.roles ? req.user.roles.map((r: any) => r.name) : [];
+    const isAdmin = userRoles.includes('admin');
+    
+    if (isAdmin) {
+      // Admin can see all contacts
+      return this.svc.listAllContacts();
+    } else {
+      // Regular users see only their contacts
+      return this.svc.listContactsForUser(userId);
+    }
   }
 
   @Patch('contacts/:contactId/role')
@@ -304,6 +314,13 @@ export class AutoReplyController {
       .filter((v): v is number => v !== undefined);
     if (!parsed.length) return [] as any;
     return this.svc.listProductsByIds(parsed);
+  }
+
+  @Post('products/preview')
+  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage() }))
+  previewProducts(@UploadedFile() file: Express.Multer.File) {
+    if (!file?.buffer) throw new BadRequestException('Missing file');
+    return this.svc.previewProductsFromExcel(file.buffer);
   }
 
   @Post('products/import')
@@ -625,13 +642,19 @@ export class AutoReplyController {
       : excludeRoles
         ? [excludeRoles]
         : [];
+    
+    // Check if user is admin
+    const userRoles = req.user?.roles ? req.user.roles.map((r: any) => r.name) : [];
+    const isAdmin = userRoles.includes('admin');
+    
     return this.svc.listContactsPaginated({
-      userId,
-      mine: mine === '1' || mine === 'true',
+      userId: isAdmin ? undefined : userId, // Admin sees all, others see only their own
+      mine: isAdmin ? false : (mine === '1' || mine === 'true'), // Admin doesn't use mine filter
       page,
       limit,
       search,
       excludeRoles: rolesArr,
+      isAdmin, // Pass admin flag to service
     });
   }
 

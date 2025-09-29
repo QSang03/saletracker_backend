@@ -108,7 +108,172 @@ export class AutoGreetingService {
   }
 
   /**
-   * Lấy danh sách khách hàng cần gửi tin nhắn
+   * Lấy danh sách khách hàng cần gửi tin nhắn với pagination
+   */
+  async getCustomersPaginated(options: {
+    userId?: number;
+    page: number;
+    limit: number;
+    search?: string;
+    statusFilter?: string;
+    conversationTypeFilter?: string;
+    dateFilter?: string;
+    includeOwnerInfo: boolean;
+  }): Promise<{
+    data: CustomerWithLastMessage[];
+    total: number;
+    page: number;
+    limit: number;
+    totalPages: number;
+  }> {
+    const config = await this.getConfig();
+    if (!config.enabled) {
+      return {
+        data: [],
+        total: 0,
+        page: options.page,
+        limit: options.limit,
+        totalPages: 0,
+      };
+    }
+
+    // Build base query
+    let sql = `
+      SELECT 
+        c.id as customer_id,
+        c.user_id as customer_user_id,
+        c.zalo_display_name as customer_zalo_display_name,
+        c.salutation as customer_salutation,
+        c.greeting_message as customer_greeting_message,
+        c.conversation_type as customer_conversation_type,
+        c.last_message_date as customer_last_message_date,
+        c.status as customer_status,
+        c.is_active as customer_is_active,
+        ${options.includeOwnerInfo ? 'u.zalo_name as user_display_name,' : 'NULL as user_display_name,'}
+        (SELECT MAX(h.sent_at) FROM auto_greeting_customer_message_history h WHERE h.customer_id = c.id) as lastMessageDate
+      FROM auto_greeting_customers c
+      ${options.includeOwnerInfo ? 'LEFT JOIN users u ON c.user_id = u.id' : ''}
+      WHERE c.deleted_at IS NULL
+    `;
+    
+    const params: any[] = [];
+    
+    // Add user filter
+    if (options.userId) {
+      sql += ` AND c.user_id = ?`;
+      params.push(options.userId);
+    }
+    
+    // Add search filter
+    if (options.search && options.search.trim()) {
+      const searchTerm = `%${options.search.trim()}%`;
+      sql += ` AND (
+        c.id LIKE ? OR 
+        c.zalo_display_name LIKE ? OR 
+        c.salutation LIKE ? OR 
+        c.greeting_message LIKE ? OR
+        c.user_id LIKE ?
+        ${options.includeOwnerInfo ? 'OR u.zalo_name LIKE ?' : ''}
+      )`;
+      params.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
+      if (options.includeOwnerInfo) {
+        params.push(searchTerm);
+      }
+    }
+    
+    // Add status filter
+    if (options.statusFilter && options.statusFilter !== 'all') {
+      sql += ` AND c.status = ?`;
+      params.push(options.statusFilter);
+    }
+    
+    // Add conversation type filter
+    if (options.conversationTypeFilter && options.conversationTypeFilter !== 'all') {
+      sql += ` AND c.conversation_type = ?`;
+      params.push(options.conversationTypeFilter);
+    }
+    
+    // Add date filter
+    if (options.dateFilter) {
+      sql += ` AND DATE(c.last_message_date) = ?`;
+      params.push(options.dateFilter);
+    }
+    
+    // Get total count
+    const countSql = `SELECT COUNT(*) as count FROM (${sql}) as subquery`;
+    const countResult = await this.autoGreetingCustomerRepo.query(countSql, params);
+    const total = parseInt(countResult[0].count) || 0;
+    
+    // Add pagination
+    const offset = (options.page - 1) * options.limit;
+    sql += ` ORDER BY c.created_at DESC LIMIT ? OFFSET ?`;
+    params.push(options.limit, offset);
+    
+    const customers = await this.autoGreetingCustomerRepo.query(sql, params);
+
+    const now = new Date();
+    const result: CustomerWithLastMessage[] = [];
+
+    for (const customer of customers) {
+      let customerLastMessageDate: Date | undefined = undefined;
+      
+      // Sử dụng customer_last_message_date thay vì lastMessageDate
+      if (customer.customer_last_message_date) {
+        // Parse date string thành Date object
+        customerLastMessageDate = new Date(customer.customer_last_message_date);
+        
+        // Kiểm tra nếu date không hợp lệ
+        if (isNaN(customerLastMessageDate.getTime())) {
+          customerLastMessageDate = undefined;
+        }
+      }
+
+      let daysSinceLastMessage: number | null = null;
+      if (customerLastMessageDate) {
+        const diffTime = now.getTime() - customerLastMessageDate.getTime();
+        daysSinceLastMessage = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+      }
+
+      // Xác định trạng thái khách hàng
+      let customerStatus: 'urgent' | 'reminder' | 'normal' = 'normal';
+      if (daysSinceLastMessage !== null) {
+        if (daysSinceLastMessage >= 30) {
+          customerStatus = 'urgent';
+        } else if (daysSinceLastMessage >= 7) {
+          customerStatus = 'reminder';
+        }
+      }
+
+      result.push({
+        id: customer.customer_id,
+        userId: customer.customer_user_id,
+        zaloDisplayName: customer.customer_zalo_display_name,
+        userDisplayName: customer.user_display_name,
+        salutation: customer.customer_salutation,
+        greetingMessage: customer.customer_greeting_message,
+        conversationType: customer.customer_conversation_type,
+        lastMessageDate: customer.lastMessageDate,
+        customerLastMessageDate: customerLastMessageDate ? customerLastMessageDate.toISOString() : undefined,
+        customerStatus,
+        daysSinceLastMessage,
+        status: customer.customer_status as 'ready' | 'urgent' | 'stable',
+        isActive: customer.customer_is_active,
+      });
+    }
+
+    const totalPages = Math.ceil(total / options.limit);
+
+    return {
+      data: result,
+      total,
+      page: options.page,
+      limit: options.limit,
+      totalPages,
+    };
+  }
+
+  /**
+   * Lấy danh sách khách hàng cần gửi tin nhắn (legacy method)
    */
   async getCustomersForGreeting(userId?: number, includeOwnerInfo: boolean = true): Promise<CustomerWithLastMessage[]> {
     const config = await this.getConfig();
