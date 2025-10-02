@@ -84,6 +84,8 @@ export class UserService {
         qb.andWhere('user.zaloLinkStatus IN (:...zaloLinkStatuses)', {
           zaloLinkStatuses: filter.zaloLinkStatuses,
         });
+        // Loại bỏ những tài khoản bị khóa khi áp dụng bộ lọc trạng thái liên kết Zalo
+        qb.andWhere('user.isBlock = :isBlock', { isBlock: false });
       }
     }
 
@@ -635,6 +637,7 @@ export class UserService {
       departments?: string[];
       roles?: string[];
       statuses?: string[];
+      zaloLinkStatuses?: number[];
     },
   excludeViewUsers = false,
   ): Promise<{ data: User[]; total: number }> {
@@ -672,6 +675,13 @@ export class UserService {
         qb.andWhere('user.status IN (:...statuses)', {
           statuses: filter.statuses,
         });
+      }
+      if (filter.zaloLinkStatuses && filter.zaloLinkStatuses.length > 0) {
+        qb.andWhere('user.zaloLinkStatus IN (:...zaloLinkStatuses)', {
+          zaloLinkStatuses: filter.zaloLinkStatuses,
+        });
+        // Loại bỏ những tài khoản bị khóa khi áp dụng bộ lọc trạng thái liên kết Zalo
+        qb.andWhere('user.isBlock = :isBlock', { isBlock: false });
       }
     }
 

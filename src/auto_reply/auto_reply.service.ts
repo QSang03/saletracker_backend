@@ -12,6 +12,7 @@ import { AutoReplyConversation } from '../auto_reply_conversations/auto_reply_co
 import { AutoReplyMessage } from '../auto_reply_messages/auto_reply_message.entity';
 import { WebsocketGateway } from '../websocket/websocket.gateway';
 import { NKCProduct } from '../nkc_products/nkc_product.entity';
+import { User } from '../users/user.entity';
 import * as ExcelJS from 'exceljs';
 
 @Injectable()
@@ -37,8 +38,39 @@ export class AutoReplyService {
     private msgRepo: Repository<AutoReplyMessage>,
     @InjectRepository(NKCProduct)
     private nkcRepo: Repository<NKCProduct>,
+    @InjectRepository(User)
+    private userRepo: Repository<User>,
     private readonly ws: WebsocketGateway,
   ) {}
+
+  // Helper method to get user's main department slug (department with server_ip)
+  private async getUserMainDepartmentSlug(userId: number): Promise<string | null> {
+    if (!userId) {
+      console.log(`[DEBUG] getUserMainDepartmentSlug - userId is null/undefined`);
+      return null;
+    }
+    
+    const user = await this.userRepo.findOne({
+      where: { id: userId },
+      relations: ['departments'],
+    });
+    
+    console.log(`[DEBUG] getUserMainDepartmentSlug - userId: ${userId}, user found: ${!!user}, departments count: ${user?.departments?.length || 0}`);
+    
+    if (!user || !user.departments) {
+      console.log(`[DEBUG] getUserMainDepartmentSlug - No user or departments found`);
+      return null;
+    }
+    
+    // Find department with server_ip (main department)
+    const mainDepartment = user.departments.find(
+      (dept) => dept.server_ip && dept.server_ip.trim() !== ''
+    );
+    
+    console.log(`[DEBUG] getUserMainDepartmentSlug - Main department found: ${!!mainDepartment}, slug: ${mainDepartment?.slug}`);
+    
+    return mainDepartment?.slug || null;
+  }
 
   // Persona
   async getMyPersona(userId: number) {
@@ -482,6 +514,62 @@ export class AutoReplyService {
     return { items, total, page, limit };
   }
 
+  async listProductIds(opts: {
+    search?: string;
+    brands?: string[];
+    cates?: string[];
+    allowedForUserId?: number;
+    activeForContactId?: number;
+  }) {
+    const {
+      search,
+      brands,
+      cates,
+      allowedForUserId,
+      activeForContactId,
+    } = opts || {};
+
+    const qb = this.productRepo
+      .createQueryBuilder('p')
+      .select('p.product_id', 'productId');
+
+    if (search) {
+      qb.andWhere('(p.code LIKE :q OR p.name LIKE :q)', { q: `%${search}%` });
+    }
+    if (brands && brands.length) {
+      qb.andWhere('p.brand IN (:...brands)', { brands });
+    }
+    if (cates && cates.length) {
+      qb.andWhere('p.cate IN (:...cates)', { cates });
+    }
+    if (allowedForUserId) {
+      qb.andWhere(
+        `EXISTS (
+          SELECT 1 FROM auto_reply_contact_allowed_products cap
+          JOIN auto_reply_contacts c ON c.contact_id = cap.contact_id
+          WHERE cap.product_id = p.product_id
+            AND cap.active = TRUE
+            AND c.user_id = :uid
+        )`,
+        { uid: allowedForUserId },
+      );
+    }
+    if (activeForContactId) {
+      qb.andWhere(
+        `EXISTS (
+          SELECT 1 FROM auto_reply_contact_allowed_products cap3
+          WHERE cap3.product_id = p.product_id
+            AND cap3.contact_id = :afcid
+            AND cap3.active = TRUE
+        )`,
+        { afcid: activeForContactId },
+      );
+    }
+
+    const rows = await qb.getRawMany<{ productId: number }>();
+    return rows.map((r) => Number(r.productId));
+  }
+
   async getProductsMeta() {
     const brandRows = await this.productRepo
       .createQueryBuilder('p')
@@ -567,8 +655,54 @@ export class AutoReplyService {
 
     const data: any[] = [];
     const errors: string[] = [];
+    let totalValidRows = 0;
+    let totalRows = 0;
 
-    for (let r = headerRowIdx + 1; r <= Math.min(headerRowIdx + 10, sheet.rowCount); r++) { // Preview first 10 rows
+    // Find the actual last row with data (not just sheet.rowCount which may include empty rows)
+    let actualLastRow = headerRowIdx;
+    for (let r = headerRowIdx + 1; r <= sheet.rowCount; r++) {
+      const row = sheet.getRow(r);
+      const code = String(row.getCell(headerMap['MaHH']).value ?? '').trim();
+      if (code) {
+        actualLastRow = r;
+      }
+    }
+
+    // First pass: count total valid rows in the entire file
+    for (let r = headerRowIdx + 1; r <= actualLastRow; r++) {
+      const row = sheet.getRow(r);
+      const code = String(row.getCell(headerMap['MaHH']).value ?? '').trim();
+      if (!code) continue;
+      
+      totalRows++;
+      
+      const name = String(row.getCell(headerMap['TenHH']).value ?? '').trim();
+      const brand = String(
+        row.getCell(headerMap['NhanHang']).value ?? '',
+      ).trim();
+      const cate = String(
+        row.getCell(headerMap['NhomHang']).value ?? '',
+      ).trim();
+
+      // Validate required fields
+      const rowErrors: string[] = [];
+      if (!name) rowErrors.push('Tên sản phẩm không được để trống');
+      if (!brand) rowErrors.push('Thương hiệu không được để trống');
+      if (!cate) rowErrors.push('Danh mục không được để trống');
+      if (code.length > 100) rowErrors.push('Mã sản phẩm quá dài (tối đa 100 ký tự)');
+      if (name.length > 255) rowErrors.push('Tên sản phẩm quá dài (tối đa 255 ký tự)');
+
+      if (rowErrors.length === 0) {
+        totalValidRows++;
+      }
+
+      if (rowErrors.length > 0) {
+        errors.push(`Dòng ${r}: ${rowErrors.join(', ')}`);
+      }
+    }
+
+    // Second pass: collect preview data (all rows)
+    for (let r = headerRowIdx + 1; r <= actualLastRow; r++) {
       const row = sheet.getRow(r);
       const code = String(row.getCell(headerMap['MaHH']).value ?? '').trim();
       if (!code) continue;
@@ -598,14 +732,12 @@ export class AutoReplyService {
         errors: rowErrors,
         isValid: rowErrors.length === 0
       });
-
-      if (rowErrors.length > 0) {
-        errors.push(`Dòng ${r}: ${rowErrors.join(', ')}`);
-      }
     }
 
     return {
-      total: data.length,
+      total: totalRows, // Total rows in file
+      valid: totalValidRows, // Total valid rows
+      preview: data.length, // Number of rows in preview
       data,
       errors
     };
@@ -670,8 +802,18 @@ export class AutoReplyService {
       };
     }
 
+    // Find the actual last row with data (not just sheet.rowCount which may include empty rows)
+    let actualLastRow = headerRowIdx;
+    for (let r = headerRowIdx + 1; r <= sheet.rowCount; r++) {
+      const row = sheet.getRow(r);
+      const code = String(row.getCell(headerMap['MaHH']).value ?? '').trim();
+      if (code) {
+        actualLastRow = r;
+      }
+    }
+
     // Validate minimum rows
-    if (sheet.rowCount < 2) {
+    if (actualLastRow <= headerRowIdx) {
       return {
         total: 0,
         created: 0,
@@ -684,7 +826,7 @@ export class AutoReplyService {
     let updated = 0;
     const errors: string[] = [];
 
-    for (let r = headerRowIdx + 1; r <= sheet.rowCount; r++) {
+    for (let r = headerRowIdx + 1; r <= actualLastRow; r++) {
       const row = sheet.getRow(r);
       const code = String(row.getCell(headerMap['MaHH']).value ?? '').trim();
       if (!code) continue;
@@ -763,18 +905,31 @@ export class AutoReplyService {
     contactId: number,
     productIds: number[],
     active: boolean,
+    userId?: number,
   ) {
+    // Get department_slug from user's main department
+    const departmentSlug = userId ? await this.getUserMainDepartmentSlug(userId) : null;
+    
+    console.log(`[DEBUG] patchAllowedProducts - contactId: ${contactId}, userId: ${userId}, departmentSlug: ${departmentSlug}`);
+    
     const existing = await this.capRepo.find({ where: { contactId } });
     const map = new Map(existing.map((e) => [e.productId, e]));
     for (const pid of productIds) {
       if (map.has(pid)) {
         const rec = map.get(pid)!;
         rec.active = active;
+        rec.department_slug = departmentSlug;
+        console.log(`[DEBUG] Updating existing record - contactId: ${contactId}, productId: ${pid}, department_slug: ${departmentSlug}`);
         await this.capRepo.save(rec);
       } else {
-        await this.capRepo.save(
-          this.capRepo.create({ contactId, productId: pid, active }),
-        );
+        const newRecord = this.capRepo.create({ 
+          contactId, 
+          productId: pid, 
+          active, 
+          department_slug: departmentSlug 
+        });
+        console.log(`[DEBUG] Creating new record - contactId: ${contactId}, productId: ${pid}, department_slug: ${departmentSlug}`);
+        await this.capRepo.save(newRecord);
       }
     }
     const res = await this.getAllowedProducts(contactId);
@@ -807,7 +962,7 @@ export class AutoReplyService {
       return { success: true, count: 0 };
     }
     for (const cid of targets) {
-      await this.patchAllowedProducts(cid, productIds, active);
+      await this.patchAllowedProducts(cid, productIds, active, userId);
     }
     this.ws.emitToAll('autoReply:allowedProductsBulkUpdated', {
       contactIds: targets,
@@ -1025,7 +1180,7 @@ export class AutoReplyService {
       const ensureIds = addedForThisRoute.length ? addedForThisRoute : productIds.map(Number);
       if (ensureIds.length) {
         try {
-          await this.patchAllowedProducts(route.contactId as any, ensureIds, true);
+          await this.patchAllowedProducts(route.contactId as any, ensureIds, true, userId);
         } catch (_) {}
       }
     }
@@ -1099,7 +1254,10 @@ export class AutoReplyService {
 
   // Per-route product management (operate on a single contact's route)
   async addProductsToRoute(routeId: number, productIds: number[]) {
-    const route = await this.routeRepo.findOne({ where: { routeId }, relations: ['routeProducts'] });
+    const route = await this.routeRepo.findOne({ 
+      where: { routeId }, 
+      relations: ['routeProducts', 'contact', 'contact.user'] 
+    });
     if (!route) return { success: true, added: 0 } as any;
     const existingIds = new Set<number>((route.routeProducts || []).map((p: any) => Number(p.productId)));
     const maxPrio = (route.routeProducts || []).reduce((m: number, p: any) => Math.max(m, Number(p.priority ?? 0)), 0);
@@ -1119,7 +1277,8 @@ export class AutoReplyService {
     try {
       if ((route as any).contactId && (addedIds.length || (productIds || []).length)) {
         const ensure = addedIds.length ? addedIds : (productIds || []).map(Number);
-        await this.patchAllowedProducts((route as any).contactId, ensure, true);
+        const userId = (route as any).contact?.user?.id;
+        await this.patchAllowedProducts((route as any).contactId, ensure, true, userId);
       }
     } catch (_) {}
     return { success: true, added } as any;
@@ -1228,13 +1387,14 @@ export class AutoReplyService {
     }
     const full = await this.routeRepo.findOne({
       where: { routeId: (existing as any).routeId },
-      relations: ['routeProducts'],
+      relations: ['routeProducts', 'contact', 'contact.user'],
     });
     // Ensure selected products for this keyword are also allowed for the contact
     try {
       const toAllow = Array.from(new Set((routeProducts || []).map((rp) => Number(rp.productId))));
       if ((contactId as any) && toAllow.length) {
-        await this.patchAllowedProducts(contactId as any, toAllow, true);
+        const userId = (full as any)?.contact?.user?.id;
+        await this.patchAllowedProducts(contactId as any, toAllow, true, userId);
       }
     } catch (_) {}
     this.ws.emitToAll('autoReply:keywordRoutesChanged', {
@@ -1332,7 +1492,7 @@ export class AutoReplyService {
   async listMessages(convId: number, page = 1, pageSize = 50) {
     const items = await this.msgRepo.find({
       where: { convId },
-      order: { createdAt: 'DESC' },
+      order: { createdAt: 'ASC' },
       take: pageSize,
       skip: (page - 1) * pageSize,
     });

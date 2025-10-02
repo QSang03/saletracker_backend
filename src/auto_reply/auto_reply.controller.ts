@@ -10,6 +10,7 @@ import {
   Post,
   Query,
   Req,
+  UseGuards,
 } from '@nestjs/common';
 import {
   UseInterceptors,
@@ -39,8 +40,10 @@ import {
 import { WebhookService } from '../webhook/webhook.service';
 import { UpdateRoleDto } from './dto/role.dto';
 import { ProfilePatchDto } from './dto/profile.dto';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
 @Controller('auto-reply')
+@UseGuards(JwtAuthGuard)
 export class AutoReplyController {
   constructor(
     private readonly svc: AutoReplyService,
@@ -297,6 +300,40 @@ export class AutoReplyController {
     });
   }
 
+  @Get('products.ids')
+  listProductIds(
+    @Req() req: any,
+    @Query('search') search?: string,
+    @Query('brands') brands?: string | string[],
+    @Query('cates') cates?: string | string[],
+    @Query('myAllowed') myAllowed?: string,
+    @Query('activeForContact') activeForContact?: string,
+    @Query('userId') userIdFromQuery?: string,
+    @Query('contactId') contactIdFromQuery?: string,
+  ) {
+    const arr = (v?: string | string[]) =>
+      Array.isArray(v) ? v : v ? [v] : [];
+    const uid =
+      req?.user?.id ??
+      (userIdFromQuery ? parseInt(userIdFromQuery) : undefined);
+    const allowedForUserId =
+      (myAllowed === '1' || myAllowed === 'true') && uid
+        ? Number(uid)
+        : undefined;
+    const activeForContactId =
+      (activeForContact === '1' || activeForContact === 'true') &&
+      contactIdFromQuery
+        ? parseInt(contactIdFromQuery)
+        : undefined;
+    return this.svc.listProductIds({
+      search,
+      brands: arr(brands),
+      cates: arr(cates),
+      allowedForUserId,
+      activeForContactId,
+    });
+  }
+
   @Get('products.meta')
   getProductsMeta() {
     return this.svc.getProductsMeta();
@@ -339,8 +376,10 @@ export class AutoReplyController {
   patchAllowed(
     @Param('contactId', ParseIntPipe) cid: number,
     @Body() body: PatchAllowedProductsDto,
+    @Req() req: any,
   ) {
-    return this.svc.patchAllowedProducts(cid, body.productIds, body.active);
+    const userId = req?.user?.id;
+    return this.svc.patchAllowedProducts(cid, body.productIds, body.active, userId);
   }
 
   @Patch('allowed-products/bulk')

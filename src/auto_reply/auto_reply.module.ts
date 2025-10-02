@@ -16,6 +16,7 @@ import { UserModule } from '../users/user.module';
 import { WebhookModule } from '../webhook/webhook.module';
 import { AuthModule } from '../auth/auth.module';
 import { NKCProduct } from '../nkc_products/nkc_product.entity';
+import { User } from '../users/user.entity';
 
 @Module({
   imports: [
@@ -29,7 +30,8 @@ import { NKCProduct } from '../nkc_products/nkc_product.entity';
       AutoReplyRouteProduct,
       AutoReplyConversation,
       AutoReplyMessage,
-  NKCProduct,
+      NKCProduct,
+      User,
     ]),
     forwardRef(() => WebsocketModule),
     forwardRef(() => UserModule),

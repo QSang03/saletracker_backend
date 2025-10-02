@@ -20,4 +20,7 @@ export class AutoReplyContactAllowedProduct {
   @ManyToOne(() => AutoReplyProduct, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'product_id', referencedColumnName: 'productId' })
   product: AutoReplyProduct;
+
+  @Column({ type: 'varchar', length: 100, nullable: true, default: null })
+  department_slug: string | null;
 }
