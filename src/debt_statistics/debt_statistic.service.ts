@@ -952,7 +952,6 @@ export class DebtStatisticService {
           WHERE ${where.join(' AND ')}
           GROUP BY bucket`;
   const rows = await this.debtRepository.query(query, [D, D, D, ...arr]);
-  console.debug('[getAgingDaily] current rows for', D, rows);
   for (const r of rows) results.push({ date: D, range: r.bucket, count: Number(r.count) || 0, amount: Number(r.amount) || 0 });
       }
     }
@@ -991,7 +990,6 @@ export class DebtStatisticService {
         }).join(',');
         const query = `SELECT ${parts} FROM debt_statistics ds WHERE ${whereClauses.join(' AND ')}`;
         const row = (await this.debtStatisticRepository.query(query, params))[0] || {};
-        console.debug('[getPayLaterDelayDaily] historical row for', D, row);
         for (const r of ranges) {
           const key = r.label.replace(/[^a-zA-Z0-9_]/g, '_');
           results.push({ date: D, range: r.label, count: Number(row[`cnt_${key}`]) || 0, amount: Number(row[`amt_${key}`]) || 0 });
@@ -1018,7 +1016,6 @@ export class DebtStatisticService {
           WHERE ${where.join(' AND ')}
         ) t`;
         const row = (await this.debtRepository.query(query, [...arr]))[0] || {};
-        console.debug('[getPayLaterDelayDaily] current row for', D, row);
         for (const r of ranges) {
           const key = r.label.replace(/[^a-zA-Z0-9_]/g, '_');
           results.push({ date: D, range: r.label, count: Number(row[`cnt_${key}`]) || 0, amount: Number(row[`amt_${key}`]) || 0 });
