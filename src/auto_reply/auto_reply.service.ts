@@ -1490,13 +1490,13 @@ export class AutoReplyService {
     return this.convRepo.findOne({ where: { contactId } });
   }
   async listMessages(convId: number, page = 1, pageSize = 50) {
-    const items = await this.msgRepo.find({
+    const [items, total] = await this.msgRepo.findAndCount({
       where: { convId },
       order: { createdAt: 'ASC' },
       take: pageSize,
       skip: (page - 1) * pageSize,
     });
-    return { items, page };
+    return { items, page, total };
   }
 
   // Rename + webhook
