@@ -11,6 +11,7 @@ import {
 } from 'typeorm';
 import { Product } from '../products/product.entity';
 import { Order } from '../orders/order.entity';
+import { OrderInquiryPreset } from '../order_inquiry_presets/order_inquiry_preset.entity';
 export enum OrderDetailStatus {
   PENDING = 'pending',
   COMPLETED = 'completed',
@@ -133,6 +134,18 @@ export class OrderDetail {
 
   @Column('json', { nullable: true })
   metadata: Record<string, any>;
+
+  // Quan hệ với OrderInquiryPreset: order_detail có thể có 0 hoặc 1 preset
+  @ManyToOne(() => OrderInquiryPreset, (preset) => preset.orderDetails, {
+    nullable: true,
+    onDelete: 'SET NULL',
+  })
+  @JoinColumn({ name: 'inquiry_preset_id' })
+  inquiryPreset?: OrderInquiryPreset;
+
+  @Index()
+  @Column('bigint', { nullable: true })
+  inquiry_preset_id: number | null;
 
   @Index()
   @CreateDateColumn({ type: 'timestamp' })

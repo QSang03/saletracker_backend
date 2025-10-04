@@ -40,6 +40,7 @@ import { OrderBlacklistModule } from './order-blacklist/order-blacklist.module';
 import { AnalysisBlockModule } from './analysis-block/analysis-block.module';
 import { AutoReplyModule } from './auto_reply/auto_reply.module';
 import { AutoGreetingModule } from './auto_greeting/auto_greeting.module';
+import { OrderInquiryPresetModule } from './order_inquiry_presets/order_inquiry_preset.module';
 import { CommonModule } from './common/common.module';
 
 @Module({
@@ -89,6 +90,7 @@ import { CommonModule } from './common/common.module';
     CampaignDepartmentsSchedulesModule,
     AutoReplyModule,
     AutoGreetingModule,
+    OrderInquiryPresetModule,
     CommonModule,
   ],
 })

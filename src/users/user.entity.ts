@@ -16,6 +16,7 @@ import { UserStatus } from './user-status.enum';
 import { Notification } from '../notifications/notification.entity';
 import { AutoReplySalesPersona } from 'src/auto_reply_sales_personas/auto_reply_sales_persona.entity';
 import { AutoReplyContact } from 'src/auto_reply_contacts/auto_reply_contact.entity';
+import { OrderInquiryPreset } from '../order_inquiry_presets/order_inquiry_preset.entity';
 
 @Index('idx_users_ar', ['id', 'isAutoReplyEnabled'], { where: '"is_auto_reply_enabled" = true' })
 @Entity('users')
@@ -90,6 +91,9 @@ export class User {
 
   @OneToMany(() => AutoReplyContact, (contact) => contact.user)
   autoReplyContacts: AutoReplyContact[];
+
+  @OneToMany(() => OrderInquiryPreset, (preset) => preset.user)
+  orderInquiryPresets: OrderInquiryPreset[];
 
   @Index()
   @Column({ type: 'datetime', nullable: true })
