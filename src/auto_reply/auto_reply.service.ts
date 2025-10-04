@@ -444,6 +444,12 @@ export class AutoReplyService {
     } = opts || {};
     const qb = this.productRepo
       .createQueryBuilder('p')
+      .leftJoin('p.priceTiers', 'pt', 'pt.deletedAt IS NULL')
+      .addSelect([
+        'pt.priceTierId',
+        'pt.minQuantity',
+        'pt.pricePerUnit'
+      ])
       .orderBy('p.updatedAt', 'DESC');
     if (search) {
       qb.andWhere('(p.code LIKE :q OR p.name LIKE :q)', { q: `%${search}%` });
@@ -497,6 +503,21 @@ export class AutoReplyService {
       .skip((page - 1) * limit)
       .take(limit)
       .getManyAndCount();
+
+    // Transform data to include price info
+    const transformedItems = items.map((product: any) => {
+      const priceTiers = product.priceTiers || [];
+      const minPriceTier = priceTiers.find((pt: any) => pt.minQuantity === 1) || priceTiers[0];
+      
+      return {
+        ...product,
+        minPrice: minPriceTier ? parseFloat(minPriceTier.pricePerUnit) : null,
+        minQuantity: minPriceTier ? minPriceTier.minQuantity : null,
+        stock: product.stock || 0,
+        priceTiers: undefined // Remove from response to keep it clean
+      };
+    });
+
     if (prioritizeContactId) {
       const rows = await this.capRepo
         .createQueryBuilder('cap')
@@ -505,13 +526,13 @@ export class AutoReplyService {
         .andWhere('cap.active = :active', { active: true })
         .getRawMany<{ productId: number }>();
       const activeSet = new Set<number>(rows.map((r) => Number(r.productId)));
-      const annotated = items.map((p: any) => ({
-        ...(p as any),
-        activeForContact: activeSet.has(Number((p as any).productId)),
+      const annotated = transformedItems.map((p: any) => ({
+        ...p,
+        activeForContact: activeSet.has(Number(p.productId)),
       }));
       return { items: annotated, total, page, limit } as any;
     }
-    return { items, total, page, limit };
+    return { items: transformedItems, total, page, limit };
   }
 
   async listProductIds(opts: {
