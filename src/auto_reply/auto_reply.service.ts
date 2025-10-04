@@ -181,6 +181,7 @@ export class AutoReplyService {
         : undefined;
     return safe as any;
   }
+  
   async deletePersona(personaId: number, userId: number) {
     // Optional: verify ownership
     const persona = await this.personaRepo.findOne({
