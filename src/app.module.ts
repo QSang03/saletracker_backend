@@ -42,6 +42,7 @@ import { AutoReplyModule } from './auto_reply/auto_reply.module';
 import { AutoGreetingModule } from './auto_greeting/auto_greeting.module';
 import { OrderInquiryPresetModule } from './order_inquiry_presets/order_inquiry_preset.module';
 import { CommonModule } from './common/common.module';
+import { SendHistoryModule } from './send_history/send_history.module';
 
 @Module({
   imports: [
@@ -90,6 +91,7 @@ import { CommonModule } from './common/common.module';
     CampaignDepartmentsSchedulesModule,
     AutoReplyModule,
     AutoGreetingModule,
+  SendHistoryModule,
     OrderInquiryPresetModule,
     CommonModule,
   ],

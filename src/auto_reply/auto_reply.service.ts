@@ -515,7 +515,11 @@ export class AutoReplyService {
         minPrice: minPriceTier ? parseFloat(minPriceTier.pricePerUnit) : null,
         minQuantity: minPriceTier ? minPriceTier.minQuantity : null,
         stock: product.stock || 0,
-        priceTiers: undefined // Remove from response to keep it clean
+        priceTiers: priceTiers.map((pt: any) => ({
+          priceTierId: pt.priceTierId,
+          minQuantity: pt.minQuantity,
+          pricePerUnit: parseFloat(pt.pricePerUnit)
+        }))
       };
     });
 
