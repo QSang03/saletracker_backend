@@ -4,6 +4,7 @@ import { AutoReplySalesPersona } from '../auto_reply_sales_personas/auto_reply_s
 import { AutoReplyContact } from '../auto_reply_contacts/auto_reply_contact.entity';
 import { AutoReplyCustomerProfile } from '../auto_reply_customer_profiles/auto_reply_customer_profile.entity';
 import { AutoReplyProduct } from '../auto_reply_products/auto_reply_product.entity';
+import { AutoReplyProductPriceTier } from '../auto_reply_products/auto_reply_product_price_tier.entity';
 import { AutoReplyContactAllowedProduct } from '../auto_reply_contact_allowed_products/auto_reply_contact_allowed_product.entity';
 import { AutoReplyKeywordRoute } from '../auto_reply_keyword_routes/auto_reply_keyword_route.entity';
 import { AutoReplyRouteProduct } from '../auto_reply_products/auto_reply_route_product.entity';
@@ -25,6 +26,7 @@ import { User } from '../users/user.entity';
       AutoReplyContact,
       AutoReplyCustomerProfile,
       AutoReplyProduct,
+      AutoReplyProductPriceTier,
       AutoReplyContactAllowedProduct,
       AutoReplyKeywordRoute,
       AutoReplyRouteProduct,

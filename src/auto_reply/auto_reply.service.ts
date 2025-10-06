@@ -489,15 +489,17 @@ export class AutoReplyService {
     }
     // Prioritize products already active for a specific contactId at the top
     if (prioritizeContactId) {
-      qb.orderBy(
+      qb.addSelect(
         `CASE WHEN EXISTS (
             SELECT 1 FROM auto_reply_contact_allowed_products cap2
             WHERE cap2.product_id = p.product_id
               AND cap2.contact_id = :pcid
               AND cap2.active = TRUE
           ) THEN 1 ELSE 0 END`,
-        'DESC',
-      ).addOrderBy('p.updatedAt', 'DESC');
+        'priority_score'
+      );
+      qb.orderBy('priority_score', 'DESC')
+        .addOrderBy('p.updatedAt', 'DESC');
       qb.setParameter('pcid', prioritizeContactId);
     }
     const [items, total] = await qb
