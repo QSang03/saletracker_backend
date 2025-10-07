@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { Repository, In, IsNull } from 'typeorm';
 import { AutoGreetingCustomer } from './auto_greeting_customer.entity';
 import { AutoGreetingCustomerMessageHistory } from './auto_greeting_customer_message_history.entity';
 import { SystemConfig } from '../system_config/system_config.entity';
@@ -650,6 +650,65 @@ export class AutoGreetingService {
     } catch (error) {
       this.logger.error('Error importing from contacts:', error);
       throw error;
+    }
+  }
+
+  /**
+   * Trích xuất cách xưng hô từ user_id và zaloId/zaloDisplayName
+   */
+  async extractSalutation(
+    userId: number,
+    zaloId?: string,
+    zaloDisplayName?: string
+  ): Promise<{ salutation: string | null; customerInfo?: any }> {
+    try {
+      let customer: AutoGreetingCustomer | null = null;
+
+      // Ưu tiên tìm theo zaloId nếu có
+      if (zaloId) {
+        customer = await this.autoGreetingCustomerRepo.findOne({
+          where: {
+            userId: userId,
+            zaloId: zaloId,
+            deleted_at: IsNull(),
+          },
+        });
+      }
+
+      // Nếu không tìm thấy bằng zaloId hoặc không có zaloId, tìm theo zaloDisplayName
+      if (!customer && zaloDisplayName) {
+        customer = await this.autoGreetingCustomerRepo.findOne({
+          where: {
+            userId: userId,
+            zaloDisplayName: zaloDisplayName,
+            deleted_at: IsNull(),
+          },
+        });
+      }
+
+      if (!customer) {
+        this.logger.log(`No customer found for userId=${userId}, zaloId=${zaloId}, zaloDisplayName=${zaloDisplayName}`);
+        return {
+          salutation: null,
+          customerInfo: null
+        };
+      }
+
+      this.logger.log(`Found customer: ${customer.id} with salutation: ${customer.salutation}`);
+      
+      return {
+        salutation: customer.salutation || null,
+        customerInfo: {
+          id: customer.id,
+          zaloId: customer.zaloId,
+          zaloDisplayName: customer.zaloDisplayName,
+          conversationType: customer.conversationType,
+          isActive: customer.isActive,
+        }
+      };
+    } catch (error) {
+      this.logger.error(`Error extracting salutation: ${error.message}`, error.stack);
+      throw new Error(`Lỗi khi trích xuất cách xưng hô: ${error.message}`);
     }
   }
 

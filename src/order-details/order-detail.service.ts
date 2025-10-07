@@ -255,10 +255,33 @@ export class OrderDetailService {
         }
 
         if (blacklistedSet.size > 0) {
+          // Nếu là manager, cần lấy blacklist của tất cả owner để filter
+          let ownerBlacklistMap = new Map<number, Set<string>>();
+          if (isManager) {
+            const uniqueOwnerIds = [...new Set(orderDetails.map(od => od.order?.sale_by?.id).filter(id => id))];
+            if (uniqueOwnerIds.length > 0) {
+              ownerBlacklistMap = await this.orderBlacklistService.getBlacklistedContactsForUsers(uniqueOwnerIds);
+            }
+          }
+          
           return orderDetails.filter((orderDetail) => {
             // Use generated column meta_customer_id (already string)
             const customerId = orderDetail.meta_customer_id;
-            return !customerId || !blacklistedSet.has(customerId);
+            if (!customerId) return true; // Không có customer_id thì hiển thị
+            
+            // Kiểm tra xem owner của order detail có blacklist contact này không
+            const orderOwnerId = orderDetail.order?.sale_by?.id;
+            if (!orderOwnerId) return true; // Không có owner thì hiển thị
+            
+            // Nếu manager, kiểm tra xem owner có blacklist contact này không
+            if (isManager) {
+              const ownerBlacklistedContacts = ownerBlacklistMap.get(orderOwnerId);
+              if (ownerBlacklistedContacts && ownerBlacklistedContacts.has(customerId)) {
+                return false; // Owner đã blacklist contact này, không hiển thị cho manager
+              }
+            }
+            
+            return !blacklistedSet.has(customerId);
           });
         }
       }
@@ -901,9 +924,28 @@ export class OrderDetailService {
           );
         const bl = new Set<string>();
         for (const set of map.values()) for (const id of set) bl.add(id);
+        
+        // Lấy blacklist của tất cả owner để filter
+        const uniqueOwnerIds = [...new Set(rows.map(od => od.order?.sale_by?.id).filter(id => id))];
+        let ownerBlacklistMap = new Map<number, Set<string>>();
+        if (uniqueOwnerIds.length > 0) {
+          ownerBlacklistMap = await this.orderBlacklistService.getBlacklistedContactsForUsers(uniqueOwnerIds);
+        }
+        
         rows = rows.filter((od) => {
           const cid = od.meta_customer_id;
-          return !cid || !bl.has(cid);
+          if (!cid) return true;
+          
+          const orderOwnerId = od.order?.sale_by?.id;
+          if (!orderOwnerId) return true;
+          
+          // Kiểm tra xem owner có blacklist contact này không
+          const ownerBlacklistedContacts = ownerBlacklistMap.get(orderOwnerId);
+          if (ownerBlacklistedContacts && ownerBlacklistedContacts.has(cid)) {
+            return false; // Owner đã blacklist contact này, không hiển thị cho manager
+          }
+          
+          return !bl.has(cid);
         });
       } else {
         const list =

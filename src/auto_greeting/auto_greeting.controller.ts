@@ -571,6 +571,46 @@ export class AutoGreetingController {
   }
 
   /**
+   * Trích xuất cách xưng hô từ user_id và zaloId/zaloDisplayName
+   */
+  @Get('customers/extract-salutation')
+  async extractSalutation(
+    @Query('userId') userId: string,
+    @Query('zaloId') zaloId?: string,
+    @Query('zaloDisplayName') zaloDisplayName?: string,
+  ): Promise<{ salutation: string | null; customerInfo?: any }> {
+    if (!userId) {
+      throw new HttpException(
+        'Thiếu tham số userId',
+        HttpStatus.BAD_REQUEST
+      );
+    }
+
+    if (!zaloId && !zaloDisplayName) {
+      throw new HttpException(
+        'Cần ít nhất một trong hai tham số: zaloId hoặc zaloDisplayName',
+        HttpStatus.BAD_REQUEST
+      );
+    }
+
+    const userIdNumber = parseInt(userId);
+    if (isNaN(userIdNumber)) {
+      throw new HttpException(
+        'userId phải là số nguyên hợp lệ',
+        HttpStatus.BAD_REQUEST
+      );
+    }
+
+    const result = await this.autoGreetingService.extractSalutation(
+      userIdNumber,
+      zaloId,
+      zaloDisplayName
+    );
+
+    return result;
+  }
+
+  /**
    * Lấy lịch sử tin nhắn của khách hàng
    */
   @Get('customers/:customerId/message-history')
