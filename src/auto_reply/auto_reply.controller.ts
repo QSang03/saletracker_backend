@@ -179,6 +179,51 @@ export class AutoReplyController {
     }
   }
 
+  // Get contacts with greeting info (integrated view)
+  @Get('contacts-with-greeting')
+  listContactsWithGreeting(
+    @Req() req: any,
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page = 1,
+    @Query('pageSize', new DefaultValuePipe(10), ParseIntPipe) pageSize = 10,
+    @Query('search') search?: string,
+    @Query('greetingStatus') greetingStatus?: 'active' | 'inactive' | 'none',
+    @Query('customerStatus') customerStatus?: 'urgent' | 'reminder' | 'normal',
+    @Query('conversationType') conversationType?: 'group' | 'private',
+    @Query('userId') userIdFromQuery?: string,
+  ) {
+    const userId =
+      req.user?.id ?? (userIdFromQuery ? parseInt(userIdFromQuery) : undefined);
+    if (userId === undefined || userId === null) {
+      throw new BadRequestException('Missing userId (JWT or ?userId=)');
+    }
+    
+    // Check if user is admin
+    const userRoles = req.user?.roles ? req.user.roles.map((r: any) => r.name) : [];
+    const isAdmin = userRoles.includes('admin');
+    
+    return this.svc.listContactsWithGreeting(
+      userId,
+      page,
+      pageSize,
+      search,
+      isAdmin,
+      { greetingStatus, customerStatus, conversationType },
+    );
+  }
+
+  // Update greeting info for a contact
+  @Patch('contacts/:contactId/greeting')
+  updateContactGreeting(
+    @Param('contactId', ParseIntPipe) contactId: number,
+    @Body() body: {
+      salutation?: string;
+      greetingMessage?: string;
+      greetingIsActive?: number;
+    },
+  ) {
+    return this.svc.updateContactGreeting(contactId, body);
+  }
+
   @Patch('contacts/:contactId/role')
   updateRole(
     @Param('contactId', ParseIntPipe) cid: number,

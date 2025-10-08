@@ -10,6 +10,7 @@ import { AutoReplyKeywordRoute } from '../auto_reply_keyword_routes/auto_reply_k
 import { AutoReplyRouteProduct } from '../auto_reply_products/auto_reply_route_product.entity';
 import { AutoReplyConversation } from '../auto_reply_conversations/auto_reply_conversation.entity';
 import { AutoReplyMessage } from '../auto_reply_messages/auto_reply_message.entity';
+import { AutoGreetingCustomer } from '../auto_greeting/auto_greeting_customer.entity';
 import { WebsocketGateway } from '../websocket/websocket.gateway';
 import { NKCProduct } from '../nkc_products/nkc_product.entity';
 import { User } from '../users/user.entity';
@@ -36,6 +37,8 @@ export class AutoReplyService {
     private convRepo: Repository<AutoReplyConversation>,
     @InjectRepository(AutoReplyMessage)
     private msgRepo: Repository<AutoReplyMessage>,
+    @InjectRepository(AutoGreetingCustomer)
+    private greetingRepo: Repository<AutoGreetingCustomer>,
     @InjectRepository(NKCProduct)
     private nkcRepo: Repository<NKCProduct>,
     @InjectRepository(User)
@@ -1536,5 +1539,202 @@ export class AutoReplyService {
       patch: { name: newName },
     });
     return updated;
+  }
+
+  // Get contacts with greeting info - JOIN với auto_greeting_customers
+  async listContactsWithGreeting(
+    userId: number,
+    page: number = 1,
+    pageSize: number = 10,
+    search?: string,
+    isAdmin: boolean = false,
+    filters?: {
+      greetingStatus?: 'active' | 'inactive' | 'none';
+      customerStatus?: 'urgent' | 'reminder' | 'normal';
+      conversationType?: 'group' | 'private';
+    },
+  ) {
+    // First, get total count
+    const countQb = this.contactRepo
+      .createQueryBuilder('contact')
+      .leftJoin(
+        'auto_greeting_customers',
+        'greeting',
+        'greeting.user_id = contact.user_id AND greeting.zalo_id = contact.zalo_contact_id',
+      )
+      .andWhere('contact.deleted_at IS NULL');
+
+    // Admin thấy tất cả contacts, user thường chỉ thấy của mình
+    if (!isAdmin) {
+      countQb.where('contact.user_id = :userId', { userId });
+    }
+
+    if (search && search.trim()) {
+      countQb.andWhere('(contact.name LIKE :search OR contact.zalo_contact_id LIKE :search)', {
+        search: `%${search.trim()}%`,
+      });
+    }
+
+    // Apply filters to count query as well
+    if (filters) {
+      if (filters.greetingStatus === 'active') {
+        countQb.andWhere('greeting.is_active = 1');
+      } else if (filters.greetingStatus === 'inactive') {
+        countQb.andWhere('greeting.is_active = 0');
+      } else if (filters.greetingStatus === 'none') {
+        countQb.andWhere('greeting.id IS NULL');
+      }
+
+      if (filters.customerStatus) {
+        countQb.andWhere('greeting.status = :customerStatus', {
+          customerStatus: filters.customerStatus,
+        });
+      }
+
+      if (filters.conversationType) {
+        countQb.andWhere('greeting.conversation_type = :conversationType', {
+          conversationType: filters.conversationType,
+        });
+      }
+    }
+
+    const total = await countQb.getCount();
+
+    // Then get the actual data with greeting info
+    const qb = this.contactRepo
+      .createQueryBuilder('contact')
+      .leftJoinAndSelect('contact.user', 'user')
+      .leftJoinAndSelect('contact.assignedPersona', 'persona')
+      .leftJoin(
+        'auto_greeting_customers',
+        'greeting',
+        'greeting.user_id = contact.user_id AND greeting.zalo_id = contact.zalo_contact_id',
+      )
+      .addSelect('greeting.id', 'greeting_id')
+      .addSelect('greeting.salutation', 'greeting_salutation')
+      .addSelect('greeting.greeting_message', 'greeting_greetingMessage')
+      .addSelect('greeting.is_active', 'greeting_isActive')
+      .addSelect('greeting.conversation_type', 'greeting_conversationType')
+      .addSelect('greeting.last_message_date', 'greeting_lastMessageDate')
+      .addSelect('greeting.status', 'greeting_customerStatus')
+      .andWhere('contact.deleted_at IS NULL');
+
+    // Admin thấy tất cả contacts, user thường chỉ thấy của mình
+    if (!isAdmin) {
+      qb.where('contact.user_id = :userId', { userId });
+    }
+
+    if (search && search.trim()) {
+      qb.andWhere('(contact.name LIKE :search OR contact.zalo_contact_id LIKE :search)', {
+        search: `%${search.trim()}%`,
+      });
+    }
+
+    // Apply filters
+    if (filters) {
+      if (filters.greetingStatus === 'active') {
+        qb.andWhere('greeting.is_active = 1');
+      } else if (filters.greetingStatus === 'inactive') {
+        qb.andWhere('greeting.is_active = 0');
+      } else if (filters.greetingStatus === 'none') {
+        qb.andWhere('greeting.id IS NULL');
+      }
+
+      if (filters.customerStatus) {
+        qb.andWhere('greeting.status = :customerStatus', {
+          customerStatus: filters.customerStatus,
+        });
+      }
+
+      if (filters.conversationType) {
+        qb.andWhere('greeting.conversation_type = :conversationType', {
+          conversationType: filters.conversationType,
+        });
+      }
+    }
+
+    qb.orderBy('contact.createdAt', 'DESC')
+      .skip((page - 1) * pageSize)
+      .take(pageSize);
+
+    // Get raw results to access greeting fields
+    const rawResults = await qb.getRawAndEntities();
+
+    // Merge greeting data with contacts
+    const contactsWithGreeting = rawResults.entities.map((contact, index) => {
+      const raw = rawResults.raw[index];
+      return {
+        ...contact,
+        greetingId: raw?.greeting_id || null,
+        salutation: raw?.greeting_salutation || null,
+        greetingMessage: raw?.greeting_greetingMessage || null,
+        greetingIsActive: raw?.greeting_isActive !== undefined ? raw.greeting_isActive : null,
+        greetingConversationType: raw?.greeting_conversationType || null,
+        greetingLastMessageDate: raw?.greeting_lastMessageDate || null,
+        greetingCustomerStatus: raw?.greeting_customerStatus || null,
+      };
+    });
+
+    return {
+      data: contactsWithGreeting,
+      total,
+      page,
+      pageSize,
+    };
+  }
+
+  // Update greeting info for a contact
+  async updateContactGreeting(
+    contactId: number,
+    data: {
+      salutation?: string;
+      greetingMessage?: string;
+      greetingIsActive?: number;
+    },
+  ) {
+    // Find contact to get userId and zaloContactId
+    const contact = await this.contactRepo.findOne({
+      where: { contactId },
+      relations: ['user'],
+    });
+
+    if (!contact) {
+      throw new Error('Contact not found');
+    }
+
+    // Check if greeting exists for this user and zalo_id
+    let greeting = await this.greetingRepo.findOne({
+      where: {
+        userId: contact.user.id,
+        zaloId: contact.zaloContactId,
+      },
+    });
+
+    if (greeting) {
+      // Update existing greeting
+      if (data.salutation !== undefined) greeting.salutation = data.salutation || null;
+      if (data.greetingMessage !== undefined) greeting.greetingMessage = data.greetingMessage || null;
+      if (data.greetingIsActive !== undefined) greeting.isActive = data.greetingIsActive;
+      
+      await this.greetingRepo.save(greeting);
+    } else {
+      // Create new greeting
+      greeting = this.greetingRepo.create({
+        userId: contact.user.id,
+        zaloId: contact.zaloContactId,
+        zaloDisplayName: contact.name,
+        salutation: data.salutation || null,
+        greetingMessage: data.greetingMessage || null,
+        isActive: data.greetingIsActive !== undefined ? data.greetingIsActive : 1,
+      });
+      
+      await this.greetingRepo.save(greeting);
+    }
+
+    this.ws.emitToUser(String(contact.user.id), 'autoReply:contactGreetingUpdated', {
+      contactId,
+    });
+
+    return { success: true };
   }
 }

@@ -15,6 +15,7 @@ import { AutoGreetingCustomerMessageHistory } from './auto_greeting_customer_mes
 
 @Index('idx_auto_greeting_customers_user_zalo', ['userId', 'zaloDisplayName'])
 @Index('idx_auto_greeting_customers_user_zalo_id', ['userId', 'zaloId'], { unique: true })
+@Index('idx_auto_greeting_customers_zalo_id', ['zaloId'])
 @Index('idx_auto_greeting_customers_created_at', ['created_at'])
 @Index('idx_auto_greeting_customers_deleted_at', ['deleted_at'])
 @Entity({ name: 'auto_greeting_customers' })

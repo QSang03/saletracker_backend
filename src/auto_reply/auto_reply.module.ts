@@ -10,6 +10,7 @@ import { AutoReplyKeywordRoute } from '../auto_reply_keyword_routes/auto_reply_k
 import { AutoReplyRouteProduct } from '../auto_reply_products/auto_reply_route_product.entity';
 import { AutoReplyConversation } from '../auto_reply_conversations/auto_reply_conversation.entity';
 import { AutoReplyMessage } from '../auto_reply_messages/auto_reply_message.entity';
+import { AutoGreetingCustomer } from '../auto_greeting/auto_greeting_customer.entity';
 import { AutoReplyService } from './auto_reply.service';
 import { AutoReplyController } from './auto_reply.controller';
 import { WebsocketModule } from '../websocket/websocket.module';
@@ -32,6 +33,7 @@ import { User } from '../users/user.entity';
       AutoReplyRouteProduct,
       AutoReplyConversation,
       AutoReplyMessage,
+      AutoGreetingCustomer,
       NKCProduct,
       User,
     ]),
