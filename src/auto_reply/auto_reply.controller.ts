@@ -189,6 +189,8 @@ export class AutoReplyController {
     @Query('greetingStatus') greetingStatus?: 'active' | 'inactive' | 'none',
     @Query('customerStatus') customerStatus?: 'urgent' | 'reminder' | 'normal',
     @Query('conversationType') conversationType?: 'group' | 'private',
+    @Query('sortBy') sortBy?: 'autoReplyUpdated' | 'greetingLastMessage',
+    @Query('sortOrder') sortOrder?: 'asc' | 'desc',
     @Query('userId') userIdFromQuery?: string,
   ) {
     const userId =
@@ -207,7 +209,7 @@ export class AutoReplyController {
       pageSize,
       search,
       isAdmin,
-      { greetingStatus, customerStatus, conversationType },
+      { greetingStatus, customerStatus, conversationType, sortBy, sortOrder },
     );
   }
 

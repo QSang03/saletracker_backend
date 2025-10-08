@@ -1552,6 +1552,8 @@ export class AutoReplyService {
       greetingStatus?: 'active' | 'inactive' | 'none';
       customerStatus?: 'urgent' | 'reminder' | 'normal';
       conversationType?: 'group' | 'private';
+      sortBy?: 'autoReplyUpdated' | 'greetingLastMessage';
+      sortOrder?: 'asc' | 'desc';
     },
   ) {
     // First, get total count
@@ -1653,11 +1655,7 @@ export class AutoReplyService {
       }
     }
 
-    qb.orderBy('contact.createdAt', 'DESC')
-      .skip((page - 1) * pageSize)
-      .take(pageSize);
-
-    // Get raw results to access greeting fields
+    // Get raw results to access greeting fields (without pagination first)
     const rawResults = await qb.getRawAndEntities();
 
     // Merge greeting data with contacts
@@ -1675,8 +1673,46 @@ export class AutoReplyService {
       };
     });
 
+    // Apply sorting in memory to avoid TypeORM issues
+    const sortBy = filters?.sortBy || 'autoReplyUpdated';
+    const sortOrder = filters?.sortOrder || 'desc';
+    const isAscending = sortOrder.toLowerCase() === 'asc';
+
+    contactsWithGreeting.sort((a, b) => {
+      let compareValue = 0;
+
+      if (sortBy === 'greetingLastMessage') {
+        // Sort by greeting last message date
+        const dateA = a.greetingLastMessageDate ? new Date(a.greetingLastMessageDate).getTime() : 0;
+        const dateB = b.greetingLastMessageDate ? new Date(b.greetingLastMessageDate).getTime() : 0;
+        compareValue = dateB - dateA; // Most recent first by default
+      } else {
+        // Sort by auto-reply updated (enabled/disabled time)
+        const getLatestDate = (contact: any) => {
+          const dates = [
+            contact.autoReplyEnabledAt,
+            contact.autoReplyDisabledAt,
+            contact.createdAt,
+          ].filter(Boolean).map(d => new Date(d).getTime());
+          return dates.length > 0 ? Math.max(...dates) : 0;
+        };
+        
+        const dateA = getLatestDate(a);
+        const dateB = getLatestDate(b);
+        compareValue = dateB - dateA; // Most recent first by default
+      }
+
+      // Reverse if ascending
+      return isAscending ? -compareValue : compareValue;
+    });
+
+    // Apply pagination after sorting
+    const startIndex = (page - 1) * pageSize;
+    const endIndex = startIndex + pageSize;
+    const paginatedContacts = contactsWithGreeting.slice(startIndex, endIndex);
+
     return {
-      data: contactsWithGreeting,
+      data: paginatedContacts,
       total,
       page,
       pageSize,
