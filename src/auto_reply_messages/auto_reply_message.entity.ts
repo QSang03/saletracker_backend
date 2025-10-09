@@ -4,6 +4,7 @@ import {
   PrimaryGeneratedColumn,
   ManyToOne,
   JoinColumn,
+  Index,
 } from 'typeorm';
 import { AutoReplyConversation } from '../auto_reply_conversations/auto_reply_conversation.entity';
 
@@ -15,7 +16,9 @@ export enum AutoReplyMessageRole {
   TOOL = 'tool',
 }
 
+@Index('idx_fingerprint', ['convId', 'messageFingerprint'])
 @Entity('auto_reply_messages')
+
 export class AutoReplyMessage {
   @PrimaryGeneratedColumn({ name: 'msg_id', type: 'int' })
   msgId: number;
@@ -37,6 +40,15 @@ export class AutoReplyMessage {
 
   @Column({ type: 'text', name: 'text_content' })
   textContent: string;
+
+  // Hash of normalized message content for takeover detection
+  @Column({
+    type: 'bigint',
+    name: 'message_fingerprint',
+    nullable: true,
+    comment: 'Hash of normalized message content for takeover detection',
+  })
+  messageFingerprint: string | null;
 
   @Column({ type: 'boolean', name: 'by_bot', default: false })
   byBot: boolean;
