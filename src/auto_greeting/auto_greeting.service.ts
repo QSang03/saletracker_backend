@@ -25,7 +25,7 @@ export interface CustomerWithLastMessage {
   customerLastMessageDate?: string; // ISO string format - từ customers.last_message_date
   customerStatus?: 'urgent' | 'reminder' | 'normal'; // Trạng thái từ bảng customers
   daysSinceLastMessage: number | null;
-  status: 'ready' | 'urgent' | 'stable'; // Trạng thái tính toán dựa trên ngày
+  status: 'urgent' | 'reminder' | 'normal'; // Trạng thái theo DB
   isActive: number; // 1: active, 0: inactive
   userDisplayName?: string; // Tên hiển thị của user sở hữu
 }
@@ -181,10 +181,22 @@ export class AutoGreetingService {
       }
     }
     
-    // Add status filter
+    // Add status filter using DB column
     if (options.statusFilter && options.statusFilter !== 'all') {
-      sql += ` AND c.status = ?`;
-      params.push(options.statusFilter);
+      if (options.statusFilter.includes(',')) {
+        const statuses = options.statusFilter
+          .split(',')
+          .map(s => s.trim())
+          .filter(s => s);
+        if (statuses.length > 0) {
+          const placeholders = statuses.map(() => '?').join(', ');
+          sql += ` AND c.status IN (${placeholders})`;
+          params.push(...statuses);
+        }
+      } else {
+        sql += ` AND c.status = ?`;
+        params.push(options.statusFilter.trim());
+      }
     }
     
     // Add conversation type filter
@@ -235,15 +247,8 @@ export class AutoGreetingService {
         daysSinceLastMessage = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
       }
 
-      // Xác định trạng thái khách hàng
-      let customerStatus: 'urgent' | 'reminder' | 'normal' = 'normal';
-      if (daysSinceLastMessage !== null) {
-        if (daysSinceLastMessage >= 30) {
-          customerStatus = 'urgent';
-        } else if (daysSinceLastMessage >= 7) {
-          customerStatus = 'reminder';
-        }
-      }
+      // Lấy trạng thái trực tiếp từ database (c.status as customer_status)
+      const customerStatus = customer.customer_status as 'urgent' | 'reminder' | 'normal';
 
       result.push({
         id: customer.customer_id,
@@ -257,7 +262,7 @@ export class AutoGreetingService {
         customerLastMessageDate: customerLastMessageDate ? customerLastMessageDate.toISOString() : undefined,
         customerStatus,
         daysSinceLastMessage,
-        status: customer.customer_status as 'ready' | 'urgent' | 'stable',
+        status: customerStatus,
         isActive: customer.customer_is_active,
       });
     }
@@ -327,21 +332,13 @@ export class AutoGreetingService {
       }
       let daysSinceLastMessage: number | null;
       if (!customerLastMessageDate) {
-        daysSinceLastMessage = null; // Nếu chưa có tin nhắn nào từ khách hàng
+        daysSinceLastMessage = null;
       } else {
-        // Align with Auto-Reply: use absolute time diff and ceil to full days
         const diffTime = Math.abs(now.getTime() - customerLastMessageDate.getTime());
         daysSinceLastMessage = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
       }
 
-      let status: 'ready' | 'urgent' | 'stable' = 'stable';
-      if (daysSinceLastMessage === null) {
-        status = 'urgent'; // Nếu chưa có tin nhắn nào, coi như urgent
-      } else if (daysSinceLastMessage >= config.cycleDays * 2) {
-        status = 'urgent';
-      } else if (daysSinceLastMessage >= config.cycleDays) {
-        status = 'ready';
-      }
+      const customerStatus = customer.customer_status as 'urgent' | 'reminder' | 'normal';
 
       // Debug log for customer 304
       if (customer.customer_id === '304') {
@@ -357,17 +354,17 @@ export class AutoGreetingService {
         conversationType: customer.customer_conversation_type,
         lastMessageDate: customer.lastMessageDate ? new Date(customer.lastMessageDate).toISOString() : undefined,
         customerLastMessageDate: customerLastMessageDate ? customerLastMessageDate.toISOString() : undefined,
-        customerStatus: customer.customer_status,
+        customerStatus: customerStatus,
         daysSinceLastMessage,
-        status,
+        status: customerStatus,
         isActive: customer.customer_is_active !== null && customer.customer_is_active !== undefined ? customer.customer_is_active : 1,
         userDisplayName: customer.user_display_name || `User ${customer.customer_user_id}`,
       });
     }
 
     return result.sort((a, b) => {
-      // Ưu tiên urgent trước, sau đó ready, cuối cùng stable
-      const statusOrder = { urgent: 0, ready: 1, stable: 2 };
+      // Ưu tiên urgent trước, sau đó reminder, cuối cùng normal
+      const statusOrder = { urgent: 0, reminder: 1, normal: 2 } as const;
       return statusOrder[a.status] - statusOrder[b.status];
     });
   }
@@ -414,7 +411,7 @@ export class AutoGreetingService {
    */
   async sendGreetingsToAllCustomers(userId?: number): Promise<{ success: number; failed: number }> {
     const customers = await this.getCustomersForGreeting(userId, false); // Không cần owner info cho việc gửi tin nhắn
-    const readyCustomers = customers.filter(c => c.status === 'ready' || c.status === 'urgent');
+    const readyCustomers = customers.filter(c => c.status === 'urgent' || c.status === 'reminder');
 
     let success = 0;
     let failed = 0;
