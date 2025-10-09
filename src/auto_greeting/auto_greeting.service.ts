@@ -211,8 +211,8 @@ export class AutoGreetingService {
     
     const customers = await this.autoGreetingCustomerRepo.query(sql, params);
 
-    const now = new Date();
-    const result: CustomerWithLastMessage[] = [];
+  const now = new Date();
+  const result: CustomerWithLastMessage[] = [];
 
     for (const customer of customers) {
       let customerLastMessageDate: Date | undefined = undefined;
@@ -230,8 +230,9 @@ export class AutoGreetingService {
 
       let daysSinceLastMessage: number | null = null;
       if (customerLastMessageDate) {
-        const diffTime = now.getTime() - customerLastMessageDate.getTime();
-        daysSinceLastMessage = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+        // Align with Auto-Reply: use absolute time diff and ceil to full days
+        const diffTime = Math.abs(now.getTime() - customerLastMessageDate.getTime());
+        daysSinceLastMessage = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
       }
 
       // Xác định trạng thái khách hàng
@@ -308,8 +309,8 @@ export class AutoGreetingService {
     
     const customers = await this.autoGreetingCustomerRepo.query(sql, params);
 
-    const now = new Date();
-    const result: CustomerWithLastMessage[] = [];
+  const now = new Date();
+  const result: CustomerWithLastMessage[] = [];
 
     for (const customer of customers) {
       let customerLastMessageDate: Date | undefined = undefined;
@@ -328,13 +329,9 @@ export class AutoGreetingService {
       if (!customerLastMessageDate) {
         daysSinceLastMessage = null; // Nếu chưa có tin nhắn nào từ khách hàng
       } else {
-        const diffTime = now.getTime() - customerLastMessageDate.getTime();
-        daysSinceLastMessage = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-        
-        // Nếu ngày trong tương lai (có thể lỗi dữ liệu), coi như 0 ngày
-        if (daysSinceLastMessage < 0) {
-          daysSinceLastMessage = 0;
-        }
+        // Align with Auto-Reply: use absolute time diff and ceil to full days
+        const diffTime = Math.abs(now.getTime() - customerLastMessageDate.getTime());
+        daysSinceLastMessage = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
       }
 
       let status: 'ready' | 'urgent' | 'stable' = 'stable';
