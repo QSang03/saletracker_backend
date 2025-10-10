@@ -44,6 +44,19 @@ export class AutoGreetingController {
   }
 
   /**
+   * Helper function để kiểm tra user có quyền admin hoặc view (xem tất cả data)
+   */
+  private isAdminOrView(req: any): boolean {
+    const userRoles = req.user?.roles || [];
+    return userRoles.some((role: any) => 
+      role.name === 'admin' || 
+      role.name === 'Admin' || 
+      role.name === 'view' || 
+      role.name === 'View'
+    );
+  }
+
+  /**
    * Cập nhật hàng loạt khách hàng
    */
   @Patch('customers/bulk-update')
@@ -234,12 +247,9 @@ export class AutoGreetingController {
       // Nếu có userId parameter thì dùng parameter đó
       parsedUserId = parseInt(userId);
     } else {
-      // Kiểm tra nếu user là admin
-      const userRoles = req.user?.roles || [];
-      const isAdmin = userRoles.some((role: any) => role.name === 'admin' || role.name === 'Admin');
-      
-      if (isAdmin) {
-        // Admin thấy tất cả customers
+      // Kiểm tra nếu user là admin hoặc view
+      if (this.isAdminOrView(req)) {
+        // Admin/View thấy tất cả customers
         parsedUserId = undefined;
       } else {
         // User thường chỉ thấy customers của mình
