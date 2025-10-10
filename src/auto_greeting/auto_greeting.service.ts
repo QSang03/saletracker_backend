@@ -122,6 +122,7 @@ export class AutoGreetingService {
     statusFilter?: string;
     conversationTypeFilter?: string;
     dateFilter?: string;
+    activeFilter?: string;
     includeOwnerInfo: boolean;
   }): Promise<{
     data: CustomerWithLastMessage[];
@@ -226,6 +227,13 @@ export class AutoGreetingService {
     if (options.dateFilter) {
       sql += ` AND DATE(c.last_message_date) = ?`;
       params.push(options.dateFilter);
+    }
+
+    // Add active filter (is_active = 1 or 0)
+    if (options.activeFilter === '1') {
+      sql += ` AND c.is_active = 1`;
+    } else if (options.activeFilter === '0') {
+      sql += ` AND c.is_active = 0`;
     }
     
     // Get total count

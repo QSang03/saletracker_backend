@@ -239,6 +239,7 @@ export class AutoGreetingController {
     @Query('statusFilter') statusFilter?: string,
     @Query('conversationTypeFilter') conversationTypeFilter?: string,
     @Query('dateFilter') dateFilter?: string,
+    @Query('activeFilter') activeFilter?: string,
     @Req() req?: any
   ) {
     let parsedUserId: number | undefined;
@@ -269,6 +270,7 @@ export class AutoGreetingController {
       statusFilter,
       conversationTypeFilter,
       dateFilter,
+      activeFilter,
       includeOwnerInfo: this.canViewOwnerInfo(req)
     });
   }
