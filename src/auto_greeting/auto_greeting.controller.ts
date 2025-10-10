@@ -216,6 +216,10 @@ export class AutoGreetingController {
   @Get('customers')
   async getCustomers(
     @Query('userId') userId?: string,
+    @Query('departmentId') departmentId?: string,
+    @Query('daysFilter') daysFilter?: string,
+    @Query('sortBy') sortBy?: string,
+    @Query('sortOrder') sortOrder?: string,
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number = 1,
     @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number = 10,
     @Query('search') search?: string,
@@ -245,6 +249,10 @@ export class AutoGreetingController {
     
     return this.autoGreetingService.getCustomersPaginated({
       userId: parsedUserId,
+      departmentId: departmentId ? parseInt(departmentId) : undefined,
+      daysFilter: daysFilter ? parseInt(daysFilter) : undefined,
+      sortBy: sortBy || 'created_at',
+      sortOrder: sortOrder || 'DESC',
       page,
       limit,
       search,

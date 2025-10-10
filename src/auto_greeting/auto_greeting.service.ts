@@ -112,6 +112,10 @@ export class AutoGreetingService {
    */
   async getCustomersPaginated(options: {
     userId?: number;
+    departmentId?: number;
+    daysFilter?: number;
+    sortBy?: string;
+    sortOrder?: string;
     page: number;
     limit: number;
     search?: string;
@@ -153,6 +157,7 @@ export class AutoGreetingService {
         (SELECT MAX(h.sent_at) FROM auto_greeting_customer_message_history h WHERE h.customer_id = c.id) as lastMessageDate
       FROM auto_greeting_customers c
       ${options.includeOwnerInfo ? 'LEFT JOIN users u ON c.user_id = u.id' : ''}
+      ${options.departmentId ? 'LEFT JOIN users_departments ud ON c.user_id = ud.user_id' : ''}
       WHERE c.deleted_at IS NULL
     `;
     
@@ -162,6 +167,18 @@ export class AutoGreetingService {
     if (options.userId) {
       sql += ` AND c.user_id = ?`;
       params.push(options.userId);
+    }
+
+    // Add department filter
+    if (options.departmentId) {
+      sql += ` AND ud.department_id = ?`;
+      params.push(options.departmentId);
+    }
+
+    // Add days filter (số ngày kể từ tin nhắn cuối)
+    if (options.daysFilter !== undefined && options.daysFilter !== null) {
+      sql += ` AND c.last_message_date IS NOT NULL AND DATEDIFF(NOW(), c.last_message_date) >= ?`;
+      params.push(options.daysFilter);
     }
     
     // Add search filter
@@ -216,9 +233,18 @@ export class AutoGreetingService {
     const countResult = await this.autoGreetingCustomerRepo.query(countSql, params);
     const total = parseInt(countResult[0].count) || 0;
     
+    // Add sorting
+    const sortBy = options.sortBy || 'created_at';
+    const sortOrder = (options.sortOrder || 'DESC').toUpperCase();
+    
+    // Validate sortBy to prevent SQL injection
+    const allowedSortFields = ['created_at', 'last_message_date', 'zalo_display_name', 'status'];
+    const validSortBy = allowedSortFields.includes(sortBy) ? sortBy : 'created_at';
+    const validSortOrder = ['ASC', 'DESC'].includes(sortOrder) ? sortOrder : 'DESC';
+    
     // Add pagination
     const offset = (options.page - 1) * options.limit;
-    sql += ` ORDER BY c.created_at DESC LIMIT ? OFFSET ?`;
+    sql += ` ORDER BY c.${validSortBy} ${validSortOrder} LIMIT ? OFFSET ?`;
     params.push(options.limit, offset);
     
     const customers = await this.autoGreetingCustomerRepo.query(sql, params);
