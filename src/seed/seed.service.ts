@@ -392,6 +392,14 @@ export class SeedService implements OnModuleInit {
           section: 'system',
           status: 1,
         },
+        {
+          name: 'zalo_chat_auto_refresh_interval',
+          display_name: 'Thời gian tự động làm mới chat (giây)',
+          value: '10',
+          type: 'number',
+          section: 'zalo_chat',
+          status: 1,
+        },
       ];
       for (const config of configs) {
         await this.systemConfigRepo.save(this.systemConfigRepo.create(config));
@@ -399,6 +407,26 @@ export class SeedService implements OnModuleInit {
       console.log('✅ Seeder: Đã tạo system_config thành công!');
     } else {
       console.log('⚠️ Seeder skipped - system_config đã có dữ liệu.');
+      
+      // Vẫn kiểm tra và thêm các config mới nếu chưa có
+      const configsToCheck = [
+        {
+          name: 'zalo_chat_auto_refresh_interval',
+          display_name: 'Thời gian tự động làm mới chat (giây)',
+          value: '10',
+          type: 'number',
+          section: 'zalo_chat',
+          status: 1,
+        },
+      ];
+      
+      for (const config of configsToCheck) {
+        const existing = await this.systemConfigRepo.findOne({ where: { name: config.name } });
+        if (!existing) {
+          await this.systemConfigRepo.save(this.systemConfigRepo.create(config));
+          console.log(`✅ Đã thêm config mới: ${config.name}`);
+        }
+      }
     }
   }
 }
