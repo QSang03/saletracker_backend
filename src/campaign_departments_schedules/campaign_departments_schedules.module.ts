@@ -5,13 +5,16 @@ import { CampaignDepartmentsSchedulesController } from './campaign_departments_s
 import { DepartmentSchedule } from './campaign_departments_schedules.entity';
 import { User } from '../users/user.entity';
 import { Department } from '../departments/department.entity';
+import { ScheduleStatusUpdaterService } from '../cronjobs/schedule-status-updater.service';
+import { Campaign } from '../campaigns/campaign.entity';
+import { CampaignSchedule } from '../campaign_schedules/campaign_schedule.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([DepartmentSchedule, User, Department])
+    TypeOrmModule.forFeature([DepartmentSchedule, User, Department, Campaign, CampaignSchedule])
   ],
   controllers: [CampaignDepartmentsSchedulesController],
-  providers: [CampaignDepartmentsSchedulesService],
+  providers: [CampaignDepartmentsSchedulesService, ScheduleStatusUpdaterService],
   exports: [CampaignDepartmentsSchedulesService],
 })
 export class CampaignDepartmentsSchedulesModule {}

@@ -168,7 +168,6 @@ export class ScheduleStatusUpdaterService {
   ): { activeNow: boolean; hasFuture: boolean } {
     let activeNow = false;
     let hasFuture = false;
-    let hasFutureDate = false; // Đánh dấu có slot với ngày tương lai
     const ONE_DAY = 24 * 60 * 60 * 1000;
 
     const slots = Array.isArray(cfg?.slots) ? cfg.slots : [];
@@ -191,7 +190,11 @@ export class ScheduleStatusUpdaterService {
           const isoBase = this.isoDow(base);                // 1..7
           const legacyOfBase = this.legacyFromIso(isoBase); // 2..7 hoặc null nếu CN
           if (legacyOfBase == null || legacyOfBase !== slotDowLegacy) {
-            continue; // cấu hình sai thứ -> bỏ qua slot này
+            // THAY ĐỔI: Thay vì continue, vẫn xử lý slot nhưng log warning
+            this.logger.warn(
+              `Schedule slot có day_of_week=${slotDowLegacy} không khớp với applicable_date=${(slot as any).applicable_date} (thứ ${legacyOfBase || 'CN'}). Vẫn xử lý slot này.`
+            );
+            // Không continue, vẫn xử lý slot này để tránh bị đánh dấu EXPIRED sai
           }
         }
 
@@ -204,15 +207,14 @@ export class ScheduleStatusUpdaterService {
           // HÔM NAY: gom để tính lastEnd; ACTIVE giữ cho tới khi qua hết
           if (!todayLastEnd || end > todayLastEnd) todayLastEnd = end;
         } else if (now < start) {
-          // Ngày tương lai - đánh dấu hasFuture và tiếp tục xử lý các slot khác
+          // Ngày tương lai
           hasFuture = true;
-          hasFutureDate = true;
         } else if (now >= start && now <= end) {
           // Đang chạy (case qua-đêm từ ngày khác)
           activeNow = true;
         }
         // else: đã qua slot one-off đó, không future
-        // KHÔNG continue ở đây để xử lý các slot khác trong cùng config
+        continue;
       }
 
       // 2) Slot weekly (Mon..Sat) theo legacy 2..7
@@ -260,9 +262,18 @@ export class ScheduleStatusUpdaterService {
       }
     }
 
-    // Đảm bảo hasFuture được bảo toàn nếu có slot với ngày tương lai
-    if (hasFutureDate) {
-      hasFuture = true;
+    // BẢO VỆ: Nếu không có hasFuture nhưng có slot với applicable_date ở tương lai
+    if (!hasFuture && slots.length > 0) {
+      for (const slot of slots) {
+        if ((slot as any)?.applicable_date) {
+          const base = this.parseLocalYMD((slot as any).applicable_date);
+          if (base > today) {
+            hasFuture = true;
+            this.logger.debug(`Phát hiện slot tương lai bị bỏ qua: ${(slot as any).applicable_date}, đã set hasFuture=true`);
+            break;
+          }
+        }
+      }
     }
 
     return { activeNow, hasFuture };
