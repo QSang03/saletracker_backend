@@ -168,6 +168,7 @@ export class ScheduleStatusUpdaterService {
   ): { activeNow: boolean; hasFuture: boolean } {
     let activeNow = false;
     let hasFuture = false;
+    let hasFutureDate = false; // Đánh dấu có slot với ngày tương lai
     const ONE_DAY = 24 * 60 * 60 * 1000;
 
     const slots = Array.isArray(cfg?.slots) ? cfg.slots : [];
@@ -203,14 +204,15 @@ export class ScheduleStatusUpdaterService {
           // HÔM NAY: gom để tính lastEnd; ACTIVE giữ cho tới khi qua hết
           if (!todayLastEnd || end > todayLastEnd) todayLastEnd = end;
         } else if (now < start) {
-          // Ngày tương lai
+          // Ngày tương lai - đánh dấu hasFuture và tiếp tục xử lý các slot khác
           hasFuture = true;
+          hasFutureDate = true;
         } else if (now >= start && now <= end) {
           // Đang chạy (case qua-đêm từ ngày khác)
           activeNow = true;
         }
         // else: đã qua slot one-off đó, không future
-        continue;
+        // KHÔNG continue ở đây để xử lý các slot khác trong cùng config
       }
 
       // 2) Slot weekly (Mon..Sat) theo legacy 2..7
@@ -256,6 +258,11 @@ export class ScheduleStatusUpdaterService {
       } else {
         // đã qua hết slot của hôm nay -> không set future tại đây (để tổng thể có thể EXPIRED nếu không còn gì khác)
       }
+    }
+
+    // Đảm bảo hasFuture được bảo toàn nếu có slot với ngày tương lai
+    if (hasFutureDate) {
+      hasFuture = true;
     }
 
     return { activeNow, hasFuture };
