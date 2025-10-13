@@ -13,6 +13,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { CampaignDepartmentsSchedulesService } from './campaign_departments_schedules.service';
+import { ScheduleStatusUpdaterService } from '../cronjobs/schedule-status-updater.service';
 import { CreateDepartmentScheduleDto } from './dto/create-department-schedule.dto';
 import { UpdateDepartmentScheduleDto } from './dto/update-department-schedule.dto';
 import { QueryDepartmentScheduleDto } from './dto/query-department-schedule.dto';
@@ -24,6 +25,7 @@ import { AuthGuard } from '@nestjs/passport';
 export class CampaignDepartmentsSchedulesController {
   constructor(
     private readonly campaignDepartmentsSchedulesService: CampaignDepartmentsSchedulesService,
+    private readonly scheduleStatusUpdaterService: ScheduleStatusUpdaterService,
   ) {}
 
   @Post()
@@ -192,5 +194,25 @@ export class CampaignDepartmentsSchedulesController {
 
     await this.campaignDepartmentsSchedulesService.remove(id);
     return { message: 'Department schedule deleted successfully' };
+  }
+
+  @Post('manual-update-statuses')
+  async manualUpdateScheduleStatuses(@Request() req: any) {
+    // Chỉ admin mới được phép trigger manual update
+    if (!req.user?.is_admin) {
+      throw new BadRequestException('Chỉ admin mới được phép trigger manual update schedule statuses');
+    }
+    
+    return this.scheduleStatusUpdaterService.manualUpdateScheduleStatuses();
+  }
+
+  @Get('status-stats')
+  async getScheduleStatusStats(@Request() req: any) {
+    // Chỉ admin mới được phép xem thống kê
+    if (!req.user?.is_admin) {
+      throw new BadRequestException('Chỉ admin mới được phép xem thống kê schedule status');
+    }
+    
+    return this.scheduleStatusUpdaterService.getScheduleStatusStats();
   }
 }

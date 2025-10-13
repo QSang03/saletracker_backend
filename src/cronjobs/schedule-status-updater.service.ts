@@ -190,7 +190,11 @@ export class ScheduleStatusUpdaterService {
           const isoBase = this.isoDow(base);                // 1..7
           const legacyOfBase = this.legacyFromIso(isoBase); // 2..7 hoặc null nếu CN
           if (legacyOfBase == null || legacyOfBase !== slotDowLegacy) {
-            continue; // cấu hình sai thứ -> bỏ qua slot này
+            // THAY ĐỔI: Thay vì continue, vẫn xử lý slot nhưng log warning
+            this.logger.warn(
+              `Schedule slot có day_of_week=${slotDowLegacy} không khớp với applicable_date=${(slot as any).applicable_date} (thứ ${legacyOfBase || 'CN'}). Vẫn xử lý slot này.`
+            );
+            // Không continue, vẫn xử lý slot này để tránh bị đánh dấu EXPIRED sai
           }
         }
 
@@ -202,10 +206,9 @@ export class ScheduleStatusUpdaterService {
         if (this.sameYMD(base, today)) {
           // HÔM NAY: gom để tính lastEnd; ACTIVE giữ cho tới khi qua hết
           if (!todayLastEnd || end > todayLastEnd) todayLastEnd = end;
-        } else if (base > today) {
-          // Ngày tương lai - SỬA: sử dụng so sánh ngày thay vì thời gian
+        } else if (now < start) {
+          // Ngày tương lai
           hasFuture = true;
-          this.logger.debug(`Slot tương lai: ${(slot as any).applicable_date} > ${today.toISOString().split('T')[0]}`);
         } else if (now >= start && now <= end) {
           // Đang chạy (case qua-đêm từ ngày khác)
           activeNow = true;
@@ -259,7 +262,20 @@ export class ScheduleStatusUpdaterService {
       }
     }
 
-    this.logger.debug(`Kết quả evaluateHourlySlots: activeNow=${activeNow}, hasFuture=${hasFuture}`);
+    // BẢO VỆ: Nếu không có hasFuture nhưng có slot với applicable_date ở tương lai
+    if (!hasFuture && slots.length > 0) {
+      for (const slot of slots) {
+        if ((slot as any)?.applicable_date) {
+          const base = this.parseLocalYMD((slot as any).applicable_date);
+          if (base > today) {
+            hasFuture = true;
+            this.logger.debug(`Phát hiện slot tương lai bị bỏ qua: ${(slot as any).applicable_date}, đã set hasFuture=true`);
+            break;
+          }
+        }
+      }
+    }
+
     return { activeNow, hasFuture };
   }
 
@@ -293,14 +309,6 @@ export class ScheduleStatusUpdaterService {
       if (scheduleDetails?.endDate && currentTime > scheduleDetails.endDate) {
         return ScheduleStatus.EXPIRED;
       }
-      
-      // SỬA: Kiểm tra có startDate trong tương lai không để xác định INACTIVE vs EXPIRED
-      if (scheduleDetails?.startDate && currentTime < scheduleDetails.startDate) {
-        return ScheduleStatus.INACTIVE; // Chưa đến giờ
-      }
-      
-      // Nếu không có endDate và không có startDate trong tương lai -> có thể là recurring hoặc không giới hạn
-      // Trong trường hợp này, nếu không active thì coi như INACTIVE (không EXPIRED)
       return ScheduleStatus.INACTIVE;
     } catch (e: any) {
       this.logger.warn(`Không thể tính status cho schedule ID ${schedule.id}: ${e.message}`);
