@@ -60,11 +60,45 @@ export class UserStatusObserver {
 
       // Gọi API Python để xử lý lỗi liên kết
       await this.callPythonApiForLinkError(event);
+    } else if (event.newStatus === 0) {
+      // Với yêu cầu mới: nếu username là số điện thoại thì cũng gửi thông báo (status 0 = chưa liên kết)
+      try {
+        const user = await this.userService.findOneWithDetails(event.userId);
+        if (!user) return;
+
+        // Bỏ qua nếu user bị block
+        if (user.isBlock === true) {
+          this.logger.log(`⏭️ Bỏ qua user ${user.id} (${user.username}) - đã bị ban (is_block = true)`);
+          return;
+        }
+
+        const username = (user.username || '').toString();
+        if (this.isPhoneNumber(username)) {
+          this.logger.log(`User ${event.userId} có username là số điện thoại, gửi notification cho trạng thái chưa liên kết...`);
+
+          // Gửi thông báo chung đến admin dashboard (khác event để dễ phân biệt)
+          this.userGateway.server
+            .to('admin_dashboard')
+            .emit('user_zalo_not_linked', {
+              userId: event.userId,
+              status: event.newStatus,
+              updatedBy: event.updatedBy,
+              timestamp: event.timestamp,
+            });
+
+          // Gọi API Python để xử lý (truyền user đã lấy để tránh fetch lại)
+          await this.callPythonApiForLinkError(event, user);
+        }
+      } catch (e) {
+        this.logger.error(`Failed handling newStatus=0 for user ${event.userId}: ${e?.message}`);
+      }
     }
   }
 
   // Gọi API Python để xử lý lỗi liên kết Zalo
-  async callPythonApiForLinkError(event: UserStatusChangeEvent) {
+  // Gọi API Python để xử lý lỗi liên kết Zalo
+  // Nếu `providedUser` được truyền vào, sẽ dùng object đó thay vì fetch lại từ DB (tiết kiệm 1 query)
+  async callPythonApiForLinkError(event: UserStatusChangeEvent, providedUser?: any) {
     let payload: any;
     
     try {
@@ -78,8 +112,8 @@ export class UserStatusObserver {
       
       // Đánh dấu user đang được xử lý
       this.processedUsers.set(event.userId, now);
-      // Lấy thông tin chi tiết của user
-      const user = await this.userService.findOneWithDetails(event.userId);
+      // Lấy thông tin chi tiết của user (nếu chưa có)
+      const user = providedUser ?? await this.userService.findOneWithDetails(event.userId);
       
       if (!user) {
         this.logger.error(`Không tìm thấy user với ID: ${event.userId}`);
@@ -137,6 +171,11 @@ export class UserStatusObserver {
       
       // Không throw error để không làm gián đoạn flow chính
     }
+  }
+
+  // Kiểm tra username có phải là số điện thoại không (đơn giản: chỉ gồm chữ số, 9-12 ký tự)
+  private isPhoneNumber(s: string): boolean {
+    return /^\d{9,12}$/.test(s);
   }
 
   // Xác định loại lỗi dựa trên trạng thái cũ và mới
