@@ -53,33 +53,45 @@ export class ZaloLinkMonitorCronjob {
     const startTime = Date.now();
     
     try {
-        // Lấy tất cả user có zalo_link_status = 2 (lỗi liên kết) và không bị ban (is_block = false)
-      const allUsersWithError = await this.userRepo.find({
-        where: { 
-          zaloLinkStatus: 2,
-          isBlock: false // Chỉ lấy user không bị ban
-        },
-        select: ['id', 'username', 'fullName', 'email', 'employeeCode', 'zaloLinkStatus', 'isBlock', 'updatedAt']
-      });
+        // Lấy tất cả user có zalo_link_status = 2 (lỗi liên kết) hoặc zalo_link_status = 0
+        // (chúng ta sẽ chỉ xử lý status 0 khi username trông như số điện thoại), và không bị ban
+        const allCandidates = await this.userRepo.find({
+          where: [
+            { zaloLinkStatus: 2, isBlock: false },
+            { zaloLinkStatus: 0, isBlock: false },
+          ],
+          select: ['id', 'username', 'fullName', 'email', 'employeeCode', 'zaloLinkStatus', 'isBlock', 'updatedAt']
+        });
 
-      // Lọc bỏ user thietpn và user không có email
-      const usersWithError = allUsersWithError.filter(user => 
-        user.username !== 'thietpn' && 
-        user.email !== 'thietpn@nguyenkimvn.vn' &&
-        user.email && user.email.trim() !== ''
-      );
+        // Lọc bỏ user thietpn và user không có email
+        const usersToProcess = allCandidates.filter(user => {
+          if (!user) return false;
+          if (user.username === 'thietpn' || user.email === 'thietpn@nguyenkimvn.vn') return false;
+          if (!user.email || user.email.trim() === '') return false;
 
-      this.logger.log(`📊 Tìm thấy ${allUsersWithError.length} users có lỗi liên kết, sau khi lọc thietpn và không có email còn ${usersWithError.length} users`);
+          // Nếu status = 2 => xử lý luôn
+          if (user.zaloLinkStatus === 2) return true;
 
-      for (const user of usersWithError) {
+          // Nếu status = 0 => chỉ xử lý nếu username là số điện thoại (9-12 chữ số)
+          if (user.zaloLinkStatus === 0) {
+            const uname = (user.username || '').toString();
+            return /^\d{9,12}$/.test(uname);
+          }
+
+          return false;
+        });
+
+        this.logger.log(`📊 Tìm thấy ${allCandidates.length} candidate users (status 2 hoặc 0), sau khi lọc thietpn và không có email còn ${usersToProcess.length} users`);
+
+        for (const user of usersToProcess) {
         // Kiểm tra user đã được xử lý trong phiên này chưa
         if (this.processedUsers.has(user.id)) {
           this.logger.log(`⏭️ Bỏ qua user ${user.id} (${user.username}) - đã được xử lý trong phiên này`);
           continue;
         }
         
-        // Gọi API Python để xử lý lỗi liên kết
-        await this.handleZaloLinkError(user);
+          // Gọi API Python để xử lý lỗi liên kết hoặc chưa liên kết (tùy status)
+          await this.handleZaloLinkError(user);
         
         // Đánh dấu user đã được xử lý
         this.processedUsers.add(user.id);
@@ -99,13 +111,14 @@ export class ZaloLinkMonitorCronjob {
   private async handleZaloLinkError(user: User) {
     try {
       // Gọi trực tiếp API Python thay vì trigger event (để tránh duplicate)
+      const newStatus = user.zaloLinkStatus === 0 ? 0 : 2;
       await this.userStatusObserver.callPythonApiForLinkError({
         userId: user.id,
         oldStatus: user.zaloLinkStatus,
-        newStatus: 2,
+        newStatus,
         updatedBy: 'database_monitor',
         timestamp: new Date(),
-      });
+      }, user);
     } catch (error) {
       this.logger.error(`Lỗi khi xử lý lỗi liên kết cho user ${user.id}: ${error.message}`);
     }
