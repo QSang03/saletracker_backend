@@ -1064,7 +1064,7 @@ export class OrderDetailService {
         .filter((n) => !Number.isNaN(n));
       if (deptIds.length > 0) {
         qb.andWhere(
-          'EXISTS (SELECT 1 FROM users_departments_ud ud WHERE ud.user_id = sale_by.id AND ud.department_id IN (:...deptIds))',
+          'EXISTS (SELECT 1 FROM users_departments ud WHERE ud.user_id = sale_by.id AND ud.department_id IN (:...deptIds))',
           { deptIds },
         );
       }
