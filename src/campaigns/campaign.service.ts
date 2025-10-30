@@ -3375,8 +3375,12 @@ export class CampaignService {
     const expandedResults: any[] = [];
     Object.values(groupedData).forEach((customer: GroupedCustomer) => {
       if (customer.logs.length > 0) {
-        // Sắp xếp logs theo sent_at
-        customer.logs.sort((a, b) => a.sent_at.getTime() - b.sent_at.getTime());
+        // Sắp xếp logs theo sent_at (safe: handle null sent_at)
+        customer.logs.sort((a, b) => {
+          const ta = a.sent_at instanceof Date ? a.sent_at.getTime() : Number.POSITIVE_INFINITY;
+          const tb = b.sent_at instanceof Date ? b.sent_at.getTime() : Number.POSITIVE_INFINITY;
+          return ta - tb;
+        });
 
         // Tạo một entry cho mỗi log
         customer.logs.forEach((log) => {
@@ -5058,10 +5062,12 @@ export class CampaignService {
     const results: any[] = [];
     for (const customer of Object.values(groupedData)) {
       if (customer.logs.length > 0) {
-        customer.logs.sort(
-          (a, b) =>
-            new Date(a.sent_at).getTime() - new Date(b.sent_at).getTime(),
-        );
+        // Sort logs by sent_at safely. If sent_at is missing/null, push them to the end.
+        customer.logs.sort((a, b) => {
+          const ta = a.sent_at ? new Date(a.sent_at).getTime() : Number.POSITIVE_INFINITY;
+          const tb = b.sent_at ? new Date(b.sent_at).getTime() : Number.POSITIVE_INFINITY;
+          return ta - tb;
+        });
       }
 
       const latestLog = customer.logs[customer.logs.length - 1] || null;
