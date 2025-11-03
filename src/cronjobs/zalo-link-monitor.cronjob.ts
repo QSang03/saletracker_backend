@@ -28,6 +28,20 @@ export class ZaloLinkMonitorCronjob {
   @Cron(process.env.ZALO_LINK_MONITOR_CRON || '*/5 * * * *')
   async monitorZaloLinkStatus() {
     const currentTime = Date.now();
+
+    // ENFORCE: never run sending before 08:00 local server time for any reason
+    try {
+      const now = new Date();
+      const hour = now.getHours(); // 0-23 in server local timezone
+      if (hour < 8) {
+        this.logger.log(`⏰ Bỏ qua cronjob - chỉ được phép gửi sau 08:00. Giờ hiện tại: ${now.toLocaleTimeString()}`);
+        return;
+      }
+    } catch (err) {
+      // If anything odd happens reading time, be conservative and skip sending
+      this.logger.warn(`⚠️ Không thể xác định thời gian hiện tại, bỏ qua cronjob để an toàn: ${err?.message || err}`);
+      return;
+    }
     
     // Kiểm tra lock để tránh duplicate execution
     if (this.isRunning) {
