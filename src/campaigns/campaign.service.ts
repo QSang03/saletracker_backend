@@ -1901,15 +1901,16 @@ export class CampaignService {
         campaign.campaign_type,
       );
 
+      // Nếu không tìm được schedule phù hợp với cấu hình campaign thì **không** fallback
+      // sang departmentSchedules[0] — theo yêu cầu, bắt buộc phải phù hợp cấu hình.
       if (!bestMatchingSchedule) {
-        // Không tìm thấy schedule phù hợp với cấu hình chiến dịch -> không set dates
         shouldSetNullDates = true;
       }
     } else {
-      // Nếu campaign không có `schedule_config`, không được phép fallback sang
-      // departmentSchedules[0] vì yêu cầu bắt buộc phải phù hợp cấu hình.
-      // Do đó, đánh dấu là không set dates.
+      // Nếu campaign chưa có schedule_config thì theo option A chúng ta bắt buộc phải
+      // có cấu hình để chọn lịch; do đó không fallback và sẽ set null dates.
       shouldSetNullDates = true;
+      bestMatchingSchedule = null;
     }
 
     // 4. Calculate date range hoặc set null dates
