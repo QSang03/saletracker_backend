@@ -55,10 +55,10 @@ export class ZaloLinkMonitorCronjob {
       return;
     }
 
-    // Kiểm tra thời gian nghỉ
+    // Kiểm tra thời gian nghỉ (fixed window 08:00 - 17:45)
     const isInRestTime = await this.checkRestTime();
     if (isInRestTime) {
-      this.logger.log(`😴 Bỏ qua cronjob - đang trong thời gian nghỉ`);
+      this.logger.log(`😴 Bỏ qua cronjob - hiện tại ngoài khung giờ gửi hoặc là ngày nghỉ (08:00-17:45 + DB ngày nghỉ)`);
       return;
     }
 
@@ -146,45 +146,108 @@ export class ZaloLinkMonitorCronjob {
   // Kiểm tra thời gian nghỉ
   private async checkRestTime(): Promise<boolean> {
     try {
-      const config = await this.systemConfigRepo.findOne({
-        where: { name: 'system_stopToolConfig' }
-      });
-
-      if (!config || !config.value) {
-        this.logger.log('Không tìm thấy config system_stopToolConfig, cho phép chạy');
-        return false;
-      }
-
-      const schedule = JSON.parse(config.value);
+      // Fixed allowed window: 08:00 - 17:45 local server time
       const now = new Date();
-      const currentDay = now.toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase();
-      const currentTime = now.toLocaleTimeString('en-US', { 
-        hour12: false, 
-        hour: '2-digit', 
-        minute: '2-digit' 
+      const currentTime = now.toLocaleTimeString('en-US', {
+        hour12: false,
+        hour: '2-digit',
+        minute: '2-digit'
       });
 
-      // Kiểm tra ngày hiện tại có trong schedule không
-      if (!schedule[currentDay]) {
-        this.logger.log(`Ngày ${currentDay} không có trong schedule, cho phép chạy`);
-        return false;
+      const allowedStart = '08:00';
+      const allowedEnd = '17:45';
+
+      // isTimeInRange returns true when current is within start-end (handles wrap)
+      const isWithinAllowed = this.isTimeInRange(currentTime, allowedStart, allowedEnd);
+      if (!isWithinAllowed) {
+        this.logger.log(`Thời gian hiện tại ${currentTime} nằm ngoài khung ${allowedStart}-${allowedEnd}`);
+        return true; // In rest time (outside allowed window)
       }
 
-      // Kiểm tra thời gian hiện tại có nằm trong khoảng nghỉ không
-      const daySchedule = schedule[currentDay];
-      for (const timeSlot of daySchedule) {
-        if (this.isTimeInRange(currentTime, timeSlot.start, timeSlot.end)) {
-          this.logger.log(`Thời gian hiện tại ${currentTime} nằm trong khoảng nghỉ ${timeSlot.start}-${timeSlot.end}`);
+      // Additional DB-based checks: skip Sundays and configured holidays
+      const nowDate = new Date();
+      const dayOfWeek = nowDate.getDay(); // 0 = Sunday
+
+      // 1) If Sunday, check system_scheduleSunday
+      if (dayOfWeek === 0) {
+        const allowSunday = await this.isSundayRunAllowed();
+        if (!allowSunday) {
+          this.logger.log('🚫 Hôm nay là Chủ nhật và cấu hình DB không cho phép chạy');
           return true;
         }
       }
 
-      this.logger.log(`Thời gian hiện tại ${currentTime} không nằm trong khoảng nghỉ, cho phép chạy`);
-      return false;
+      // 2) Check holiday configs
+      const allowHolidayRun = await this.isHolidayRunAllowed();
+      if (!allowHolidayRun) {
+        this.logger.log('🚫 Cấu hình system_scheduleHoliday = 0 → chặn toàn bộ ngày lễ');
+        return true;
+      }
 
+      const isHoliday = await this.isTodayHoliday();
+      if (isHoliday) {
+        this.logger.log('🚫 Hôm nay là ngày nghỉ theo cấu hình DB (holiday_*) → bỏ qua');
+        return true;
+      }
+
+      this.logger.log(`Thời gian hiện tại ${currentTime} nằm trong khung ${allowedStart}-${allowedEnd} và không phải ngày nghỉ, cho phép chạy`);
+      return false;
     } catch (error) {
-      this.logger.error(`Lỗi khi kiểm tra thời gian nghỉ: ${error.message}`);
-      return false; // Nếu có lỗi, cho phép chạy
+      this.logger.error(`Lỗi khi kiểm tra thời gian nghỉ: ${error?.message || error}`);
+      return false; // Fail-safe: allow run on error
+    }
+  }
+
+  private async isSundayRunAllowed(): Promise<boolean> {
+    try {
+      const config = await this.systemConfigRepo.findOne({ where: { name: 'system_scheduleSunday' } });
+      const result = config?.value === '1';
+      this.logger.log(`📋 system_scheduleSunday: ${config?.value || 'null'} → ${result ? 'Cho phép' : 'Không cho phép'}`);
+      return result;
+    } catch (error) {
+      this.logger.error('❌ Lỗi kiểm tra system_scheduleSunday:', error?.message || error);
+      return false; // Fail-safe
+    }
+  }
+
+  private async isHolidayRunAllowed(): Promise<boolean> {
+    try {
+      const config = await this.systemConfigRepo.findOne({ where: { name: 'system_scheduleHoliday' } });
+      const result = config?.value === '1';
+      this.logger.log(`📋 system_scheduleHoliday: ${config?.value || 'null'} → ${result ? 'Cho phép kiểm tra chi tiết' : 'Chặn hoàn toàn'}`);
+      return result;
+    } catch (error) {
+      this.logger.error('❌ Lỗi kiểm tra system_scheduleHoliday:', error?.message || error);
+      return false;
+    }
+  }
+
+  private async isTodayHoliday(): Promise<boolean> {
+    try {
+      const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }); // YYYY-MM-DD
+      this.logger.log(`📅 Kiểm tra ngày nghỉ cho: ${today} (VN timezone)`);
+
+      const holidayConfigs = await this.systemConfigRepo.find({ where: [ { name: 'holiday_multi_days' }, { name: 'holiday_single_day' }, { name: 'holiday_separated_days' } ] });
+
+      for (const config of holidayConfigs) {
+        if (!config.value) continue;
+        try {
+          const holidays = JSON.parse(config.value);
+          for (const holiday of holidays) {
+            if (holiday.dates?.includes(today)) {
+              this.logger.log(`🏖️ Tìm thấy ngày nghỉ: ${today} - ${holiday.reason || 'no reason'}`);
+              return true;
+            }
+          }
+        } catch (parseError) {
+          this.logger.error(`❌ Lỗi parse JSON cho ${config.name}:`, parseError?.message || parseError);
+        }
+      }
+
+      return false;
+    } catch (error) {
+      this.logger.error('❌ Lỗi kiểm tra ngày nghỉ:', error?.message || error);
+      return true; // Fail-safe: consider holiday on error to avoid accidental sends
     }
   }
 
