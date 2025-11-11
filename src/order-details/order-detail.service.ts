@@ -56,6 +56,56 @@ export class OrderDetailService {
     return /^\d{4}-\d{2}-\d{2}$/.test(value.trim());
   }
 
+  // Compare values to decide whether they're meaningfully different.
+  // Rules:
+  // - Strings: compare trimmed strings
+  // - Dates: compare ISO strings
+  // - Numbers: compare numeric value
+  // - Booleans: compare boolean
+  // - null/undefined: treat both null/undefined as equal
+  // - Objects/arrays: compare JSON.stringify
+  private valuesDiffer(a: any, b: any): boolean {
+    // both null/undefined
+    if (a == null && b == null) return false;
+
+    // same reference or primitive equality
+    if (a === b) return false;
+
+    // Strings: compare trimmed
+    if (typeof a === 'string' || typeof b === 'string') {
+      const sa = a == null ? '' : String(a).trim();
+      const sb = b == null ? '' : String(b).trim();
+      return sa !== sb;
+    }
+
+    // Dates
+    if (a instanceof Date || b instanceof Date) {
+      const da = a ? new Date(a).toISOString() : null;
+      const db = b ? new Date(b).toISOString() : null;
+      return da !== db;
+    }
+
+    // Numbers
+    if (typeof a === 'number' || typeof b === 'number') {
+      const na = a == null ? null : Number(a);
+      const nb = b == null ? null : Number(b);
+      if (Number.isNaN(na) && Number.isNaN(nb)) return false;
+      return na !== nb;
+    }
+
+    // Booleans
+    if (typeof a === 'boolean' || typeof b === 'boolean') {
+      return Boolean(a) !== Boolean(b);
+    }
+
+    // Fallback: deep compare via JSON
+    try {
+      return JSON.stringify(a) !== JSON.stringify(b);
+    } catch {
+      return true;
+    }
+  }
+
   private addOneDayDateOnly(value: string): string {
     const [y, m, d] = value.split('-').map((n) => parseInt(n, 10));
     const dt = new Date(Date.UTC(y, (m || 1) - 1, d || 1));
@@ -435,10 +485,7 @@ export class OrderDetailService {
           const oldVal = (currentOrderDetail as any)[key];
           const newVal = (orderDetailData as any)[key];
 
-          const oldStr = oldVal instanceof Date ? oldVal.toISOString() : JSON.stringify(oldVal);
-          const newStr = newVal instanceof Date ? newVal.toISOString() : JSON.stringify(newVal);
-
-          if (oldStr !== newStr) {
+          if (this.valuesDiffer(oldVal, newVal)) {
             changedFields.push({ field: key, old_value: oldVal, new_value: newVal });
           }
         }
@@ -474,26 +521,32 @@ export class OrderDetailService {
 
     // ✅ Ghi lại lịch sử thay đổi ghi chú nếu có cập nhật notes
     if (typeof orderDetailData.notes === 'string') {
-      // Parse existing history
-      let history: any[] = [];
-      const raw = (currentOrderDetail as any)?.notes_history;
-      try {
-        if (Array.isArray(raw)) history = raw;
-        else if (raw && typeof raw === 'string') history = JSON.parse(raw);
-      } catch {
-        history = [];
+      // only record notes change if different from current
+      const currentNotes = (currentOrderDetail as any)?.notes;
+      if (!this.valuesDiffer(currentNotes, orderDetailData.notes)) {
+        // nothing changed
+      } else {
+        // Parse existing history
+        let history: any[] = [];
+        const raw = (currentOrderDetail as any)?.notes_history;
+        try {
+          if (Array.isArray(raw)) history = raw;
+          else if (raw && typeof raw === 'string') history = JSON.parse(raw);
+        } catch {
+          history = [];
+        }
+
+        history.push({
+          user_id: user?.id ?? null,
+          content: orderDetailData.notes,
+          changed_at: new Date().toISOString(),
+        });
+
+        // Optional cap to avoid unbounded growth
+        if (history.length > 500) history = history.slice(-500);
+
+        updatePayload = { ...updatePayload, notes_history: history };
       }
-
-      history.push({
-        user_id: user?.id ?? null,
-        content: orderDetailData.notes,
-        changed_at: new Date().toISOString(),
-      });
-
-      // Optional cap to avoid unbounded growth
-      if (history.length > 500) history = history.slice(-500);
-
-      updatePayload = { ...updatePayload, notes_history: history };
     }
 
     // Remove transient edit_note so it doesn't get saved as a column
@@ -685,6 +738,8 @@ export class OrderDetailService {
     // Nếu có cập nhật notes, cần ghi lịch sử theo từng item
     if (typeof updates.notes === 'string') {
       for (const od of orderDetails) {
+        // only append notes history if value actually changed
+        const currentNotes = (od as any).notes;
         let history: any[] = [];
         const raw = (od as any).notes_history;
         try {
@@ -693,12 +748,14 @@ export class OrderDetailService {
         } catch {
           history = [];
         }
-        history.push({
-          user_id: user?.id ?? null,
-          content: updates.notes,
-          changed_at: new Date().toISOString(),
-        });
-        if (history.length > 500) history = history.slice(-500);
+        if (this.valuesDiffer(currentNotes, updates.notes)) {
+          history.push({
+            user_id: user?.id ?? null,
+            content: updates.notes,
+            changed_at: new Date().toISOString(),
+          });
+          if (history.length > 500) history = history.slice(-500);
+        }
 
         // Also append edit_history for this notes change
         let editHistory: any[] = [];
@@ -709,15 +766,17 @@ export class OrderDetailService {
         } catch {
           editHistory = [];
         }
-        editHistory.push({
-          user_id: user?.id ?? null,
-          user_name: user?.fullName || user?.username || 'Unknown',
-          fields: [
-            { field: 'notes', old_value: (od as any).notes, new_value: updates.notes },
-          ],
-          note: (updates as any).edit_note ?? null,
-          changed_at: new Date().toISOString(),
-        });
+        if (this.valuesDiffer((od as any).notes, updates.notes)) {
+          editHistory.push({
+            user_id: user?.id ?? null,
+            user_name: user?.fullName || user?.username || 'Unknown',
+            fields: [
+              { field: 'notes', old_value: (od as any).notes, new_value: updates.notes },
+            ],
+            note: (updates as any).edit_note ?? null,
+            changed_at: new Date().toISOString(),
+          });
+        }
         if (editHistory.length > 1000) editHistory = editHistory.slice(-1000);
 
         await this.orderDetailRepository.update(od.id, {
@@ -732,16 +791,14 @@ export class OrderDetailService {
     // Không có cập nhật notes: có thể update hàng loạt
     // But we need to record edit_history per item for changed fields
     const skipKeys = new Set(['created_at', 'updated_at', 'deleted_at', 'notes_history', 'edit_history', 'hidden_at']);
-    for (const od of orderDetails) {
+      for (const od of orderDetails) {
       const changedFields: { field: string; old_value: any; new_value: any }[] = [];
       for (const key of Object.keys(updates)) {
         if (skipKeys.has(key)) continue;
         if ((updates as any)[key] === undefined) continue;
         const oldVal = (od as any)[key];
         const newVal = (updates as any)[key];
-        const oldStr = oldVal instanceof Date ? oldVal.toISOString() : JSON.stringify(oldVal);
-        const newStr = newVal instanceof Date ? newVal.toISOString() : JSON.stringify(newVal);
-        if (oldStr !== newStr) changedFields.push({ field: key, old_value: oldVal, new_value: newVal });
+        if (this.valuesDiffer(oldVal, newVal)) changedFields.push({ field: key, old_value: oldVal, new_value: newVal });
       }
 
       let payload: any = { ...updates };
@@ -829,12 +886,15 @@ export class OrderDetailService {
       } catch {
         history = [];
       }
-      history.push({
-        user_id: user?.id ?? null,
-        content: notes,
-        changed_at: new Date().toISOString(),
-      });
-      if (history.length > 500) history = history.slice(-500);
+      // only append if changed
+      if (this.valuesDiffer((od as any).notes, notes)) {
+        history.push({
+          user_id: user?.id ?? null,
+          content: notes,
+          changed_at: new Date().toISOString(),
+        });
+        if (history.length > 500) history = history.slice(-500);
+      }
 
       // Also append edit_history for this notes change
       let editHistory: any[] = [];
