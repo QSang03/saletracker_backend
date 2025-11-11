@@ -442,12 +442,11 @@ export class OrderDetailService {
     orderDetailData: Partial<OrderDetail>,
     user?: any,
   ): Promise<OrderDetail | null> {
-    // Determine if we need the current row
-    const needsExisting =
-      orderDetailData.extended !== undefined ||
-      typeof orderDetailData.notes === 'string' ||
-      orderDetailData.product_id === null; // Cần lấy thông tin hiện tại khi xóa mã sản phẩm
-    const currentOrderDetail = needsExisting ? await this.findById(id) : null;
+    // Always fetch current row so we can compute meaningful edit_history entries.
+    // Previously we only fetched when certain fields were present which skipped
+    // edit detection for many updates. Fetching here ensures any changed field
+    // is compared to the current value and an edit_history entry is recorded.
+    const currentOrderDetail = await this.findById(id);
 
     // ✅ Xử lý đặc biệt cho trường extended - cộng thêm thay vì ghi đè
     if (orderDetailData.extended !== undefined && currentOrderDetail) {
