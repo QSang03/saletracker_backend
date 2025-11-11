@@ -32,10 +32,21 @@ export class ZaloLinkMonitorCronjob {
     // ENFORCE: never run sending before 08:00 local server time for any reason
     try {
       // Use VN timezone explicitly to avoid server-local timezone mismatch
-      const nowVn = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh' }));
-      const hour = nowVn.getHours(); // 0-23 in VN timezone
+      const now = new Date();
+      const vnTimeString = now.toLocaleString('en-US', { 
+        timeZone: 'Asia/Ho_Chi_Minh',
+        hour12: false,
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+      });
+      
+      // Extract hour from formatted string (format: "MM/DD/YYYY, HH:MM:SS")
+      const timePart = vnTimeString.split(', ')[1]; // "HH:MM:SS"
+      const hour = parseInt(timePart.split(':')[0], 10); // Extract hour
+      
       if (hour < 8) {
-        this.logger.log(`⏰ Bỏ qua cronjob - chỉ được phép gửi sau 08:00 (VN timezone). Giờ hiện tại: ${nowVn.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Ho_Chi_Minh' })}`);
+        this.logger.log(`⏰ Bỏ qua cronjob - chỉ được phép gửi sau 08:00 (VN timezone). Giờ hiện tại: ${timePart.substring(0, 5)} (${hour}h)`);
         return;
       }
     } catch (err) {
@@ -149,13 +160,13 @@ export class ZaloLinkMonitorCronjob {
     try {
       // Fixed allowed window: 08:00 - 17:45 local server time
       // Use VN timezone everywhere for consistent checks
-      const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh' }));
-      const currentTime = now.toLocaleTimeString('en-US', {
+      const now = new Date();
+      const currentTime = now.toLocaleString('en-US', {
         hour12: false,
         hour: '2-digit',
         minute: '2-digit',
         timeZone: 'Asia/Ho_Chi_Minh'
-      });
+      }).split(', ')[1].substring(0, 5); // Extract "HH:MM" from "MM/DD/YYYY, HH:MM:SS"
 
       const allowedStart = '08:00';
       const allowedEnd = '17:45';
@@ -169,11 +180,16 @@ export class ZaloLinkMonitorCronjob {
       }
 
       // Additional DB-based checks: skip Sundays and configured holidays
-  const nowDate = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh' }));
-  const dayOfWeek = nowDate.getDay(); // 0 = Sunday (VN timezone)
+  const dayOfWeek = now.getDay(); // 0 = Sunday (but this is still server timezone, needs fix)
+  // BETTER: Get day of week in VN timezone
+  const vnDateString = now.toLocaleString('en-US', { 
+    timeZone: 'Asia/Ho_Chi_Minh',
+    weekday: 'short'
+  }); // "Sun", "Mon", etc.
+  const vnDayOfWeek = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(vnDateString.split(',')[0]);
 
       // 1) If Sunday, check system_scheduleSunday
-      if (dayOfWeek === 0) {
+      if (vnDayOfWeek === 0) {
         const allowSunday = await this.isSundayRunAllowed();
         if (!allowSunday) {
           this.logger.log('🚫 Hôm nay là Chủ nhật và cấu hình DB không cho phép chạy');
