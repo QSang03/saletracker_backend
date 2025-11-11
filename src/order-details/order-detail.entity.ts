@@ -118,6 +118,15 @@ export class OrderDetail {
   @Column('json', { nullable: true })
   notes_history: { user_id: number | null; content: string; changed_at: string }[];
 
+  @Column('json', { nullable: true, default: null })
+  edit_history: {
+    user_id: number | null;
+    user_name?: string | null;
+    fields: { field: string; old_value: any; new_value: any }[];
+    note?: string | null;
+    changed_at: string;
+  }[];
+
   @Column('longtext', { nullable: true })
   reason: string;
 

@@ -410,6 +410,68 @@ export class OrderDetailService {
       }
     }
 
+    // Prepare edit_history entry if there are actual field changes
+    let updatePayload: Partial<OrderDetail> = { ...orderDetailData };
+
+    try {
+      if (currentOrderDetail) {
+        // Identify changed fields (skip internal fields)
+        const skipKeys = new Set([
+          'created_at',
+          'updated_at',
+          'deleted_at',
+          'notes_history',
+          'edit_history',
+          'hidden_at',
+        ]);
+
+        const changedFields: { field: string; old_value: any; new_value: any }[] = [];
+
+        for (const key of Object.keys(orderDetailData)) {
+          if (skipKeys.has(key)) continue;
+          // ignore undefined
+          if ((orderDetailData as any)[key] === undefined) continue;
+
+          const oldVal = (currentOrderDetail as any)[key];
+          const newVal = (orderDetailData as any)[key];
+
+          const oldStr = oldVal instanceof Date ? oldVal.toISOString() : JSON.stringify(oldVal);
+          const newStr = newVal instanceof Date ? newVal.toISOString() : JSON.stringify(newVal);
+
+          if (oldStr !== newStr) {
+            changedFields.push({ field: key, old_value: oldVal, new_value: newVal });
+          }
+        }
+
+        if (changedFields.length > 0) {
+          // Read existing edit history
+          let editHistory: any[] = [];
+          const raw = (currentOrderDetail as any)?.edit_history;
+          try {
+            if (Array.isArray(raw)) editHistory = raw;
+            else if (raw && typeof raw === 'string') editHistory = JSON.parse(raw);
+          } catch {
+            editHistory = [];
+          }
+
+          const entry = {
+            user_id: user?.id ?? null,
+            user_name: user?.fullName || user?.username || 'Unknown',
+            fields: changedFields,
+            note: (orderDetailData as any).edit_note ?? null,
+            changed_at: new Date().toISOString(),
+          };
+
+          editHistory.push(entry);
+          if (editHistory.length > 1000) editHistory = editHistory.slice(-1000);
+
+          updatePayload = { ...updatePayload, edit_history: editHistory };
+        }
+      }
+    } catch (e) {
+      this.logger.warn('Failed to build edit_history: ' + (e?.message || e));
+    }
+
     // ✅ Ghi lại lịch sử thay đổi ghi chú nếu có cập nhật notes
     if (typeof orderDetailData.notes === 'string') {
       // Parse existing history
@@ -431,13 +493,16 @@ export class OrderDetailService {
       // Optional cap to avoid unbounded growth
       if (history.length > 500) history = history.slice(-500);
 
-      await this.orderDetailRepository.update(id, {
-        ...orderDetailData,
-        notes_history: history,
-      });
-    } else {
-      await this.orderDetailRepository.update(id, orderDetailData);
+      updatePayload = { ...updatePayload, notes_history: history };
     }
+
+    // Remove transient edit_note so it doesn't get saved as a column
+    if ((updatePayload as any).edit_note !== undefined) {
+      delete (updatePayload as any).edit_note;
+    }
+
+    // Perform update with combined payload
+    await this.orderDetailRepository.update(id, updatePayload);
 
     // ✅ Ghi log xóa mã sản phẩm nếu product_id được set thành null
     if (orderDetailData.product_id === null && currentOrderDetail?.product?.productCode) {
@@ -635,19 +700,77 @@ export class OrderDetailService {
         });
         if (history.length > 500) history = history.slice(-500);
 
+        // Also append edit_history for this notes change
+        let editHistory: any[] = [];
+        const rawEdit = (od as any).edit_history;
+        try {
+          if (Array.isArray(rawEdit)) editHistory = rawEdit;
+          else if (rawEdit && typeof rawEdit === 'string') editHistory = JSON.parse(rawEdit);
+        } catch {
+          editHistory = [];
+        }
+        editHistory.push({
+          user_id: user?.id ?? null,
+          user_name: user?.fullName || user?.username || 'Unknown',
+          fields: [
+            { field: 'notes', old_value: (od as any).notes, new_value: updates.notes },
+          ],
+          note: (updates as any).edit_note ?? null,
+          changed_at: new Date().toISOString(),
+        });
+        if (editHistory.length > 1000) editHistory = editHistory.slice(-1000);
+
         await this.orderDetailRepository.update(od.id, {
           ...updates,
           notes_history: history,
+          edit_history: editHistory,
         });
       }
       return { updated: orderDetails.length };
     }
 
     // Không có cập nhật notes: có thể update hàng loạt
-    await this.orderDetailRepository.update(
-      orderDetails.map((od) => od.id),
-      updates,
-    );
+    // But we need to record edit_history per item for changed fields
+    const skipKeys = new Set(['created_at', 'updated_at', 'deleted_at', 'notes_history', 'edit_history', 'hidden_at']);
+    for (const od of orderDetails) {
+      const changedFields: { field: string; old_value: any; new_value: any }[] = [];
+      for (const key of Object.keys(updates)) {
+        if (skipKeys.has(key)) continue;
+        if ((updates as any)[key] === undefined) continue;
+        const oldVal = (od as any)[key];
+        const newVal = (updates as any)[key];
+        const oldStr = oldVal instanceof Date ? oldVal.toISOString() : JSON.stringify(oldVal);
+        const newStr = newVal instanceof Date ? newVal.toISOString() : JSON.stringify(newVal);
+        if (oldStr !== newStr) changedFields.push({ field: key, old_value: oldVal, new_value: newVal });
+      }
+
+      let payload: any = { ...updates };
+      if (changedFields.length > 0) {
+        let editHistory: any[] = [];
+        const rawEdit = (od as any).edit_history;
+        try {
+          if (Array.isArray(rawEdit)) editHistory = rawEdit;
+          else if (rawEdit && typeof rawEdit === 'string') editHistory = JSON.parse(rawEdit);
+        } catch {
+          editHistory = [];
+        }
+        editHistory.push({
+          user_id: user?.id ?? null,
+          user_name: user?.fullName || user?.username || 'Unknown',
+          fields: changedFields,
+          note: (updates as any).edit_note ?? null,
+          changed_at: new Date().toISOString(),
+        });
+        if (editHistory.length > 1000) editHistory = editHistory.slice(-1000);
+        payload.edit_history = editHistory;
+      }
+
+      // remove edit_note transient
+      if (payload.edit_note !== undefined) delete payload.edit_note;
+
+      await this.orderDetailRepository.update(od.id, payload);
+    }
+
     return { updated: orderDetails.length };
   }
 
@@ -713,9 +836,30 @@ export class OrderDetailService {
       });
       if (history.length > 500) history = history.slice(-500);
 
+      // Also append edit_history for this notes change
+      let editHistory: any[] = [];
+      const rawEdit = (od as any).edit_history;
+      try {
+        if (Array.isArray(rawEdit)) editHistory = rawEdit;
+        else if (rawEdit && typeof rawEdit === 'string') editHistory = JSON.parse(rawEdit);
+      } catch {
+        editHistory = [];
+      }
+      editHistory.push({
+        user_id: user?.id ?? null,
+        user_name: user?.fullName || user?.username || 'Unknown',
+        fields: [
+          { field: 'notes', old_value: (od as any).notes, new_value: notes },
+        ],
+        note: null,
+        changed_at: new Date().toISOString(),
+      });
+      if (editHistory.length > 1000) editHistory = editHistory.slice(-1000);
+
       await this.orderDetailRepository.update(od.id, {
         notes,
         notes_history: history,
+        edit_history: editHistory,
       });
     }
 
