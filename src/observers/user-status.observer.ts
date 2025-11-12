@@ -102,6 +102,26 @@ export class UserStatusObserver {
     let payload: any;
     
     try {
+      // ENFORCE: never send notifications before 08:00 VN timezone
+      try {
+        const now = new Date();
+        const vnTimeString = now.toLocaleString('en-US', { 
+          timeZone: 'Asia/Ho_Chi_Minh',
+          hour12: false,
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit'
+        });
+        const timePart = vnTimeString.split(', ')[1]; // "HH:MM:SS"
+        const hour = parseInt(timePart.split(':')[0], 10);
+        if (!isNaN(hour) && hour < 8) {
+          this.logger.log(`⏰ Bỏ qua gửi notification đến Python API cho user ${event.userId} — ngoài giờ (trước 08:00 VN). Giờ VN hiện tại: ${timePart.substring(0,5)}`);
+          return;
+        }
+      } catch (tzErr) {
+        // If timezone parsing fails, conservative approach: allow send (or you may choose to skip)
+        this.logger.warn(`⚠️ Không thể xác định giờ VN trước khi gửi (để an toàn có thể cân nhắc bỏ qua): ${tzErr?.message || tzErr}`);
+      }
       // Kiểm tra user đã được xử lý gần đây chưa (trong vòng 5 phút)
       const now = Date.now();
       const lastProcessed = this.processedUsers.get(event.userId);
