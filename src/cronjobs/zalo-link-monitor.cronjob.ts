@@ -161,12 +161,18 @@ export class ZaloLinkMonitorCronjob {
       // Fixed allowed window: 08:00 - 17:45 local server time
       // Use VN timezone everywhere for consistent checks
       const now = new Date();
-      const currentTime = now.toLocaleString('en-US', {
+
+      // Use Intl.DateTimeFormat.formatToParts to reliably get hour/minute in VN timezone
+      const timeFormatter = new Intl.DateTimeFormat('en-US', {
         hour12: false,
         hour: '2-digit',
         minute: '2-digit',
         timeZone: 'Asia/Ho_Chi_Minh'
-      }).split(', ')[1].substring(0, 5); // Extract "HH:MM" from "MM/DD/YYYY, HH:MM:SS"
+      });
+      const parts = timeFormatter.formatToParts(now);
+      const hourPart = parts.find(p => p.type === 'hour')?.value ?? '00';
+      const minutePart = parts.find(p => p.type === 'minute')?.value ?? '00';
+      const currentTime = `${hourPart.padStart(2, '0')}:${minutePart.padStart(2, '0')}`; // "HH:MM"
 
       const allowedStart = '08:00';
       const allowedEnd = '17:45';
@@ -180,13 +186,15 @@ export class ZaloLinkMonitorCronjob {
       }
 
       // Additional DB-based checks: skip Sundays and configured holidays
-  const dayOfWeek = now.getDay(); // 0 = Sunday (but this is still server timezone, needs fix)
-  // BETTER: Get day of week in VN timezone
-  const vnDateString = now.toLocaleString('en-US', { 
-    timeZone: 'Asia/Ho_Chi_Minh',
-    weekday: 'short'
-  }); // "Sun", "Mon", etc.
-  const vnDayOfWeek = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(vnDateString.split(',')[0]);
+      // Get VN weekday reliably
+      const weekdayFormatter = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'Asia/Ho_Chi_Minh',
+        weekday: 'short'
+      });
+      const vnWeekday = weekdayFormatter.format(now); // e.g. 'Sun', 'Mon'
+      const vnDayOfWeek = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(vnWeekday);
+
+      this.logger.log(`🔎 VN time computed: ${currentTime}, weekday: ${vnWeekday} (index ${vnDayOfWeek})`);
 
       // 1) If Sunday, check system_scheduleSunday
       if (vnDayOfWeek === 0) {
