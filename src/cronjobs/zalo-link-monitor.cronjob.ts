@@ -32,32 +32,41 @@ export class ZaloLinkMonitorCronjob {
   @Cron(process.env.ZALO_LINK_MONITOR_CRON || '*/5 * * * *')
   async monitorZaloLinkStatus() {
     const currentTime = Date.now();
+    // Log invocation immediately so we can detect whether cron is firing
+    this.logger.log('🔔 monitorZaloLinkStatus invoked');
+    this.appendFileLog('INFO', 'monitorZaloLinkStatus invoked').catch(() => {});
 
     // ENFORCE: never run sending before 08:00 local server time for any reason
     try {
-      // Use VN timezone explicitly to avoid server-local timezone mismatch
+      // Use Intl.DateTimeFormat to reliably compute VN hour/minute
       const now = new Date();
-      const vnTimeString = now.toLocaleString('en-US', { 
+      const timeFormatter = new Intl.DateTimeFormat('en-US', {
         timeZone: 'Asia/Ho_Chi_Minh',
         hour12: false,
         hour: '2-digit',
         minute: '2-digit',
         second: '2-digit'
       });
-      
-      // Extract hour from formatted string (format: "MM/DD/YYYY, HH:MM:SS")
-      const timePart = vnTimeString.split(', ')[1]; // "HH:MM:SS"
-      const hour = parseInt(timePart.split(':')[0], 10); // Extract hour
-      
-      if (hour < 8) {
-        const msg = `⏰ Bỏ qua cronjob - chỉ được phép gửi sau 08:00 (VN timezone). Giờ hiện tại: ${timePart.substring(0, 5)} (${hour}h)`;
+      const parts = timeFormatter.formatToParts(now);
+      const hourPart = parts.find(p => p.type === 'hour')?.value ?? '00';
+      const minutePart = parts.find(p => p.type === 'minute')?.value ?? '00';
+      const secondPart = parts.find(p => p.type === 'second')?.value ?? '00';
+      const timePart = `${hourPart.padStart(2, '0')}:${minutePart.padStart(2, '0')}:${secondPart.padStart(2, '0')}`;
+      const hour = parseInt(hourPart, 10);
+
+      this.logger.log(`🔎 VN time (monitor check): ${timePart} (hour=${hour})`);
+
+      if (isNaN(hour) || hour < 8) {
+        const msg = `⏰ Bỏ qua cronjob - chỉ được phép gửi sau 08:00 (VN timezone). Giờ hiện tại: ${timePart.substring(0, 5)} (${isNaN(hour) ? 'NaN' : hour + 'h'})`;
         this.logger.log(msg);
         this.appendFileLog('INFO', msg).catch(() => {});
         return;
       }
     } catch (err) {
       // If anything odd happens reading time, be conservative and skip sending
-      this.logger.warn(`⚠️ Không thể xác định thời gian hiện tại (VN timezone), bỏ qua cronjob để an toàn: ${err?.message || err}`);
+      const warn = `⚠️ Không thể xác định thời gian hiện tại (VN timezone), bỏ qua cronjob để an toàn: ${err?.message || err}`;
+      this.logger.warn(warn);
+      this.appendFileLog('WARN', warn).catch(() => {});
       return;
     }
     
