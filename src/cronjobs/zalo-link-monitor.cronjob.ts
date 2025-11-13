@@ -1,5 +1,7 @@
 import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import * as fs from 'fs';
+import * as path from 'path';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User } from '../users/user.entity';
@@ -22,6 +24,8 @@ export class ZaloLinkMonitorCronjob {
     private readonly userStatusObserver: UserStatusObserver,
   ) {
     this.logger.log('🚀 ZaloLinkMonitorCronjob khởi động');
+    // write startup to daily file
+    this.appendFileLog('INFO', 'ZaloLinkMonitorCronjob khởi động').catch(() => {});
   }
 
  
@@ -46,7 +50,9 @@ export class ZaloLinkMonitorCronjob {
       const hour = parseInt(timePart.split(':')[0], 10); // Extract hour
       
       if (hour < 8) {
-        this.logger.log(`⏰ Bỏ qua cronjob - chỉ được phép gửi sau 08:00 (VN timezone). Giờ hiện tại: ${timePart.substring(0, 5)} (${hour}h)`);
+        const msg = `⏰ Bỏ qua cronjob - chỉ được phép gửi sau 08:00 (VN timezone). Giờ hiện tại: ${timePart.substring(0, 5)} (${hour}h)`;
+        this.logger.log(msg);
+        this.appendFileLog('INFO', msg).catch(() => {});
         return;
       }
     } catch (err) {
@@ -57,20 +63,26 @@ export class ZaloLinkMonitorCronjob {
     
     // Kiểm tra lock để tránh duplicate execution
     if (this.isRunning) {
-      this.logger.warn(`⚠️ Cronjob đang chạy, bỏ qua lần này để tránh duplicate`);
+      const msg = `⚠️ Cronjob đang chạy, bỏ qua lần này để tránh duplicate`;
+      this.logger.warn(msg);
+      this.appendFileLog('WARN', msg).catch(() => {});
       return;
     }
     
     // Kiểm tra thời gian chạy cuối cùng (tránh chạy quá gần nhau)
     if (currentTime - this.lastRunTime < 60000) { // 60 giây
-      this.logger.warn(`⚠️ Cronjob vừa chạy cách đây ${Math.round((currentTime - this.lastRunTime) / 1000)}s, bỏ qua để tránh duplicate`);
+      const msg = `⚠️ Cronjob vừa chạy cách đây ${Math.round((currentTime - this.lastRunTime) / 1000)}s, bỏ qua để tránh duplicate`;
+      this.logger.warn(msg);
+      this.appendFileLog('WARN', msg).catch(() => {});
       return;
     }
 
     // Kiểm tra thời gian nghỉ (fixed window 08:00 - 17:45)
     const isInRestTime = await this.checkRestTime();
     if (isInRestTime) {
-      this.logger.log(`😴 Bỏ qua cronjob - hiện tại ngoài khung giờ gửi hoặc là ngày nghỉ (08:00-17:45 + DB ngày nghỉ)`);
+      const msg = `😴 Bỏ qua cronjob - hiện tại ngoài khung giờ gửi hoặc là ngày nghỉ (08:00-17:45 + DB ngày nghỉ)`;
+      this.logger.log(msg);
+      this.appendFileLog('INFO', msg).catch(() => {});
       return;
     }
 
@@ -107,12 +119,16 @@ export class ZaloLinkMonitorCronjob {
           return false;
         });
 
-        this.logger.log(`📊 Tìm thấy ${allCandidates.length} candidate users (status 2 hoặc 0), sau khi lọc thietpn và không có email còn ${usersToProcess.length} users`);
+  const foundMsg = `📊 Tìm thấy ${allCandidates.length} candidate users (status 2 hoặc 0), sau khi lọc thietpn và không có email còn ${usersToProcess.length} users`;
+  this.logger.log(foundMsg);
+  this.appendFileLog('INFO', foundMsg).catch(() => {});
 
         for (const user of usersToProcess) {
         // Kiểm tra user đã được xử lý trong phiên này chưa
         if (this.processedUsers.has(user.id)) {
-          this.logger.log(`⏭️ Bỏ qua user ${user.id} (${user.username}) - đã được xử lý trong phiên này`);
+          const skipMsg = `⏭️ Bỏ qua user ${user.id} (${user.username}) - đã được xử lý trong phiên này`;
+          this.logger.log(skipMsg);
+          this.appendFileLog('INFO', skipMsg).catch(() => {});
           continue;
         }
         
@@ -124,13 +140,34 @@ export class ZaloLinkMonitorCronjob {
       }
 
     } catch (error) {
-      this.logger.error(`Lỗi khi monitor Zalo link status: ${error.message}`);
+      const errMsg = `Lỗi khi monitor Zalo link status: ${error.message}`;
+      this.logger.error(errMsg);
+      this.appendFileLog('ERROR', errMsg + ' - ' + JSON.stringify(error)).catch(() => {});
     } finally {
       // Luôn reset lock trong finally block
       this.isRunning = false;
       
       // Clear processed users sau mỗi lần chạy
       this.processedUsers.clear();
+      const duration = Date.now() - startTime;
+      const finishMsg = `Kết thúc cronjob, thời gian chạy ${duration}ms`;
+      this.logger.log(finishMsg);
+      this.appendFileLog('INFO', finishMsg).catch(() => {});
+    }
+  }
+
+  // Append log line to a per-day file under Backend/logs
+  private async appendFileLog(level: string, message: string) {
+    try {
+      const vnDate = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }); // YYYY-MM-DD
+      const logsDir = path.resolve(process.cwd(), 'Backend', 'logs');
+      await fs.promises.mkdir(logsDir, { recursive: true });
+      const fileName = `zalo-link-monitor-${vnDate}.log`;
+      const fullPath = path.join(logsDir, fileName);
+      const line = `${new Date().toISOString()} [${level}] ${message}\n`;
+      await fs.promises.appendFile(fullPath, line, { encoding: 'utf8' });
+    } catch (e) {
+      // swallow to avoid affecting cronjob
     }
   }
 
