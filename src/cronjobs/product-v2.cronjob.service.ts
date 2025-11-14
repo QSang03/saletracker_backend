@@ -29,6 +29,11 @@ export class ProductV2CronjobService {
 
   @Cron(process.env.CRON_PRODUCT_TIME || '0 22 * * *')
   async syncProductsV2() {
+    // Temporary toggle: if this env var is set to 'true', skip the cronjob execution.
+    if (process.env.DISABLE_CRON_PRODUCT_V2 === 'true') {
+      this.logger.warn('product-v2 cronjob temporarily disabled via DISABLE_CRON_PRODUCT_V2');
+      return;
+    }
     const apiUrl = process.env.VNK_API_PRODUCT_URL_V2;
     const token = process.env.VNK_API_TOKEN;
 
