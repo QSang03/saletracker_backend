@@ -2745,7 +2745,7 @@ export class CampaignService {
         name: data.name,
         campaign_type: data.campaign_type,
         status: data.status || CampaignStatus.DRAFT,
-        send_method: data.send_method || 'api',
+        send_method: data.send_method || 'bot',
         department: department,
         created_by: createdBy,
       });
