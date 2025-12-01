@@ -58,8 +58,9 @@ export class UserStatusObserver {
           timestamp: event.timestamp,
         });
 
-      // Gọi API Python để xử lý lỗi liên kết
-      await this.callPythonApiForLinkError(event);
+      // NOTE: Disabled direct call to Python API here per recent change.
+      // Only the cronjob monitor should call the API and send email notifications.
+      this.logger.log(`⚠️ Direct Python API call disabled for user ${event.userId}; cronjob will handle notification.`);
     } else if (event.newStatus === 0) {
       // Với yêu cầu mới: nếu username là số điện thoại thì cũng gửi thông báo (status 0 = chưa liên kết)
       try {
@@ -86,8 +87,9 @@ export class UserStatusObserver {
               timestamp: event.timestamp,
             });
 
-          // Gọi API Python để xử lý (truyền user đã lấy để tránh fetch lại)
-          await this.callPythonApiForLinkError(event, user);
+          // Mark the user for cronjob processing by updating status (DB already has the status)
+          // We purposely do not call the Python API from here.
+          this.logger.log(`⚠️ Direct Python API call disabled for user ${event.userId} (status 0); cronjob will handle notification.`);
         }
       } catch (e) {
         this.logger.error(`Failed handling newStatus=0 for user ${event.userId}: ${e?.message}`);
@@ -230,24 +232,15 @@ export class UserStatusObserver {
   // Phương thức để trigger manual khi phát hiện lỗi liên kết
   async triggerZaloLinkError(userId: number, errorType: string = 'unknown', updatedBy: string = 'system') {
     try {
-      const user = await this.userService.findOneWithDetails(userId);
-      
-      if (!user) {
-        this.logger.error(`Không tìm thấy user với ID: ${userId}`);
-        return false;
+      // Manual trigger should only update the user's zaloLinkStatus so the cronjob
+      // will pick up and send notifications. Avoid direct API calls here.
+      const updatedUser = await this.userService.updateZaloLinkStatus(userId, 2);
+      if (updatedUser) {
+        this.logger.log(`Đã trigger lỗi liên kết cho user ${userId} — status updated to 2 (handled by cronjob)`);
+        return true;
       }
-
-      // Gọi trực tiếp API Python thay vì update user (để tránh duplicate event)
-      await this.callPythonApiForLinkError({
-        userId: user.id,
-        oldStatus: user.zaloLinkStatus,
-        newStatus: 2,
-        updatedBy: updatedBy,
-        timestamp: new Date(),
-      });
-
-      this.logger.log(`Đã trigger lỗi liên kết cho user ${userId}`);
-      return true;
+      this.logger.error(`Không thể trigger lỗi liên kết cho user ${userId} - cập nhật status thất bại`);
+      return false;
 
     } catch (error) {
       this.logger.error(`Lỗi khi trigger lỗi liên kết cho user ${userId}: ${error.message}`);
