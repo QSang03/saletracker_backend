@@ -21,7 +21,9 @@ export class OrderCleanupCronjobService {
   ) {}
 
   // ✅ SỬA: Chạy MỌI NGÀY để có thể check và xử lý (0 = Chủ nhật, 1-6 = Thứ 2-7)
-  @Cron(process.env.CRON_ORDER_CLEANUP_TIME || '00 01 * * *')
+  // Ensure schedule uses Vietnam timezone so it's consistent with VN business days
+  // Default cron expression is set to 01:00 daily (minute, hour, day, month, day-of-week)
+  @Cron(process.env.CRON_ORDER_CLEANUP_TIME || '0 1 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
   async cleanupExpiredOrderDetails() {
     const executionStartTime = new Date();
     try {
@@ -163,15 +165,13 @@ export class OrderCleanupCronjobService {
    */
   private async canRunToday(): Promise<boolean> {
     try {
-      const today = new Date();
-      // Sử dụng timezone VN đồng nhất
-      const todayStr = today.toLocaleDateString('en-CA', {
-        timeZone: 'Asia/Ho_Chi_Minh',
-      }); // Format: YYYY-MM-DD
-      const dayOfWeek = today.getDay(); // 0 = Chủ nhật, 1 = Thứ 2, ..., 6 = Thứ 7
+      // Sử dụng VN timezone để lấy ngày hiện tại và dayOfWeek đồng bộ
+      const todayDateOnly = this.getVNDateOnly();
+      const todayStr = todayDateOnly.toISOString().split('T')[0]; // YYYY-MM-DD
+      const dayOfWeek = todayDateOnly.getDay(); // 0 = Chủ nhật, 1 = Thứ 2, ..., 6 = Thứ 7
 
       this.logger.log(
-        `🔍 Kiểm tra điều kiện chạy cho ngày: ${todayStr} (${this.formatDate(today)})`,
+        `🔍 Kiểm tra điều kiện chạy cho ngày: ${todayStr} (${this.formatDate(todayDateOnly)})`,
       );
       this.logger.log(
         `📅 Thứ trong tuần: ${this.getDayOfWeekName(dayOfWeek)} (${dayOfWeek})`,
@@ -246,6 +246,18 @@ export class OrderCleanupCronjobService {
       'Thứ 7',
     ];
     return days[dayOfWeek];
+  }
+
+  /**
+   * Lấy ngày (đầu ngày) theo timezone Vietnam (Asia/Ho_Chi_Minh)
+   * Trả về Date được chuẩn hóa về đầu ngày (00:00:00) trong timezone VN.
+   */
+  private getVNDateOnly(date?: Date | string): Date {
+    const d = date ? new Date(date) : new Date();
+    const isoDateStr = d.toLocaleDateString('en-CA', {
+      timeZone: 'Asia/Ho_Chi_Minh',
+    }); // YYYY-MM-DD
+    return new Date(isoDateStr);
   }
 
   /**
@@ -379,17 +391,11 @@ export class OrderCleanupCronjobService {
    * Công thức mới: Tính số ngày đã trôi qua kể từ khi tạo
    */
   private calculateExpiredOrderDetails(orderDetails: OrderDetail[]): number[] {
-    const currentDate = new Date();
-
-    // Chuẩn hóa về đầu ngày để so sánh chính xác (00:00:00)
-    const currentDateOnly = new Date(
-      currentDate.getFullYear(),
-      currentDate.getMonth(),
-      currentDate.getDate(),
-    );
+    // Chuẩn hóa current/created date về ngày VN (00:00:00 VN timezone)
+    const currentDateOnly = this.getVNDateOnly();
 
     this.logger.log(`🔢 === BẮT ĐẦU TÍNH TOÁN EXTENDED MỚI ===`);
-    this.logger.log(`📅 Ngày hiện tại: ${this.formatDate(currentDate)}`);
+    this.logger.log(`📅 Ngày hiện tại: ${this.formatDate(currentDateOnly)}`);
     this.logger.log(
       `🔢 Timestamp hiện tại (đầu ngày): ${currentDateOnly.getTime()}`,
     );
@@ -398,14 +404,7 @@ export class OrderCleanupCronjobService {
 
     for (const orderDetail of orderDetails) {
       try {
-        const createdDate = new Date(orderDetail.created_at);
-
-        // Chuẩn hóa created_at về đầu ngày
-        const createdDateOnly = new Date(
-          createdDate.getFullYear(),
-          createdDate.getMonth(),
-          createdDate.getDate(),
-        );
+        const createdDateOnly = this.getVNDateOnly(orderDetail.created_at);
 
         const extended = orderDetail.extended || 4; // Default 4 nếu null/undefined
 
