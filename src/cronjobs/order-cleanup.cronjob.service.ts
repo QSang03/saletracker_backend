@@ -87,7 +87,12 @@ export class OrderCleanupCronjobService {
       this.logger.log('🆙 === BẮT ĐẦU GIA HẠN EXTENDED CHO TẤT CẢ ĐƠN ===');
 
       // Lấy danh sách order details active
-      const orderDetails = await this.getActiveOrderDetails();
+      // Lấy thêm trường last_extended_at để tránh gia hạn trùng ngày
+      const orderDetails = await this.orderDetailRepository.find({
+        where: { deleted_at: IsNull(), hidden_at: IsNull() },
+        select: ['id', 'created_at', 'extended', 'last_extended_at'],
+        order: { created_at: 'ASC' },
+      });
 
       if (orderDetails.length === 0) {
         this.logger.log('📦 Không có order detail nào để gia hạn');
@@ -98,30 +103,46 @@ export class OrderCleanupCronjobService {
         `📦 Tìm thấy ${orderDetails.length} order details cần gia hạn`,
       );
 
-      // Log chi tiết trước khi update
-      for (const orderDetail of orderDetails) {
-        const currentExtended = orderDetail.extended || 4;
+      // Lọc các orderDetail cần gia hạn: chỉ những bản ghi chưa được gia hạn trong NGÀY VN hiện tại
+      const todayVN = this.getVNDateOnly();
+      const idsToExtend: number[] = [];
+
+      for (const od of orderDetails) {
+        const currentExtended = od.extended || 4;
+        // Nếu đã có last_extended_at hôm nay (theo VN), bỏ qua
+        if (od.last_extended_at) {
+          const lastExtVN = this.getVNDateOnly(od.last_extended_at);
+          if (lastExtVN.getTime() === todayVN.getTime()) {
+            this.logger.log(
+              `⏭️ Bỏ qua Order Detail ID ${od.id}: đã gia hạn hôm nay (${this.formatDate(lastExtVN)})`,
+            );
+            continue;
+          }
+        }
+
         const newExtended = currentExtended + 1;
-        this.logger.log(
-          `📋 Order Detail ID ${orderDetail.id}: ${currentExtended} → ${newExtended} ngày`,
-        );
+        this.logger.log(`📋 Order Detail ID ${od.id}: ${currentExtended} → ${newExtended} ngày`);
+        idsToExtend.push(od.id);
       }
 
-      // Cập nhật extended: Tăng lên 1 hoặc set = 5 nếu null
-      const updateResult = await this.orderDetailRepository
-        .createQueryBuilder()
-        .update(OrderDetail)
-        .set({
-          extended: () => 'COALESCE(extended, 4) + 1',
-          extend_reason: ExtendReason.SYSTEM_SUNDAY_AUTO,
-        })
-        .where('deleted_at IS NULL')
-        .andWhere('hidden_at IS NULL')
-        .execute();
+      if (idsToExtend.length > 0) {
+        const updateResult = await this.orderDetailRepository
+          .createQueryBuilder()
+          .update(OrderDetail)
+          .set({
+            extended: () => 'COALESCE(extended, 4) + 1',
+            extend_reason: ExtendReason.SYSTEM_SUNDAY_AUTO,
+            last_extended_at: () => 'CURRENT_TIMESTAMP',
+          })
+          .where('id IN (:...ids)', { ids: idsToExtend })
+          .andWhere('deleted_at IS NULL')
+          .andWhere('hidden_at IS NULL')
+          .execute();
 
-      this.logger.log(
-        `✅ Đã gia hạn extended cho ${updateResult.affected} order details`,
-      );
+        this.logger.log(`✅ Đã gia hạn extended cho ${updateResult.affected} order details`);
+      } else {
+        this.logger.log('ℹ️ Không có order detail nào cần gia hạn (tất cả đã được gia hạn hôm nay)');
+      }
       this.logger.log(
         `🕐 Thời gian gia hạn: ${this.formatDateTime(new Date())}`,
       );
