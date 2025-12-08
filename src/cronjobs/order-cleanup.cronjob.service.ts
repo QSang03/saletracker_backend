@@ -12,6 +12,8 @@ import { WinstonLogger } from '../common/winston.logger';
 @Injectable()
 export class OrderCleanupCronjobService {
   private readonly logger = new WinstonLogger(OrderCleanupCronjobService.name);
+  // Dedicated history log for run summaries
+  private readonly historyLogger = new WinstonLogger(`${OrderCleanupCronjobService.name}.history`);
 
   constructor(
     @InjectRepository(OrderDetail)
@@ -24,6 +26,8 @@ export class OrderCleanupCronjobService {
   @Cron(process.env.CRON_ORDER_CLEANUP_TIME || '00 01 * * *')
   async cleanupExpiredOrderDetails() {
     const executionStartTime = new Date();
+    let historyExtendResult: { affected: number | null; daysExtended: number } | null = null;
+    let historyHiddenCount = 0;
     try {
       this.logger.log('=== Bắt đầu cronjob kiểm tra order details ===');
       this.logger.log(
@@ -33,6 +37,9 @@ export class OrderCleanupCronjobService {
         `📅 Ngày hiện tại: ${this.formatDate(executionStartTime)}`,
       );
 
+      // Log run to history
+      this.historyLogger.info('Run started', { executionStartTime: this.formatDateTime(executionStartTime) });
+
       // Kiểm tra điều kiện chạy
       const canRun = await this.canRunToday();
 
@@ -41,7 +48,9 @@ export class OrderCleanupCronjobService {
         this.logger.log(
           '❌ Không được phép chạy cleanup hôm nay → Gia hạn extended',
         );
-        await this.extendAllActiveOrderDetails();
+        const extendResult = await this.extendAllActiveOrderDetails();
+        historyExtendResult = extendResult || null;
+        this.historyLogger.info('Extend performed', { daysExtended: extendResult?.daysExtended, affected: extendResult?.affected });
         this.logger.log('✅ Đã hoàn thành gia hạn extended thay thế');
       } else {
         // ĐƯỢC phép chạy cleanup → Xử lý bình thường
@@ -55,7 +64,9 @@ export class OrderCleanupCronjobService {
         const expiredIds = this.calculateExpiredOrderDetails(orderDetails);
 
         if (expiredIds.length > 0) {
-          await this.softHideOrderDetails(expiredIds);
+          const hiddenCount = await this.softHideOrderDetails(expiredIds);
+          historyHiddenCount = hiddenCount;
+          this.historyLogger.info('Hidden records', { hiddenCount, expiredCount: expiredIds.length });
           this.logger.log(`✅ Đã ẩn ${expiredIds.length} order details`);
         } else {
           this.logger.log('✅ Không có order detail nào cần ẩn');
@@ -66,13 +77,54 @@ export class OrderCleanupCronjobService {
       const executionTime =
         executionEndTime.getTime() - executionStartTime.getTime();
       this.logger.log(`⏱️ Thời gian thực hiện: ${executionTime}ms`);
+      this.historyLogger.info('Run finished', {
+        executionStartTime: this.formatDateTime(executionStartTime),
+        executionEndTime: this.formatDateTime(executionEndTime),
+        executionTimeMs: executionTime,
+        extendResult: historyExtendResult,
+        hiddenCount: historyHiddenCount,
+      });
       this.logger.log('=== Kết thúc cronjob ===');
     } catch (error) {
       this.logger.error(
         '❌ Lỗi trong quá trình thực hiện cronjob:',
         error.stack,
       );
+      this.historyLogger.error('Run failed', error.stack, { error: error.message, executionStartTime: this.formatDateTime(executionStartTime) });
       throw error;
+    }
+  }
+
+  /**
+   * Kiểm tra 1 ngày cụ thể (YYYY-MM-DD, VN timezone) có nằm trong holiday configs
+   */
+  private async isGivenDateHoliday(ymd: string): Promise<boolean> {
+    try {
+      const holidayConfigs = await this.systemConfigRepository.find({
+        where: [
+          { name: 'holiday_multi_days' },
+          { name: 'holiday_single_day' },
+          { name: 'holiday_separated_days' },
+        ],
+      });
+
+      for (const config of holidayConfigs) {
+        if (!config?.value) continue;
+        try {
+          const holidays = JSON.parse(config.value);
+          for (const holiday of holidays) {
+            if (holiday.dates?.includes(ymd)) {
+              return true;
+            }
+          }
+        } catch (e) {
+          this.logger.error(`❌ Lỗi parse JSON cho ${config.name}:`, e.message);
+        }
+      }
+      return false;
+    } catch (error) {
+      this.logger.error('❌ Lỗi khi kiểm tra ngày nghỉ cụ thể:', error.message);
+      return true; // Fail-safe: if error treat as holiday to be safe
     }
   }
 
@@ -80,7 +132,7 @@ export class OrderCleanupCronjobService {
    * ✅ THÊM MỚI: Gia hạn extended cho tất cả order details khi không chạy được
    * Logic: Khi cronjob không chạy (ngày nghỉ/chủ nhật) thì gia hạn thêm 1 ngày
    */
-  private async extendAllActiveOrderDetails(): Promise<void> {
+  private async extendAllActiveOrderDetails(): Promise<{affected: number | null; daysExtended: number}> {
     try {
       this.logger.log('🆙 === BẮT ĐẦU GIA HẠN EXTENDED CHO TẤT CẢ ĐƠN ===');
 
@@ -89,7 +141,7 @@ export class OrderCleanupCronjobService {
 
       if (orderDetails.length === 0) {
         this.logger.log('📦 Không có order detail nào để gia hạn');
-        return;
+        return { affected: 0, daysExtended: 0 };
       }
 
       this.logger.log(
@@ -105,25 +157,108 @@ export class OrderCleanupCronjobService {
         );
       }
 
-      // Cập nhật extended: Tăng lên 1 hoặc set = 5 nếu null
-      const updateResult = await this.orderDetailRepository
-        .createQueryBuilder()
-        .update(OrderDetail)
-        .set({
-          extended: () => 'COALESCE(extended, 4) + 1',
-          extend_reason: ExtendReason.SYSTEM_SUNDAY_AUTO,
-        })
-        .where('deleted_at IS NULL')
-        .andWhere('hidden_at IS NULL')
-        .execute();
+      // Guard: avoid double extending in the same VN day (or multiple runs)
+      const nowVN = new Date(
+        new Date().toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh' }),
+      );
+      const todayVNStr = nowVN.toLocaleDateString('en-CA', {
+        timeZone: 'Asia/Ho_Chi_Minh',
+      }); // YYYY-MM-DD
 
-      this.logger.log(
-        `✅ Đã gia hạn extended cho ${updateResult.affected} order details`,
-      );
-      this.logger.log(
-        `🕐 Thời gian gia hạn: ${this.formatDateTime(new Date())}`,
-      );
-      this.logger.log('🆙 === KẾT THÚC GIA HẠN EXTENDED ===');
+      const CONFIG_NAME = 'order_cleanup_last_extended_day';
+      // We'll compute how many blocked days have passed since last extension
+      // and apply that many increments in one go (so if holiday was 2 days, add 2)
+      // We'll fetch and lock the system_config row within a transaction to avoid races
+      let updateResult: any;
+      let calcDaysToExtendOut = 0;
+      // Config flags
+      const allowSundayRun = await this.isSundayRunAllowed();
+      const allowHolidayRun = await this.isHolidayRunAllowed();
+      await this.orderDetailRepository.manager.transaction(async (manager) => {
+        // SELECT ... FOR UPDATE on system_config row
+        const rows = await manager.query(
+          'SELECT * FROM system_config WHERE name = ? FOR UPDATE',
+          [CONFIG_NAME],
+        );
+        const row = rows[0] || null;
+        const lastConfigValue = row?.value || null;
+
+        let lastDate = null as Date | null;
+        if (lastConfigValue) {
+          try {
+            lastDate = new Date(lastConfigValue + 'T00:00:00+07:00');
+          } catch (err) {
+            lastDate = null;
+          }
+        }
+
+        const todayDate = new Date(todayVNStr + 'T00:00:00+07:00');
+        const startDate = lastDate ? new Date(lastDate.getTime() + 24 * 60 * 60 * 1000) : todayDate;
+        let iter = new Date(startDate);
+        let calcDaysToExtend = 0;
+        let calcHasHoliday = false;
+        while (iter.getTime() <= todayDate.getTime()) {
+          const ymd = iter.toISOString().slice(0, 10);
+          const dayDateVN = new Date(`${ymd}T12:00:00+07:00`);
+          const dayOfWeek = dayDateVN.getUTCDay();
+          const isHoliday = await this.isGivenDateHoliday(ymd);
+          if ((dayOfWeek === 0 && !allowSundayRun) || isHoliday) {
+            calcDaysToExtend += 1;
+            if (isHoliday) calcHasHoliday = true;
+          }
+          iter = new Date(iter.getTime() + 24 * 60 * 60 * 1000);
+        }
+
+        if (calcDaysToExtend <= 0) {
+          // Nothing to do
+          return { affected: 0, daysExtended: 0 };
+        }
+
+        // Update records that haven't been extended today
+        const reason = calcHasHoliday ? ExtendReason.SYSTEM_HOLIDAY_AUTO : ExtendReason.SYSTEM_SUNDAY_AUTO;
+        updateResult = await manager
+          .createQueryBuilder()
+          .update(OrderDetail)
+          .set({
+            extended: () => `COALESCE(extended, 4) + ${calcDaysToExtend}`,
+            extend_reason: reason,
+            last_extended_at: () => 'CURRENT_TIMESTAMP()',
+          })
+          .where('deleted_at IS NULL')
+          .andWhere('hidden_at IS NULL')
+          .andWhere(
+            `(last_extended_at IS NULL OR DATE(CONVERT_TZ(last_extended_at, @@session.time_zone, 'Asia/Ho_Chi_Minh')) < :todayVN)`,
+            { todayVN: todayVNStr },
+          )
+          .execute();
+        calcDaysToExtendOut = calcDaysToExtend;
+
+        // Upsert system_config row: insert if not exists, or update if exists
+        if (!row) {
+          await manager.query(
+            'INSERT INTO system_config (name, value, display_name, type, section, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW())',
+            [CONFIG_NAME, todayVNStr, 'Last day cron extended order details', 'string', 'cronjobs', 1],
+          );
+        } else {
+          await manager.query(
+            'UPDATE system_config SET value = ?, updated_at = NOW() WHERE name = ?',
+            [todayVNStr, CONFIG_NAME],
+          );
+        }
+      });
+
+      // The update + config upsert are performed inside the transaction above.
+      // Log results below if updateResult was set.
+      if (updateResult?.affected) {
+        this.logger.log(`✅ Đã gia hạn extended cho ${updateResult.affected} order details`);
+        this.logger.log(`📅 Ngày VN (khi cập nhật): ${todayVNStr}`);
+        this.logger.log(`🕐 Thời gian gia hạn: ${this.formatDateTime(new Date())}`);
+        this.logger.log('🆙 === KẾT THÚC GIA HẠN EXTENDED ===');
+      } else {
+        this.logger.log('⚠️ Không có bản ghi nào được gia hạn (có thể đã gia hạn trước đó trong ngày)');
+      }
+
+      return { affected: updateResult?.affected || 0, daysExtended: calcDaysToExtendOut };
     } catch (error) {
       this.logger.error('❌ Lỗi khi gia hạn extended:', error.stack);
       throw error;
@@ -480,7 +615,7 @@ export class OrderCleanupCronjobService {
   /**
    * Thực hiện xóa mềm các order_detail theo batch
    */
-  private async softHideOrderDetails(ids: number[]): Promise<void> {
+  private async softHideOrderDetails(ids: number[]): Promise<number> {
     const time = new Date();
     const reason = 'Hệ Thống Ẩn Tự Động';
     const BATCH_SIZE = 1000; // Batch size để tránh query quá lớn
@@ -489,7 +624,7 @@ export class OrderCleanupCronjobService {
     
     if (ids.length === 0) {
       this.logger.log('⚠️ Không có ID nào để ẩn');
-      return;
+      return 0;
     }
 
     let totalAffected = 0;
@@ -527,6 +662,7 @@ export class OrderCleanupCronjobService {
     }
 
     this.logger.log(`✅ TỔNG KẾT: Đã cập nhật hidden_at cho ${totalAffected}/${ids.length} records`);
+    return totalAffected;
     this.logger.log(`🕐 Hoàn thành tại: ${this.formatDateTime(new Date())}`);
   }
 

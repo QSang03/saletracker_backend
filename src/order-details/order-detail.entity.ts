@@ -21,6 +21,7 @@ export enum OrderDetailStatus {
 }
 export enum ExtendReason {
   SYSTEM_SUNDAY_AUTO = 'hệ thống tự gia hạn vào chủ nhật hoặc nghỉ lễ',
+  SYSTEM_HOLIDAY_AUTO = 'hệ thống tự gia hạn vào ngày nghỉ (holiday)',
   USER_MANUAL = 'chính chủ gia hạn',
   SYSTEM_RESTORE = 'hệ thống gia hạn khi khôi phục đơn',
 }
