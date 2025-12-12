@@ -85,6 +85,16 @@ export class OrderCleanupCronjobService {
         hiddenCount: historyHiddenCount,
       });
       this.logger.log('=== Kết thúc cronjob ===');
+        // Skip processing during lunch window VN timezone: 12:00 - 13:30
+        const nowVN = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh' }));
+        const h = nowVN.getHours();
+        const m = nowVN.getMinutes();
+        const inLunch = (h === 12) || (h === 13 && m < 30);
+        if (inLunch) {
+          this.logger.log('⏸️ Cronjob skipped due to lunch window (12:00-13:30 VN)');
+          this.historyLogger.info('Run skipped (lunch window)', { now: this.formatDateTime(nowVN) });
+          return;
+        }
     } catch (error) {
       this.logger.error(
         '❌ Lỗi trong quá trình thực hiện cronjob:',
