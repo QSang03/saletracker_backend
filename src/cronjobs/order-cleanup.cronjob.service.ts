@@ -29,6 +29,17 @@ export class OrderCleanupCronjobService {
     let historyExtendResult: { affected: number | null; daysExtended: number } | null = null;
     let historyHiddenCount = 0;
     try {
+      // Skip processing during lunch window VN timezone: 12:00 - 13:30
+      const nowVNForSkip = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh' }));
+      const hSkip = nowVNForSkip.getHours();
+      const mSkip = nowVNForSkip.getMinutes();
+      const inLunchWindow = hSkip === 12 || (hSkip === 13 && mSkip < 30);
+      if (inLunchWindow) {
+        this.logger.log('⏸️ Cronjob skipped do khung giờ nghỉ trưa (12:00-13:30 VN)');
+        this.historyLogger.info('Run skipped (lunch window)', { now: this.formatDateTime(nowVNForSkip) });
+        return;
+      }
+
       this.logger.log('=== Bắt đầu cronjob kiểm tra order details ===');
       this.logger.log(
         `🕐 Thời gian thực hiện: ${this.formatDateTime(executionStartTime)}`,
@@ -85,16 +96,6 @@ export class OrderCleanupCronjobService {
         hiddenCount: historyHiddenCount,
       });
       this.logger.log('=== Kết thúc cronjob ===');
-        // Skip processing during lunch window VN timezone: 12:00 - 13:30
-        const nowVN = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh' }));
-        const h = nowVN.getHours();
-        const m = nowVN.getMinutes();
-        const inLunch = (h === 12) || (h === 13 && m < 30);
-        if (inLunch) {
-          this.logger.log('⏸️ Cronjob skipped due to lunch window (12:00-13:30 VN)');
-          this.historyLogger.info('Run skipped (lunch window)', { now: this.formatDateTime(nowVN) });
-          return;
-        }
     } catch (error) {
       this.logger.error(
         '❌ Lỗi trong quá trình thực hiện cronjob:',
@@ -327,18 +328,10 @@ export class OrderCleanupCronjobService {
         `📅 Thứ trong tuần (VN timezone): ${this.getDayOfWeekName(dayOfWeek)} (${dayOfWeek})`,
       );
 
-      // 1. Kiểm tra chủ nhật
+      // 1. Chủ nhật: luôn chặn để gia hạn thay vì cleanup
       if (dayOfWeek === 0) {
-        this.logger.log('🚫 Hôm nay là chủ nhật - kiểm tra cấu hình');
-
-        const allowSundayRun = await this.isSundayRunAllowed();
-        if (!allowSundayRun) {
-          this.logger.log(
-            '❌ Không được phép chạy vào chủ nhật - sẽ gia hạn thay thế',
-          );
-          return false;
-        }
-        this.logger.log('✅ Được cấu hình cho phép chạy chủ nhật');
+        this.logger.log('🚫 Hôm nay là chủ nhật - luôn gia hạn, không cleanup');
+        return false; // Force extend on Sundays
       }
 
       // 2. ✅ SỬA LẠI: Kiểm tra ngày nghỉ với logic đúng
