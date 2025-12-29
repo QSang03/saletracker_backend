@@ -182,9 +182,9 @@ export class OrderCleanupCronjobService {
       // We'll fetch and lock the system_config row within a transaction to avoid races
       let updateResult: any;
       let calcDaysToExtendOut = 0;
-      // Config flags
-      const allowSundayRun = await this.isSundayRunAllowed();
-      const allowHolidayRun = await this.isHolidayRunAllowed();
+      // Chủ nhật luôn được xem là ngày nghỉ để gia hạn (+1)
+      // (không phụ thuộc cấu hình system_scheduleSunday)
+      await this.isHolidayRunAllowed();
       await this.orderDetailRepository.manager.transaction(async (manager) => {
         // SELECT ... FOR UPDATE on system_config row
         const rows = await manager.query(
@@ -209,11 +209,17 @@ export class OrderCleanupCronjobService {
         let calcDaysToExtend = 0;
         let calcHasHoliday = false;
         while (iter.getTime() <= todayDate.getTime()) {
-          const ymd = iter.toISOString().slice(0, 10);
+          // Lấy ngày theo VN timezone để tránh lệch ngày do UTC/toISOString
+          const ymd = new Date(
+            new Date(iter).toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh' }),
+          ).toLocaleDateString('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' });
+
           const dayDateVN = new Date(`${ymd}T12:00:00+07:00`);
-          const dayOfWeek = dayDateVN.getUTCDay();
+          const dayOfWeek = dayDateVN.getUTCDay(); // 0=CN
           const isHoliday = await this.isGivenDateHoliday(ymd);
-          if ((dayOfWeek === 0 && !allowSundayRun) || isHoliday) {
+
+          // ✅ Rule: CN luôn tính là ngày nghỉ (+1), holiday thì nghỉ mấy ngày + mấy
+          if (dayOfWeek === 0 || isHoliday) {
             calcDaysToExtend += 1;
             if (isHoliday) calcHasHoliday = true;
           }
@@ -665,8 +671,8 @@ export class OrderCleanupCronjobService {
     }
 
     this.logger.log(`✅ TỔNG KẾT: Đã cập nhật hidden_at cho ${totalAffected}/${ids.length} records`);
-    return totalAffected;
     this.logger.log(`🕐 Hoàn thành tại: ${this.formatDateTime(new Date())}`);
+    return totalAffected;
   }
 
   /**
