@@ -90,21 +90,53 @@ export class RealTimeDebtObserver implements OnModuleInit, OnModuleDestroy {
 
     if (newChanges.length === 0) return;
 
-    for (const change of newChanges) {
-      try {
-        await this.processIndividualChange(change);
+    // Optimized flow: mark whole batch as processed first (single UPDATE),
+    // then process each record. If the batch-update fails, fall back to
+    // per-record update to preserve behavior.
+    const ids = newChanges.map((c) => c.id);
 
-        // Mark as processed
-        await this.changeLogRepo.update(change.id, {
-          processed: true,
-          processed_at: new Date(),
-        });
+    try {
+      await this.changeLogRepo
+        .createQueryBuilder()
+        .update()
+        .set({ processed: true, processed_at: () => 'CURRENT_TIMESTAMP()' })
+        .where('id IN (:...ids)', { ids })
+        .execute();
 
-        this.lastProcessedId = change.id;
-      } catch (error) {
-        this.logger.error(
-          `Error processing change ${change.id}: ${error.message}`,
-        );
+      // Advance lastProcessedId to the max id in this batch
+      const maxId = Math.max(...ids, this.lastProcessedId);
+      this.lastProcessedId = maxId;
+
+      // Now process each change (note: if service crashes here, events may be lost)
+      for (const change of newChanges) {
+        try {
+          await this.processIndividualChange(change);
+        } catch (error) {
+          this.logger.error(
+            `Error processing change ${change.id} after batch-mark: ${error.message}`,
+          );
+        }
+      }
+    } catch (batchError) {
+      this.logger.error('Error marking batch processed, falling back to per-record flow:', batchError.stack);
+
+      // Fallback: original per-record behavior
+      for (const change of newChanges) {
+        try {
+          await this.processIndividualChange(change);
+
+          // Mark as processed
+          await this.changeLogRepo.update(change.id, {
+            processed: true,
+            processed_at: new Date(),
+          });
+
+          this.lastProcessedId = change.id;
+        } catch (error) {
+          this.logger.error(
+            `Error processing change ${change.id}: ${error.message}`,
+          );
+        }
       }
     }
   }
