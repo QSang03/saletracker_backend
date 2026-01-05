@@ -90,6 +90,7 @@ export class OrderDetailController {
     @Query('departments') departments?: string, // ✅ CSV của department IDs
     @Query('status') status?: string, // ✅ CSV của statuses
     @Query('hiddenDateRange') hiddenDateRange?: string, // ✅ JSON string cho date range
+    @Query('dateRange') dateRange?: string,
     @Query('sortField') sortField?: 'quantity' | 'unit_price' | 'hidden_at',
     @Query('sortDirection') sortDirection?: 'asc' | 'desc',
     @Req() req?: any,
@@ -105,13 +106,22 @@ export class OrderDetailController {
       Math.min(parseInt(pageSize, 10) || 10, 10000),
     );
 
-    // ✅ Parse hiddenDateRange nếu có
+    // ✅ Parse hiddenDateRange và dateRange nếu có
     let parsedHiddenDateRange;
     if (hiddenDateRange) {
       try {
         parsedHiddenDateRange = JSON.parse(hiddenDateRange);
       } catch {
         parsedHiddenDateRange = undefined;
+      }
+    }
+
+    let parsedDateRange;
+    if (dateRange) {
+      try {
+        parsedDateRange = JSON.parse(dateRange);
+      } catch {
+        parsedDateRange = undefined;
       }
     }
 
@@ -123,6 +133,7 @@ export class OrderDetailController {
       departments,
       status,
       hiddenDateRange: parsedHiddenDateRange,
+      dateRange: parsedDateRange,
       sortField: sortField || null,
       sortDirection: sortDirection || null,
     });

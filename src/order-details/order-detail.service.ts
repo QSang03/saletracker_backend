@@ -22,6 +22,8 @@ interface HiddenOrderOptions {
   status?: string;
   search?: string;
   hiddenDateRange?: { start: string; end: string };
+  // Optional created_at date range for filtering by order.created_at
+  dateRange?: { start: string; end: string };
   sortField?: 'quantity' | 'unit_price' | 'hidden_at' | null;
   sortDirection?: 'asc' | 'desc' | null;
 }
@@ -1642,6 +1644,19 @@ export class OrderDetailService {
         // Single status
         qb.andWhere('details.status = :status', { status: options.status });
       }
+    }
+
+    // ✅ Filter 4: Hidden Date Range với giới hạn 14 ngày
+    // ✅ Filter (created_at): if parent passed a dateRange, apply filter on order.created_at
+    if (options?.dateRange?.start && options?.dateRange?.end) {
+      const startDate = new Date(options.dateRange.start);
+      const endDate = new Date(options.dateRange.end);
+      endDate.setHours(23, 59, 59, 999);
+
+      qb.andWhere('order.created_at BETWEEN :rangeStart AND :rangeEnd', {
+        rangeStart: startDate,
+        rangeEnd: endDate,
+      });
     }
 
     // ✅ Filter 4: Hidden Date Range với giới hạn 14 ngày
