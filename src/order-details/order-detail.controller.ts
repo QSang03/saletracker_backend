@@ -206,14 +206,6 @@ export class OrderDetailController {
       user: req.user,
     };
     return this.transactionStatsService.getTransactionStats(params);
-      let parsedCreatedDateRange;
-      if (dateRange) {
-        try {
-          parsedCreatedDateRange = JSON.parse(dateRange);
-        } catch {
-          parsedCreatedDateRange = undefined;
-        }
-      }
   }
 
   @Get('stats/transactions/details')
@@ -223,7 +215,6 @@ export class OrderDetailController {
 
     if (isNaN(timestamp)) {
       return {
-        dateRange: parsedCreatedDateRange,
         items: [],
         total: 0,
         page: 1,
