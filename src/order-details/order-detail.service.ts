@@ -1215,6 +1215,7 @@ export class OrderDetailService {
       products?: string; // csv of product ids
       sortField?: 'quantity' | 'unit_price' | null;
       sortDirection?: 'asc' | 'desc' | null;
+      dateRange?: { start?: string; end?: string };
     },
   ): Promise<{
     data: OrderDetail[];
@@ -1295,6 +1296,18 @@ export class OrderDetailService {
         'LOWER(details.customer_name) LIKE LOWER(:search) OR LOWER(details.raw_item) LIKE LOWER(:search) OR CAST(details.id AS CHAR) LIKE :search',
         { search },
       );
+    }
+
+    // Created date range filter
+    if (options?.dateRange?.start && options?.dateRange?.end) {
+      const startDate = new Date(options.dateRange.start);
+      const endDate = new Date(options.dateRange.end);
+      endDate.setHours(23, 59, 59, 999);
+
+      qb.andWhere('order.created_at BETWEEN :createdStart AND :createdEnd', {
+        createdStart: startDate,
+        createdEnd: endDate,
+      });
     }
 
     // Sorting

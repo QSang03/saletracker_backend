@@ -47,6 +47,7 @@ export class OrderDetailController {
     @Query('products') products?: string,
     @Query('sortField') sortField?: 'quantity' | 'unit_price',
     @Query('sortDirection') sortDirection?: 'asc' | 'desc',
+    @Query('dateRange') dateRange?: string,
     @Req() req?: any,
   ): Promise<{
     data: OrderDetail[];
@@ -60,6 +61,15 @@ export class OrderDetailController {
       Math.min(parseInt(pageSize, 10) || 10, 10000),
     );
 
+    let parsedDateRange;
+    if (dateRange) {
+      try {
+        parsedDateRange = JSON.parse(dateRange);
+      } catch {
+        parsedDateRange = undefined;
+      }
+    }
+
     return this.orderDetailService.findAllTrashedPaginated(req.user, {
       page: pageNum,
       pageSize: pageSizeNum,
@@ -69,6 +79,7 @@ export class OrderDetailController {
       products,
       sortField: sortField || null,
       sortDirection: sortDirection || null,
+      dateRange: parsedDateRange,
     });
   }
 
