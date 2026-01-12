@@ -48,6 +48,7 @@ export class OrderDetailController {
     @Query('sortField') sortField?: 'quantity' | 'unit_price',
     @Query('sortDirection') sortDirection?: 'asc' | 'desc',
     @Query('dateRange') dateRange?: string,
+    @Query('date') date?: string,
     @Req() req?: any,
   ): Promise<{
     data: OrderDetail[];
@@ -80,6 +81,8 @@ export class OrderDetailController {
       sortField: sortField || null,
       sortDirection: sortDirection || null,
       dateRange: parsedDateRange,
+      // accept single-day date param (YYYY-MM-DD) and pass through
+      date: date?.trim(),
     });
   }
 
@@ -102,6 +105,7 @@ export class OrderDetailController {
     @Query('status') status?: string, // ✅ CSV của statuses
     @Query('hiddenDateRange') hiddenDateRange?: string, // ✅ JSON string cho date range
     @Query('dateRange') dateRange?: string,
+    @Query('date') date?: string,
     @Query('sortField') sortField?: 'quantity' | 'unit_price' | 'hidden_at',
     @Query('sortDirection') sortDirection?: 'asc' | 'desc',
     @Req() req?: any,
@@ -145,6 +149,8 @@ export class OrderDetailController {
       status,
       hiddenDateRange: parsedHiddenDateRange,
       dateRange: parsedDateRange,
+      // accept single-day date param (YYYY-MM-DD)
+      date: date?.trim(),
       sortField: sortField || null,
       sortDirection: sortDirection || null,
     });

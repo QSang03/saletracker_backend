@@ -22,6 +22,8 @@ interface HiddenOrderOptions {
   status?: string;
   search?: string;
   hiddenDateRange?: { start: string; end: string };
+  // Single-day created filter (YYYY-MM-DD) — mutually exclusive with dateRange
+  date?: string;
   // Optional created_at date range for filtering by order.created_at
   dateRange?: { start: string; end: string };
   sortField?: 'quantity' | 'unit_price' | 'hidden_at' | null;
@@ -1215,6 +1217,8 @@ export class OrderDetailService {
       products?: string; // csv of product ids
       sortField?: 'quantity' | 'unit_price' | null;
       sortDirection?: 'asc' | 'desc' | null;
+      // single-day date filter (YYYY-MM-DD)
+      date?: string;
       dateRange?: { start?: string; end?: string };
     },
   ): Promise<{
@@ -1298,8 +1302,31 @@ export class OrderDetailService {
       );
     }
 
-    // Created date range filter
-    if (options?.dateRange?.start && options?.dateRange?.end) {
+    // Created date filter: support single-day `date` param and dateRange fallback
+    if (options?.date && typeof options.date === 'string') {
+      const dateStr = options.date.trim();
+      if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+        const startDate = new Date(dateStr);
+        const endDate = new Date(this.addOneDayDateOnly(dateStr));
+        endDate.setMilliseconds(endDate.getMilliseconds() - 1);
+        qb.andWhere('order.created_at BETWEEN :createdStart AND :createdEnd', {
+          createdStart: startDate,
+          createdEnd: endDate,
+        });
+      } else {
+        try {
+          const startDate = new Date(dateStr);
+          const endDate = new Date(dateStr);
+          endDate.setHours(23, 59, 59, 999);
+          qb.andWhere('order.created_at BETWEEN :createdStart AND :createdEnd', {
+            createdStart: startDate,
+            createdEnd: endDate,
+          });
+        } catch (e) {
+          // ignore invalid
+        }
+      }
+    } else if (options?.dateRange?.start && options?.dateRange?.end) {
       const startDate = new Date(options.dateRange.start);
       const endDate = new Date(options.dateRange.end);
       endDate.setHours(23, 59, 59, 999);
@@ -1575,9 +1602,8 @@ export class OrderDetailService {
       Math.min(Number(options?.pageSize) || 10, 10000),
     );
 
-    // ✅ THÊM: Logic giới hạn 14 ngày cho hidden orders
+    // allow hidden orders from any past date (no 14-day cap). Keep `now` to validate future dates.
     const now = new Date();
-    const fourteenDaysAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
 
     const qb = this.orderDetailRepository
       .createQueryBuilder('details')
@@ -1585,8 +1611,7 @@ export class OrderDetailService {
       .leftJoinAndSelect('details.product', 'product')
       .leftJoinAndSelect('order.sale_by', 'sale_by')
       .leftJoinAndSelect('sale_by.departments', 'sale_by_departments')
-      .where('details.hidden_at IS NOT NULL')
-      .andWhere('details.hidden_at >= :fourteenDaysAgo', { fourteenDaysAgo });
+      .where('details.hidden_at IS NOT NULL');
 
     // ✅ Permission scoping (giữ nguyên logic hiện tại)
     const allowedUserIds = await this.getUserIdsByRole(user);
@@ -1659,9 +1684,33 @@ export class OrderDetailService {
       }
     }
 
-    // ✅ Filter 4: Hidden Date Range với giới hạn 14 ngày
-    // ✅ Filter (created_at): if parent passed a dateRange, apply filter on order.created_at
-    if (options?.dateRange?.start && options?.dateRange?.end) {
+    // ✅ Filter (created_at): support single-day `date` (preferred) and `dateRange` fallbacks
+    if (options?.date && typeof options.date === 'string') {
+      const dateStr = options.date.trim();
+      // Support YYYY-MM-DD single-date format (treat as [date, nextDay))
+      if (this.isDateOnly(dateStr)) {
+        const startDate = new Date(dateStr);
+        const endDate = new Date(this.addOneDayDateOnly(dateStr));
+        endDate.setMilliseconds(endDate.getMilliseconds() - 1); // make inclusive
+        qb.andWhere('order.created_at BETWEEN :rangeStart AND :rangeEnd', {
+          rangeStart: startDate,
+          rangeEnd: endDate,
+        });
+      } else {
+        // If not a pure date string, fall back to parsing as dates (inclusive day logic)
+        try {
+          const startDate = new Date(dateStr);
+          const endDate = new Date(dateStr);
+          endDate.setHours(23, 59, 59, 999);
+          qb.andWhere('order.created_at BETWEEN :rangeStart AND :rangeEnd', {
+            rangeStart: startDate,
+            rangeEnd: endDate,
+          });
+        } catch (e) {
+          // ignore invalid date
+        }
+      }
+    } else if (options?.dateRange?.start && options?.dateRange?.end) {
       const startDate = new Date(options.dateRange.start);
       const endDate = new Date(options.dateRange.end);
       endDate.setHours(23, 59, 59, 999);
@@ -1678,31 +1727,14 @@ export class OrderDetailService {
       const endDate = new Date(options.hiddenDateRange.end);
       endDate.setHours(23, 59, 59, 999);
 
-      // ✅ THÊM: Kiểm tra và giới hạn date range không vượt quá 14 ngày
-      const maxEndDate = new Date(now);
-      const minStartDate = new Date(fourteenDaysAgo);
-      
-      // Đảm bảo endDate không vượt quá hiện tại
-      const actualEndDate = endDate > maxEndDate ? maxEndDate : endDate;
-      
-      // Đảm bảo startDate không sớm hơn 14 ngày trước
-      const actualStartDate = startDate < minStartDate ? minStartDate : startDate;
-      
-      // Kiểm tra range không vượt quá 14 ngày
-      const rangeDays = Math.ceil((actualEndDate.getTime() - actualStartDate.getTime()) / (1000 * 60 * 60 * 24));
-      if (rangeDays > 14) {
-        // Nếu range > 14 ngày, giới hạn về 14 ngày từ endDate
-        const adjustedStartDate = new Date(actualEndDate.getTime() - 14 * 24 * 60 * 60 * 1000);
-        qb.andWhere('details.hidden_at BETWEEN :hiddenStart AND :hiddenEnd', {
-          hiddenStart: adjustedStartDate,
-          hiddenEnd: actualEndDate,
-        });
-      } else {
-        qb.andWhere('details.hidden_at BETWEEN :hiddenStart AND :hiddenEnd', {
-          hiddenStart: actualStartDate,
-          hiddenEnd: actualEndDate,
-        });
-      }
+      // Ensure endDate is not in the future
+      const actualEndDate = endDate > now ? now : endDate;
+      const actualStartDate = startDate;
+
+      qb.andWhere('details.hidden_at BETWEEN :hiddenStart AND :hiddenEnd', {
+        hiddenStart: actualStartDate,
+        hiddenEnd: actualEndDate,
+      });
     }
 
     // ✅ Sorting
