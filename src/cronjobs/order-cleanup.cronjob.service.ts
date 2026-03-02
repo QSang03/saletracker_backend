@@ -135,7 +135,9 @@ export class OrderCleanupCronjobService {
       return false;
     } catch (error) {
       this.logger.error('❌ Lỗi khi kiểm tra ngày nghỉ cụ thể:', error.message);
-      return true; // Fail-safe: if error treat as holiday to be safe
+      // On error, do NOT automatically treat date as holiday to avoid
+      // accidental mass-extensions when DB/config is temporarily unreadable.
+      return false;
     }
   }
 
@@ -184,7 +186,7 @@ export class OrderCleanupCronjobService {
       let calcDaysToExtendOut = 0;
       // Chủ nhật luôn được xem là ngày nghỉ để gia hạn (+1)
       // (không phụ thuộc cấu hình system_scheduleSunday)
-      await this.isHolidayRunAllowed();
+      // remove unused call to isHolidayRunAllowed() here (it was a noop)
       await this.orderDetailRepository.manager.transaction(async (manager) => {
         // SELECT ... FOR UPDATE on system_config row
         const rows = await manager.query(
@@ -208,21 +210,29 @@ export class OrderCleanupCronjobService {
         let iter = new Date(startDate);
         let calcDaysToExtend = 0;
         let calcHasHoliday = false;
+        // collect holiday dates found in the iteration window so we can
+        // limit which orders are eligible for extension
+        const holidayDatesFound: string[] = [];
         while (iter.getTime() <= todayDate.getTime()) {
           // Lấy ngày theo VN timezone để tránh lệch ngày do UTC/toISOString
           const ymd = new Date(
             new Date(iter).toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh' }),
           ).toLocaleDateString('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' });
 
-          const dayDateVN = new Date(`${ymd}T12:00:00+07:00`);
-          const dayOfWeek = dayDateVN.getUTCDay(); // 0=CN
-          const isHoliday = await this.isGivenDateHoliday(ymd);
+            const dayDateVN = new Date(`${ymd}T12:00:00+07:00`);
+            // Use local weekday (getDay) consistently to avoid UTC/local mismatch
+            const dayOfWeek = dayDateVN.getDay(); // 0 = Chủ nhật
+            const isHoliday = await this.isGivenDateHoliday(ymd);
 
-          // ✅ Rule: CN luôn tính là ngày nghỉ (+1), holiday thì nghỉ mấy ngày + mấy
-          if (dayOfWeek === 0 || isHoliday) {
-            calcDaysToExtend += 1;
-            if (isHoliday) calcHasHoliday = true;
-          }
+            // ✅ Rule: CN luôn tính là ngày nghỉ (+1), holiday thì nghỉ mấy ngày + mấy
+            if (dayOfWeek === 0 || isHoliday) {
+              calcDaysToExtend += 1;
+              if (isHoliday) {
+                calcHasHoliday = true;
+                // record this holiday date so we can limit which orders to extend
+                holidayDatesFound.push(ymd);
+              }
+            }
           iter = new Date(iter.getTime() + 24 * 60 * 60 * 1000);
         }
 
@@ -233,7 +243,7 @@ export class OrderCleanupCronjobService {
 
         // Update records that haven't been extended today
         const reason = calcHasHoliday ? ExtendReason.SYSTEM_HOLIDAY_AUTO : ExtendReason.SYSTEM_SUNDAY_AUTO;
-        updateResult = await manager
+        const qb = manager
           .createQueryBuilder()
           .update(OrderDetail)
           .set({
@@ -246,8 +256,21 @@ export class OrderCleanupCronjobService {
           .andWhere(
             `(last_extended_at IS NULL OR DATE(CONVERT_TZ(last_extended_at, @@session.time_zone, 'Asia/Ho_Chi_Minh')) < :todayVN)`,
             { todayVN: todayVNStr },
-          )
-          .execute();
+          );
+
+        // If we found holiday dates, restrict extension to orders that were
+        // created on or before the earliest holiday date in the window. This
+        // avoids extending orders created after the holiday was (later) added.
+        if (holidayDatesFound.length > 0) {
+          holidayDatesFound.sort();
+          const earliestHoliday = holidayDatesFound[0]; // YYYY-MM-DD
+          qb.andWhere(
+            `DATE(CONVERT_TZ(created_at, @@session.time_zone, 'Asia/Ho_Chi_Minh')) <= :earliestHoliday`,
+            { earliestHoliday },
+          );
+        }
+
+        updateResult = await qb.execute();
         calcDaysToExtendOut = calcDaysToExtend;
 
         // Upsert system_config row: insert if not exists, or update if exists
