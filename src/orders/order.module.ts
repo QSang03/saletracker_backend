@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Order } from './order.entity';
+import { SystemConfig } from 'src/system_config/system_config.entity';
 import { OrderService } from './order.service';
 import { OrderController } from './order.controller';
 import { OrderDetail } from 'src/order-details/order-detail.entity';
@@ -13,7 +14,7 @@ import { OrderBlacklistModule } from '../order-blacklist/order-blacklist.module'
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Order, OrderDetail, Department, User, Product, Brand, Category]),
+    TypeOrmModule.forFeature([Order, OrderDetail, Department, User, Product, Brand, Category, SystemConfig]),
     OrderBlacklistModule,
   ],
   providers: [OrderService],
