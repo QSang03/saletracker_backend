@@ -6,6 +6,7 @@ import {
   OrderDetail,
   ExtendReason,
 } from 'src/order-details/order-detail.entity';
+import { SystemConfig } from 'src/system_config/system_config.entity';
 import { Department } from 'src/departments/department.entity';
 import { User } from 'src/users/user.entity';
 import { Product } from 'src/products/product.entity';
@@ -70,6 +71,8 @@ export class OrderService {
     private brandRepository: Repository<Brand>,
     @InjectRepository(Category)
     private categoryRepository: Repository<Category>,
+    @InjectRepository(SystemConfig)
+    private systemConfigRepository: Repository<SystemConfig>,
     private orderBlacklistService: OrderBlacklistService,
   ) {}
 
@@ -129,21 +132,71 @@ export class OrderService {
       }
 
       // Tính toán extend mới cho từng order detail
-      const now = new Date();
-      const updates = orderDetails.map((detail) => {
-        // Công thức: ngày tạo + x - ngày hiện tại = 4
-        // => x = 4 + (ngày hiện tại - ngày tạo) tính theo ngày
-        const createdAt = new Date(detail.order.created_at);
-        const daysDiff = Math.ceil(
-          (now.getTime() - createdAt.getTime()) / (1000 * 60 * 60 * 24),
-        );
-        const newExtended = Math.max(1, 4 + daysDiff); // Đảm bảo extend ít nhất là 1
-
-        return {
-          id: detail.id,
-          extended: newExtended,
-        };
+      // Lấy trước danh sách tất cả các ngày holiday vào một Set để kiểm tra nhanh
+      const holidayConfigs = await this.systemConfigRepository.find({
+        where: [
+          { name: 'holiday_multi_days' },
+          { name: 'holiday_single_day' },
+          { name: 'holiday_separated_days' },
+        ],
       });
+
+      const holidaySet = new Set<string>();
+      for (const cfg of holidayConfigs) {
+        if (!cfg?.value) continue;
+        try {
+          const arr = JSON.parse(cfg.value);
+          if (Array.isArray(arr)) {
+            for (const grp of arr) {
+              if (grp && Array.isArray(grp.dates)) {
+                for (const d of grp.dates) {
+                  holidaySet.add(d);
+                }
+              }
+            }
+          }
+        } catch (e) {
+          // ignore parse errors for safety
+        }
+      }
+
+      const nowVN = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh' }));
+      const todayYmd = nowVN.toLocaleDateString('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' });
+      const todayDate = new Date(todayYmd + 'T00:00:00+07:00');
+
+      const updates = [] as { id: number; extended: number }[];
+
+      for (const detail of orderDetails) {
+        // start từ ngày sau last_extended_at (nếu có), ngược lại từ ngày tạo
+        let startYmd: string;
+        if (detail.last_extended_at) {
+          startYmd = new Date(detail.last_extended_at).toLocaleDateString('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' });
+        } else {
+          startYmd = new Date(detail.order.created_at).toLocaleDateString('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' });
+        }
+
+        let startDate = new Date(startYmd + 'T00:00:00+07:00');
+        // nếu có last_extended_at thì bắt đầu từ ngày kế tiếp
+        if (detail.last_extended_at) startDate = new Date(startDate.getTime() + 24 * 60 * 60 * 1000);
+
+        let iter = new Date(startDate);
+        let daysToExtend = 0;
+        while (iter.getTime() <= todayDate.getTime()) {
+          const ymd = new Date(new Date(iter).toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh' })).toLocaleDateString('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' });
+          const dayDateVN = new Date(ymd + 'T12:00:00+07:00');
+          const dayOfWeek = dayDateVN.getDay();
+          const isHoliday = holidaySet.has(ymd);
+          if (dayOfWeek === 0 || isHoliday) {
+            daysToExtend += 1;
+          }
+          iter = new Date(iter.getTime() + 24 * 60 * 60 * 1000);
+        }
+
+        const currentExtended = detail.extended || 4;
+        const newExtended = Math.max(1, currentExtended + daysToExtend);
+
+        updates.push({ id: detail.id, extended: newExtended });
+      }
 
       // Batch update với extended mới
       for (const update of updates) {
