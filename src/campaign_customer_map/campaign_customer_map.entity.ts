@@ -15,7 +15,7 @@ export class CampaignCustomerMap {
   @Column({ type: 'varchar', length: 255 })
   full_name: string;
 
-  @Column({ type: 'varchar', length: 20, nullable: true })
+  @Column({ type: 'varchar', length: 255, nullable: true })
   salutation?: string;
 
   @Index()
