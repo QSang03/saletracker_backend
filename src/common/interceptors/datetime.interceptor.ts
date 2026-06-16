@@ -46,13 +46,13 @@ function convertDates(obj: any, seen = new WeakSet<any>()): any {
   if (obj === undefined || obj === null) {
     return obj === undefined ? {} : null;
   }
-  
+
   // Skip Buffer/ArrayBuffer/Uint8Array/Streams to avoid corrupting binary responses
   if (
-    typeof Buffer !== 'undefined' && Buffer.isBuffer(obj) ||
+    (typeof Buffer !== 'undefined' && Buffer.isBuffer(obj)) ||
     obj instanceof ArrayBuffer ||
     obj instanceof Uint8Array ||
-    (typeof obj === 'object' && typeof (obj as any).pipe === 'function')
+    (typeof obj === 'object' && typeof obj.pipe === 'function')
   ) {
     return obj;
   }
@@ -68,7 +68,7 @@ function convertDates(obj: any, seen = new WeakSet<any>()): any {
   if (Array.isArray(obj)) {
     return obj.map((item) => convertDates(item, seen));
   }
-  
+
   if (obj && typeof obj === 'object') {
     const result: any = {};
     for (const key of Object.keys(obj)) {
@@ -96,21 +96,23 @@ function convertDates(obj: any, seen = new WeakSet<any>()): any {
 export class DatetimeInterceptor implements NestInterceptor {
   intercept(context: ExecutionContext, next: CallHandler): Observable<any> {
     const request = context.switchToHttp().getRequest();
-    
+
     return next.handle().pipe(
       map((data) => {
         // Log để debug
         if (data === undefined || data === null) {
-          console.warn(`[DatetimeInterceptor] Undefined/null response for ${request.method} ${request.url}`);
+          console.warn(
+            `[DatetimeInterceptor] Undefined/null response for ${request.method} ${request.url}`,
+          );
         }
-        
+
         // Fix: ensure không bao giờ return undefined
         if (data === undefined) {
           return {};
         }
-        
+
         return convertDates(data);
-      })
+      }),
     );
   }
 }

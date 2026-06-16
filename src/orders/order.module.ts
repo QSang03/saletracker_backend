@@ -14,7 +14,16 @@ import { OrderBlacklistModule } from '../order-blacklist/order-blacklist.module'
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Order, OrderDetail, Department, User, Product, Brand, Category, SystemConfig]),
+    TypeOrmModule.forFeature([
+      Order,
+      OrderDetail,
+      Department,
+      User,
+      Product,
+      Brand,
+      Category,
+      SystemConfig,
+    ]),
     OrderBlacklistModule,
   ],
   providers: [OrderService],

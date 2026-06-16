@@ -14,10 +14,26 @@ import { CampaignSchedule } from 'src/campaign_schedules/campaign_schedule.entit
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([DebtLogs, DebtConfig, Debt, Campaign, CampaignInteractionLog, CampaignSchedule, DatabaseChangeLog]), // thêm DatabaseChangeLog vào đây
-    WebsocketModule
+    TypeOrmModule.forFeature([
+      DebtLogs,
+      DebtConfig,
+      Debt,
+      Campaign,
+      CampaignInteractionLog,
+      CampaignSchedule,
+      DatabaseChangeLog,
+    ]), // thêm DatabaseChangeLog vào đây
+    WebsocketModule,
   ],
-  providers: [RealTimeDebtObserver, RealTimeCampaignObserver, UserLinkStatusLogObserver],
-  exports: [RealTimeDebtObserver, RealTimeCampaignObserver, UserLinkStatusLogObserver],
+  providers: [
+    RealTimeDebtObserver,
+    RealTimeCampaignObserver,
+    UserLinkStatusLogObserver,
+  ],
+  exports: [
+    RealTimeDebtObserver,
+    RealTimeCampaignObserver,
+    UserLinkStatusLogObserver,
+  ],
 })
 export class ObserversModule {}

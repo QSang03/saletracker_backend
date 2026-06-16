@@ -32,10 +32,13 @@ export class DebtStatisticService {
   }
 
   // Helper to format date range for MySQL queries
-  private formatDateRangeForMySQL(fromDate: string, toDate: string): { from: string; to: string } {
+  private formatDateRangeForMySQL(
+    fromDate: string,
+    toDate: string,
+  ): { from: string; to: string } {
     return {
       from: this.formatDateForMySQL(fromDate),
-      to: this.formatDateForMySQL(toDate)
+      to: this.formatDateForMySQL(toDate),
     };
   }
 
@@ -50,20 +53,24 @@ export class DebtStatisticService {
     return undefined;
   }
 
-  private resolveAsOfDate(params: { singleDate?: string; from?: string; to?: string }): string {
+  private resolveAsOfDate(params: {
+    singleDate?: string;
+    from?: string;
+    to?: string;
+  }): string {
     const today = this.getVietnamToday();
     const sd = this.normalizeDateOnly(params.singleDate);
     const to = this.normalizeDateOnly(params.to);
     const from = this.normalizeDateOnly(params.from);
-    
+
     // Ưu tiên ngày được truyền vào, chỉ fallback về hôm nay khi thực sự cần thiết
     const resolvedDate = sd || to || from;
-    
+
     // Nếu không có ngày nào được truyền vào, mới dùng hôm nay
     if (!resolvedDate) {
       return today;
     }
-    
+
     // Nếu ngày được chọn là tương lai, chỉ trả về ngày hiện tại
     return resolvedDate > today ? today : resolvedDate;
   }
@@ -121,14 +128,21 @@ export class DebtStatisticService {
       `;
       await this.debtStatisticRepository.query(query, [today]);
     } catch (error) {
-      this.logger.error(`Failed to capture debt statistics for ${today}:`, error);
+      this.logger.error(
+        `Failed to capture debt statistics for ${today}:`,
+        error,
+      );
       throw error;
     }
   }
 
-  async getOverviewStatistics(fromDate: string, toDate: string, filters?: { employeeCode?: string; customerCode?: string }) {
+  async getOverviewStatistics(
+    fromDate: string,
+    toDate: string,
+    filters?: { employeeCode?: string; customerCode?: string },
+  ) {
     const today = this.getVietnamToday();
-    
+
     // Nếu toDate là tương lai, chỉ tính đến ngày hiện tại
     const effectiveToDate = toDate > today ? today : toDate;
 
@@ -180,12 +194,12 @@ export class DebtStatisticService {
 
       let historyQuery = historyPart;
       params.push(fromDate, endDateForHistory);
-      
+
       if (filters?.employeeCode) {
         historyQuery += ` AND employee_code_raw = ?`;
         params.push(filters.employeeCode);
       }
-      
+
       if (filters?.customerCode) {
         historyQuery += ` AND customer_code = ?`;
         params.push(filters.customerCode);
@@ -199,12 +213,12 @@ export class DebtStatisticService {
       const todayVietnam = this.formatDateStringToVietnam(today);
       let todayQuery = todayPart;
       params.push(todayVietnam);
-      
+
       if (filters?.employeeCode) {
         todayQuery += ` AND employee_code_raw = ?`;
         params.push(filters.employeeCode);
       }
-      
+
       if (filters?.customerCode) {
         todayQuery += ` AND customer_code = ?`;
         params.push(filters.customerCode);
@@ -246,7 +260,8 @@ export class DebtStatisticService {
 
     // Phase 1.2: Tối ưu hóa - Chuyển aggregation từ application layer sang database
     if (results.totalAmount > 0) {
-      results.collectionRate = (results.collectedAmount / results.totalAmount) * 100;
+      results.collectionRate =
+        (results.collectedAmount / results.totalAmount) * 100;
     }
 
     return results;
@@ -258,10 +273,10 @@ export class DebtStatisticService {
     groupBy: 'day' | 'week' | 'month' = 'day',
   ) {
     const today = this.getVietnamToday();
-    
+
     // Nếu toDate là tương lai, chỉ tính đến ngày hiện tại
     const effectiveToDate = toDate > today ? today : toDate;
-    
+
     const results: Array<{
       date: string;
       name: string;
@@ -274,7 +289,9 @@ export class DebtStatisticService {
     }> = [];
 
     // Generate date range (skip Sundays)
-    const dates = this.generateDateRange(fromDate, effectiveToDate).filter((d) => new Date(d).getDay() !== 0);
+    const dates = this.generateDateRange(fromDate, effectiveToDate).filter(
+      (d) => new Date(d).getDay() !== 0,
+    );
 
     for (const date of dates) {
       if (date < today) {
@@ -344,7 +361,20 @@ export class DebtStatisticService {
       // Get today's date in the same timezone/format
       const today = this.getVietnamToday();
 
-      const { date, from, to, status, contactStatus, mode, minDays, maxDays, employeeCode, customerCode, page = 1, limit = 10 } = filters;
+      const {
+        date,
+        from,
+        to,
+        status,
+        contactStatus,
+        mode,
+        minDays,
+        maxDays,
+        employeeCode,
+        customerCode,
+        page = 1,
+        limit = 10,
+      } = filters;
       if (!date && (!from || !to)) {
         throw new Error('Either date or from/to parameters are required');
       }
@@ -368,11 +398,12 @@ export class DebtStatisticService {
 
         // Historical snapshots part (from .. min(to, yesterday))
         if ((from as string) < today) {
-          const endHistory = effectiveTo < today
-            ? effectiveTo
-            : new Date(new Date(today).getTime() - 24 * 60 * 60 * 1000)
-                .toISOString()
-                .split('T')[0];
+          const endHistory =
+            effectiveTo < today
+              ? effectiveTo
+              : new Date(new Date(today).getTime() - 24 * 60 * 60 * 1000)
+                  .toISOString()
+                  .split('T')[0];
 
           const where: string[] = [
             'ds.statistic_date >= ? AND ds.statistic_date <= ?',
@@ -409,15 +440,15 @@ export class DebtStatisticService {
             'd.deleted_at IS NULL',
             "d.status <> 'paid'",
             'd.pay_later IS NOT NULL',
-            "DATE(d.updated_at) = DATE(?)",
+            'DATE(d.updated_at) = DATE(?)',
           ];
           const paramsToday: any[] = [todayVietnam];
           if (typeof minDays === 'number') {
-            whereToday.push("DATEDIFF(DATE(d.updated_at), d.pay_later) >= ?");
+            whereToday.push('DATEDIFF(DATE(d.updated_at), d.pay_later) >= ?');
             paramsToday.push(minDays);
           }
           if (typeof maxDays === 'number') {
-            whereToday.push("DATEDIFF(DATE(d.updated_at), d.pay_later) <= ?");
+            whereToday.push('DATEDIFF(DATE(d.updated_at), d.pay_later) <= ?');
             paramsToday.push(maxDays);
           }
           if (employeeCode) {
@@ -434,7 +465,10 @@ export class DebtStatisticService {
             LEFT JOIN debt_configs dc ON d.debt_config_id = dc.id
             WHERE ${whereToday.join(' AND ')}
           `;
-          const rowsToday = await this.debtRepository.query(qToday, paramsToday);
+          const rowsToday = await this.debtRepository.query(
+            qToday,
+            paramsToday,
+          );
           dataCombined.push(...rowsToday);
         }
 
@@ -458,11 +492,12 @@ export class DebtStatisticService {
         const effectiveTo = (to as string) > today ? today : (to as string);
 
         if ((from as string) < today) {
-          const endHistory = effectiveTo < today
-            ? effectiveTo
-            : new Date(new Date(today).getTime() - 24 * 60 * 60 * 1000)
-                .toISOString()
-                .split('T')[0];
+          const endHistory =
+            effectiveTo < today
+              ? effectiveTo
+              : new Date(new Date(today).getTime() - 24 * 60 * 60 * 1000)
+                  .toISOString()
+                  .split('T')[0];
 
           const where: string[] = [
             'ds.statistic_date >= ? AND ds.statistic_date <= ?',
@@ -525,7 +560,10 @@ export class DebtStatisticService {
             LEFT JOIN debt_configs dc ON d.debt_config_id = dc.id
             WHERE ${whereToday.join(' AND ')}
           `;
-          const rowsToday = await this.debtRepository.query(qToday, paramsToday);
+          const rowsToday = await this.debtRepository.query(
+            qToday,
+            paramsToday,
+          );
           dataCombined.push(...rowsToday);
         }
 
@@ -634,7 +672,10 @@ export class DebtStatisticService {
           countParams.push(customerCode);
         }
 
-        const totalResult = await this.debtStatisticRepository.query(countQuery, countParams);
+        const totalResult = await this.debtStatisticRepository.query(
+          countQuery,
+          countParams,
+        );
         const total = totalResult[0]?.total || 0;
 
         return {
@@ -762,7 +803,7 @@ export class DebtStatisticService {
           limit,
           totalPages: Math.ceil(total / limit),
         };
-        
+
         return result;
       }
     } catch (error) {
@@ -787,10 +828,10 @@ export class DebtStatisticService {
   async getAgingAnalysis(fromDate: string, toDate: string) {
     // Phase 1.3: Tối ưu hóa - Sử dụng CASE WHEN để phân nhóm trực tiếp trong SQL
     const today = this.getVietnamToday();
-    
+
     // Nếu toDate là tương lai, chỉ tính đến ngày hiện tại
     const effectiveToDate = toDate > today ? today : toDate;
-    
+
     // Phase 1.3: Tối ưu hóa - Gộp logic xử lý ngày quá khứ và hiện tại
     const buildAgingUnionQuery = () => {
       const historyPart = `
@@ -880,7 +921,10 @@ export class DebtStatisticService {
       END
     `;
 
-    const results = await this.debtStatisticRepository.query(finalQuery, params);
+    const results = await this.debtStatisticRepository.query(
+      finalQuery,
+      params,
+    );
 
     return results.map((item) => ({
       range: item.age_range,
@@ -890,16 +934,27 @@ export class DebtStatisticService {
   }
 
   // Daily aging buckets per date range, 4 buckets per day
-  async getAgingDaily(fromDate: string, toDate: string, opts: { employeeCode?: string; customerCode?: string } = {}) {
+  async getAgingDaily(
+    fromDate: string,
+    toDate: string,
+    opts: { employeeCode?: string; customerCode?: string } = {},
+  ) {
     const today = this.getVietnamToday();
-    
+
     // Nếu toDate là tương lai, chỉ tính đến ngày hiện tại
     const effectiveToDate = toDate > today ? today : toDate;
-    
-    const dates = this.generateDateRange(fromDate, effectiveToDate).filter((d) => new Date(d).getDay() !== 0); // skip Sunday
-    const results: Array<{ date: string; range: string; count: number; amount: number }> = [];
+
+    const dates = this.generateDateRange(fromDate, effectiveToDate).filter(
+      (d) => new Date(d).getDay() !== 0,
+    ); // skip Sunday
+    const results: Array<{
+      date: string;
+      range: string;
+      count: number;
+      amount: number;
+    }> = [];
     for (const D of dates) {
-  if (D < today) {
+      if (D < today) {
         // Use exact snapshot for the requested date (match modal behavior)
         const filters: string[] = [
           "ds.status <> 'paid'",
@@ -907,8 +962,14 @@ export class DebtStatisticService {
           'DATEDIFF(ds.statistic_date, ds.due_date) > 0',
         ];
         const args: any[] = [];
-        if (opts.employeeCode) { filters.push('ds.employee_code_raw = ?'); args.push(opts.employeeCode); }
-        if (opts.customerCode) { filters.push('ds.customer_code = ?'); args.push(opts.customerCode); }
+        if (opts.employeeCode) {
+          filters.push('ds.employee_code_raw = ?');
+          args.push(opts.employeeCode);
+        }
+        if (opts.customerCode) {
+          filters.push('ds.customer_code = ?');
+          args.push(opts.customerCode);
+        }
         const query = `
           SELECT
             CASE
@@ -923,9 +984,18 @@ export class DebtStatisticService {
           WHERE ds.statistic_date = ?
             AND ${filters.join(' AND ')}
           GROUP BY bucket`;
-  const rows = await this.debtStatisticRepository.query(query, [D, ...args]);
-  console.debug('[getAgingDaily] historical rows for', D, rows);
-  for (const r of rows) results.push({ date: D, range: r.bucket, count: Number(r.count) || 0, amount: Number(r.amount) || 0 });
+        const rows = await this.debtStatisticRepository.query(query, [
+          D,
+          ...args,
+        ]);
+        console.debug('[getAgingDaily] historical rows for', D, rows);
+        for (const r of rows)
+          results.push({
+            date: D,
+            range: r.bucket,
+            count: Number(r.count) || 0,
+            amount: Number(r.amount) || 0,
+          });
       } else {
         const where: string[] = [
           'd.deleted_at IS NULL',
@@ -935,8 +1005,14 @@ export class DebtStatisticService {
           'DATE(d.updated_at) = DATE(?)', // Thêm filter theo ngày hiện tại
         ];
         const arr: any[] = [D, D]; // Thêm D cho filter DATE(d.updated_at) = DATE(?)
-        if (opts.employeeCode) { where.push('d.employee_code_raw = ?'); arr.push(opts.employeeCode); }
-        if (opts.customerCode) { where.push('dc.customer_code = ?'); arr.push(opts.customerCode); }
+        if (opts.employeeCode) {
+          where.push('d.employee_code_raw = ?');
+          arr.push(opts.employeeCode);
+        }
+        if (opts.customerCode) {
+          where.push('dc.customer_code = ?');
+          arr.push(opts.customerCode);
+        }
         const query = `
           SELECT
             CASE
@@ -951,48 +1027,90 @@ export class DebtStatisticService {
           LEFT JOIN debt_configs dc ON d.debt_config_id = dc.id
           WHERE ${where.join(' AND ')}
           GROUP BY bucket`;
-  const rows = await this.debtRepository.query(query, [D, D, D, ...arr]);
-  for (const r of rows) results.push({ date: D, range: r.bucket, count: Number(r.count) || 0, amount: Number(r.amount) || 0 });
+        const rows = await this.debtRepository.query(query, [D, D, D, ...arr]);
+        for (const r of rows)
+          results.push({
+            date: D,
+            range: r.bucket,
+            count: Number(r.count) || 0,
+            amount: Number(r.amount) || 0,
+          });
       }
     }
     return results;
   }
 
   // Daily pay-later buckets per day using ranges config
-  async getPayLaterDelayDaily(from: string, to: string, buckets: number[], options: { employeeCode?: string; customerCode?: string } = {}) {
+  async getPayLaterDelayDaily(
+    from: string,
+    to: string,
+    buckets: number[],
+    options: { employeeCode?: string; customerCode?: string } = {},
+  ) {
     const today = this.getVietnamToday();
-    
+
     // Nếu to là tương lai, chỉ tính đến ngày hiện tại
     const effectiveTo = to > today ? today : to;
-    
-    const dates = this.generateDateRange(from, effectiveTo).filter((d) => new Date(d).getDay() !== 0);
+
+    const dates = this.generateDateRange(from, effectiveTo).filter(
+      (d) => new Date(d).getDay() !== 0,
+    );
     const sorted = [...buckets].sort((a, b) => a - b);
-    const ranges = [] as Array<{ label: string; min: number; max: number | null }>;
+    const ranges = [] as Array<{
+      label: string;
+      min: number;
+      max: number | null;
+    }>;
     let prev = 0;
-    for (const b of sorted) { ranges.push({ label: `${prev + 1}-${b}`, min: prev + 1, max: b }); prev = b; }
+    for (const b of sorted) {
+      ranges.push({ label: `${prev + 1}-${b}`, min: prev + 1, max: b });
+      prev = b;
+    }
     ranges.push({ label: `>${prev}`, min: prev + 1, max: null });
-    const results: Array<{ date: string; range: string; count: number; amount: number }> = [];
+    const results: Array<{
+      date: string;
+      range: string;
+      count: number;
+      amount: number;
+    }> = [];
     for (const D of dates) {
       if (D < today) {
         // Use exact snapshot for the requested date to match modal
         const whereClauses: string[] = [
-          "ds.status <> 'paid'", 
+          "ds.status <> 'paid'",
           'ds.pay_later IS NOT NULL',
-          'ds.statistic_date = ?'
+          'ds.statistic_date = ?',
         ];
         const params: any[] = [D];
-        if (options.employeeCode) { whereClauses.push('ds.employee_code_raw = ?'); params.push(options.employeeCode); }
-        if (options.customerCode) { whereClauses.push('ds.customer_code = ?'); params.push(options.customerCode); }
+        if (options.employeeCode) {
+          whereClauses.push('ds.employee_code_raw = ?');
+          params.push(options.employeeCode);
+        }
+        if (options.customerCode) {
+          whereClauses.push('ds.customer_code = ?');
+          params.push(options.customerCode);
+        }
         // Use statistic_date in DATEDIFF like aging logic to avoid placeholder proliferation
-        const parts = ranges.map((r) => {
-          const cond = r.max == null ? `DATEDIFF(ds.statistic_date, ds.pay_later) >= ${r.min}` : `DATEDIFF(ds.statistic_date, ds.pay_later) BETWEEN ${r.min} AND ${r.max}`;
-          return `SUM(CASE WHEN ${cond} THEN 1 ELSE 0 END) AS cnt_${r.label.replace(/[^a-zA-Z0-9_]/g, '_')}, SUM(CASE WHEN ${cond} THEN ds.remaining ELSE 0 END) AS amt_${r.label.replace(/[^a-zA-Z0-9_]/g, '_')}`;
-        }).join(',');
+        const parts = ranges
+          .map((r) => {
+            const cond =
+              r.max == null
+                ? `DATEDIFF(ds.statistic_date, ds.pay_later) >= ${r.min}`
+                : `DATEDIFF(ds.statistic_date, ds.pay_later) BETWEEN ${r.min} AND ${r.max}`;
+            return `SUM(CASE WHEN ${cond} THEN 1 ELSE 0 END) AS cnt_${r.label.replace(/[^a-zA-Z0-9_]/g, '_')}, SUM(CASE WHEN ${cond} THEN ds.remaining ELSE 0 END) AS amt_${r.label.replace(/[^a-zA-Z0-9_]/g, '_')}`;
+          })
+          .join(',');
         const query = `SELECT ${parts} FROM debt_statistics ds WHERE ${whereClauses.join(' AND ')}`;
-        const row = (await this.debtStatisticRepository.query(query, params))[0] || {};
+        const row =
+          (await this.debtStatisticRepository.query(query, params))[0] || {};
         for (const r of ranges) {
           const key = r.label.replace(/[^a-zA-Z0-9_]/g, '_');
-          results.push({ date: D, range: r.label, count: Number(row[`cnt_${key}`]) || 0, amount: Number(row[`amt_${key}`]) || 0 });
+          results.push({
+            date: D,
+            range: r.label,
+            count: Number(row[`cnt_${key}`]) || 0,
+            amount: Number(row[`amt_${key}`]) || 0,
+          });
         }
       } else if (D === today) {
         // Ngày hiện tại: Lấy từ debts (real-time)
@@ -1003,13 +1121,24 @@ export class DebtStatisticService {
           'DATE(d.updated_at) = DATE(?)', // Thêm filter theo ngày hiện tại
         ];
         const arr: any[] = [D]; // Chỉ cần một D cho filter DATE(d.updated_at) = DATE(?)
-        if (options.employeeCode) { where.push('d.employee_code_raw = ?'); arr.push(options.employeeCode); }
-        if (options.customerCode) { where.push('dc.customer_code = ?'); arr.push(options.customerCode); }
+        if (options.employeeCode) {
+          where.push('d.employee_code_raw = ?');
+          arr.push(options.employeeCode);
+        }
+        if (options.customerCode) {
+          where.push('dc.customer_code = ?');
+          arr.push(options.customerCode);
+        }
         // Use DATE(updated_at) in DATEDIFF like aging logic
-        const parts = ranges.map((r) => {
-          const cond = r.max == null ? `DATEDIFF(DATE(t.updated_at), t.pay_later) >= ${r.min}` : `DATEDIFF(DATE(t.updated_at), t.pay_later) BETWEEN ${r.min} AND ${r.max}`;
-          return `SUM(CASE WHEN ${cond} THEN 1 ELSE 0 END) AS cnt_${r.label.replace(/[^a-zA-Z0-9_]/g, '_')}, SUM(CASE WHEN ${cond} THEN t.remaining ELSE 0 END) AS amt_${r.label.replace(/[^a-zA-Z0-9_]/g, '_')}`;
-        }).join(',');
+        const parts = ranges
+          .map((r) => {
+            const cond =
+              r.max == null
+                ? `DATEDIFF(DATE(t.updated_at), t.pay_later) >= ${r.min}`
+                : `DATEDIFF(DATE(t.updated_at), t.pay_later) BETWEEN ${r.min} AND ${r.max}`;
+            return `SUM(CASE WHEN ${cond} THEN 1 ELSE 0 END) AS cnt_${r.label.replace(/[^a-zA-Z0-9_]/g, '_')}, SUM(CASE WHEN ${cond} THEN t.remaining ELSE 0 END) AS amt_${r.label.replace(/[^a-zA-Z0-9_]/g, '_')}`;
+          })
+          .join(',');
         const query = `SELECT ${parts} FROM (
           SELECT d.* FROM debts d
           LEFT JOIN debt_configs dc ON d.debt_config_id = dc.id
@@ -1018,7 +1147,12 @@ export class DebtStatisticService {
         const row = (await this.debtRepository.query(query, [...arr]))[0] || {};
         for (const r of ranges) {
           const key = r.label.replace(/[^a-zA-Z0-9_]/g, '_');
-          results.push({ date: D, range: r.label, count: Number(row[`cnt_${key}`]) || 0, amount: Number(row[`amt_${key}`]) || 0 });
+          results.push({
+            date: D,
+            range: r.label,
+            count: Number(row[`cnt_${key}`]) || 0,
+            amount: Number(row[`amt_${key}`]) || 0,
+          });
         }
       }
       // D > today: không làm gì, tự động trả về 0
@@ -1027,21 +1161,36 @@ export class DebtStatisticService {
   }
 
   // Daily contact responses per remind_status
-  async getContactResponsesDaily(from: string, to: string, by: 'customer' | 'invoice' = 'customer', options: { employeeCode?: string; customerCode?: string } = {}) {
+  async getContactResponsesDaily(
+    from: string,
+    to: string,
+    by: 'customer' | 'invoice' = 'customer',
+    options: { employeeCode?: string; customerCode?: string } = {},
+  ) {
     // Keep Sunday filter but fix timezone issue
     const today = this.getVietnamToday();
-    const dates = this.generateDateRange(from, to).filter((d) => new Date(d).getDay() !== 0);
-    const results: Array<{ date: string; status: string; customers: number }> = [];
+    const dates = this.generateDateRange(from, to).filter(
+      (d) => new Date(d).getDay() !== 0,
+    );
+    const results: Array<{ date: string; status: string; customers: number }> =
+      [];
     for (const D of dates) {
-      const selectDistinct = by === 'customer' ? 'COUNT(DISTINCT dc.customer_code)' : 'COUNT(*)';
+      const selectDistinct =
+        by === 'customer' ? 'COUNT(DISTINCT dc.customer_code)' : 'COUNT(*)';
 
       if (D < today) {
         // Past days: use events from debt_histories on that day
         // FIX: Use DATE(send_at) to reflect actual message send time
-        const where = ["DATE(dh.send_at) = ?"] as string[];
+        const where = ['DATE(dh.send_at) = ?'] as string[];
         const arr: any[] = [D];
-        if (options.employeeCode) { where.push('u.employee_code = ?'); arr.push(options.employeeCode); }
-        if (options.customerCode) { where.push('dc.customer_code = ?'); arr.push(options.customerCode); }
+        if (options.employeeCode) {
+          where.push('u.employee_code = ?');
+          arr.push(options.employeeCode);
+        }
+        if (options.customerCode) {
+          where.push('dc.customer_code = ?');
+          arr.push(options.customerCode);
+        }
         const query = `
           SELECT dh.remind_status as status, ${selectDistinct} as customers
           FROM debt_histories dh
@@ -1052,13 +1201,24 @@ export class DebtStatisticService {
           GROUP BY dh.remind_status
         `;
         const rows = await this.debtHistoriesRepository.query(query, arr);
-        for (const r of rows) results.push({ date: D, status: r.status, customers: Number(r.customers) || 0 });
+        for (const r of rows)
+          results.push({
+            date: D,
+            status: r.status,
+            customers: Number(r.customers) || 0,
+          });
       } else if (D === today) {
         // Ngày hiện tại: Lấy từ debt_logs (real-time)
-        const where = ["DATE(dl.send_at) = ?"] as string[];
+        const where = ['DATE(dl.send_at) = ?'] as string[];
         const arr: any[] = [D];
-        if (options.employeeCode) { where.push('u.employee_code = ?'); arr.push(options.employeeCode); }
-        if (options.customerCode) { where.push('dc.customer_code = ?'); arr.push(options.customerCode); }
+        if (options.employeeCode) {
+          where.push('u.employee_code = ?');
+          arr.push(options.employeeCode);
+        }
+        if (options.customerCode) {
+          where.push('dc.customer_code = ?');
+          arr.push(options.customerCode);
+        }
         const query = `
           SELECT dl.remind_status as status, ${selectDistinct} as customers
           FROM debt_logs dl
@@ -1068,7 +1228,12 @@ export class DebtStatisticService {
           GROUP BY dl.remind_status
         `;
         const rows = await this.debtLogsRepository.query(query, arr);
-        for (const r of rows) results.push({ date: D, status: r.status, customers: Number(r.customers) || 0 });
+        for (const r of rows)
+          results.push({
+            date: D,
+            status: r.status,
+            customers: Number(r.customers) || 0,
+          });
       }
       // D > today: không làm gì, tự động trả về 0
     }
@@ -1076,7 +1241,13 @@ export class DebtStatisticService {
   }
 
   // New as-of implementation per plan: single D date determines snapshot selection
-  async getAgingAnalysisAsOf(params: { singleDate?: string; from?: string; to?: string; employeeCode?: string; customerCode?: string }) {
+  async getAgingAnalysisAsOf(params: {
+    singleDate?: string;
+    from?: string;
+    to?: string;
+    employeeCode?: string;
+    customerCode?: string;
+  }) {
     const D = this.resolveAsOfDate(params);
     const today = this.getVietnamToday();
 
@@ -1119,8 +1290,15 @@ export class DebtStatisticService {
         ORDER BY CASE bucket WHEN '1-30' THEN 1 WHEN '31-60' THEN 2 WHEN '61-90' THEN 3 ELSE 4 END
       `;
       // Placeholders: 1 for latest.snap_date (<= ?), then ...args
-      const rows = await this.debtStatisticRepository.query(query, [D, ...args]);
-      return rows.map((r: any) => ({ range: r.bucket, count: Number(r.count) || 0, amount: Number(r.amount) || 0 }));
+      const rows = await this.debtStatisticRepository.query(query, [
+        D,
+        ...args,
+      ]);
+      return rows.map((r: any) => ({
+        range: r.bucket,
+        count: Number(r.count) || 0,
+        amount: Number(r.amount) || 0,
+      }));
     } else {
       // Ngày hiện tại: Lấy từ debts (real-time) - BÌNH THƯỜNG
       const where: string[] = [
@@ -1156,7 +1334,11 @@ export class DebtStatisticService {
       `;
       // Placeholders: provided in ...arr
       const rows = await this.debtRepository.query(query, [...arr]);
-      return rows.map((r: any) => ({ range: r.bucket, count: Number(r.count) || 0, amount: Number(r.amount) || 0 }));
+      return rows.map((r: any) => ({
+        range: r.bucket,
+        count: Number(r.count) || 0,
+        amount: Number(r.amount) || 0,
+      }));
     }
   }
 
@@ -1168,13 +1350,14 @@ export class DebtStatisticService {
     options: { employeeCode?: string; customerCode?: string } = {},
   ) {
     const today = this.getVietnamToday();
-    
+
     // Nếu toDate là tương lai, chỉ tính đến ngày hiện tại
     const effectiveToDate = toDate > today ? today : toDate;
-    
+
     // Phase 1.4: Tối ưu hóa - Dynamic bucket generation
     const sortedBuckets = [...buckets].sort((a, b) => a - b);
-    const ranges: Array<{ label: string; min: number; max: number | null }> = [];
+    const ranges: Array<{ label: string; min: number; max: number | null }> =
+      [];
     let previous = 0;
     for (const b of sortedBuckets) {
       ranges.push({ label: `${previous + 1}-${b}`, min: previous + 1, max: b });
@@ -1187,12 +1370,15 @@ export class DebtStatisticService {
       const historyPart = `
         SELECT 
           CASE 
-            ${ranges.map(r => {
-              const cond = r.max === null 
-                ? `WHEN DATEDIFF(statistic_date, pay_later) >= ${r.min} THEN '${r.label}'`
-                : `WHEN DATEDIFF(statistic_date, pay_later) BETWEEN ${r.min} AND ${r.max} THEN '${r.label}'`;
-              return cond;
-            }).join(' ')}
+            ${ranges
+              .map((r) => {
+                const cond =
+                  r.max === null
+                    ? `WHEN DATEDIFF(statistic_date, pay_later) >= ${r.min} THEN '${r.label}'`
+                    : `WHEN DATEDIFF(statistic_date, pay_later) BETWEEN ${r.min} AND ${r.max} THEN '${r.label}'`;
+                return cond;
+              })
+              .join(' ')}
             ELSE NULL
           END as bucket,
           COUNT(*) as count,
@@ -1206,12 +1392,15 @@ export class DebtStatisticService {
       const todayPart = `
         SELECT 
           CASE 
-            ${ranges.map(r => {
-              const cond = r.max === null 
-                ? `WHEN DATEDIFF(DATE(updated_at), pay_later) >= ${r.min} THEN '${r.label}'`
-                : `WHEN DATEDIFF(DATE(updated_at), pay_later) BETWEEN ${r.min} AND ${r.max} THEN '${r.label}'`;
-              return cond;
-            }).join(' ')}
+            ${ranges
+              .map((r) => {
+                const cond =
+                  r.max === null
+                    ? `WHEN DATEDIFF(DATE(updated_at), pay_later) >= ${r.min} THEN '${r.label}'`
+                    : `WHEN DATEDIFF(DATE(updated_at), pay_later) BETWEEN ${r.min} AND ${r.max} THEN '${r.label}'`;
+                return cond;
+              })
+              .join(' ')}
             ELSE NULL
           END as bucket,
           COUNT(*) as count,
@@ -1241,7 +1430,7 @@ export class DebtStatisticService {
 
       let historyQuery = historyPart;
       params.push(fromDate, endHistory);
-      
+
       if (options.employeeCode) {
         historyQuery += ` AND employee_code_raw = ?`;
         params.push(options.employeeCode);
@@ -1260,7 +1449,7 @@ export class DebtStatisticService {
       const todayVietnam = this.formatDateStringToVietnam(today);
       let todayQuery = todayPart;
       params.push(todayVietnam);
-      
+
       if (options.employeeCode) {
         todayQuery += ` AND employee_code_raw = ?`;
         params.push(options.employeeCode);
@@ -1294,7 +1483,10 @@ export class DebtStatisticService {
       END
     `;
 
-    const results = await this.debtStatisticRepository.query(finalQuery, params);
+    const results = await this.debtStatisticRepository.query(
+      finalQuery,
+      params,
+    );
 
     return results.map((item) => ({
       range: item.range,
@@ -1304,11 +1496,19 @@ export class DebtStatisticService {
   }
 
   // New as-of implementation for pay-later delay buckets
-  async getPayLaterDelayAsOf(params: { singleDate?: string; from?: string; to?: string; buckets: number[]; employeeCode?: string; customerCode?: string }) {
+  async getPayLaterDelayAsOf(params: {
+    singleDate?: string;
+    from?: string;
+    to?: string;
+    buckets: number[];
+    employeeCode?: string;
+    customerCode?: string;
+  }) {
     const D = this.resolveAsOfDate(params);
     const today = this.getVietnamToday();
     const sorted = [...params.buckets].sort((a, b) => a - b);
-    const ranges: Array<{ label: string; min: number; max: number | null }> = [];
+    const ranges: Array<{ label: string; min: number; max: number | null }> =
+      [];
     let prev = 0;
     for (const b of sorted) {
       ranges.push({ label: `${prev + 1}-${b}`, min: prev + 1, max: b });
@@ -1319,7 +1519,10 @@ export class DebtStatisticService {
     const buildCase = (diffExpr: string) => {
       const whenClauses = ranges
         .map((r) => {
-          const cond = r.max == null ? `${diffExpr} >= ${r.min}` : `${diffExpr} BETWEEN ${r.min} AND ${r.max}`;
+          const cond =
+            r.max == null
+              ? `${diffExpr} >= ${r.min}`
+              : `${diffExpr} BETWEEN ${r.min} AND ${r.max}`;
           return `WHEN ${cond} THEN '${r.label}'`;
         })
         .join(' ');
@@ -1340,8 +1543,8 @@ export class DebtStatisticService {
         filters.push('ds.customer_code = ?');
         arr.push(params.customerCode);
       }
-  // Use statistic_date like aging logic so case expressions reference snapshot date
-  const caseExpr = buildCase('DATEDIFF(ds.statistic_date, ds.pay_later)');
+      // Use statistic_date like aging logic so case expressions reference snapshot date
+      const caseExpr = buildCase('DATEDIFF(ds.statistic_date, ds.pay_later)');
       const query = `
         SELECT rng AS bucket, COUNT(*) AS count, SUM(ds.remaining) AS amount
         FROM (
@@ -1362,9 +1565,13 @@ export class DebtStatisticService {
         ORDER BY CASE rng ${ranges.map((r, idx) => `WHEN '${r.label}' THEN ${idx + 1}`).join(' ')} ELSE 999 END
       `;
       // Placeholders: one for caseExpr (DATEDIFF), one for latest.snap_date compare
-  // No extra D placeholders needed because caseExpr uses ds.statistic_date
-  const rows = await this.debtStatisticRepository.query(query, [D, ...arr]);
-      return rows.map((r: any) => ({ range: r.bucket, count: Number(r.count) || 0, amount: Number(r.amount) || 0 }));
+      // No extra D placeholders needed because caseExpr uses ds.statistic_date
+      const rows = await this.debtStatisticRepository.query(query, [D, ...arr]);
+      return rows.map((r: any) => ({
+        range: r.bucket,
+        count: Number(r.count) || 0,
+        amount: Number(r.amount) || 0,
+      }));
     } else {
       const where: string[] = [
         'd.deleted_at IS NULL',
@@ -1380,8 +1587,8 @@ export class DebtStatisticService {
         where.push('dc.customer_code = ?');
         arr.push(params.customerCode);
       }
-  // Use DATE(updated_at) like aging logic for today's calculation
-  const caseExpr = buildCase('DATEDIFF(DATE(d.updated_at), d.pay_later)');
+      // Use DATE(updated_at) like aging logic for today's calculation
+      const caseExpr = buildCase('DATEDIFF(DATE(d.updated_at), d.pay_later)');
       const query = `
         SELECT rng AS bucket, COUNT(*) AS count, SUM(d.remaining) AS amount
         FROM (
@@ -1398,7 +1605,11 @@ export class DebtStatisticService {
       `;
       // No extra D placeholders needed because caseExpr uses DATE(d.updated_at)
       const rows = await this.debtRepository.query(query, [...arr]);
-      return rows.map((r: any) => ({ range: r.bucket, count: Number(r.count) || 0, amount: Number(r.amount) || 0 }));
+      return rows.map((r: any) => ({
+        range: r.bucket,
+        count: Number(r.count) || 0,
+        amount: Number(r.amount) || 0,
+      }));
     }
   }
 
@@ -1406,13 +1617,17 @@ export class DebtStatisticService {
     fromDate: string,
     toDate: string,
     by: 'customer' | 'invoice' = 'customer',
-    options: { employeeCode?: string; customerCode?: string; mode?: 'events' | 'distribution' } = {},
+    options: {
+      employeeCode?: string;
+      customerCode?: string;
+      mode?: 'events' | 'distribution';
+    } = {},
   ) {
     const today = this.getVietnamToday();
-    
+
     // Nếu toDate là tương lai, chỉ tính đến ngày hiện tại
     const effectiveToDate = toDate > today ? today : toDate;
-    
+
     const resultsMap = new Map<string, { status: string; customers: number }>();
 
     const addCount = (status: string, count: number) => {
@@ -1427,7 +1642,7 @@ export class DebtStatisticService {
     // Mode events: đếm sự kiện trong khoảng [from, to] thuần theo debt_histories
     if (mode === 'events') {
       const whereClauses = [
-        "DATE(dh.created_at) >= ? AND DATE(dh.created_at) <= ?",
+        'DATE(dh.created_at) >= ? AND DATE(dh.created_at) <= ?',
       ];
       const params: any[] = [fromDate, effectiveToDate];
       if (options.employeeCode) {
@@ -1438,7 +1653,8 @@ export class DebtStatisticService {
         whereClauses.push('dc.customer_code = ?');
         params.push(options.customerCode);
       }
-      const selectDistinct = by === 'customer' ? 'COUNT(DISTINCT dc.customer_code)' : 'COUNT(*)';
+      const selectDistinct =
+        by === 'customer' ? 'COUNT(DISTINCT dc.customer_code)' : 'COUNT(*)';
       const query = `
         SELECT dh.remind_status as status, ${selectDistinct} as customers
         FROM debt_histories dh
@@ -1456,7 +1672,7 @@ export class DebtStatisticService {
 
     // Distribution as-of today (current state), ignore range; only valid for today
     if (mode === 'distribution') {
-      const whereClauses = [ '1=1' ];
+      const whereClauses = ['1=1'];
       const params: any[] = [];
       if (options.employeeCode) {
         whereClauses.push('u.employee_code = ?');
@@ -1466,7 +1682,8 @@ export class DebtStatisticService {
         whereClauses.push('dc.customer_code = ?');
         params.push(options.customerCode);
       }
-      const selectDistinct = by === 'customer' ? 'COUNT(DISTINCT dc.customer_code)' : 'COUNT(*)';
+      const selectDistinct =
+        by === 'customer' ? 'COUNT(DISTINCT dc.customer_code)' : 'COUNT(*)';
       const query = `
         SELECT dl.remind_status as status, ${selectDistinct} as customers
         FROM debt_logs dl
@@ -1495,20 +1712,36 @@ export class DebtStatisticService {
     page?: number;
     limit?: number;
   }) {
-    const { date, from, to, responseStatus, mode = 'events', employeeCode, customerCode, page = 1, limit = 50 } = params;
+    const {
+      date,
+      from,
+      to,
+      responseStatus,
+      mode = 'events',
+      employeeCode,
+      customerCode,
+      page = 1,
+      limit = 50,
+    } = params;
     const today = this.getVietnamToday();
     const offset = (page - 1) * limit;
 
     // Range mode (events): list distinct customers having that response in [from, to]
     if (!date && from && to && mode === 'events') {
       const where: string[] = [
-        "DATE(dh.created_at) >= ?",
-        "DATE(dh.created_at) <= ?",
+        'DATE(dh.created_at) >= ?',
+        'DATE(dh.created_at) <= ?',
         'dh.remind_status = ?',
       ];
       const arr: any[] = [from, to, responseStatus];
-      if (employeeCode) { where.push('u.employee_code = ?'); arr.push(employeeCode); }
-      if (customerCode) { where.push('dc.customer_code = ?'); arr.push(customerCode); }
+      if (employeeCode) {
+        where.push('u.employee_code = ?');
+        arr.push(employeeCode);
+      }
+      if (customerCode) {
+        where.push('dc.customer_code = ?');
+        arr.push(customerCode);
+      }
 
       const dataQuery = `
         SELECT 
@@ -1529,7 +1762,10 @@ export class DebtStatisticService {
         LIMIT ? OFFSET ?
       `;
       const dataParams = [...arr, limit, offset];
-      const data = await this.debtHistoriesRepository.query(dataQuery, dataParams);
+      const data = await this.debtHistoriesRepository.query(
+        dataQuery,
+        dataParams,
+      );
 
       const countQuery = `
         SELECT COUNT(*) as total FROM (
@@ -1542,7 +1778,10 @@ export class DebtStatisticService {
           GROUP BY dc.customer_code
         ) t
       `;
-      const totalRow = await this.debtHistoriesRepository.query(countQuery, arr);
+      const totalRow = await this.debtHistoriesRepository.query(
+        countQuery,
+        arr,
+      );
       const total = Number(totalRow[0]?.total) || 0;
       return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
     }
@@ -1551,8 +1790,8 @@ export class DebtStatisticService {
 
     if (isHistorical) {
       const where: string[] = [
-        "DATE(dh.created_at) = ?",
-        'dh.remind_status = ?'
+        'DATE(dh.created_at) = ?',
+        'dh.remind_status = ?',
       ];
       const arr: any[] = [date, responseStatus];
       if (employeeCode) {
@@ -1582,7 +1821,10 @@ export class DebtStatisticService {
         LIMIT ? OFFSET ?
       `;
       const dataParams = [...arr, limit, offset];
-      const data = await this.debtHistoriesRepository.query(dataQuery, dataParams);
+      const data = await this.debtHistoriesRepository.query(
+        dataQuery,
+        dataParams,
+      );
 
       const countQuery = `
         SELECT COUNT(*) as total FROM (
@@ -1595,7 +1837,10 @@ export class DebtStatisticService {
           GROUP BY dc.customer_code
         ) t
       `;
-      const totalRow = await this.debtHistoriesRepository.query(countQuery, arr);
+      const totalRow = await this.debtHistoriesRepository.query(
+        countQuery,
+        arr,
+      );
       const total = Number(totalRow[0]?.total) || 0;
       return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
     } else {
@@ -1603,7 +1848,7 @@ export class DebtStatisticService {
       const todayVietnam = this.formatDateStringToVietnam(today);
       const where: string[] = [
         'DATE(dl.updated_at) = DATE(?)',
-        'dl.remind_status = ?'
+        'dl.remind_status = ?',
       ];
       const arr: any[] = [todayVietnam, responseStatus];
       if (employeeCode) {
@@ -1661,10 +1906,10 @@ export class DebtStatisticService {
 
   async getEmployeePerformance(fromDate: string, toDate: string) {
     const today = this.getVietnamToday();
-    
+
     // Nếu toDate là tương lai, chỉ tính đến ngày hiện tại
     const effectiveToDate = toDate > today ? today : toDate;
-    
+
     const results: any[] = [];
 
     // Lấy dữ liệu từ debt_statistics cho các ngày trong quá khứ

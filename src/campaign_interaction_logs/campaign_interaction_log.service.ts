@@ -1,7 +1,14 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  BadRequestException,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Between } from 'typeorm';
-import { CampaignInteractionLog, LogStatus } from './campaign_interaction_log.entity';
+import {
+  CampaignInteractionLog,
+  LogStatus,
+} from './campaign_interaction_log.entity';
 import { Campaign } from '../campaigns/campaign.entity';
 import { User } from '../users/user.entity';
 
@@ -30,12 +37,18 @@ export class CampaignInteractionLogService {
     private readonly campaignRepository: Repository<Campaign>,
   ) {}
 
-  async findAll(filter: LogFilter, page = 1, pageSize = 10, user: User): Promise<{
+  async findAll(
+    filter: LogFilter,
+    page = 1,
+    pageSize = 10,
+    user: User,
+  ): Promise<{
     data: CampaignInteractionLog[];
     total: number;
     stats: InteractionStats;
   }> {
-    const qb = this.campaignInteractionLogRepository.createQueryBuilder('log')
+    const qb = this.campaignInteractionLogRepository
+      .createQueryBuilder('log')
       .leftJoinAndSelect('log.campaign', 'campaign')
       .leftJoinAndSelect('log.customer', 'customer')
       .leftJoinAndSelect('log.staff_handler', 'staff')
@@ -49,23 +62,25 @@ export class CampaignInteractionLogService {
 
     // Apply filters
     if (filter.campaign_id) {
-      qb.andWhere('campaign.id = :campaignId', { campaignId: filter.campaign_id });
+      qb.andWhere('campaign.id = :campaignId', {
+        campaignId: filter.campaign_id,
+      });
     }
-    
+
     if (filter.status) {
       qb.andWhere('log.status = :status', { status: filter.status });
     }
-    
+
     if (filter.date_from && filter.date_to) {
       qb.andWhere('log.sent_at BETWEEN :dateFrom AND :dateTo', {
         dateFrom: filter.date_from,
         dateTo: filter.date_to,
       });
     }
-    
+
     if (filter.customer_phone) {
-      qb.andWhere('customer.phone_number LIKE :phone', { 
-        phone: `%${filter.customer_phone}%` 
+      qb.andWhere('customer.phone_number LIKE :phone', {
+        phone: `%${filter.customer_phone}%`,
       });
     }
 
@@ -78,12 +93,13 @@ export class CampaignInteractionLogService {
     qb.orderBy('log.sent_at', 'DESC');
 
     const [data, total] = await qb.getManyAndCount();
-    
+
     return { data, total, stats };
   }
 
   async getStats(filter: LogFilter, user: User): Promise<InteractionStats> {
-    const qb = this.campaignInteractionLogRepository.createQueryBuilder('log')
+    const qb = this.campaignInteractionLogRepository
+      .createQueryBuilder('log')
       .leftJoin('log.campaign', 'campaign')
       .leftJoin('campaign.department', 'department');
 
@@ -94,9 +110,11 @@ export class CampaignInteractionLogService {
     }
 
     if (filter.campaign_id) {
-      qb.andWhere('campaign.id = :campaignId', { campaignId: filter.campaign_id });
+      qb.andWhere('campaign.id = :campaignId', {
+        campaignId: filter.campaign_id,
+      });
     }
-    
+
     if (filter.date_from && filter.date_to) {
       qb.andWhere('log.sent_at BETWEEN :dateFrom AND :dateTo', {
         dateFrom: filter.date_from,
@@ -104,18 +122,24 @@ export class CampaignInteractionLogService {
       });
     }
 
-    const total_sent = await qb.andWhere('log.status != :pending', { pending: 'pending' }).getCount();
-    
-    const total_replies = await qb.clone()
+    const total_sent = await qb
+      .andWhere('log.status != :pending', { pending: 'pending' })
+      .getCount();
+
+    const total_replies = await qb
+      .clone()
       .andWhere('log.customer_replied_at IS NOT NULL')
       .getCount();
-    
-    const total_handled = await qb.clone()
+
+    const total_handled = await qb
+      .clone()
       .andWhere('log.staff_handled_at IS NOT NULL')
       .getCount();
 
-    const response_rate = total_sent > 0 ? (total_replies / total_sent) * 100 : 0;
-    const handling_rate = total_replies > 0 ? (total_handled / total_replies) * 100 : 0;
+    const response_rate =
+      total_sent > 0 ? (total_replies / total_sent) * 100 : 0;
+    const handling_rate =
+      total_replies > 0 ? (total_handled / total_replies) * 100 : 0;
 
     return {
       total_sent,
@@ -126,14 +150,24 @@ export class CampaignInteractionLogService {
     };
   }
 
-  async create(data: Partial<CampaignInteractionLog>, user: User): Promise<CampaignInteractionLog> {
+  async create(
+    data: Partial<CampaignInteractionLog>,
+    user: User,
+  ): Promise<CampaignInteractionLog> {
     const log = this.campaignInteractionLogRepository.create(data);
     return this.campaignInteractionLogRepository.save(log);
   }
 
-  async updateLogStatus(id: string, newStatus: LogStatus, extra: any, userId: string): Promise<CampaignInteractionLog> {
-    const log = await this.campaignInteractionLogRepository.findOneByOrFail({ id });
-    
+  async updateLogStatus(
+    id: string,
+    newStatus: LogStatus,
+    extra: any,
+    userId: string,
+  ): Promise<CampaignInteractionLog> {
+    const log = await this.campaignInteractionLogRepository.findOneByOrFail({
+      id,
+    });
+
     // Validate status transitions
     const validTransitions = {
       [LogStatus.PENDING]: [LogStatus.SENT, LogStatus.FAILED],
@@ -165,9 +199,13 @@ export class CampaignInteractionLogService {
     return this.campaignInteractionLogRepository.save(log);
   }
 
-  async updateStatus(id: string, status: string, additionalData?: any): Promise<CampaignInteractionLog> {
+  async updateStatus(
+    id: string,
+    status: string,
+    additionalData?: any,
+  ): Promise<CampaignInteractionLog> {
     const updateData: any = { status };
-    
+
     // Set timestamps based on status
     if (status === 'sent') {
       updateData.sent_at = new Date();
@@ -191,7 +229,8 @@ export class CampaignInteractionLogService {
   }
 
   async findOne(id: string, user?: User): Promise<CampaignInteractionLog> {
-    const qb = this.campaignInteractionLogRepository.createQueryBuilder('log')
+    const qb = this.campaignInteractionLogRepository
+      .createQueryBuilder('log')
       .leftJoinAndSelect('log.campaign', 'campaign')
       .leftJoinAndSelect('log.customer', 'customer')
       .leftJoinAndSelect('log.staff_handler', 'staff_handler')
@@ -207,19 +246,22 @@ export class CampaignInteractionLogService {
     }
 
     const log = await qb.getOne();
-    
+
     if (!log) {
       throw new NotFoundException('Không tìm thấy log');
     }
-    
+
     return log;
   }
 
-  async getByCampaign(campaignId: string, user: User): Promise<CampaignInteractionLog[]> {
+  async getByCampaign(
+    campaignId: string,
+    user: User,
+  ): Promise<CampaignInteractionLog[]> {
     // Verify campaign access
     const campaign = await this.campaignRepository.findOne({
       where: { id: campaignId },
-      relations: ['department']
+      relations: ['department'],
     });
 
     if (!campaign) {
@@ -246,7 +288,11 @@ export class CampaignInteractionLogService {
     });
   }
 
-  async update(id: string, data: Partial<CampaignInteractionLog>, user: User): Promise<CampaignInteractionLog> {
+  async update(
+    id: string,
+    data: Partial<CampaignInteractionLog>,
+    user: User,
+  ): Promise<CampaignInteractionLog> {
     await this.findOne(id, user); // Verify access
     await this.campaignInteractionLogRepository.update(id, data);
     return this.findOne(id, user);

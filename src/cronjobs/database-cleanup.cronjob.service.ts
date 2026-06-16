@@ -7,7 +7,9 @@ import { WinstonLogger } from '../common/winston.logger';
 
 @Injectable()
 export class DatabaseCleanupCronjobService {
-  private readonly logger = new WinstonLogger(DatabaseCleanupCronjobService.name);
+  private readonly logger = new WinstonLogger(
+    DatabaseCleanupCronjobService.name,
+  );
 
   constructor(
     @InjectRepository(DatabaseChangeLog)
@@ -44,7 +46,7 @@ export class DatabaseCleanupCronjobService {
     try {
       // Đếm số bản ghi trước khi xóa để log
       const countBefore = await this.changeLogRepository.count();
-      
+
       if (countBefore === 0) {
         this.logger.log(
           'ℹ️ [Database Cleanup Cron] Bảng database_change_log đã trống, không có gì để xóa',
@@ -106,7 +108,7 @@ export class DatabaseCleanupCronjobService {
           break;
         }
 
-        const idsToDelete = recordsToDelete.map(record => record.id);
+        const idsToDelete = recordsToDelete.map((record) => record.id);
 
         // Xóa batch hiện tại
         const deleteResult = await this.changeLogRepository
@@ -131,7 +133,7 @@ export class DatabaseCleanupCronjobService {
 
         // Nghỉ ngắn giữa các batch để giảm tải cho database
         if (hasMoreData && batches < maxBatches) {
-          await new Promise(resolve => setTimeout(resolve, 100)); // Nghỉ 100ms
+          await new Promise((resolve) => setTimeout(resolve, 100)); // Nghỉ 100ms
         }
       } catch (error) {
         this.logger.error(

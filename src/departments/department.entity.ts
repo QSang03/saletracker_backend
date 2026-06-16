@@ -19,7 +19,6 @@ export class Department {
   @Column({ unique: true })
   name: string;
 
-  @Index({ unique: true })
   @Column({ unique: true })
   slug: string;
 

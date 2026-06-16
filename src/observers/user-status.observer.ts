@@ -15,7 +15,8 @@ export interface UserStatusChangeEvent {
 @Injectable()
 export class UserStatusObserver {
   private readonly logger = new Logger(UserStatusObserver.name);
-  private readonly pythonApiUrl = process.env.CONTACTS_API_BASE_URL || 'http://192.168.117.19:5555';
+  private readonly pythonApiUrl =
+    process.env.CONTACTS_API_BASE_URL || 'http://192.168.117.19:5555';
   private readonly processedUsers = new Map<number, number>(); // userId -> timestamp
 
   constructor(
@@ -33,10 +34,11 @@ export class UserStatusObserver {
   // Lắng nghe event user status thay đổi
   @OnEvent('user.status.changed')
   async handleUserStatusChange(event: UserStatusChangeEvent) {
-
     // Nếu status được cập nhật thành 2 (lỗi liên kết Zalo)
     if (event.newStatus === 2) {
-      this.logger.log(`User ${event.userId} có lỗi liên kết Zalo, bắt đầu xử lý...`);
+      this.logger.log(
+        `User ${event.userId} có lỗi liên kết Zalo, bắt đầu xử lý...`,
+      );
 
       // Gửi socket event đến frontend yêu cầu refresh token
       this.userGateway.server
@@ -60,7 +62,9 @@ export class UserStatusObserver {
 
       // NOTE: Disabled direct call to Python API here per recent change.
       // Only the cronjob monitor should call the API and send email notifications.
-      this.logger.log(`⚠️ Direct Python API call disabled for user ${event.userId}; cronjob will handle notification.`);
+      this.logger.log(
+        `⚠️ Direct Python API call disabled for user ${event.userId}; cronjob will handle notification.`,
+      );
     } else if (event.newStatus === 0) {
       // Với yêu cầu mới: nếu username là số điện thoại thì cũng gửi thông báo (status 0 = chưa liên kết)
       try {
@@ -69,13 +73,17 @@ export class UserStatusObserver {
 
         // Bỏ qua nếu user bị block
         if (user.isBlock === true) {
-          this.logger.log(`⏭️ Bỏ qua user ${user.id} (${user.username}) - đã bị ban (is_block = true)`);
+          this.logger.log(
+            `⏭️ Bỏ qua user ${user.id} (${user.username}) - đã bị ban (is_block = true)`,
+          );
           return;
         }
 
         const username = (user.username || '').toString();
         if (this.isPhoneNumber(username)) {
-          this.logger.log(`User ${event.userId} có username là số điện thoại, gửi notification cho trạng thái chưa liên kết...`);
+          this.logger.log(
+            `User ${event.userId} có username là số điện thoại, gửi notification cho trạng thái chưa liên kết...`,
+          );
 
           // Gửi thông báo chung đến admin dashboard (khác event để dễ phân biệt)
           this.userGateway.server
@@ -89,10 +97,14 @@ export class UserStatusObserver {
 
           // Mark the user for cronjob processing by updating status (DB already has the status)
           // We purposely do not call the Python API from here.
-          this.logger.log(`⚠️ Direct Python API call disabled for user ${event.userId} (status 0); cronjob will handle notification.`);
+          this.logger.log(
+            `⚠️ Direct Python API call disabled for user ${event.userId} (status 0); cronjob will handle notification.`,
+          );
         }
       } catch (e) {
-        this.logger.error(`Failed handling newStatus=0 for user ${event.userId}: ${e?.message}`);
+        this.logger.error(
+          `Failed handling newStatus=0 for user ${event.userId}: ${e?.message}`,
+        );
       }
     }
   }
@@ -100,43 +112,55 @@ export class UserStatusObserver {
   // Gọi API Python để xử lý lỗi liên kết Zalo
   // Gọi API Python để xử lý lỗi liên kết Zalo
   // Nếu `providedUser` được truyền vào, sẽ dùng object đó thay vì fetch lại từ DB (tiết kiệm 1 query)
-  async callPythonApiForLinkError(event: UserStatusChangeEvent, providedUser?: any) {
+  async callPythonApiForLinkError(
+    event: UserStatusChangeEvent,
+    providedUser?: any,
+  ) {
     let payload: any;
-    
+
     try {
       // ENFORCE: never send notifications before 08:00 VN timezone
       try {
         const now = new Date();
-        const vnTimeString = now.toLocaleString('en-US', { 
+        const vnTimeString = now.toLocaleString('en-US', {
           timeZone: 'Asia/Ho_Chi_Minh',
           hour12: false,
           hour: '2-digit',
           minute: '2-digit',
-          second: '2-digit'
+          second: '2-digit',
         });
         const timePart = vnTimeString.split(', ')[1]; // "HH:MM:SS"
         const hour = parseInt(timePart.split(':')[0], 10);
         if (!isNaN(hour) && hour < 8) {
-          this.logger.log(`⏰ Bỏ qua gửi notification đến Python API cho user ${event.userId} — ngoài giờ (trước 08:00 VN). Giờ VN hiện tại: ${timePart.substring(0,5)}`);
+          this.logger.log(
+            `⏰ Bỏ qua gửi notification đến Python API cho user ${event.userId} — ngoài giờ (trước 08:00 VN). Giờ VN hiện tại: ${timePart.substring(0, 5)}`,
+          );
           return;
         }
       } catch (tzErr) {
         // If timezone parsing fails, conservative approach: allow send (or you may choose to skip)
-        this.logger.warn(`⚠️ Không thể xác định giờ VN trước khi gửi (để an toàn có thể cân nhắc bỏ qua): ${tzErr?.message || tzErr}`);
+        this.logger.warn(
+          `⚠️ Không thể xác định giờ VN trước khi gửi (để an toàn có thể cân nhắc bỏ qua): ${tzErr?.message || tzErr}`,
+        );
       }
       // Kiểm tra user đã được xử lý gần đây chưa (trong vòng 5 phút)
       const now = Date.now();
       const lastProcessed = this.processedUsers.get(event.userId);
-      if (lastProcessed && (now - lastProcessed) < 300000) { // 5 phút = 300000ms
-        this.logger.log(`⏭️ Bỏ qua user ${event.userId} - đã được xử lý cách đây ${Math.round((now - lastProcessed) / 1000)}s`);
+      if (lastProcessed && now - lastProcessed < 300000) {
+        // 5 phút = 300000ms
+        this.logger.log(
+          `⏭️ Bỏ qua user ${event.userId} - đã được xử lý cách đây ${Math.round((now - lastProcessed) / 1000)}s`,
+        );
         return;
       }
-      
+
       // Đánh dấu user đang được xử lý
       this.processedUsers.set(event.userId, now);
       // Lấy thông tin chi tiết của user (nếu chưa có)
-      const user = providedUser ?? await this.userService.findOneWithDetails(event.userId);
-      
+      const user =
+        providedUser ??
+        (await this.userService.findOneWithDetails(event.userId));
+
       if (!user) {
         this.logger.error(`Không tìm thấy user với ID: ${event.userId}`);
         return;
@@ -144,19 +168,28 @@ export class UserStatusObserver {
 
       // Kiểm tra user có bị ban không
       if (user.isBlock === true) {
-        this.logger.log(`⏭️ Bỏ qua user ${user.id} (${user.username}) - đã bị ban (is_block = true)`);
+        this.logger.log(
+          `⏭️ Bỏ qua user ${user.id} (${user.username}) - đã bị ban (is_block = true)`,
+        );
         return;
       }
 
       // Kiểm tra user có phải là thietpn không
-      if (user.username === 'thietpn' || user.email === 'thietpn@nguyenkimvn.vn') {
-        this.logger.log(`⏭️ Bỏ qua user ${user.id} (${user.username}) - tài khoản thietpn không được phép gửi`);
+      if (
+        user.username === 'thietpn' ||
+        user.email === 'thietpn@nguyenkimvn.vn'
+      ) {
+        this.logger.log(
+          `⏭️ Bỏ qua user ${user.id} (${user.username}) - tài khoản thietpn không được phép gửi`,
+        );
         return;
       }
 
       // Kiểm tra user có email không
       if (!user.email || user.email.trim() === '') {
-        this.logger.log(`⏭️ Bỏ qua user ${user.id} (${user.username}) - không có email`);
+        this.logger.log(
+          `⏭️ Bỏ qua user ${user.id} (${user.username}) - không có email`,
+        );
         return;
       }
 
@@ -164,33 +197,42 @@ export class UserStatusObserver {
       payload = {
         userId: user.id,
         errorType: this.determineErrorType(event.oldStatus, event.newStatus),
-        errorMessage: "Tài khoản đang lỗi liên kết",
+        errorMessage: 'Tài khoản đang lỗi liên kết',
         userInfo: {
           username: user.username,
           fullName: user.fullName,
           email: user.email,
-          employeeCode: user.employeeCode || ''
-        }
+          employeeCode: user.employeeCode || '',
+        },
       };
 
-
       // Gọi API Python
-      const response = await axios.post(`${this.pythonApiUrl}/send-error-notification`, payload, {
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${process.env.PYTHON_API_TOKEN || ''}`,
-          'X-Master-Key': process.env.NEXT_PUBLIC_MASTER_KEY || process.env.MASTER_KEY || ''
+      const response = await axios.post(
+        `${this.pythonApiUrl}/send-error-notification`,
+        payload,
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${process.env.PYTHON_API_TOKEN || ''}`,
+            'X-Master-Key':
+              process.env.NEXT_PUBLIC_MASTER_KEY ||
+              process.env.MASTER_KEY ||
+              '',
+          },
+          timeout: 10000, // 10 seconds timeout
         },
-        timeout: 10000 // 10 seconds timeout
-      });
+      );
 
       const result = response.data;
-      this.logger.log(`✅ Gửi API thành công cho user ${user.id} (${user.username})`);
-
+      this.logger.log(
+        `✅ Gửi API thành công cho user ${user.id} (${user.username})`,
+      );
     } catch (error: any) {
-      this.logger.error(`❌ Lỗi khi gọi Python API cho user ${event.userId}: ${error.message}`);
+      this.logger.error(
+        `❌ Lỗi khi gọi Python API cho user ${event.userId}: ${error.message}`,
+      );
       this.logger.error(`Error details: ${JSON.stringify(error)}`);
-      
+
       // Không throw error để không làm gián đoạn flow chính
     }
   }
@@ -203,11 +245,11 @@ export class UserStatusObserver {
   // Xác định loại lỗi dựa trên trạng thái cũ và mới
   private determineErrorType(oldStatus: number, newStatus: number): string {
     if (oldStatus === 1 && newStatus === 2) {
-      return "session_invalid"; // Đang hoạt động bình thường nhưng bị lỗi
+      return 'session_invalid'; // Đang hoạt động bình thường nhưng bị lỗi
     } else if (oldStatus === 0 && newStatus === 2) {
-      return "token_expired"; // Chưa liên kết nhưng bị lỗi
+      return 'token_expired'; // Chưa liên kết nhưng bị lỗi
     } else {
-      return "unknown"; // Các trường hợp khác
+      return 'unknown'; // Các trường hợp khác
     }
   }
 
@@ -230,20 +272,32 @@ export class UserStatusObserver {
   }
 
   // Phương thức để trigger manual khi phát hiện lỗi liên kết
-  async triggerZaloLinkError(userId: number, errorType: string = 'unknown', updatedBy: string = 'system') {
+  async triggerZaloLinkError(
+    userId: number,
+    errorType: string = 'unknown',
+    updatedBy: string = 'system',
+  ) {
     try {
       // Manual trigger should only update the user's zaloLinkStatus so the cronjob
       // will pick up and send notifications. Avoid direct API calls here.
-      const updatedUser = await this.userService.updateZaloLinkStatus(userId, 2);
+      const updatedUser = await this.userService.updateZaloLinkStatus(
+        userId,
+        2,
+      );
       if (updatedUser) {
-        this.logger.log(`Đã trigger lỗi liên kết cho user ${userId} — status updated to 2 (handled by cronjob)`);
+        this.logger.log(
+          `Đã trigger lỗi liên kết cho user ${userId} — status updated to 2 (handled by cronjob)`,
+        );
         return true;
       }
-      this.logger.error(`Không thể trigger lỗi liên kết cho user ${userId} - cập nhật status thất bại`);
+      this.logger.error(
+        `Không thể trigger lỗi liên kết cho user ${userId} - cập nhật status thất bại`,
+      );
       return false;
-
     } catch (error) {
-      this.logger.error(`Lỗi khi trigger lỗi liên kết cho user ${userId}: ${error.message}`);
+      this.logger.error(
+        `Lỗi khi trigger lỗi liên kết cho user ${userId}: ${error.message}`,
+      );
       return false;
     }
   }

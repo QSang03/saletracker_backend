@@ -14,7 +14,9 @@ import { User } from '../users/user.entity';
 import { AutoGreetingCustomerMessageHistory } from './auto_greeting_customer_message_history.entity';
 
 @Index('idx_auto_greeting_customers_user_zalo', ['userId', 'zaloDisplayName'])
-@Index('idx_auto_greeting_customers_user_zalo_id', ['userId', 'zaloId'], { unique: true })
+@Index('idx_auto_greeting_customers_user_zalo_id', ['userId', 'zaloId'], {
+  unique: true,
+})
 @Index('idx_auto_greeting_customers_zalo_id', ['zaloId'])
 @Index('idx_auto_greeting_customers_created_at', ['created_at'])
 @Index('idx_auto_greeting_customers_deleted_at', ['deleted_at'])
@@ -33,7 +35,6 @@ export class AutoGreetingCustomer {
   @JoinColumn({ name: 'user_id', referencedColumnName: 'id' })
   user: User;
 
-  @Index()
   @Column({
     name: 'zalo_id',
     type: 'varchar',
@@ -57,37 +58,37 @@ export class AutoGreetingCustomer {
   @Column({ name: 'greeting_message', type: 'text', nullable: true })
   greetingMessage?: string | null;
 
-  @Column({ 
-    name: 'conversation_type', 
+  @Column({
+    name: 'conversation_type',
     type: 'enum',
     enum: ['group', 'private'],
     nullable: true,
-    default: 'private'
+    default: 'private',
   })
   conversationType?: 'group' | 'private' | null;
 
-  @Column({ 
-    name: 'last_message_date', 
-    type: 'datetime', 
-    nullable: true 
+  @Column({
+    name: 'last_message_date',
+    type: 'datetime',
+    nullable: true,
   })
   lastMessageDate?: Date | null;
 
-  @Column({ 
-    name: 'status', 
+  @Column({
+    name: 'status',
     type: 'enum',
     enum: ['urgent', 'reminder', 'normal'],
     nullable: true,
-    default: 'normal'
+    default: 'normal',
   })
   status?: 'urgent' | 'reminder' | 'normal' | null;
 
-  @Column({ 
-    name: 'is_active', 
+  @Column({
+    name: 'is_active',
     type: 'tinyint',
     unsigned: true,
     nullable: true,
-    comment: '1: active, 0: inactive'
+    comment: '1: active, 0: inactive',
   })
   isActive: number;
 

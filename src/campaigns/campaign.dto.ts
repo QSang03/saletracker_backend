@@ -1,17 +1,17 @@
-import { 
-  IsString, 
-  IsNotEmpty, 
-  IsEnum, 
-  IsOptional, 
-  IsIn, 
-  IsNumberString, 
-  IsObject, 
-  IsArray, 
-  ValidateNested, 
+import {
+  IsString,
+  IsNotEmpty,
+  IsEnum,
+  IsOptional,
+  IsIn,
+  IsNumberString,
+  IsObject,
+  IsArray,
+  ValidateNested,
   IsBoolean,
   IsNumber,
   IsPhoneNumber,
-  Matches
+  Matches,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { CampaignType, CampaignStatus, SendMethod } from './campaign.entity';
@@ -187,7 +187,9 @@ export class CustomerDto {
   @IsString()
   @IsNotEmpty({ message: 'Số điện thoại không được để trống' })
   @Matches(/^\S+$/, { message: 'Số điện thoại không được chứa khoảng trắng' })
-  @IsPhoneNumber('VN', { message: 'Số điện thoại không đúng định dạng (VD: 0987654321)' })
+  @IsPhoneNumber('VN', {
+    message: 'Số điện thoại không đúng định dạng (VD: 0987654321)',
+  })
   phone_number: string;
 
   @IsString()
@@ -197,6 +199,10 @@ export class CustomerDto {
   @IsString()
   @IsOptional()
   salutation?: string;
+
+  @IsString()
+  @IsOptional()
+  zalo_name?: string | null;
 }
 
 export class CreateCampaignDto {

@@ -11,10 +11,19 @@ import { CampaignSchedule } from '../campaign_schedules/campaign_schedule.entity
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([DepartmentSchedule, User, Department, Campaign, CampaignSchedule])
+    TypeOrmModule.forFeature([
+      DepartmentSchedule,
+      User,
+      Department,
+      Campaign,
+      CampaignSchedule,
+    ]),
   ],
   controllers: [CampaignDepartmentsSchedulesController],
-  providers: [CampaignDepartmentsSchedulesService, ScheduleStatusUpdaterService],
+  providers: [
+    CampaignDepartmentsSchedulesService,
+    ScheduleStatusUpdaterService,
+  ],
   exports: [CampaignDepartmentsSchedulesService],
 })
 export class CampaignDepartmentsSchedulesModule {}

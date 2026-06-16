@@ -36,7 +36,10 @@ export class CompressionService {
   /**
    * Compress data if it's larger than threshold
    */
-  async compressIfNeeded(data: any, threshold: number = 1024): Promise<{
+  async compressIfNeeded(
+    data: any,
+    threshold: number = 1024,
+  ): Promise<{
     data: any;
     compressed: boolean;
     originalSize: number;
@@ -69,7 +72,7 @@ export class CompressionService {
    * Batch compress multiple items
    */
   async batchCompress(items: any[]): Promise<Buffer[]> {
-    const promises = items.map(item => this.compress(item));
+    const promises = items.map((item) => this.compress(item));
     return Promise.all(promises);
   }
 
@@ -77,7 +80,7 @@ export class CompressionService {
    * Batch decompress multiple items
    */
   async batchDecompress(compressedItems: Buffer[]): Promise<any[]> {
-    const promises = compressedItems.map(item => this.decompress(item));
+    const promises = compressedItems.map((item) => this.decompress(item));
     return Promise.all(promises);
   }
 

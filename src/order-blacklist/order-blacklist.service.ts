@@ -19,7 +19,7 @@ import { Department } from '../departments/department.entity';
 @Injectable()
 export class OrderBlacklistService {
   private readonly logger = new Logger(OrderBlacklistService.name);
-  
+
   // ✅ Thêm cache để tối ưu hiệu suất
   private customerNameCache = new Map<string, string>();
   private cacheExpiry = new Map<string, number>();
@@ -48,7 +48,10 @@ export class OrderBlacklistService {
     return null;
   }
 
-  private setCachedCustomerName(zaloContactId: string, customerName: string): void {
+  private setCachedCustomerName(
+    zaloContactId: string,
+    customerName: string,
+  ): void {
     this.customerNameCache.set(zaloContactId, customerName);
     this.cacheExpiry.set(zaloContactId, Date.now() + this.CACHE_TTL);
   }
@@ -261,14 +264,17 @@ export class OrderBlacklistService {
       const orderDetail = await this.orderDetailRepository
         .createQueryBuilder('od')
         .where('od.metadata IS NOT NULL')
-        .andWhere("JSON_EXTRACT(od.metadata, '$.customer_id') = :zaloContactId", {
-          zaloContactId,
-        })
+        .andWhere(
+          "JSON_EXTRACT(od.metadata, '$.customer_id') = :zaloContactId",
+          {
+            zaloContactId,
+          },
+        )
         .select(['od.customer_name'])
         .getOne();
 
       const customerName = orderDetail?.customer_name || null;
-      
+
       // ✅ Lưu vào cache nếu có kết quả
       if (customerName) {
         this.setCachedCustomerName(zaloContactId, customerName);
@@ -336,7 +342,7 @@ export class OrderBlacklistService {
       }
 
       // Tạo main query
-      let queryBuilder = this.orderBlacklistRepository
+      const queryBuilder = this.orderBlacklistRepository
         .createQueryBuilder('blacklist')
         .leftJoinAndSelect('blacklist.user', 'user')
         .leftJoinAndSelect('user.departments', 'departments');
@@ -433,7 +439,8 @@ export class OrderBlacklistService {
         .getMany();
 
       // ✅ Tối ưu: Batch query customer names thay vì N+1 queries
-      const enrichedData = await this.enrichBlacklistWithCustomerNames(blacklists);
+      const enrichedData =
+        await this.enrichBlacklistWithCustomerNames(blacklists);
 
       return {
         data: enrichedData,
@@ -456,20 +463,25 @@ export class OrderBlacklistService {
 
     try {
       // Lấy tất cả unique zaloContactIds
-      const zaloContactIds = [...new Set(blacklists.map(bl => bl.zaloContactId))];
-      
+      const zaloContactIds = [
+        ...new Set(blacklists.map((bl) => bl.zaloContactId)),
+      ];
+
       // Batch query customer names
       const customerNamesMap = new Map<string, string>();
-      
+
       if (zaloContactIds.length > 0) {
         // ✅ TODO: Cần tạo migration để thêm index cho JSON_EXTRACT trên order_details.metadata
         // CREATE INDEX idx_order_details_metadata_customer_id ON order_details ((JSON_EXTRACT(metadata, '$.customer_id')));
         const orderDetails = await this.orderDetailRepository
           .createQueryBuilder('od')
           .where('od.metadata IS NOT NULL')
-          .andWhere("JSON_EXTRACT(od.metadata, '$.customer_id') IN (:...zaloContactIds)", {
-            zaloContactIds,
-          })
+          .andWhere(
+            "JSON_EXTRACT(od.metadata, '$.customer_id') IN (:...zaloContactIds)",
+            {
+              zaloContactIds,
+            },
+          )
           .select(['od.metadata', 'od.customer_name'])
           .getMany();
 
@@ -483,14 +495,17 @@ export class OrderBlacklistService {
       }
 
       // Enrich blacklist data
-      return blacklists.map(blacklist => ({
+      return blacklists.map((blacklist) => ({
         ...blacklist,
         customerName: customerNamesMap.get(blacklist.zaloContactId) || 'N/A',
       }));
     } catch (error) {
-      this.logger.error('Error enriching blacklist with customer names:', error);
+      this.logger.error(
+        'Error enriching blacklist with customer names:',
+        error,
+      );
       // Fallback: trả về data gốc nếu có lỗi
-      return blacklists.map(blacklist => ({
+      return blacklists.map((blacklist) => ({
         ...blacklist,
         customerName: 'N/A',
       }));
@@ -522,13 +537,19 @@ export class OrderBlacklistService {
           .groupBy('dept.id')
           .orderBy('dept.name', 'ASC')
           .getMany();
-        return departments.map((dept) => ({ value: dept.id, label: dept.name }));
+        return departments.map((dept) => ({
+          value: dept.id,
+          label: dept.name,
+        }));
       } else {
         const departments = await this.departmentRepository.find({
           select: ['id', 'name'],
-            order: { name: 'ASC' },
+          order: { name: 'ASC' },
         });
-        return departments.map((dept) => ({ value: dept.id, label: dept.name }));
+        return departments.map((dept) => ({
+          value: dept.id,
+          label: dept.name,
+        }));
       }
     } else if (isManager) {
       // Manager: chỉ lấy departments có server_ip mà họ thuộc về
@@ -578,7 +599,7 @@ export class OrderBlacklistService {
       (role) => role && role.includes('manager'),
     );
 
-    let queryBuilder = this.userRepository
+    const queryBuilder = this.userRepository
       .createQueryBuilder('user')
       .leftJoin('user.departments', 'department')
       .select(['user.id', 'user.fullName', 'user.employeeCode'])
@@ -646,7 +667,10 @@ export class OrderBlacklistService {
 
       const rows = await this.orderBlacklistRepository
         .createQueryBuilder('blacklist')
-        .select(['blacklist.userId AS userId', 'blacklist.zaloContactId AS zaloContactId'])
+        .select([
+          'blacklist.userId AS userId',
+          'blacklist.zaloContactId AS zaloContactId',
+        ])
         .where('blacklist.userId IN (:...userIds)', { userIds })
         .getRawMany<{ userId: number; zaloContactId: string }>();
 

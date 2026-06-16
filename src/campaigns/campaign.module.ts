@@ -12,16 +12,18 @@ import { CampaignCustomer } from 'src/campaign_customers/campaign_customer.entit
 import { DepartmentSchedule } from '../campaign_departments_schedules/campaign_departments_schedules.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([
-    Campaign, 
-    CampaignContent,
-    CampaignSchedule,
-    CampaignEmailReport,
-    CampaignCustomerMap, 
-    CampaignCustomer,
-    CampaignInteractionLog,
-    DepartmentSchedule
-  ])],
+  imports: [
+    TypeOrmModule.forFeature([
+      Campaign,
+      CampaignContent,
+      CampaignSchedule,
+      CampaignEmailReport,
+      CampaignCustomerMap,
+      CampaignCustomer,
+      CampaignInteractionLog,
+      DepartmentSchedule,
+    ]),
+  ],
   providers: [CampaignService],
   controllers: [CampaignController],
 })

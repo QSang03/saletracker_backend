@@ -7,11 +7,9 @@ import { CampaignCustomerMap } from '../campaign_customer_map/campaign_customer_
 import { Campaign } from '../campaigns/campaign.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([
-    CampaignCustomer, 
-    CampaignCustomerMap, 
-    Campaign
-  ])],
+  imports: [
+    TypeOrmModule.forFeature([CampaignCustomer, CampaignCustomerMap, Campaign]),
+  ],
   providers: [CampaignCustomerService],
   controllers: [CampaignCustomerController],
 })

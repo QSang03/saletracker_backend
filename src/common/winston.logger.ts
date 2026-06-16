@@ -24,19 +24,19 @@ export function getWinstonLogger(serviceName: string): winston.Logger {
     winston.format.printf(({ level, message, timestamp, stack, ...meta }) => {
       // Format: [2025-09-15 23:00:01] [INFO] [DatabaseCleanupCronjobService] Message
       let logMessage = `[${timestamp}] [${level.toUpperCase()}] [${serviceName}] ${message}`;
-      
+
       // Add stack trace for errors
       if (stack) {
         logMessage += `\n${stack}`;
       }
-      
+
       // Add extra metadata if present
       if (Object.keys(meta).length > 0) {
         logMessage += `\n${JSON.stringify(meta, null, 2)}`;
       }
-      
+
       return logMessage;
-    })
+    }),
   );
 
   // Create daily rotate file transport for cronjobs
@@ -61,19 +61,13 @@ export function getWinstonLogger(serviceName: string): winston.Logger {
 
   // Console transport with colors for development
   const consoleTransport = new winston.transports.Console({
-    format: winston.format.combine(
-      winston.format.colorize(),
-      logFormat
-    ),
+    format: winston.format.combine(winston.format.colorize(), logFormat),
   });
 
   // Create logger instance
   const logger = winston.createLogger({
     level: process.env.LOG_LEVEL || 'info',
-    transports: [
-      fileTransport,
-      consoleTransport,
-    ],
+    transports: [fileTransport, consoleTransport],
     // Exit on error false to prevent process exit
     exitOnError: false,
   });

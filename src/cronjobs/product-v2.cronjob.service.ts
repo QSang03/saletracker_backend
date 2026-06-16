@@ -31,7 +31,9 @@ export class ProductV2CronjobService {
   async syncProductsV2() {
     // Temporary toggle: if this env var is set to 'true', skip the cronjob execution.
     if (process.env.DISABLE_CRON_PRODUCT_V2 === 'true') {
-      this.logger.warn('product-v2 cronjob temporarily disabled via DISABLE_CRON_PRODUCT_V2');
+      this.logger.warn(
+        'product-v2 cronjob temporarily disabled via DISABLE_CRON_PRODUCT_V2',
+      );
       return;
     }
     const apiUrl = process.env.VNK_API_PRODUCT_URL_V2;
@@ -99,44 +101,80 @@ export class ProductV2CronjobService {
               // Ensure existing brand has a proper slug; update if needed
               if (brand) {
                 try {
-                  const expectedSlug = slugify(String(brandName).replace(/[đĐ]/g, 'd'), { lower: true, strict: true }).slice(0, 255);
+                  const expectedSlug = slugify(
+                    String(brandName).replace(/[đĐ]/g, 'd'),
+                    { lower: true, strict: true },
+                  ).slice(0, 255);
                   if ((brand as any).slug !== expectedSlug) {
                     // check slug conflict
-                    const conflict = await this.brandRepo.findOne({ where: { slug: expectedSlug } });
+                    const conflict = await this.brandRepo.findOne({
+                      where: { slug: expectedSlug },
+                    });
                     if (conflict && conflict.id !== brand.id) {
-                      this.logger.warn(`Slug conflict for brand '${brandName}': desired slug '${expectedSlug}' already used by id=${conflict.id}. Skipping slug update.`);
+                      this.logger.warn(
+                        `Slug conflict for brand '${brandName}': desired slug '${expectedSlug}' already used by id=${conflict.id}. Skipping slug update.`,
+                      );
                     } else {
                       const oldSlug = (brand as any).slug || '';
-                      await this.brandRepo.update({ id: brand.id }, { slug: expectedSlug } as Partial<Brand>);
+                      await this.brandRepo.update(
+                        { id: brand.id },
+                        {
+                          slug: expectedSlug,
+                        },
+                      );
                       // rename permission from old to new
                       try {
                         if (oldSlug) {
-                          await this.permissionService.updatePermissionNameBySlug(`pm_brand_${oldSlug}`, `pm_brand_${expectedSlug}`);
+                          await this.permissionService.updatePermissionNameBySlug(
+                            `pm_brand_${oldSlug}`,
+                            `pm_brand_${expectedSlug}`,
+                          );
                         } else {
                           // create permission if none existed for this brand
-                          await this.permissionService.createPermission({ name: `pm_brand_${expectedSlug}`, action: 'scope' });
+                          await this.permissionService.createPermission({
+                            name: `pm_brand_${expectedSlug}`,
+                            action: 'scope',
+                          });
                         }
                       } catch (permErr) {
-                        this.logger.debug(`Failed to update/create permission for brand '${brandName}': ${permErr?.message || permErr}`);
+                        this.logger.debug(
+                          `Failed to update/create permission for brand '${brandName}': ${permErr?.message || permErr}`,
+                        );
                       }
                       // refresh brand object
-                      brand = await this.brandRepo.findOne({ where: { id: brand.id } }) ?? undefined;
+                      brand =
+                        (await this.brandRepo.findOne({
+                          where: { id: brand.id },
+                        })) ?? undefined;
                     }
                   }
                 } catch (e) {
-                  this.logger.debug(`Failed to ensure slug for existing brand '${brandName}': ${e?.message || e}`);
+                  this.logger.debug(
+                    `Failed to ensure slug for existing brand '${brandName}': ${e?.message || e}`,
+                  );
                 }
                 // Ensure permission exists for this brand (create if missing)
                 try {
-                  const ensuredSlug = slugify(String(brandName).replace(/[đĐ]/g, 'd'), { lower: true, strict: true }).slice(0, 255);
-                  await this.permissionService.createPermission({ name: `pm_brand_${ensuredSlug}`, action: 'scope' });
+                  const ensuredSlug = slugify(
+                    String(brandName).replace(/[đĐ]/g, 'd'),
+                    { lower: true, strict: true },
+                  ).slice(0, 255);
+                  await this.permissionService.createPermission({
+                    name: `pm_brand_${ensuredSlug}`,
+                    action: 'scope',
+                  });
                 } catch (permErr) {
-                  this.logger.debug(`Failed to create/check permission for existing brand '${brandName}': ${permErr?.message || permErr}`);
+                  this.logger.debug(
+                    `Failed to create/check permission for existing brand '${brandName}': ${permErr?.message || permErr}`,
+                  );
                 }
               }
               if (!brand) {
                 try {
-                  const slug = slugify(String(brandName).replace(/[đĐ]/g, 'd'), { lower: true, strict: true }).slice(0, 255);
+                  const slug = slugify(
+                    String(brandName).replace(/[đĐ]/g, 'd'),
+                    { lower: true, strict: true },
+                  ).slice(0, 255);
                   brand = await this.brandRepo.save({
                     name: String(brandName).slice(0, 255),
                     slug,
@@ -168,40 +206,76 @@ export class ProductV2CronjobService {
               // Ensure existing category has a proper slug; update if needed
               if (category) {
                 try {
-                  const expectedSlug = slugify(String(categoryName).replace(/[đĐ]/g, 'd'), { lower: true, strict: true }).slice(0, 255);
+                  const expectedSlug = slugify(
+                    String(categoryName).replace(/[đĐ]/g, 'd'),
+                    { lower: true, strict: true },
+                  ).slice(0, 255);
                   if ((category as any).slug !== expectedSlug) {
-                    const conflict = await this.categoryRepo.findOne({ where: { slug: expectedSlug } });
+                    const conflict = await this.categoryRepo.findOne({
+                      where: { slug: expectedSlug },
+                    });
                     if (conflict && conflict.id !== category.id) {
-                      this.logger.warn(`Slug conflict for category '${categoryName}': desired slug '${expectedSlug}' already used by id=${conflict.id}. Skipping slug update.`);
+                      this.logger.warn(
+                        `Slug conflict for category '${categoryName}': desired slug '${expectedSlug}' already used by id=${conflict.id}. Skipping slug update.`,
+                      );
                     } else {
                       const oldSlug = (category as any).slug || '';
-                      await this.categoryRepo.update({ id: category.id }, { slug: expectedSlug } as Partial<Category>);
+                      await this.categoryRepo.update(
+                        { id: category.id },
+                        {
+                          slug: expectedSlug,
+                        },
+                      );
                       try {
                         if (oldSlug) {
-                          await this.permissionService.updatePermissionNameBySlug(`pm_cat_${oldSlug}`, `pm_cat_${expectedSlug}`);
+                          await this.permissionService.updatePermissionNameBySlug(
+                            `pm_cat_${oldSlug}`,
+                            `pm_cat_${expectedSlug}`,
+                          );
                         } else {
-                          await this.permissionService.createPermission({ name: `pm_cat_${expectedSlug}`, action: 'scope' });
+                          await this.permissionService.createPermission({
+                            name: `pm_cat_${expectedSlug}`,
+                            action: 'scope',
+                          });
                         }
                       } catch (permErr) {
-                        this.logger.debug(`Failed to update/create permission for category '${categoryName}': ${permErr?.message || permErr}`);
+                        this.logger.debug(
+                          `Failed to update/create permission for category '${categoryName}': ${permErr?.message || permErr}`,
+                        );
                       }
-                      category = await this.categoryRepo.findOne({ where: { id: category.id } }) ?? undefined;
+                      category =
+                        (await this.categoryRepo.findOne({
+                          where: { id: category.id },
+                        })) ?? undefined;
                     }
                   }
                 } catch (e) {
-                  this.logger.debug(`Failed to ensure slug for existing category '${categoryName}': ${e?.message || e}`);
+                  this.logger.debug(
+                    `Failed to ensure slug for existing category '${categoryName}': ${e?.message || e}`,
+                  );
                 }
-                  // Ensure permission exists for this category (create if missing)
-                  try {
-                    const ensuredSlug = slugify(String(categoryName).replace(/[đĐ]/g, 'd'), { lower: true, strict: true }).slice(0, 255);
-                    await this.permissionService.createPermission({ name: `pm_cat_${ensuredSlug}`, action: 'scope' });
-                  } catch (permErr) {
-                    this.logger.debug(`Failed to create/check permission for existing category '${categoryName}': ${permErr?.message || permErr}`);
-                  }
+                // Ensure permission exists for this category (create if missing)
+                try {
+                  const ensuredSlug = slugify(
+                    String(categoryName).replace(/[đĐ]/g, 'd'),
+                    { lower: true, strict: true },
+                  ).slice(0, 255);
+                  await this.permissionService.createPermission({
+                    name: `pm_cat_${ensuredSlug}`,
+                    action: 'scope',
+                  });
+                } catch (permErr) {
+                  this.logger.debug(
+                    `Failed to create/check permission for existing category '${categoryName}': ${permErr?.message || permErr}`,
+                  );
+                }
               }
               if (!category) {
                 try {
-                  const slug = slugify(String(categoryName).replace(/[đĐ]/g, 'd'), { lower: true, strict: true }).slice(0, 255);
+                  const slug = slugify(
+                    String(categoryName).replace(/[đĐ]/g, 'd'),
+                    { lower: true, strict: true },
+                  ).slice(0, 255);
                   category = await this.categoryRepo.save({
                     catName: String(categoryName).slice(0, 255),
                     slug,
@@ -245,26 +319,39 @@ export class ProductV2CronjobService {
 
             if (existing) {
               // determine if any relevant field changed
-              const existingBrandId = (existing as any).brand ? (existing as any).brand.id : undefined;
-              const existingCategoryId = (existing as any).category ? (existing as any).category.id : undefined;
+              const existingBrandId = (existing as any).brand
+                ? (existing as any).brand.id
+                : undefined;
+              const existingCategoryId = (existing as any).category
+                ? (existing as any).category.id
+                : undefined;
               const newBrandId = brand ? (brand as any).id : undefined;
               const newCategoryId = category ? (category as any).id : undefined;
 
-              const nameChanged = (existing.productName || '') !== (payload.productName || '');
-              const descChanged = (existing.description || '') !== (payload.description || '');
+              const nameChanged =
+                (existing.productName || '') !== (payload.productName || '');
+              const descChanged =
+                (existing.description || '') !== (payload.description || '');
               const brandChanged = existingBrandId !== newBrandId;
               const categoryChanged = existingCategoryId !== newCategoryId;
 
-              if (nameChanged || descChanged || brandChanged || categoryChanged) {
+              if (
+                nameChanged ||
+                descChanged ||
+                brandChanged ||
+                categoryChanged
+              ) {
                 // apply changes and save
                 existing.productName = payload.productName as string;
-                existing.description = payload.description as string | undefined;
+                existing.description = payload.description;
                 (existing as any).brand = brand ?? undefined;
                 (existing as any).category = category ?? undefined;
-                await this.productRepo.save(existing as Product);
+                await this.productRepo.save(existing);
               } else {
                 // nothing to update
-                this.logger.debug(`Product ${productCode} unchanged, skipping save`);
+                this.logger.debug(
+                  `Product ${productCode} unchanged, skipping save`,
+                );
               }
             } else {
               // new product

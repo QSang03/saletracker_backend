@@ -14,7 +14,6 @@ import { SeedDebtTriggerService } from './seed-debt-trigger.service';
 import { SeedCampaignTriggerService } from './seed-campaign-trigger.service';
 import { SeedUserTriggerService } from './seed-user-trigger.service';
 
-
 @Module({
   imports: [
     TypeOrmModule.forFeature([
@@ -29,7 +28,11 @@ import { SeedUserTriggerService } from './seed-user-trigger.service';
       Category,
     ]),
   ],
-  providers: [SeedService, SeedDebtTriggerService, SeedCampaignTriggerService, SeedUserTriggerService],
-
+  providers: [
+    SeedService,
+    SeedDebtTriggerService,
+    SeedCampaignTriggerService,
+    SeedUserTriggerService,
+  ],
 })
 export class SeedModule {}

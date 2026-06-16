@@ -452,7 +452,6 @@ export class RealTimeCampaignObserver implements OnModuleInit, OnModuleDestroy {
       // Custom sync logic for campaigns
       // Example: When campaign status changes, might need to update related schedules
       if (changes.status) {
-
         // Add any automatic sync logic here
         // For example: if campaign becomes inactive, pause all schedules
         if (
@@ -475,14 +474,12 @@ export class RealTimeCampaignObserver implements OnModuleInit, OnModuleDestroy {
       // Custom sync logic for interaction logs
       // Example: When customer replies, update campaign stats
       if (changes.customer_replied_at && changes.customer_replied_at.new) {
-
         // Add any automatic sync logic here
         // For example: update campaign response rates
       }
 
       // Example: When staff handles interaction, update performance metrics
       if (changes.staff_handled_at && changes.staff_handled_at.new) {
-
         // Add any automatic sync logic here
       }
     } catch (error) {

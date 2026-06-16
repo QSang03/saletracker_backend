@@ -37,10 +37,10 @@ export class DepartmentService {
       slug: string;
       server_ip: string;
       createdAt: Date;
-  // Backward-compat single manager (first in list). Prefer using `managers`.
-  manager?: { id: number; fullName: string; username: string };
-  // New: list of all managers for the department
-  managers?: { id: number; fullName: string; username: string }[];
+      // Backward-compat single manager (first in list). Prefer using `managers`.
+      manager?: { id: number; fullName: string; username: string };
+      // New: list of all managers for the department
+      managers?: { id: number; fullName: string; username: string }[];
     }[];
     total: number;
     page: number;
@@ -49,10 +49,13 @@ export class DepartmentService {
     const roleNames = getRoleNames(user);
 
     // Kiểm tra role "view" - cho phép xem tất cả departments
-  // Normalize search
-  const q = typeof search === 'string' && search.trim() !== '' ? search.trim() : undefined;
-  // For MySQL use case-insensitive match via LOWER(...) LIKE
-  const qLower = q ? `%${q.toLowerCase()}%` : undefined;
+    // Normalize search
+    const q =
+      typeof search === 'string' && search.trim() !== ''
+        ? search.trim()
+        : undefined;
+    // For MySQL use case-insensitive match via LOWER(...) LIKE
+    const qLower = q ? `%${q.toLowerCase()}%` : undefined;
 
     if (roleNames.includes('view')) {
       // If search present, apply WHERE LIKE on name or slug
@@ -61,7 +64,9 @@ export class DepartmentService {
           .createQueryBuilder('dept')
           .leftJoinAndSelect('dept.users', 'users')
           .leftJoinAndSelect('users.roles', 'roles')
-          .where('LOWER(dept.name) LIKE :q OR LOWER(dept.slug) LIKE :q', { q: qLower })
+          .where('LOWER(dept.name) LIKE :q OR LOWER(dept.slug) LIKE :q', {
+            q: qLower,
+          })
           .orderBy('dept.id', 'ASC')
           .skip((page - 1) * pageSize)
           .take(pageSize)
@@ -70,7 +75,9 @@ export class DepartmentService {
         return {
           data: departments.map((dep) => {
             const managersList = (dep.users || [])
-              .filter((u) => getRoleNames(u).some((r) => r === `manager-${dep.slug}`))
+              .filter((u) =>
+                getRoleNames(u).some((r) => r === `manager-${dep.slug}`),
+              )
               .map((m) => ({
                 id: m.id,
                 fullName:
@@ -107,7 +114,9 @@ export class DepartmentService {
       return {
         data: departments.map((dep) => {
           const managersList = (dep.users || [])
-            .filter((u) => getRoleNames(u).some((r) => r === `manager-${dep.slug}`))
+            .filter((u) =>
+              getRoleNames(u).some((r) => r === `manager-${dep.slug}`),
+            )
             .map((m) => ({
               id: m.id,
               fullName:
@@ -139,7 +148,9 @@ export class DepartmentService {
           .createQueryBuilder('dept')
           .leftJoinAndSelect('dept.users', 'users')
           .leftJoinAndSelect('users.roles', 'roles')
-          .where('LOWER(dept.name) LIKE :q OR LOWER(dept.slug) LIKE :q', { q: qLower })
+          .where('LOWER(dept.name) LIKE :q OR LOWER(dept.slug) LIKE :q', {
+            q: qLower,
+          })
           .orderBy('dept.id', 'ASC')
           .skip((page - 1) * pageSize)
           .take(pageSize)
@@ -148,7 +159,9 @@ export class DepartmentService {
         return {
           data: departments.map((dep) => {
             const managersList = (dep.users || [])
-              .filter((u) => getRoleNames(u).some((r) => r === `manager-${dep.slug}`))
+              .filter((u) =>
+                getRoleNames(u).some((r) => r === `manager-${dep.slug}`),
+              )
               .map((m) => ({
                 id: m.id,
                 fullName:
@@ -184,7 +197,9 @@ export class DepartmentService {
       return {
         data: departments.map((dep) => {
           const managersList = (dep.users || [])
-            .filter((u) => getRoleNames(u).some((r) => r === `manager-${dep.slug}`))
+            .filter((u) =>
+              getRoleNames(u).some((r) => r === `manager-${dep.slug}`),
+            )
             .map((m) => ({
               id: m.id,
               fullName:
@@ -224,7 +239,9 @@ export class DepartmentService {
           .leftJoinAndSelect('dept.users', 'users')
           .leftJoinAndSelect('users.roles', 'roles')
           .where('dept.id IN (:...ids)', { ids: departmentIds })
-          .andWhere('(LOWER(dept.name) LIKE :q OR LOWER(dept.slug) LIKE :q)', { q: qLower })
+          .andWhere('(LOWER(dept.name) LIKE :q OR LOWER(dept.slug) LIKE :q)', {
+            q: qLower,
+          })
           .orderBy('dept.id', 'ASC')
           .skip((page - 1) * pageSize)
           .take(pageSize)
@@ -233,7 +250,9 @@ export class DepartmentService {
         return {
           data: departments.map((dep) => {
             const managersList = (dep.users || [])
-              .filter((u) => getRoleNames(u).some((r) => r === `manager-${dep.slug}`))
+              .filter((u) =>
+                getRoleNames(u).some((r) => r === `manager-${dep.slug}`),
+              )
               .map((m) => ({
                 id: m.id,
                 fullName:
@@ -284,7 +303,9 @@ export class DepartmentService {
       return {
         data: departmentsSorted.map((dep) => {
           const managersList = (dep.users || [])
-            .filter((u) => getRoleNames(u).some((r) => r === `manager-${dep.slug}`))
+            .filter((u) =>
+              getRoleNames(u).some((r) => r === `manager-${dep.slug}`),
+            )
             .map((m) => ({
               id: m.id,
               fullName:

@@ -288,7 +288,7 @@ export class OrderDetailService {
 
       if (!isAdmin) {
         // Admin không filter blacklist
-        let blacklistedSet = new Set<string>();
+        const blacklistedSet = new Set<string>();
         if (isManager) {
           const userIds = Array.isArray(allowedUserIds)
             ? allowedUserIds
@@ -312,29 +312,42 @@ export class OrderDetailService {
           // Nếu là manager, cần lấy blacklist của tất cả owner để filter
           let ownerBlacklistMap = new Map<number, Set<string>>();
           if (isManager) {
-            const uniqueOwnerIds = [...new Set(orderDetails.map(od => od.order?.sale_by?.id).filter(id => id))];
+            const uniqueOwnerIds = [
+              ...new Set(
+                orderDetails
+                  .map((od) => od.order?.sale_by?.id)
+                  .filter((id) => id),
+              ),
+            ];
             if (uniqueOwnerIds.length > 0) {
-              ownerBlacklistMap = await this.orderBlacklistService.getBlacklistedContactsForUsers(uniqueOwnerIds);
+              ownerBlacklistMap =
+                await this.orderBlacklistService.getBlacklistedContactsForUsers(
+                  uniqueOwnerIds,
+                );
             }
           }
-          
+
           return orderDetails.filter((orderDetail) => {
             // Use generated column meta_customer_id (already string)
             const customerId = orderDetail.meta_customer_id;
             if (!customerId) return true; // Không có customer_id thì hiển thị
-            
+
             // Kiểm tra xem owner của order detail có blacklist contact này không
             const orderOwnerId = orderDetail.order?.sale_by?.id;
             if (!orderOwnerId) return true; // Không có owner thì hiển thị
-            
+
             // Nếu manager, kiểm tra xem owner có blacklist contact này không
             if (isManager) {
-              const ownerBlacklistedContacts = ownerBlacklistMap.get(orderOwnerId);
-              if (ownerBlacklistedContacts && ownerBlacklistedContacts.has(customerId)) {
+              const ownerBlacklistedContacts =
+                ownerBlacklistMap.get(orderOwnerId);
+              if (
+                ownerBlacklistedContacts &&
+                ownerBlacklistedContacts.has(customerId)
+              ) {
                 return false; // Owner đã blacklist contact này, không hiển thị cho manager
               }
             }
-            
+
             return !blacklistedSet.has(customerId);
           });
         }
@@ -478,7 +491,11 @@ export class OrderDetailService {
           'hidden_at',
         ]);
 
-        const changedFields: { field: string; old_value: any; new_value: any }[] = [];
+        const changedFields: {
+          field: string;
+          old_value: any;
+          new_value: any;
+        }[] = [];
 
         for (const key of Object.keys(orderDetailData)) {
           if (skipKeys.has(key)) continue;
@@ -489,7 +506,11 @@ export class OrderDetailService {
           const newVal = (orderDetailData as any)[key];
 
           if (this.valuesDiffer(oldVal, newVal)) {
-            changedFields.push({ field: key, old_value: oldVal, new_value: newVal });
+            changedFields.push({
+              field: key,
+              old_value: oldVal,
+              new_value: newVal,
+            });
           }
         }
 
@@ -499,7 +520,8 @@ export class OrderDetailService {
           const raw = (currentOrderDetail as any)?.edit_history;
           try {
             if (Array.isArray(raw)) editHistory = raw;
-            else if (raw && typeof raw === 'string') editHistory = JSON.parse(raw);
+            else if (raw && typeof raw === 'string')
+              editHistory = JSON.parse(raw);
           } catch {
             editHistory = [];
           }
@@ -561,7 +583,10 @@ export class OrderDetailService {
     await this.orderDetailRepository.update(id, updatePayload);
 
     // ✅ Ghi log xóa mã sản phẩm nếu product_id được set thành null
-    if (orderDetailData.product_id === null && currentOrderDetail?.product?.productCode) {
+    if (
+      orderDetailData.product_id === null &&
+      currentOrderDetail?.product?.productCode
+    ) {
       try {
         const logData = {
           code_new: null,
@@ -765,7 +790,8 @@ export class OrderDetailService {
         const rawEdit = (od as any).edit_history;
         try {
           if (Array.isArray(rawEdit)) editHistory = rawEdit;
-          else if (rawEdit && typeof rawEdit === 'string') editHistory = JSON.parse(rawEdit);
+          else if (rawEdit && typeof rawEdit === 'string')
+            editHistory = JSON.parse(rawEdit);
         } catch {
           editHistory = [];
         }
@@ -774,7 +800,11 @@ export class OrderDetailService {
             user_id: user?.id ?? null,
             user_name: user?.fullName || user?.username || 'Unknown',
             fields: [
-              { field: 'notes', old_value: (od as any).notes, new_value: updates.notes },
+              {
+                field: 'notes',
+                old_value: (od as any).notes,
+                new_value: updates.notes,
+              },
             ],
             note: (updates as any).edit_note ?? null,
             changed_at: new Date().toISOString(),
@@ -793,24 +823,38 @@ export class OrderDetailService {
 
     // Không có cập nhật notes: có thể update hàng loạt
     // But we need to record edit_history per item for changed fields
-    const skipKeys = new Set(['created_at', 'updated_at', 'deleted_at', 'notes_history', 'edit_history', 'hidden_at']);
-      for (const od of orderDetails) {
-      const changedFields: { field: string; old_value: any; new_value: any }[] = [];
+    const skipKeys = new Set([
+      'created_at',
+      'updated_at',
+      'deleted_at',
+      'notes_history',
+      'edit_history',
+      'hidden_at',
+    ]);
+    for (const od of orderDetails) {
+      const changedFields: { field: string; old_value: any; new_value: any }[] =
+        [];
       for (const key of Object.keys(updates)) {
         if (skipKeys.has(key)) continue;
         if ((updates as any)[key] === undefined) continue;
         const oldVal = (od as any)[key];
         const newVal = (updates as any)[key];
-        if (this.valuesDiffer(oldVal, newVal)) changedFields.push({ field: key, old_value: oldVal, new_value: newVal });
+        if (this.valuesDiffer(oldVal, newVal))
+          changedFields.push({
+            field: key,
+            old_value: oldVal,
+            new_value: newVal,
+          });
       }
 
-      let payload: any = { ...updates };
+      const payload: any = { ...updates };
       if (changedFields.length > 0) {
         let editHistory: any[] = [];
         const rawEdit = (od as any).edit_history;
         try {
           if (Array.isArray(rawEdit)) editHistory = rawEdit;
-          else if (rawEdit && typeof rawEdit === 'string') editHistory = JSON.parse(rawEdit);
+          else if (rawEdit && typeof rawEdit === 'string')
+            editHistory = JSON.parse(rawEdit);
         } catch {
           editHistory = [];
         }
@@ -904,7 +948,8 @@ export class OrderDetailService {
       const rawEdit = (od as any).edit_history;
       try {
         if (Array.isArray(rawEdit)) editHistory = rawEdit;
-        else if (rawEdit && typeof rawEdit === 'string') editHistory = JSON.parse(rawEdit);
+        else if (rawEdit && typeof rawEdit === 'string')
+          editHistory = JSON.parse(rawEdit);
       } catch {
         editHistory = [];
       }
@@ -1131,27 +1176,34 @@ export class OrderDetailService {
           );
         const bl = new Set<string>();
         for (const set of map.values()) for (const id of set) bl.add(id);
-        
+
         // Lấy blacklist của tất cả owner để filter
-        const uniqueOwnerIds = [...new Set(rows.map(od => od.order?.sale_by?.id).filter(id => id))];
+        const uniqueOwnerIds = [
+          ...new Set(
+            rows.map((od) => od.order?.sale_by?.id).filter((id) => id),
+          ),
+        ];
         let ownerBlacklistMap = new Map<number, Set<string>>();
         if (uniqueOwnerIds.length > 0) {
-          ownerBlacklistMap = await this.orderBlacklistService.getBlacklistedContactsForUsers(uniqueOwnerIds);
+          ownerBlacklistMap =
+            await this.orderBlacklistService.getBlacklistedContactsForUsers(
+              uniqueOwnerIds,
+            );
         }
-        
+
         rows = rows.filter((od) => {
           const cid = od.meta_customer_id;
           if (!cid) return true;
-          
+
           const orderOwnerId = od.order?.sale_by?.id;
           if (!orderOwnerId) return true;
-          
+
           // Kiểm tra xem owner có blacklist contact này không
           const ownerBlacklistedContacts = ownerBlacklistMap.get(orderOwnerId);
           if (ownerBlacklistedContacts && ownerBlacklistedContacts.has(cid)) {
             return false; // Owner đã blacklist contact này, không hiển thị cho manager
           }
-          
+
           return !bl.has(cid);
         });
       } else {
@@ -1318,10 +1370,13 @@ export class OrderDetailService {
           const startDate = new Date(dateStr);
           const endDate = new Date(dateStr);
           endDate.setHours(23, 59, 59, 999);
-          qb.andWhere('order.created_at BETWEEN :createdStart AND :createdEnd', {
-            createdStart: startDate,
-            createdEnd: endDate,
-          });
+          qb.andWhere(
+            'order.created_at BETWEEN :createdStart AND :createdEnd',
+            {
+              createdStart: startDate,
+              createdEnd: endDate,
+            },
+          );
         } catch (e) {
           // ignore invalid
         }
@@ -1364,7 +1419,7 @@ export class OrderDetailService {
       const isAdmin = roleNames.includes('admin');
       const isManager = roleNames.some((r: string) => r.startsWith('manager-'));
       if (!isAdmin) {
-        let blacklistedSet = new Set<string>();
+        const blacklistedSet = new Set<string>();
         if (isManager) {
           const userIds = Array.isArray(allowedUserIds)
             ? allowedUserIds
@@ -1768,7 +1823,7 @@ export class OrderDetailService {
       const isManager = roleNames.some((r: string) => r.startsWith('manager-'));
 
       if (!isAdmin) {
-        let blacklistedSet = new Set<string>();
+        const blacklistedSet = new Set<string>();
 
         if (isManager) {
           const userIds = Array.isArray(allowedUserIds)

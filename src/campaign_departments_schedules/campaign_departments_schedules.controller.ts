@@ -39,30 +39,37 @@ export class CampaignDepartmentsSchedulesController {
     console.log('🏢 Department ID:', createDto.department_id);
 
     // Kiểm tra quyền truy cập department
-    const canAccessDepartment = await this.campaignDepartmentsSchedulesService.canUserAccessDepartment(
-      req.user?.id,
-      createDto.department_id,
-    );
+    const canAccessDepartment =
+      await this.campaignDepartmentsSchedulesService.canUserAccessDepartment(
+        req.user?.id,
+        createDto.department_id,
+      );
 
     console.log('🔐 Can access department:', canAccessDepartment);
 
     if (!canAccessDepartment) {
       console.log('❌ Access denied for department:', createDto.department_id);
-      throw new BadRequestException('You do not have permission to create schedules for this department');
+      throw new BadRequestException(
+        'You do not have permission to create schedules for this department',
+      );
     }
 
     // Validate schedule config before creating
-    const isValidConfig = await this.campaignDepartmentsSchedulesService.validateScheduleConfig(
-      createDto.schedule_config,
-      createDto.schedule_type,
-    );
+    const isValidConfig =
+      await this.campaignDepartmentsSchedulesService.validateScheduleConfig(
+        createDto.schedule_config,
+        createDto.schedule_type,
+      );
 
     if (!isValidConfig) {
       throw new BadRequestException('Invalid schedule configuration');
     }
 
     console.log('✅ Creating schedule...');
-    return this.campaignDepartmentsSchedulesService.create(createDto, req.user?.id);
+    return this.campaignDepartmentsSchedulesService.create(
+      createDto,
+      req.user?.id,
+    );
   }
 
   @Get()
@@ -70,12 +77,17 @@ export class CampaignDepartmentsSchedulesController {
     @Query() query: QueryDepartmentScheduleDto,
     @Request() req: any,
   ) {
-    return this.campaignDepartmentsSchedulesService.findAllForUser(query, req.user?.id);
+    return this.campaignDepartmentsSchedulesService.findAllForUser(
+      query,
+      req.user?.id,
+    );
   }
 
   @Get('active')
   async getActiveSchedules(@Request() req: any) {
-    return this.campaignDepartmentsSchedulesService.getActiveSchedulesForUser(req.user?.id);
+    return this.campaignDepartmentsSchedulesService.getActiveSchedulesForUser(
+      req.user?.id,
+    );
   }
 
   @Get('department/:departmentId')
@@ -83,7 +95,9 @@ export class CampaignDepartmentsSchedulesController {
     @Param('departmentId', ParseIntPipe) departmentId: number,
   ) {
     // Tất cả user đều có thể view schedules của department
-    return this.campaignDepartmentsSchedulesService.findByDepartment(departmentId);
+    return this.campaignDepartmentsSchedulesService.findByDepartment(
+      departmentId,
+    );
   }
 
   @Get(':id')
@@ -103,45 +117,70 @@ export class CampaignDepartmentsSchedulesController {
     console.log('👤 User ID:', req.user?.id);
 
     // Lấy thông tin schedule hiện tại để kiểm tra department
-    const existingSchedule = await this.campaignDepartmentsSchedulesService.findOne(id);
-    console.log('📋 Existing schedule department:', existingSchedule.department);
-    
-    // Kiểm tra quyền truy cập department hiện tại
-    const canAccessCurrentDept = await this.campaignDepartmentsSchedulesService.canUserAccessDepartment(
-      req.user?.id,
-      existingSchedule.department.id,
+    const existingSchedule =
+      await this.campaignDepartmentsSchedulesService.findOne(id);
+    console.log(
+      '📋 Existing schedule department:',
+      existingSchedule.department,
     );
+
+    // Kiểm tra quyền truy cập department hiện tại
+    const canAccessCurrentDept =
+      await this.campaignDepartmentsSchedulesService.canUserAccessDepartment(
+        req.user?.id,
+        existingSchedule.department.id,
+      );
 
     console.log('🔐 Can access current department:', canAccessCurrentDept);
 
     if (!canAccessCurrentDept) {
-      console.log('❌ Access denied for current department:', existingSchedule.department.id);
-      throw new BadRequestException('You do not have permission to update schedules for this department');
+      console.log(
+        '❌ Access denied for current department:',
+        existingSchedule.department.id,
+      );
+      throw new BadRequestException(
+        'You do not have permission to update schedules for this department',
+      );
     }
 
     // Nếu có thay đổi department_id, kiểm tra quyền truy cập department mới
-    if (updateDto.department_id && updateDto.department_id !== existingSchedule.department.id) {
-      console.log('🔄 Department change detected:', existingSchedule.department.id, '->', updateDto.department_id);
-      
-      const canAccessNewDept = await this.campaignDepartmentsSchedulesService.canUserAccessDepartment(
-        req.user?.id,
+    if (
+      updateDto.department_id &&
+      updateDto.department_id !== existingSchedule.department.id
+    ) {
+      console.log(
+        '🔄 Department change detected:',
+        existingSchedule.department.id,
+        '->',
         updateDto.department_id,
       );
+
+      const canAccessNewDept =
+        await this.campaignDepartmentsSchedulesService.canUserAccessDepartment(
+          req.user?.id,
+          updateDto.department_id,
+        );
 
       console.log('🔐 Can access new department:', canAccessNewDept);
 
       if (!canAccessNewDept) {
-        console.log('❌ Access denied for new department:', updateDto.department_id);
-        throw new BadRequestException('You do not have permission to move schedules to this department');
+        console.log(
+          '❌ Access denied for new department:',
+          updateDto.department_id,
+        );
+        throw new BadRequestException(
+          'You do not have permission to move schedules to this department',
+        );
       }
     }
 
     // Validate schedule config if provided
     if (updateDto.schedule_config && updateDto.schedule_type) {
-      const isValidConfig = await this.campaignDepartmentsSchedulesService.validateScheduleConfig(
-        updateDto.schedule_config,
-        updateDto.schedule_type,
-      );
+      const isValidConfig =
+        await this.campaignDepartmentsSchedulesService.validateScheduleConfig(
+          updateDto.schedule_config,
+          updateDto.schedule_type,
+        );
 
       if (!isValidConfig) {
         throw new BadRequestException('Invalid schedule configuration');
@@ -164,32 +203,35 @@ export class CampaignDepartmentsSchedulesController {
 
     // Kiểm tra quyền truy cập department
     const schedule = await this.campaignDepartmentsSchedulesService.findOne(id);
-    const canAccessDepartment = await this.campaignDepartmentsSchedulesService.canUserAccessDepartment(
-      req.user?.id,
-      schedule.department.id,
-    );
+    const canAccessDepartment =
+      await this.campaignDepartmentsSchedulesService.canUserAccessDepartment(
+        req.user?.id,
+        schedule.department.id,
+      );
 
     if (!canAccessDepartment) {
-      throw new BadRequestException('You do not have permission to update schedules for this department');
+      throw new BadRequestException(
+        'You do not have permission to update schedules for this department',
+      );
     }
 
     return this.campaignDepartmentsSchedulesService.updateStatus(id, status);
   }
 
   @Delete(':id')
-  async remove(
-    @Param('id') id: string,
-    @Request() req: any,
-  ) {
+  async remove(@Param('id') id: string, @Request() req: any) {
     // Kiểm tra quyền truy cập department
     const schedule = await this.campaignDepartmentsSchedulesService.findOne(id);
-    const canAccessDepartment = await this.campaignDepartmentsSchedulesService.canUserAccessDepartment(
-      req.user?.id,
-      schedule.department.id,
-    );
+    const canAccessDepartment =
+      await this.campaignDepartmentsSchedulesService.canUserAccessDepartment(
+        req.user?.id,
+        schedule.department.id,
+      );
 
     if (!canAccessDepartment) {
-      throw new BadRequestException('You do not have permission to delete schedules for this department');
+      throw new BadRequestException(
+        'You do not have permission to delete schedules for this department',
+      );
     }
 
     await this.campaignDepartmentsSchedulesService.remove(id);
@@ -200,9 +242,11 @@ export class CampaignDepartmentsSchedulesController {
   async manualUpdateScheduleStatuses(@Request() req: any) {
     // Chỉ admin mới được phép trigger manual update
     if (!req.user?.is_admin) {
-      throw new BadRequestException('Chỉ admin mới được phép trigger manual update schedule statuses');
+      throw new BadRequestException(
+        'Chỉ admin mới được phép trigger manual update schedule statuses',
+      );
     }
-    
+
     return this.scheduleStatusUpdaterService.manualUpdateScheduleStatuses();
   }
 
@@ -210,9 +254,11 @@ export class CampaignDepartmentsSchedulesController {
   async getScheduleStatusStats(@Request() req: any) {
     // Chỉ admin mới được phép xem thống kê
     if (!req.user?.is_admin) {
-      throw new BadRequestException('Chỉ admin mới được phép xem thống kê schedule status');
+      throw new BadRequestException(
+        'Chỉ admin mới được phép xem thống kê schedule status',
+      );
     }
-    
+
     return this.scheduleStatusUpdaterService.getScheduleStatusStats();
   }
 }

@@ -7,7 +7,7 @@ export class QuerySendHistoryDto {
   zalo_customer_id?: string;
 
   @IsOptional()
-  @Transform(({ value }) => value ? parseInt(value, 10) : undefined)
+  @Transform(({ value }) => (value ? parseInt(value, 10) : undefined))
   @IsInt()
   user_id?: number;
 
@@ -24,12 +24,12 @@ export class QuerySendHistoryDto {
   to?: string; // ISO date string
 
   @IsOptional()
-  @Transform(({ value }) => value ? parseInt(value, 10) : undefined)
+  @Transform(({ value }) => (value ? parseInt(value, 10) : undefined))
   @IsInt()
   page?: number;
 
   @IsOptional()
-  @Transform(({ value }) => value ? parseInt(value, 10) : undefined)
+  @Transform(({ value }) => (value ? parseInt(value, 10) : undefined))
   @IsInt()
   pageSize?: number;
 

@@ -50,11 +50,15 @@ export class AuthController {
         role.rolePermissions
           .filter(
             (rp) =>
-              !!rp && rp.isActive && !!rp.permission && !!rp.permission.name && !!rp.permission.action,
+              !!rp &&
+              rp.isActive &&
+              !!rp.permission &&
+              !!rp.permission.name &&
+              !!rp.permission.action,
           )
           .map((rp) => ({
-            name: rp.permission!.name,
-            action: rp.permission!.action,
+            name: rp.permission.name,
+            action: rp.permission.action,
           })) || []
       );
     });

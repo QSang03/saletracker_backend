@@ -90,7 +90,7 @@ export class AutoReplyController {
     return this.svc.createPersona(userId, {
       name: body.name,
       personaPrompt: body.personaPrompt,
-    } as any);
+    });
   }
 
   // New: update a persona by id (ownership will be validated in service if needed)
@@ -165,11 +165,13 @@ export class AutoReplyController {
     if (userId === undefined || userId === null) {
       throw new BadRequestException('Missing userId (JWT or ?userId=)');
     }
-    
+
     // Check if user is admin
-    const userRoles = req.user?.roles ? req.user.roles.map((r: any) => r.name) : [];
+    const userRoles = req.user?.roles
+      ? req.user.roles.map((r: any) => r.name)
+      : [];
     const isAdmin = userRoles.includes('admin');
-    
+
     if (isAdmin) {
       // Admin can see all contacts
       return this.svc.listAllContacts();
@@ -198,11 +200,13 @@ export class AutoReplyController {
     if (userId === undefined || userId === null) {
       throw new BadRequestException('Missing userId (JWT or ?userId=)');
     }
-    
+
     // Check if user is admin
-    const userRoles = req.user?.roles ? req.user.roles.map((r: any) => r.name) : [];
+    const userRoles = req.user?.roles
+      ? req.user.roles.map((r: any) => r.name)
+      : [];
     const isAdmin = userRoles.includes('admin');
-    
+
     return this.svc.listContactsWithGreeting(
       userId,
       page,
@@ -217,7 +221,8 @@ export class AutoReplyController {
   @Patch('contacts/:contactId/greeting')
   updateContactGreeting(
     @Param('contactId', ParseIntPipe) contactId: number,
-    @Body() body: {
+    @Body()
+    body: {
       salutation?: string;
       greetingMessage?: string;
       greetingIsActive?: number;
@@ -239,7 +244,7 @@ export class AutoReplyController {
     @Param('contactId', ParseIntPipe) cid: number,
     @Body() body: AssignPersonaDto,
   ) {
-    return this.svc.assignPersona(cid, (body.personaId ?? null) as any);
+    return this.svc.assignPersona(cid, body.personaId ?? null);
   }
 
   @Patch('contacts/:contactId/auto-reply')
@@ -263,7 +268,7 @@ export class AutoReplyController {
       throw new BadRequestException('Missing userId (JWT or ?userId=)');
     }
     return this.svc.bulkToggleAutoReply(
-      (body.contactIds ?? 'ALL') as any,
+      body.contactIds ?? 'ALL',
       !!body.enabled,
       uid,
     );
@@ -282,8 +287,8 @@ export class AutoReplyController {
       throw new BadRequestException('Missing userId (JWT or ?userId=)');
     }
     return this.svc.assignPersonaBulk(
-      (body.contactIds ?? 'ALL') as any,
-      (body.personaId ?? null) as any,
+      body.contactIds ?? 'ALL',
+      body.personaId ?? null,
       uid,
     );
   }
@@ -314,7 +319,7 @@ export class AutoReplyController {
     @Query('brands') brands?: string | string[],
     @Query('cates') cates?: string | string[],
     @Query('myAllowed') myAllowed?: string,
-  @Query('activeForContact') activeForContact?: string,
+    @Query('activeForContact') activeForContact?: string,
     @Query('userId') userIdFromQuery?: string,
     @Query('contactId') contactIdFromQuery?: string,
   ) {
@@ -426,7 +431,12 @@ export class AutoReplyController {
     @Req() req: any,
   ) {
     const userId = req?.user?.id;
-    return this.svc.patchAllowedProducts(cid, body.productIds, body.active, userId);
+    return this.svc.patchAllowedProducts(
+      cid,
+      body.productIds,
+      body.active,
+      userId,
+    );
   }
 
   @Patch('allowed-products/bulk')
@@ -444,7 +454,7 @@ export class AutoReplyController {
       );
     }
     return this.svc.bulkAllowedProducts(
-      (body.contactIds ?? 'ALL') as any,
+      body.contactIds ?? 'ALL',
       body.productIds,
       body.active,
       uid,
@@ -466,7 +476,7 @@ export class AutoReplyController {
       );
     }
     return this.svc.bulkAllowedProducts(
-      (body.contactIds ?? 'ALL') as any,
+      body.contactIds ?? 'ALL',
       body.productIds,
       body.active,
       uid,
@@ -500,24 +510,34 @@ export class AutoReplyController {
   // Keyword routes
   @Get('keywords')
   listRoutes(@Query('contactId') contactId?: string) {
-  if (contactId === undefined) return this.svc.listKeywordRoutes();
-  if (contactId === 'null') return this.svc.listKeywordRoutes(null);
-  return this.svc.listKeywordRoutes(parseInt(contactId));
+    if (contactId === undefined) return this.svc.listKeywordRoutes();
+    if (contactId === 'null') return this.svc.listKeywordRoutes(null);
+    return this.svc.listKeywordRoutes(parseInt(contactId));
   }
 
   @Post('keywords')
-  createRoute(@Req() req: any, @Body() body: CreateKeywordDto, @Query('userId') userIdFromQuery?: string) {
+  createRoute(
+    @Req() req: any,
+    @Body() body: CreateKeywordDto,
+    @Query('userId') userIdFromQuery?: string,
+  ) {
     const { keyword, contactId, routeProducts } = body;
-    const userId = req?.user?.id ?? (userIdFromQuery ? parseInt(userIdFromQuery) : undefined);
+    const userId =
+      req?.user?.id ??
+      (userIdFromQuery ? parseInt(userIdFromQuery) : undefined);
     // If GLOBAL requested (contactId null), require a userId and fan-out to all contacts of current user
     if (contactId == null && (userId === undefined || userId === null)) {
-      throw new BadRequestException('GLOBAL keyword creation requires userId (JWT or ?userId=)');
+      throw new BadRequestException(
+        'GLOBAL keyword creation requires userId (JWT or ?userId=)',
+      );
     }
     return this.svc.createKeywordRoute(
       keyword,
       contactId ?? null,
       routeProducts,
-      contactId == null && userId ? { fanoutForUserId: Number(userId) } : undefined,
+      contactId == null && userId
+        ? { fanoutForUserId: Number(userId) }
+        : undefined,
     );
   }
 
@@ -530,7 +550,7 @@ export class AutoReplyController {
       defaultPriority = 0,
       active = true,
     } = body;
-  return this.svc.createKeywordRoutesBulk(
+    return this.svc.createKeywordRoutesBulk(
       keyword,
       contactIds,
       productIds,
@@ -546,14 +566,20 @@ export class AutoReplyController {
     @Body() body: { oldKeyword: string; newKeyword: string },
     @Query('userId') userIdFromQuery?: string,
   ) {
-    const userId = req?.user?.id ?? (userIdFromQuery ? parseInt(userIdFromQuery) : undefined);
+    const userId =
+      req?.user?.id ??
+      (userIdFromQuery ? parseInt(userIdFromQuery) : undefined);
     if (!body?.oldKeyword || !body?.newKeyword) {
       throw new BadRequestException('Missing oldKeyword or newKeyword');
     }
     if (userId === undefined || userId === null) {
       throw new BadRequestException('Missing userId (JWT or ?userId=)');
     }
-    return this.svc.renameKeywordForUser(body.oldKeyword, body.newKeyword, userId);
+    return this.svc.renameKeywordForUser(
+      body.oldKeyword,
+      body.newKeyword,
+      userId,
+    );
   }
 
   @Patch('keywords/active-all')
@@ -562,12 +588,18 @@ export class AutoReplyController {
     @Body() body: { keyword: string; active: boolean },
     @Query('userId') userIdFromQuery?: string,
   ) {
-    const userId = req?.user?.id ?? (userIdFromQuery ? parseInt(userIdFromQuery) : undefined);
+    const userId =
+      req?.user?.id ??
+      (userIdFromQuery ? parseInt(userIdFromQuery) : undefined);
     if (!body?.keyword) throw new BadRequestException('Missing keyword');
     if (userId === undefined || userId === null) {
       throw new BadRequestException('Missing userId (JWT or ?userId=)');
     }
-    return this.svc.setKeywordActiveForUser(body.keyword, !!body.active, userId);
+    return this.svc.setKeywordActiveForUser(
+      body.keyword,
+      !!body.active,
+      userId,
+    );
   }
 
   @Patch('keywords/reorder-products')
@@ -576,14 +608,20 @@ export class AutoReplyController {
     @Body() body: { keyword: string; productIds: number[] },
     @Query('userId') userIdFromQuery?: string,
   ) {
-    const userId = req?.user?.id ?? (userIdFromQuery ? parseInt(userIdFromQuery) : undefined);
+    const userId =
+      req?.user?.id ??
+      (userIdFromQuery ? parseInt(userIdFromQuery) : undefined);
     if (!body?.keyword || !Array.isArray(body?.productIds)) {
       throw new BadRequestException('Missing keyword or productIds');
     }
     if (userId === undefined || userId === null) {
       throw new BadRequestException('Missing userId (JWT or ?userId=)');
     }
-    return this.svc.reorderProductsForKeyword(body.keyword, body.productIds, userId);
+    return this.svc.reorderProductsForKeyword(
+      body.keyword,
+      body.productIds,
+      userId,
+    );
   }
 
   // Manage products for a keyword across all contacts of current user
@@ -593,7 +631,9 @@ export class AutoReplyController {
     @Body() body: { keyword: string; productIds: number[] },
     @Query('userId') userIdFromQuery?: string,
   ) {
-    const userId = req?.user?.id ?? (userIdFromQuery ? parseInt(userIdFromQuery) : undefined);
+    const userId =
+      req?.user?.id ??
+      (userIdFromQuery ? parseInt(userIdFromQuery) : undefined);
     if (!body?.keyword || !Array.isArray(body?.productIds)) {
       throw new BadRequestException('Missing keyword or productIds');
     }
@@ -609,14 +649,20 @@ export class AutoReplyController {
     @Body() body: { keyword: string; productIds: number[] },
     @Query('userId') userIdFromQuery?: string,
   ) {
-    const userId = req?.user?.id ?? (userIdFromQuery ? parseInt(userIdFromQuery) : undefined);
+    const userId =
+      req?.user?.id ??
+      (userIdFromQuery ? parseInt(userIdFromQuery) : undefined);
     if (!body?.keyword || !Array.isArray(body?.productIds)) {
       throw new BadRequestException('Missing keyword or productIds');
     }
     if (userId === undefined || userId === null) {
       throw new BadRequestException('Missing userId (JWT or ?userId=)');
     }
-    return this.svc.removeProductsFromKeyword(body.keyword, body.productIds, userId);
+    return this.svc.removeProductsFromKeyword(
+      body.keyword,
+      body.productIds,
+      userId,
+    );
   }
 
   @Post('keywords/set-products')
@@ -625,14 +671,20 @@ export class AutoReplyController {
     @Body() body: { keyword: string; productIds: number[] },
     @Query('userId') userIdFromQuery?: string,
   ) {
-    const userId = req?.user?.id ?? (userIdFromQuery ? parseInt(userIdFromQuery) : undefined);
+    const userId =
+      req?.user?.id ??
+      (userIdFromQuery ? parseInt(userIdFromQuery) : undefined);
     if (!body?.keyword || !Array.isArray(body?.productIds)) {
       throw new BadRequestException('Missing keyword or productIds');
     }
     if (userId === undefined || userId === null) {
       throw new BadRequestException('Missing userId (JWT or ?userId=)');
     }
-    return this.svc.setProductsForKeyword(body.keyword, body.productIds, userId);
+    return this.svc.setProductsForKeyword(
+      body.keyword,
+      body.productIds,
+      userId,
+    );
   }
 
   @Post('keywords/delete-all')
@@ -641,7 +693,9 @@ export class AutoReplyController {
     @Body() body: { keyword: string },
     @Query('userId') userIdFromQuery?: string,
   ) {
-    const userId = req?.user?.id ?? (userIdFromQuery ? parseInt(userIdFromQuery) : undefined);
+    const userId =
+      req?.user?.id ??
+      (userIdFromQuery ? parseInt(userIdFromQuery) : undefined);
     if (!body?.keyword) throw new BadRequestException('Missing keyword');
     if (userId === undefined || userId === null) {
       throw new BadRequestException('Missing userId (JWT or ?userId=)');
@@ -728,14 +782,16 @@ export class AutoReplyController {
       : excludeRoles
         ? [excludeRoles]
         : [];
-    
+
     // Check if user is admin
-    const userRoles = req.user?.roles ? req.user.roles.map((r: any) => r.name) : [];
+    const userRoles = req.user?.roles
+      ? req.user.roles.map((r: any) => r.name)
+      : [];
     const isAdmin = userRoles.includes('admin');
-    
+
     return this.svc.listContactsPaginated({
       userId: isAdmin ? undefined : userId, // Admin sees all, others see only their own
-      mine: isAdmin ? false : (mine === '1' || mine === 'true'), // Admin doesn't use mine filter
+      mine: isAdmin ? false : mine === '1' || mine === 'true', // Admin doesn't use mine filter
       page,
       limit,
       search,

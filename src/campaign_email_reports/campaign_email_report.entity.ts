@@ -1,4 +1,14 @@
-import { Entity, PrimaryGeneratedColumn, Column, OneToOne, JoinColumn, Check, CreateDateColumn, UpdateDateColumn, Index } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  OneToOne,
+  JoinColumn,
+  Check,
+  CreateDateColumn,
+  UpdateDateColumn,
+  Index,
+} from 'typeorm';
 import { Campaign } from '../campaigns/campaign.entity';
 
 @Entity('campaign_email_reports')
@@ -36,7 +46,7 @@ export class CampaignEmailReport {
   @Index()
   @Column({ type: 'timestamp', nullable: true })
   last_sent_at?: Date;
-  
+
   @CreateDateColumn()
   created_at: Date;
 

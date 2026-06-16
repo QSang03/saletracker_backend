@@ -47,8 +47,8 @@ export class CampaignDepartmentsSchedulesService {
 
       const schedule = this.departmentScheduleRepository.create({
         ...createDto,
-        department: { id: createDto.department_id } as any,
-        created_by: { id: userId } as any,
+        department: { id: createDto.department_id },
+        created_by: { id: userId },
         status: createDto.status || ScheduleStatus.ACTIVE,
       });
 

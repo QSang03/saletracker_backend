@@ -8,7 +8,9 @@ import { User } from '../users/user.entity';
 import { Department } from '../departments/department.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([OrderBlacklist, OrderDetail, User, Department])],
+  imports: [
+    TypeOrmModule.forFeature([OrderBlacklist, OrderDetail, User, Department]),
+  ],
   controllers: [OrderBlacklistController],
   providers: [OrderBlacklistService],
   exports: [OrderBlacklistService],

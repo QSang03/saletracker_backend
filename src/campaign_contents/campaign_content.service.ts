@@ -11,7 +11,9 @@ export class CampaignContentService {
   ) {}
 
   async getByCampaign(campaign_id: string): Promise<CampaignContent> {
-    const content = await this.campaignContentRepository.findOne({ where: { campaign: { id: campaign_id } } });
+    const content = await this.campaignContentRepository.findOne({
+      where: { campaign: { id: campaign_id } },
+    });
     if (!content) throw new Error('Content not found');
     return content;
   }
@@ -21,13 +23,18 @@ export class CampaignContentService {
     return this.campaignContentRepository.save(content);
   }
 
-  async update(id: string, data: Partial<CampaignContent>): Promise<CampaignContent> {
+  async update(
+    id: string,
+    data: Partial<CampaignContent>,
+  ): Promise<CampaignContent> {
     await this.campaignContentRepository.update(id, data);
     return this.getById(id);
   }
 
   async getById(id: string): Promise<CampaignContent> {
-    const content = await this.campaignContentRepository.findOne({ where: { id } });
+    const content = await this.campaignContentRepository.findOne({
+      where: { id },
+    });
     if (!content) throw new Error('Content not found');
     return content;
   }

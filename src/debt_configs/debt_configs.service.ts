@@ -361,7 +361,9 @@ export class DebtConfigService {
         : (r.code || r.name || '').toLowerCase(),
     );
     const isAdminOrManager =
-      roleNames.includes('admin') || roleNames.includes('manager-cong-no') || roleNames.includes('view');
+      roleNames.includes('admin') ||
+      roleNames.includes('manager-cong-no') ||
+      roleNames.includes('view');
 
     const page = filters.page || 1;
     const limit = filters.limit || 10;

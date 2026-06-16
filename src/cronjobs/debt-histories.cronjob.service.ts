@@ -46,8 +46,11 @@ export class DebtHistoriesCronjobService {
         WHERE DATE(CONVERT_TZ(dl.updated_at, '+00:00', '+07:00')) = ?
           AND dl.id NOT IN (SELECT debt_log_id FROM debt_histories WHERE DATE(created_at) = ?)
       `;
-      
-      const result = await this.debtHistoryRepo.query(query, [todayStr, todayStr]);
+
+      const result = await this.debtHistoryRepo.query(query, [
+        todayStr,
+        todayStr,
+      ]);
 
       this.logger.log(
         `✅ [CRON] Đã clone xong debt_logs sang debt_histories cho ngày ${todayStr}`,
@@ -88,8 +91,11 @@ export class DebtHistoriesCronjobService {
         WHERE dl.send_at >= ?
           AND dl.id NOT IN (SELECT debt_log_id FROM debt_histories WHERE DATE(created_at) = ?)
       `;
-      
-      const snapshotResult = await this.debtHistoryRepo.query(insertQuery, [todayStr, todayStr]);
+
+      const snapshotResult = await this.debtHistoryRepo.query(insertQuery, [
+        todayStr,
+        todayStr,
+      ]);
 
       // 2. Reset toàn bộ debt_logs (không điều kiện WHERE)
       const updateQuery = `
@@ -106,13 +112,15 @@ export class DebtHistoriesCronjobService {
           debt_img = NULL,
           remind_status = 'Not Sent'
       `;
-      
+
       const resetResult = await this.debtHistoryRepo.query(updateQuery);
 
       this.logger.log(
         `✅ [CRON] Đã snapshot debt_logs (send_at >= ${todayStr}) và reset toàn bộ debt_logs.`,
       );
-      this.logger.debug(`[CRON] Snapshot result: ${JSON.stringify(snapshotResult)}`);
+      this.logger.debug(
+        `[CRON] Snapshot result: ${JSON.stringify(snapshotResult)}`,
+      );
       this.logger.debug(`[CRON] Reset result: ${JSON.stringify(resetResult)}`);
     } catch (error) {
       this.logger.error(

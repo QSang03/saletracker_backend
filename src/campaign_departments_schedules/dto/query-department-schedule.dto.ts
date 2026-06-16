@@ -1,5 +1,8 @@
 import { IsOptional, IsString, IsEnum, IsNumber } from 'class-validator';
-import { ScheduleType, ScheduleStatus } from '../campaign_departments_schedules.entity';
+import {
+  ScheduleType,
+  ScheduleStatus,
+} from '../campaign_departments_schedules.entity';
 
 export class QueryDepartmentScheduleDto {
   @IsOptional()

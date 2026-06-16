@@ -203,7 +203,7 @@ export class DebtController {
   ) {
     if (!file) throw new BadRequestException('No file uploaded');
     const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.load(file.buffer);
+    await workbook.xlsx.load(file.buffer as any);
     const worksheet = workbook.worksheets[0];
     const rows: Record<string, any>[] = [];
     worksheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {

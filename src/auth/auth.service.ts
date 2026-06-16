@@ -123,25 +123,31 @@ export class AuthService {
           display_name: role.display_name,
         })) || [],
       // Chỉ chứa departments và permissions nếu không phải admin
-      ...(isAdmin ? {} : {
-        departments,
-        permissions: [
-          ...updatedUser.roles?.flatMap((role: Role) => {
-            if (!role?.rolePermissions) return [];
-            return (
-              role.rolePermissions
-                .filter(
-                  (rp: RolePermission) =>
-                    !!rp && rp.isActive && !!rp.permission && !!rp.permission.name && !!rp.permission.action,
-                )
-                .map((rp: RolePermission) => ({
-                  name: rp.permission!.name,
-                  action: rp.permission!.action,
-                })) || []
-            );
-          }) || [],
-        ],
-      }),
+      ...(isAdmin
+        ? {}
+        : {
+            departments,
+            permissions: [
+              ...(updatedUser.roles?.flatMap((role: Role) => {
+                if (!role?.rolePermissions) return [];
+                return (
+                  role.rolePermissions
+                    .filter(
+                      (rp: RolePermission) =>
+                        !!rp &&
+                        rp.isActive &&
+                        !!rp.permission &&
+                        !!rp.permission.name &&
+                        !!rp.permission.action,
+                    )
+                    .map((rp: RolePermission) => ({
+                      name: rp.permission.name,
+                      action: rp.permission.action,
+                    })) || []
+                );
+              }) || []),
+            ],
+          }),
       lastLogin: updatedUser.lastLogin,
     };
 
@@ -155,10 +161,10 @@ export class AuthService {
         expiresIn: '30d',
       },
     );
-    
+
     // Lưu refresh token vào DB (trim để tránh whitespace issues)
     const cleanRefreshToken = refreshToken.trim();
-    
+
     await this.usersService.updateUser(updatedUser.id, {
       status: UserStatus.ACTIVE,
       refreshToken: cleanRefreshToken,
@@ -202,7 +208,7 @@ export class AuthService {
     try {
       // Clean the incoming token
       const cleanRefreshToken = refreshToken.trim();
-      
+
       // Verify JWT format và decode để lấy user ID ngay từ đầu
       let payload: any;
       try {
@@ -223,7 +229,10 @@ export class AuthService {
       }
 
       // Tạo promise cho refresh process
-      const refreshPromise = this.performRefreshForUser(userId, cleanRefreshToken);
+      const refreshPromise = this.performRefreshForUser(
+        userId,
+        cleanRefreshToken,
+      );
       refreshingUsers.set(userId, refreshPromise);
 
       try {
@@ -238,10 +247,13 @@ export class AuthService {
     }
   }
 
-  private async performRefreshForUser(userId: number, cleanRefreshToken: string) {
-
+  private async performRefreshForUser(
+    userId: number,
+    cleanRefreshToken: string,
+  ) {
     // Load user with full details including roles, permissions AND refresh token
-    const user = await this.usersService.findOneWithDetailsAndRefreshToken(userId);
+    const user =
+      await this.usersService.findOneWithDetailsAndRefreshToken(userId);
 
     if (!user) {
       throw new ForbiddenException('Invalid refresh token - user not found');
@@ -282,7 +294,7 @@ export class AuthService {
           server_ip: d.server_ip,
         })) || [];
     }
-    
+
     let server_ip: string | null = null;
     if (isAdmin) {
       const allDepartments = await this.departmentService.findAllActive();
@@ -292,7 +304,7 @@ export class AuthService {
       const found = user.departments?.find((d) => !!d.server_ip);
       if (found) server_ip = found.server_ip;
     }
-    
+
     // Tạo access token mới với payload tối giản cho admin
     const accessPayload = {
       sub: user.id,
@@ -315,26 +327,32 @@ export class AuthService {
           display_name: role.display_name,
         })) || [],
       // Chỉ chứa departments và permissions nếu không phải admin
-      ...(isAdmin ? {} : {
-        departments,
-        server_ip,
-        permissions: [
-          ...user.roles?.flatMap((role: Role) => {
-            if (!role?.rolePermissions) return [];
-            return (
-              role.rolePermissions
-                .filter(
-                  (rp: RolePermission) =>
-                    !!rp && rp.isActive && !!rp.permission && !!rp.permission.name && !!rp.permission.action,
-                )
-                .map((rp: RolePermission) => ({
-                  name: rp.permission!.name,
-                  action: rp.permission!.action,
-                })) || []
-            );
-          }) || [],
-        ],
-      }),
+      ...(isAdmin
+        ? {}
+        : {
+            departments,
+            server_ip,
+            permissions: [
+              ...(user.roles?.flatMap((role: Role) => {
+                if (!role?.rolePermissions) return [];
+                return (
+                  role.rolePermissions
+                    .filter(
+                      (rp: RolePermission) =>
+                        !!rp &&
+                        rp.isActive &&
+                        !!rp.permission &&
+                        !!rp.permission.name &&
+                        !!rp.permission.action,
+                    )
+                    .map((rp: RolePermission) => ({
+                      name: rp.permission.name,
+                      action: rp.permission.action,
+                    })) || []
+                );
+              }) || []),
+            ],
+          }),
       lastLogin: user.lastLogin,
     };
 
@@ -352,7 +370,6 @@ export class AuthService {
 
   // Logout method - clear refresh token
   async logout(user: any) {
-    
     const updatedUser = await this.usersService.updateUser(user.id, {
       status: UserStatus.INACTIVE,
       refreshToken: undefined,
@@ -362,16 +379,14 @@ export class AuthService {
       userId: updatedUser.id,
       status: updatedUser.status,
     });
-    
+
     return { message: 'Logged out successfully' };
   }
 
   // Cleanup expired tokens - utility method
   async cleanupExpiredTokens() {
-    
     try {
-    } catch (error) {
-    }
+    } catch (error) {}
   }
 
   // Generate new tokens method
@@ -427,26 +442,32 @@ export class AuthService {
           display_name: role.display_name,
         })) || [],
       // Chỉ chứa departments và permissions nếu không phải admin
-      ...(isAdmin ? {} : {
-        departments,
-        server_ip,
-        permissions: [
-          ...user.roles?.flatMap((role: Role) => {
-            if (!role?.rolePermissions) return [];
-            return (
-              role.rolePermissions
-                .filter(
-                  (rp: RolePermission) =>
-                    !!rp && rp.isActive && !!rp.permission && !!rp.permission.name && !!rp.permission.action,
-                )
-                .map((rp: RolePermission) => ({
-                  name: rp.permission!.name,
-                  action: rp.permission!.action,
-                })) || []
-            );
-          }) || [],
-        ],
-      }),
+      ...(isAdmin
+        ? {}
+        : {
+            departments,
+            server_ip,
+            permissions: [
+              ...(user.roles?.flatMap((role: Role) => {
+                if (!role?.rolePermissions) return [];
+                return (
+                  role.rolePermissions
+                    .filter(
+                      (rp: RolePermission) =>
+                        !!rp &&
+                        rp.isActive &&
+                        !!rp.permission &&
+                        !!rp.permission.name &&
+                        !!rp.permission.action,
+                    )
+                    .map((rp: RolePermission) => ({
+                      name: rp.permission.name,
+                      action: rp.permission.action,
+                    })) || []
+                );
+              }) || []),
+            ],
+          }),
       lastLogin: user.lastLogin,
     };
 
@@ -527,26 +548,32 @@ export class AuthService {
           display_name: role.display_name,
         })) || [],
       // Chỉ chứa departments và permissions nếu không phải admin
-      ...(isAdmin ? {} : {
-        departments,
-        server_ip,
-        permissions: [
-          ...user.roles?.flatMap((role: Role) => {
-            if (!role?.rolePermissions) return [];
-            return (
-              role.rolePermissions
-                .filter(
-                  (rp: RolePermission) =>
-                    !!rp && rp.isActive && !!rp.permission && !!rp.permission.name && !!rp.permission.action,
-                )
-                .map((rp: RolePermission) => ({
-                  name: rp.permission!.name,
-                  action: rp.permission!.action,
-                })) || []
-            );
-          }) || [],
-        ],
-      }),
+      ...(isAdmin
+        ? {}
+        : {
+            departments,
+            server_ip,
+            permissions: [
+              ...(user.roles?.flatMap((role: Role) => {
+                if (!role?.rolePermissions) return [];
+                return (
+                  role.rolePermissions
+                    .filter(
+                      (rp: RolePermission) =>
+                        !!rp &&
+                        rp.isActive &&
+                        !!rp.permission &&
+                        !!rp.permission.name &&
+                        !!rp.permission.action,
+                    )
+                    .map((rp: RolePermission) => ({
+                      name: rp.permission.name,
+                      action: rp.permission.action,
+                    })) || []
+                );
+              }) || []),
+            ],
+          }),
       lastLogin: user.lastLogin,
     };
 
@@ -561,6 +588,3 @@ export class AuthService {
     };
   }
 }
-
-
-

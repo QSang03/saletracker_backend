@@ -425,16 +425,20 @@ export class OrderDetailController {
   ): Promise<OrderDetail | null> {
     const existing = await this.orderDetailService.findById(id);
     if (!existing) throw new NotFoundException('Order detail not found');
-    
+
     // Kiểm tra quyền sở hữu hoặc quyền PM
     const isOwner = existing.order?.sale_by?.id === req.user?.id;
-    const isPM = req.user?.roles?.some((r: any) => 
-      typeof r === 'string' ? r.toLowerCase() === 'pm' : (r.name || '').toLowerCase() === 'pm'
+    const isPM = req.user?.roles?.some((r: any) =>
+      typeof r === 'string'
+        ? r.toLowerCase() === 'pm'
+        : (r.name || '').toLowerCase() === 'pm',
     );
-    const isAdmin = req.user?.roles?.some((r: any) => 
-      typeof r === 'string' ? r.toLowerCase() === 'admin' : (r.name || '').toLowerCase() === 'admin'
+    const isAdmin = req.user?.roles?.some((r: any) =>
+      typeof r === 'string'
+        ? r.toLowerCase() === 'admin'
+        : (r.name || '').toLowerCase() === 'admin',
     );
-    
+
     if (!isOwner && !isPM && !isAdmin) {
       throw new ForbiddenException('Bạn không có quyền sửa order này');
     }

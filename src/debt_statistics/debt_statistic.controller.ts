@@ -4,9 +4,7 @@ import { DebtStatisticService } from './debt_statistic.service';
 
 @Controller('debt-statistics')
 export class DebtStatisticController {
-  constructor(
-    private readonly debtStatisticService: DebtStatisticService,
-  ) {}
+  constructor(private readonly debtStatisticService: DebtStatisticService) {}
 
   // Test endpoint without authentication
   @Get('test')
@@ -44,7 +42,10 @@ export class DebtStatisticController {
     @Query('employeeCode') employeeCode?: string,
     @Query('customerCode') customerCode?: string,
   ) {
-    return this.debtStatisticService.getOverviewStatistics(fromDate, toDate, { employeeCode, customerCode });
+    return this.debtStatisticService.getOverviewStatistics(fromDate, toDate, {
+      employeeCode,
+      customerCode,
+    });
   }
 
   @Get('trend')
@@ -88,7 +89,10 @@ export class DebtStatisticController {
     @Query('employeeCode') employeeCode?: string,
     @Query('customerCode') customerCode?: string,
   ) {
-    return this.debtStatisticService.getAgingDaily(fromDate, toDate, { employeeCode, customerCode });
+    return this.debtStatisticService.getAgingDaily(fromDate, toDate, {
+      employeeCode,
+      customerCode,
+    });
   }
 
   // New: Pay-later delay buckets (hybrid: history from debt_statistics, today from debts)
@@ -121,9 +125,16 @@ export class DebtStatisticController {
       );
     } catch (error) {
       // Log and return structured error for easier frontend debugging
-      // eslint-disable-next-line no-console
-      console.error('[getPayLaterDelay] Error:', error?.message || error, error?.stack || 'no-stack');
-      return { success: false, error: error?.message || 'Internal Server Error' };
+
+      console.error(
+        '[getPayLaterDelay] Error:',
+        error?.message || error,
+        error?.stack || 'no-stack',
+      );
+      return {
+        success: false,
+        error: error?.message || 'Internal Server Error',
+      };
     }
   }
 
@@ -148,11 +159,22 @@ export class DebtStatisticController {
       toDate = toDate || today;
     }
     try {
-      return await this.debtStatisticService.getPayLaterDelayDaily(fromDate, toDate, bucketNumbers, { employeeCode, customerCode });
+      return await this.debtStatisticService.getPayLaterDelayDaily(
+        fromDate,
+        toDate,
+        bucketNumbers,
+        { employeeCode, customerCode },
+      );
     } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error('[getPayLaterDelayDaily] Error:', error?.message || error, error?.stack || 'no-stack');
-      return { success: false, error: error?.message || 'Internal Server Error' };
+      console.error(
+        '[getPayLaterDelayDaily] Error:',
+        error?.message || error,
+        error?.stack || 'no-stack',
+      );
+      return {
+        success: false,
+        error: error?.message || 'Internal Server Error',
+      };
     }
   }
 
@@ -167,12 +189,11 @@ export class DebtStatisticController {
     @Query('employeeCode') employeeCode?: string,
     @Query('customerCode') customerCode?: string,
   ) {
-    return this.debtStatisticService.getContactResponses(
-      fromDate,
-      toDate,
-      by,
-      { employeeCode, customerCode, mode },
-    );
+    return this.debtStatisticService.getContactResponses(fromDate, toDate, by, {
+      employeeCode,
+      customerCode,
+      mode,
+    });
   }
 
   // Daily customer responses by remind_status per day
@@ -185,7 +206,12 @@ export class DebtStatisticController {
     @Query('employeeCode') employeeCode?: string,
     @Query('customerCode') customerCode?: string,
   ) {
-    return this.debtStatisticService.getContactResponsesDaily(fromDate, toDate, by, { employeeCode, customerCode });
+    return this.debtStatisticService.getContactResponsesDaily(
+      fromDate,
+      toDate,
+      by,
+      { employeeCode, customerCode },
+    );
   }
 
   @Get('trends')
@@ -229,14 +255,14 @@ export class DebtStatisticController {
     if (!date && (!from || !to)) {
       throw new Error('Either date or from/to parameters are required');
     }
-    
+
     let parsedLimit = parseInt(limit, 10);
-    
+
     // Hỗ trợ lấy tất cả dữ liệu cho frontend lazy loading
     if (all === 'true' || parsedLimit >= 100000) {
       parsedLimit = 100000; // Giới hạn tối đa để tránh memory issues
     }
-    
+
     const filters: any = {
       date,
       from,
@@ -255,9 +281,9 @@ export class DebtStatisticController {
     // Không force today nữa - để frontend truyền đúng ngày từ chart
     // Logic cũ gây lỗi khi click vào cột paid của ngày quá khứ
     // Đã xóa hoàn toàn logic fallback về ngày hôm nay
-    
+
     const result = await this.debtStatisticService.getDetailedDebts(filters);
-    
+
     return result;
   }
 

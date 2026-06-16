@@ -19,7 +19,9 @@ export class ViewRoleGuard implements CanActivate {
     // Kiểm tra role "view" - không cho phép truy cập
     const roleNames = getRoleNames(user);
     if (roleNames.includes('view')) {
-      throw new ForbiddenException('Role view không có quyền truy cập chức năng này');
+      throw new ForbiddenException(
+        'Role view không có quyền truy cập chức năng này',
+      );
     }
 
     return true;

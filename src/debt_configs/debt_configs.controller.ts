@@ -158,7 +158,7 @@ export class DebtConfigController {
     }
     // Đọc file excel, parse rows
     const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.load(file.buffer);
+    await workbook.xlsx.load(file.buffer as any);
     const worksheet = workbook.worksheets[0];
     const rows: Record<string, any>[] = [];
     worksheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {

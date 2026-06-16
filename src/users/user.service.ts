@@ -37,8 +37,8 @@ export class UserService {
     private readonly rolesPermissionsService: RolesPermissionsService, // Inject service
     @Inject(forwardRef(() => UserStatusObserver))
     private readonly userStatusObserver: UserStatusObserver,
-  @InjectRepository(DatabaseChangeLog)
-  private readonly changeLogRepo: Repository<DatabaseChangeLog>,
+    @InjectRepository(DatabaseChangeLog)
+    private readonly changeLogRepo: Repository<DatabaseChangeLog>,
   ) {}
 
   async findAll(
@@ -51,8 +51,8 @@ export class UserService {
       statuses?: string[];
       zaloLinkStatuses?: number[];
     },
-  user?: any, // Thêm user để phân quyền động nếu cần
-  excludeViewUsers = false, // Ẩn user có role 'view' (cho non-admin)
+    user?: any, // Thêm user để phân quyền động nếu cần
+    excludeViewUsers = false, // Ẩn user có role 'view' (cho non-admin)
   ): Promise<{ data: Array<{ [key: string]: any }>; total: number }> {
     const qb = this.userRepo
       .createQueryBuilder('user')
@@ -639,7 +639,7 @@ export class UserService {
       statuses?: string[];
       zaloLinkStatuses?: number[];
     },
-  excludeViewUsers = false,
+    excludeViewUsers = false,
   ): Promise<{ data: User[]; total: number }> {
     // Guard: nếu không có departmentIds thì trả về ngay để tránh sinh SQL `IN ()`
     if (!departmentIds || departmentIds.length === 0) {
@@ -858,11 +858,14 @@ export class UserService {
       permissionId: number;
       isActive: boolean;
     }[],
-  viewSubRoleName?: string, // Thêm thông tin để tạo role "view con"
-  pmPrivateRoleName?: string, // Thêm thông tin để tạo role pm riêng (pm_<username>)
-  pmCustomRoleNames?: string[], // Danh sách tên các PM custom roles
-  pmCustomRolePermissions?: Array<{ roleName: string; permissions: number[] }>, // Quyền cho từng PM custom role
-  pmMode?: 'general' | 'custom', // Chế độ PM
+    viewSubRoleName?: string, // Thêm thông tin để tạo role "view con"
+    pmPrivateRoleName?: string, // Thêm thông tin để tạo role pm riêng (pm_<username>)
+    pmCustomRoleNames?: string[], // Danh sách tên các PM custom roles
+    pmCustomRolePermissions?: Array<{
+      roleName: string;
+      permissions: number[];
+    }>, // Quyền cho từng PM custom role
+    pmMode?: 'general' | 'custom', // Chế độ PM
   ) {
     const user = await this.userRepo.findOne({
       where: { id: userId },
@@ -890,8 +893,10 @@ export class UserService {
     const oldRoleIds = oldRoles.map((r) => r.id);
     const newRoleIds = newRoles.map((r) => r.id);
 
-  // Lấy id role pm chính (nếu user có) để tránh đụng chạm quyền riêng
-  const pmMainRoleId = [...oldRoles, ...newRoles].find(r => r.name === 'pm')?.id;
+    // Lấy id role pm chính (nếu user có) để tránh đụng chạm quyền riêng
+    const pmMainRoleId = [...oldRoles, ...newRoles].find(
+      (r) => r.name === 'pm',
+    )?.id;
 
     await this.userRepo
       .createQueryBuilder()
@@ -899,18 +904,17 @@ export class UserService {
       .of(userId)
       .addAndRemove(newRoleIds, oldRoleIds);
 
-  // Khai báo biến viewSubRole & pmPrivateSubRole ở scope rộng hơn
-  let viewSubRole: any = null;
-  let pmPrivateSubRole: any = null;
-    
-  // Xử lý tạo role "view con" nếu có viewSubRoleName
-  if (viewSubRoleName) {
-      
+    // Khai báo biến viewSubRole & pmPrivateSubRole ở scope rộng hơn
+    let viewSubRole: any = null;
+    let pmPrivateSubRole: any = null;
+
+    // Xử lý tạo role "view con" nếu có viewSubRoleName
+    if (viewSubRoleName) {
       // Tìm hoặc tạo role "view con"
       viewSubRole = await this.roleRepo.findOne({
-        where: { name: viewSubRoleName }
+        where: { name: viewSubRoleName },
       });
-      
+
       if (!viewSubRole) {
         // Tạo role "view con" mới
         viewSubRole = this.roleRepo.create({
@@ -926,21 +930,26 @@ export class UserService {
             .of(userId)
             .add(viewSubRole.id);
         } catch (e) {
-          console.warn('⚠️ Không thể add viewSubRole vào user (có thể đã tồn tại):', e?.message);
+          console.warn(
+            '⚠️ Không thể add viewSubRole vào user (có thể đã tồn tại):',
+            e?.message,
+          );
         }
       }
-      
+
       // Thêm role "view con" vào roleIds nếu chưa có
       if (viewSubRole && !roleIds.includes(viewSubRole.id)) {
         roleIds.push(viewSubRole.id);
       }
-      
-  // Việc gán permissions cho viewSubRole sẽ xử lý sau (tập trung 1 chỗ) để tránh roleId=0 lọt xuống
+
+      // Việc gán permissions cho viewSubRole sẽ xử lý sau (tập trung 1 chỗ) để tránh roleId=0 lọt xuống
     }
-    
+
     // Xử lý tạo role "pm riêng" nếu có pmPrivateRoleName (pattern pm_<username>)
-  if (pmPrivateRoleName) {
-      pmPrivateSubRole = await this.roleRepo.findOne({ where: { name: pmPrivateRoleName } });
+    if (pmPrivateRoleName) {
+      pmPrivateSubRole = await this.roleRepo.findOne({
+        where: { name: pmPrivateRoleName },
+      });
 
       if (!pmPrivateSubRole) {
         pmPrivateSubRole = this.roleRepo.create({
@@ -956,7 +965,10 @@ export class UserService {
             .of(userId)
             .add(pmPrivateSubRole.id);
         } catch (e) {
-          console.warn('⚠️ Không thể add pmPrivateSubRole vào user (có thể đã tồn tại):', e?.message);
+          console.warn(
+            '⚠️ Không thể add pmPrivateSubRole vào user (có thể đã tồn tại):',
+            e?.message,
+          );
         }
       }
 
@@ -969,11 +981,16 @@ export class UserService {
 
     // Xử lý tạo các PM custom roles nếu có pmCustomRoleNames
     const pmCustomRoles: any[] = [];
-    if (pmCustomRoleNames && pmCustomRoleNames.length > 0 && pmMode === 'custom') {
-      
+    if (
+      pmCustomRoleNames &&
+      pmCustomRoleNames.length > 0 &&
+      pmMode === 'custom'
+    ) {
       for (const roleName of pmCustomRoleNames) {
-        let customRole = await this.roleRepo.findOne({ where: { name: roleName } });
-        
+        let customRole = await this.roleRepo.findOne({
+          where: { name: roleName },
+        });
+
         if (!customRole) {
           customRole = this.roleRepo.create({
             name: roleName,
@@ -981,7 +998,7 @@ export class UserService {
           });
           customRole = await this.roleRepo.save(customRole);
         }
-        
+
         // Gán role mới cho user
         try {
           await this.userRepo
@@ -990,24 +1007,45 @@ export class UserService {
             .of(userId)
             .add(customRole.id);
         } catch (e) {
-          console.warn('⚠️ Không thể add PM custom role vào user (có thể đã tồn tại):', e?.message);
+          console.warn(
+            '⚠️ Không thể add PM custom role vào user (có thể đã tồn tại):',
+            e?.message,
+          );
         }
-        
+
         if (customRole && !roleIds.includes(customRole.id)) {
           roleIds.push(customRole.id);
         }
-        
+
         pmCustomRoles.push(customRole);
       }
     }
 
     // Gom & cập nhật permissions (đơn giản, tách rõ 4 nhóm: thường, view_sub, pm_private, pm_custom)
     if (rolePermissions && Array.isArray(rolePermissions)) {
-      const safeList = rolePermissions.filter(rp => rp && typeof rp.permissionId === 'number');
-      const base: { roleId: number; permissionId: number; isActive: boolean }[] = [];
-      const viewList: { roleId: number; permissionId: number; isActive: boolean }[] = [];
-      const pmPrivateList: { roleId: number; permissionId: number; isActive: boolean }[] = [];
-      const pmCustomList: { roleId: number; permissionId: number; isActive: boolean }[] = [];
+      const safeList = rolePermissions.filter(
+        (rp) => rp && typeof rp.permissionId === 'number',
+      );
+      const base: {
+        roleId: number;
+        permissionId: number;
+        isActive: boolean;
+      }[] = [];
+      const viewList: {
+        roleId: number;
+        permissionId: number;
+        isActive: boolean;
+      }[] = [];
+      const pmPrivateList: {
+        roleId: number;
+        permissionId: number;
+        isActive: boolean;
+      }[] = [];
+      const pmCustomList: {
+        roleId: number;
+        permissionId: number;
+        isActive: boolean;
+      }[] = [];
 
       for (const rp of safeList) {
         const pid = rp.permissionId;
@@ -1017,61 +1055,99 @@ export class UserService {
         // Placeholder (roleId = 0) chỉ dùng cho dynamic sub roles
         if (rid === 0) {
           if (pmPrivateSubRole && pmPrivateRoleName) {
-            pmPrivateList.push({ roleId: pmPrivateSubRole.id, permissionId: pid, isActive: rp.isActive });
+            pmPrivateList.push({
+              roleId: pmPrivateSubRole.id,
+              permissionId: pid,
+              isActive: rp.isActive,
+            });
           } else if (viewSubRole && viewSubRoleName) {
-            viewList.push({ roleId: viewSubRole.id, permissionId: pid, isActive: rp.isActive });
+            viewList.push({
+              roleId: viewSubRole.id,
+              permissionId: pid,
+              isActive: rp.isActive,
+            });
           }
           continue;
         }
 
         // View sub role
         if (viewSubRole && rid === viewSubRole.id) {
-          viewList.push({ roleId: viewSubRole.id, permissionId: pid, isActive: rp.isActive });
+          viewList.push({
+            roleId: viewSubRole.id,
+            permissionId: pid,
+            isActive: rp.isActive,
+          });
           continue;
         }
 
         // PM private sub role
         if (pmPrivateSubRole && rid === pmPrivateSubRole.id) {
-          pmPrivateList.push({ roleId: pmPrivateSubRole.id, permissionId: pid, isActive: rp.isActive });
+          pmPrivateList.push({
+            roleId: pmPrivateSubRole.id,
+            permissionId: pid,
+            isActive: rp.isActive,
+          });
           continue;
         }
 
         // PM custom roles
-        const pmCustomRole = pmCustomRoles.find(cr => cr.id === rid);
+        const pmCustomRole = pmCustomRoles.find((cr) => cr.id === rid);
         if (pmCustomRole) {
-          pmCustomList.push({ roleId: pmCustomRole.id, permissionId: pid, isActive: rp.isActive });
+          pmCustomList.push({
+            roleId: pmCustomRole.id,
+            permissionId: pid,
+            isActive: rp.isActive,
+          });
           continue;
         }
 
         // Ngăn không cho quyền riêng chảy vào role pm chính nếu đang dùng pmPrivateRoleName
-        if (pmPrivateSubRole && pmPrivateRoleName && pmMainRoleId && rid === pmMainRoleId) {
+        if (
+          pmPrivateSubRole &&
+          pmPrivateRoleName &&
+          pmMainRoleId &&
+          rid === pmMainRoleId
+        ) {
           // Bỏ qua hoàn toàn => đảm bảo không leak
           continue;
         }
 
         // Các role thường khác
-        if (rid > 0) base.push({ roleId: rid, permissionId: pid, isActive: rp.isActive });
+        if (rid > 0)
+          base.push({ roleId: rid, permissionId: pid, isActive: rp.isActive });
       }
 
       // Upsert & cleanup view sub role
       if (viewSubRole) {
-        if (viewList.length) await this.rolesPermissionsService.bulkUpdate(viewList);
-        const existing = await this.rolesPermissionsService.findByRoleIds([viewSubRole.id]);
-        const keep = new Set(viewList.filter(x => x.isActive).map(x => x.permissionId));
+        if (viewList.length)
+          await this.rolesPermissionsService.bulkUpdate(viewList);
+        const existing = await this.rolesPermissionsService.findByRoleIds([
+          viewSubRole.id,
+        ]);
+        const keep = new Set(
+          viewList.filter((x) => x.isActive).map((x) => x.permissionId),
+        );
         for (const ex of existing) {
           const exPid = ex.permission?.id;
-          if (exPid && !keep.has(exPid)) await this.rolesPermissionsService.remove(ex.id);
+          if (exPid && !keep.has(exPid))
+            await this.rolesPermissionsService.remove(ex.id);
         }
       }
 
       // Upsert & cleanup pm private role
       if (pmPrivateSubRole) {
-        if (pmPrivateList.length) await this.rolesPermissionsService.bulkUpdate(pmPrivateList);
-        const existing = await this.rolesPermissionsService.findByRoleIds([pmPrivateSubRole.id]);
-        const keep = new Set(pmPrivateList.filter(x => x.isActive).map(x => x.permissionId));
+        if (pmPrivateList.length)
+          await this.rolesPermissionsService.bulkUpdate(pmPrivateList);
+        const existing = await this.rolesPermissionsService.findByRoleIds([
+          pmPrivateSubRole.id,
+        ]);
+        const keep = new Set(
+          pmPrivateList.filter((x) => x.isActive).map((x) => x.permissionId),
+        );
         for (const ex of existing) {
           const exPid = ex.permission?.id;
-          if (exPid && !keep.has(exPid)) await this.rolesPermissionsService.remove(ex.id);
+          if (exPid && !keep.has(exPid))
+            await this.rolesPermissionsService.remove(ex.id);
         }
       }
 
@@ -1079,22 +1155,31 @@ export class UserService {
     }
 
     // Xử lý permissions cho PM custom roles từ pmCustomRolePermissions
-    if (pmCustomRolePermissions && pmCustomRolePermissions.length > 0 && pmMode === 'custom') {
-      
+    if (
+      pmCustomRolePermissions &&
+      pmCustomRolePermissions.length > 0 &&
+      pmMode === 'custom'
+    ) {
       for (const customRolePerm of pmCustomRolePermissions) {
-        const customRole = pmCustomRoles.find(cr => cr.name === customRolePerm.roleName);
+        const customRole = pmCustomRoles.find(
+          (cr) => cr.name === customRolePerm.roleName,
+        );
         if (customRole && customRolePerm.permissions.length > 0) {
-          const customPermissions = customRolePerm.permissions.map(permissionId => ({
-            roleId: customRole.id,
-            permissionId,
-            isActive: true
-          }));
-          
+          const customPermissions = customRolePerm.permissions.map(
+            (permissionId) => ({
+              roleId: customRole.id,
+              permissionId,
+              isActive: true,
+            }),
+          );
+
           // Upsert permissions cho custom role
           await this.rolesPermissionsService.bulkUpdate(customPermissions);
-          
+
           // Cleanup permissions không còn được chọn
-          const existing = await this.rolesPermissionsService.findByRoleIds([customRole.id]);
+          const existing = await this.rolesPermissionsService.findByRoleIds([
+            customRole.id,
+          ]);
           const keep = new Set(customRolePerm.permissions);
           for (const ex of existing) {
             const exPid = ex.permission?.id;
@@ -1108,14 +1193,18 @@ export class UserService {
 
     // 🧹 Cleanup: Xóa các PM custom roles cũ nếu không còn được sử dụng
     try {
-      if (pmMode === 'custom' && pmCustomRoleNames && pmCustomRoleNames.length > 0) {
+      if (
+        pmMode === 'custom' &&
+        pmCustomRoleNames &&
+        pmCustomRoleNames.length > 0
+      ) {
         // Tìm tất cả PM custom roles cũ của user này
         const existingPmCustomRoles = await this.roleRepo.find({
           where: {
-            name: Like(`pm_${user.username}_%`)
-          }
+            name: Like(`pm_${user.username}_%`),
+          },
         });
-        
+
         // Xóa các role không còn trong danh sách mới
         for (const oldRole of existingPmCustomRoles) {
           if (!pmCustomRoleNames.includes(oldRole.name)) {
@@ -1126,8 +1215,11 @@ export class UserService {
               .of(userId)
               .remove(oldRole.id);
             // Xóa mọi RolePermission của role này
-            const rpList = await this.rolesPermissionsService.findByRoleIds([oldRole.id]);
-            for (const rp of rpList) await this.rolesPermissionsService.remove(rp.id);
+            const rpList = await this.rolesPermissionsService.findByRoleIds([
+              oldRole.id,
+            ]);
+            for (const rp of rpList)
+              await this.rolesPermissionsService.remove(rp.id);
             // Xóa role luôn
             await this.roleRepo.delete(oldRole.id);
           }
@@ -1136,10 +1228,10 @@ export class UserService {
         // Nếu chuyển về chế độ general, xóa tất cả PM custom roles
         const existingPmCustomRoles = await this.roleRepo.find({
           where: {
-            name: Like(`pm_${user.username}_%`)
-          }
+            name: Like(`pm_${user.username}_%`),
+          },
         });
-        
+
         for (const oldRole of existingPmCustomRoles) {
           // Gỡ role khỏi user
           await this.userRepo
@@ -1148,8 +1240,11 @@ export class UserService {
             .of(userId)
             .remove(oldRole.id);
           // Xóa mọi RolePermission của role này
-          const rpList = await this.rolesPermissionsService.findByRoleIds([oldRole.id]);
-          for (const rp of rpList) await this.rolesPermissionsService.remove(rp.id);
+          const rpList = await this.rolesPermissionsService.findByRoleIds([
+            oldRole.id,
+          ]);
+          for (const rp of rpList)
+            await this.rolesPermissionsService.remove(rp.id);
           // Xóa role luôn
           await this.roleRepo.delete(oldRole.id);
         }
@@ -1158,15 +1253,20 @@ export class UserService {
       console.error('⚠️ Lỗi khi cleanup PM custom roles:', cleanupErr);
     }
 
-  // 🧹 Cleanup: Xóa role pm_<username> nếu không còn quyền riêng nào được chọn
+    // 🧹 Cleanup: Xóa role pm_<username> nếu không còn quyền riêng nào được chọn
     try {
       const existingPmPrivateRoleName = `pm_${user.username}`;
 
       // Trường hợp 1: Không gửi pmPrivateRoleName (người dùng đã bỏ hết quyền riêng)
       if (!pmPrivateRoleName) {
-        const existingPmPrivateRole = await this.roleRepo.findOne({ where: { name: existingPmPrivateRoleName } });
+        const existingPmPrivateRole = await this.roleRepo.findOne({
+          where: { name: existingPmPrivateRoleName },
+        });
         if (existingPmPrivateRole) {
-          const stillSelected = rolePermissions?.some(rp => rp.roleId === existingPmPrivateRole.id && rp.isActive) || false;
+          const stillSelected =
+            rolePermissions?.some(
+              (rp) => rp.roleId === existingPmPrivateRole.id && rp.isActive,
+            ) || false;
           if (!stillSelected) {
             // Gỡ role khỏi user
             await this.userRepo
@@ -1175,8 +1275,11 @@ export class UserService {
               .of(userId)
               .remove(existingPmPrivateRole.id);
             // Xóa mọi RolePermission của role này
-            const rpList = await this.rolesPermissionsService.findByRoleIds([existingPmPrivateRole.id]);
-            for (const rp of rpList) await this.rolesPermissionsService.remove(rp.id);
+            const rpList = await this.rolesPermissionsService.findByRoleIds([
+              existingPmPrivateRole.id,
+            ]);
+            for (const rp of rpList)
+              await this.rolesPermissionsService.remove(rp.id);
             // Xóa role luôn
             await this.roleRepo.delete(existingPmPrivateRole.id);
           }
@@ -1200,22 +1303,25 @@ export class UserService {
     }
 
     // Kiểm tra nếu user có role "view"
-    const hasViewRole = user.roles?.some(role => role.name === 'view');
-    
+    const hasViewRole = user.roles?.some((role) => role.name === 'view');
+
     if (hasViewRole) {
       // Tìm role con "view_username"
       const viewSubRoleName = `view_${user.username}`;
-      const viewSubRole = user.roles?.find(role => role.name === viewSubRoleName);
-      
+      const viewSubRole = user.roles?.find(
+        (role) => role.name === viewSubRoleName,
+      );
+
       if (viewSubRole) {
         // Lấy permissions từ role con
-        const permissions = viewSubRole.rolePermissions
-          ?.filter(rp => rp.isActive)
-          .map(rp => ({
-            name: rp.permission.name,
-            action: rp.permission.action,
-          })) || [];
-        
+        const permissions =
+          viewSubRole.rolePermissions
+            ?.filter((rp) => rp.isActive)
+            .map((rp) => ({
+              name: rp.permission.name,
+              action: rp.permission.action,
+            })) || [];
+
         return {
           userId: user.id,
           username: user.username,
@@ -1227,14 +1333,16 @@ export class UserService {
     }
 
     // Nếu không có role "view", trả về permissions từ tất cả roles
-    const permissions = user.roles?.flatMap(role =>
-      role.rolePermissions
-        ?.filter(rp => rp.isActive)
-        .map(rp => ({
-          name: rp.permission.name,
-          action: rp.permission.action,
-        })) || []
-    ) || [];
+    const permissions =
+      user.roles?.flatMap(
+        (role) =>
+          role.rolePermissions
+            ?.filter((rp) => rp.isActive)
+            .map((rp) => ({
+              name: rp.permission.name,
+              action: rp.permission.action,
+            })) || [],
+      ) || [];
 
     return {
       userId: user.id,
@@ -1516,7 +1624,8 @@ export class UserService {
 
   // Lấy log thay đổi trạng thái liên kết Zalo
   async getZaloLinkStatusLogs(userId: number, page = 1, limit = 10) {
-    if (!userId || isNaN(userId)) throw new BadRequestException('Invalid user id');
+    if (!userId || isNaN(userId))
+      throw new BadRequestException('Invalid user id');
     page = page < 1 ? 1 : page;
     limit = Math.min(Math.max(limit, 1), 100);
     const offset = (page - 1) * limit;
@@ -1553,10 +1662,14 @@ export class UserService {
 
     const statusLabel = (s?: number) => {
       switch (s) {
-        case 0: return 'Chưa liên kết';
-        case 1: return 'Đã liên kết';
-        case 2: return 'Lỗi liên kết';
-        default: return 'Không xác định';
+        case 0:
+          return 'Chưa liên kết';
+        case 1:
+          return 'Đã liên kết';
+        case 2:
+          return 'Lỗi liên kết';
+        default:
+          return 'Không xác định';
       }
     };
 
@@ -1569,20 +1682,29 @@ export class UserService {
       logs: rows.map((l: any) => {
         let oldVal: any = null;
         let newVal: any = null;
-        try { oldVal = typeof l.old_values === 'string' ? JSON.parse(l.old_values) : l.old_values; } catch {}
-        try { newVal = typeof l.new_values === 'string' ? JSON.parse(l.new_values) : l.new_values; } catch {}
+        try {
+          oldVal =
+            typeof l.old_values === 'string'
+              ? JSON.parse(l.old_values)
+              : l.old_values;
+        } catch {}
+        try {
+          newVal =
+            typeof l.new_values === 'string'
+              ? JSON.parse(l.new_values)
+              : l.new_values;
+        } catch {}
         const oldStatus = oldVal?.zalo_link_status;
         const newStatus = newVal?.zalo_link_status;
         return {
           id: l.id,
-            oldStatus,
-            oldStatusLabel: statusLabel(oldStatus),
-            newStatus,
-            newStatusLabel: statusLabel(newStatus),
-            triggeredAt: l.triggered_at_formatted, // chuỗi chuẩn yyyy-MM-dd HH:mm:ss.ffffff
+          oldStatus,
+          oldStatusLabel: statusLabel(oldStatus),
+          newStatus,
+          newStatusLabel: statusLabel(newStatus),
+          triggeredAt: l.triggered_at_formatted, // chuỗi chuẩn yyyy-MM-dd HH:mm:ss.ffffff
         };
-      })
+      }),
     };
   }
 }
-

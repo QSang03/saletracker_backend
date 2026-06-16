@@ -1,4 +1,12 @@
-import { Entity, PrimaryColumn, ManyToOne, JoinColumn, Column, CreateDateColumn, Index } from 'typeorm';
+import {
+  Entity,
+  PrimaryColumn,
+  ManyToOne,
+  JoinColumn,
+  Column,
+  CreateDateColumn,
+  Index,
+} from 'typeorm';
 import { Campaign } from '../campaigns/campaign.entity';
 import { CampaignCustomer } from '../campaign_customers/campaign_customer.entity';
 
@@ -17,6 +25,9 @@ export class CampaignCustomerMap {
 
   @Column({ type: 'varchar', length: 255, nullable: true })
   salutation?: string;
+
+  @Column({ type: 'varchar', length: 255, nullable: true, name: 'zalo_name' })
+  zalo_name?: string | null;
 
   @Index()
   @CreateDateColumn({ name: 'added_at' })

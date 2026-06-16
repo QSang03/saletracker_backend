@@ -12,7 +12,10 @@ export class CustomNamingStrategy extends DefaultNamingStrategy {
     embeddedPrefixes: string[],
   ): string {
     return snakeCase(
-      embeddedPrefixes.concat(customName || propertyName).map(String).join('_'),
+      embeddedPrefixes
+        .concat(customName || propertyName)
+        .map(String)
+        .join('_'),
     );
   }
 

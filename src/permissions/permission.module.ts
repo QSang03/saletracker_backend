@@ -11,7 +11,13 @@ import { Category } from '../categories/category.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Permission, Role, RolePermission, Brand, Category]),
+    TypeOrmModule.forFeature([
+      Permission,
+      Role,
+      RolePermission,
+      Brand,
+      Category,
+    ]),
     forwardRef(() => AuthModule),
   ],
   providers: [PermissionService],

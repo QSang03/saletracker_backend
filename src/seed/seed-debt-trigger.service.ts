@@ -4,7 +4,6 @@ import { DataSource } from 'typeorm';
 
 @Injectable()
 export class SeedDebtTriggerService implements OnModuleInit {
-  
   private readonly logger = new Logger(SeedDebtTriggerService.name);
 
   constructor(
@@ -15,55 +14,63 @@ export class SeedDebtTriggerService implements OnModuleInit {
   // Configuration for allowed fields to track in triggers
   private readonly ALLOWED_TRACKING_FIELDS = {
     debt_logs: [
-      'remind_status',    // Critical business status
-      'send_at',        // Reminder timing
+      'remind_status', // Critical business status
+      'send_at', // Reminder timing
     ],
     debt_configs: [
-      'is_send',        // Enable/disable flag
-      'gap_day',        // Reminder frequency
-      'day_of_week',    // Reminder scheduling
-      'send_last_at'    // Last reminder timestamp
+      'is_send', // Enable/disable flag
+      'gap_day', // Reminder frequency
+      'day_of_week', // Reminder scheduling
+      'send_last_at', // Last reminder timestamp
     ],
     debts: [
-      'status',         // Debt lifecycle status
-      'total_amount',   // Financial amount
-      'remaining',      // Outstanding balance
-      'pay_later',      // Payment deferral
-      'due_date',       // Payment deadline
-      'is_notified',    // Notification status
-      'debt_config_id'  // Configuration reference
-    ]
+      'status', // Debt lifecycle status
+      'total_amount', // Financial amount
+      'remaining', // Outstanding balance
+      'pay_later', // Payment deferral
+      'due_date', // Payment deadline
+      'is_notified', // Notification status
+      'debt_config_id', // Configuration reference
+    ],
   };
 
   /**
    * Get allowed tracking fields for a specific table
    */
-  public getAllowedTrackingFields(tableName: keyof typeof this.ALLOWED_TRACKING_FIELDS): string[] {
+  public getAllowedTrackingFields(
+    tableName: keyof typeof this.ALLOWED_TRACKING_FIELDS,
+  ): string[] {
     return this.ALLOWED_TRACKING_FIELDS[tableName] || [];
   }
 
   /**
    * Generate dynamic update trigger SQL based on allowed tracking fields
    */
-  private generateUpdateTriggerSQL(tableName: string, allowedFields: string[], allFields: Record<string, string>): string {
-    const fieldChecks = allowedFields.map(field => {
-      const fieldType = allFields[field];
-      if (fieldType === 'datetime' || fieldType === 'timestamp') {
-        // Handle nullable datetime fields
-        return `
+  private generateUpdateTriggerSQL(
+    tableName: string,
+    allowedFields: string[],
+    allFields: Record<string, string>,
+  ): string {
+    const fieldChecks = allowedFields
+      .map((field) => {
+        const fieldType = allFields[field];
+        if (fieldType === 'datetime' || fieldType === 'timestamp') {
+          // Handle nullable datetime fields
+          return `
         -- ${field}: ${this.getFieldDescription(tableName, field)}
         IF OLD.${field} != NEW.${field} OR (OLD.${field} IS NULL AND NEW.${field} IS NOT NULL) OR (OLD.${field} IS NOT NULL AND NEW.${field} IS NULL) THEN
           SET changed_fields = JSON_ARRAY_APPEND(changed_fields, '$', '${field}');
         END IF;`;
-      } else {
-        // Handle non-nullable fields
-        return `
+        } else {
+          // Handle non-nullable fields
+          return `
         -- ${field}: ${this.getFieldDescription(tableName, field)}
         IF OLD.${field} != NEW.${field} THEN
           SET changed_fields = JSON_ARRAY_APPEND(changed_fields, '$', '${field}');
         END IF;`;
-      }
-    }).join('');
+        }
+      })
+      .join('');
 
     return `
       CREATE TRIGGER \`${tableName}_after_update\` 
@@ -98,13 +105,13 @@ export class SeedDebtTriggerService implements OnModuleInit {
         remind_status: 'Critical business status',
         send_at: 'Reminder timing',
         first_remind_at: 'First reminder timing',
-        second_remind_at: 'Second reminder timing'
+        second_remind_at: 'Second reminder timing',
       },
       debt_configs: {
         is_send: 'Enable/disable flag',
         gap_day: 'Reminder frequency',
         day_of_week: 'Reminder scheduling',
-        send_last_at: 'Last reminder timestamp'
+        send_last_at: 'Last reminder timestamp',
       },
       debts: {
         status: 'Debt lifecycle status',
@@ -113,80 +120,97 @@ export class SeedDebtTriggerService implements OnModuleInit {
         pay_later: 'Payment deferral',
         due_date: 'Payment deadline',
         is_notified: 'Notification status',
-        debt_config_id: 'Configuration reference'
-      }
+        debt_config_id: 'Configuration reference',
+      },
     };
-    
+
     return descriptions[tableName]?.[fieldName] || 'Field tracking enabled';
   }
 
   /**
    * Generate JSON_OBJECT fields for trigger
    */
-  private generateJsonObjectFields(allFields: Record<string, string>, prefix: 'OLD' | 'NEW'): string {
-    return Object.keys(allFields).map(field => `'${field}', ${prefix}.${field}`).join(', ');
+  private generateJsonObjectFields(
+    allFields: Record<string, string>,
+    prefix: 'OLD' | 'NEW',
+  ): string {
+    return Object.keys(allFields)
+      .map((field) => `'${field}', ${prefix}.${field}`)
+      .join(', ');
   }
 
-  async onModuleInit() {
-  }
+  async onModuleInit() {}
 
   public async seedTriggers() {
     try {
-      
       // Drop all existing triggers first
       const existingTriggers = await this.checkExistingTriggers();
       if (existingTriggers.triggers.length > 0) {
         await this.dropExistingTriggers(existingTriggers.triggers);
         // Add delay after dropping all triggers
-        await new Promise(res => setTimeout(res, 500));
+        await new Promise((res) => setTimeout(res, 500));
       }
 
       // Create new triggers
       await this.createTriggers();
-
     } catch (error) {
-      this.logger.error(`❌ [SeedDebtTriggerService] Failed to seed triggers: ${error.message}`);
+      this.logger.error(
+        `❌ [SeedDebtTriggerService] Failed to seed triggers: ${error.message}`,
+      );
       throw error;
     }
   }
 
-  private async checkExistingTriggers(): Promise<{ hasAll: boolean; triggers: string[] }> {
+  private async checkExistingTriggers(): Promise<{
+    hasAll: boolean;
+    triggers: string[];
+  }> {
     const allTriggers = [
-      'debt_logs_after_insert', 'debt_logs_after_update',
-      'debt_configs_after_insert', 'debt_configs_after_update',
-      'debts_after_insert', 'debts_after_update'
+      'debt_logs_after_insert',
+      'debt_logs_after_update',
+      'debt_configs_after_insert',
+      'debt_configs_after_update',
+      'debts_after_insert',
+      'debts_after_update',
     ];
     const query = `
       SELECT TRIGGER_NAME 
       FROM information_schema.TRIGGERS 
       WHERE TRIGGER_SCHEMA = DATABASE()
-        AND TRIGGER_NAME IN (${allTriggers.map(t => `'${t}'`).join(',')})
+        AND TRIGGER_NAME IN (${allTriggers.map((t) => `'${t}'`).join(',')})
     `;
     const result = await this.dataSource.query(query);
-    const existingTriggers = result.map(row => row.TRIGGER_NAME);
-    const hasAll = allTriggers.every(trigger => existingTriggers.includes(trigger));
+    const existingTriggers = result.map((row) => row.TRIGGER_NAME);
+    const hasAll = allTriggers.every((trigger) =>
+      existingTriggers.includes(trigger),
+    );
     return {
       hasAll,
-      triggers: existingTriggers
+      triggers: existingTriggers,
     };
   }
 
   private async dropExistingTriggers(existingTriggers: string[]) {
     // Drop all 6 triggers if they exist
     const allPossibleTriggers = [
-      'debt_logs_after_insert', 'debt_logs_after_update',
-      'debt_configs_after_insert', 'debt_configs_after_update',
-      'debts_after_insert', 'debts_after_update'
+      'debt_logs_after_insert',
+      'debt_logs_after_update',
+      'debt_configs_after_insert',
+      'debt_configs_after_update',
+      'debts_after_insert',
+      'debts_after_update',
     ];
     for (const triggerName of allPossibleTriggers) {
       try {
         await this.dataSource.query(`DROP TRIGGER \`${triggerName}\``);
       } catch (error) {
         if (!error.message.includes("doesn't exist")) {
-          this.logger.warn(`⚠️ [SeedDebtTriggerService] Warning dropping trigger ${triggerName}: ${error.message}`);
+          this.logger.warn(
+            `⚠️ [SeedDebtTriggerService] Warning dropping trigger ${triggerName}: ${error.message}`,
+          );
         }
       }
-      await new Promise(res => setTimeout(res, 100));
+      await new Promise((res) => setTimeout(res, 100));
     }
   }
 
@@ -194,16 +218,24 @@ export class SeedDebtTriggerService implements OnModuleInit {
     const triggers = [
       { name: 'debt_logs_after_insert', sql: this.getDebtLogsInsertTrigger() },
       { name: 'debt_logs_after_update', sql: this.getDebtLogsUpdateTrigger() },
-      { name: 'debt_configs_after_insert', sql: this.getDebtConfigsInsertTrigger() },
-      { name: 'debt_configs_after_update', sql: this.getDebtConfigsUpdateTrigger() },
+      {
+        name: 'debt_configs_after_insert',
+        sql: this.getDebtConfigsInsertTrigger(),
+      },
+      {
+        name: 'debt_configs_after_update',
+        sql: this.getDebtConfigsUpdateTrigger(),
+      },
       { name: 'debts_after_insert', sql: this.getDebtsInsertTrigger() },
-      { name: 'debts_after_update', sql: this.getDebtsUpdateTrigger() }
+      { name: 'debts_after_update', sql: this.getDebtsUpdateTrigger() },
     ];
     for (const trigger of triggers) {
       try {
         await this.dataSource.query(trigger.sql);
       } catch (error) {
-        this.logger.error(`❌ [SeedDebtTriggerService] Failed to create trigger ${trigger.name}: ${error.message}`);
+        this.logger.error(
+          `❌ [SeedDebtTriggerService] Failed to create trigger ${trigger.name}: ${error.message}`,
+        );
         throw error;
       }
     }
@@ -506,11 +538,14 @@ export class SeedDebtTriggerService implements OnModuleInit {
       hasAllTriggers: existingTriggers.hasAll,
       existingTriggers: existingTriggers.triggers,
       expectedTriggers: [
-        'debt_logs_after_insert', 'debt_logs_after_update',
-        'debt_configs_after_insert', 'debt_configs_after_update',
-        'debts_after_insert', 'debts_after_update'
+        'debt_logs_after_insert',
+        'debt_logs_after_update',
+        'debt_configs_after_insert',
+        'debt_configs_after_update',
+        'debts_after_insert',
+        'debts_after_update',
       ],
-      allowedTrackingFields: this.ALLOWED_TRACKING_FIELDS
+      allowedTrackingFields: this.ALLOWED_TRACKING_FIELDS,
     };
   }
 
@@ -527,15 +562,17 @@ export class SeedDebtTriggerService implements OnModuleInit {
     const existingTriggers = await this.checkExistingTriggers();
     if (existingTriggers.triggers.length > 0) {
       await this.dropExistingTriggers(existingTriggers.triggers);
-      await new Promise(res => setTimeout(res, 300));
+      await new Promise((res) => setTimeout(res, 300));
     }
     const tables = ['debt_logs', 'debt_configs', 'debts'] as const;
     for (const tableName of tables) {
       const allowedFields = config[tableName] || [];
       if (allowedFields.length === 0) {
-        this.logger.warn(`⚠️ [SeedDebtTriggerService] No allowed fields specified for ${tableName}, skipping trigger creation`);
+        this.logger.warn(
+          `⚠️ [SeedDebtTriggerService] No allowed fields specified for ${tableName}, skipping trigger creation`,
+        );
         continue;
-      }// Insert trigger
+      } // Insert trigger
       let insertTriggerSQL: string;
       let updateTriggerSQL: string;
       switch (tableName) {
@@ -558,7 +595,9 @@ export class SeedDebtTriggerService implements OnModuleInit {
         await this.dataSource.query(insertTriggerSQL);
         await this.dataSource.query(updateTriggerSQL);
       } catch (error) {
-        this.logger.error(`❌ [SeedDebtTriggerService] Failed to create selective triggers for ${tableName}: ${error.message}`);
+        this.logger.error(
+          `❌ [SeedDebtTriggerService] Failed to create selective triggers for ${tableName}: ${error.message}`,
+        );
         throw error;
       }
     }
@@ -567,7 +606,12 @@ export class SeedDebtTriggerService implements OnModuleInit {
   /**
    * Validate if a field is allowed to be tracked
    */
-  public isFieldAllowedForTracking(tableName: keyof typeof this.ALLOWED_TRACKING_FIELDS, fieldName: string): boolean {
-    return this.ALLOWED_TRACKING_FIELDS[tableName]?.includes(fieldName) || false;
+  public isFieldAllowedForTracking(
+    tableName: keyof typeof this.ALLOWED_TRACKING_FIELDS,
+    fieldName: string,
+  ): boolean {
+    return (
+      this.ALLOWED_TRACKING_FIELDS[tableName]?.includes(fieldName) || false
+    );
   }
 }

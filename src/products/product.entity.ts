@@ -1,10 +1,18 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, Index } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  ManyToOne,
+  Index,
+} from 'typeorm';
 import { Category } from '../categories/category.entity';
 import { Brand } from '../brands/brand.entity';
 
 @Entity({ name: 'products' })
 @Index('idx_products_code', ['productCode'])
-@Index('ft_products_name_desc', ['productName', 'description'], { fulltext: true })
+@Index('ft_products_name_desc', ['productName', 'description'], {
+  fulltext: true,
+})
 export class Product {
   @PrimaryGeneratedColumn()
   id: number;

@@ -308,7 +308,9 @@ export class CampaignService {
           (cs) => {
             // Normalize computed slot shape to department slot shape
             const slotDate = cs.date ? new Date(cs.date) : null;
-            const dayOfWeek = slotDate ? this.getVietnamDayOfWeek(slotDate) : undefined;
+            const dayOfWeek = slotDate
+              ? this.getVietnamDayOfWeek(slotDate)
+              : undefined;
             return {
               start_time: cs.start_time,
               end_time: cs.end_time,
@@ -327,7 +329,8 @@ export class CampaignService {
 
         const shouldTryMerged =
           campaignScheduleConfig?.time_of_day ||
-          (campaignScheduleConfig?.start_time && campaignScheduleConfig?.end_time) ||
+          (campaignScheduleConfig?.start_time &&
+            campaignScheduleConfig?.end_time) ||
           campaignScheduleConfig?.type === 'weekly';
 
         if (shouldTryMerged) {
@@ -430,7 +433,11 @@ export class CampaignService {
     allDepartmentSchedules: DepartmentSchedule[] | any, // Accept both formats for backward compatibility
     campaignConfig: any,
     campaignType: CampaignType,
-  ): Promise<{ startDate: Date; endDate: Date; usedSlots?: Array<{ date: string; start_time: string; end_time: string }> }> {
+  ): Promise<{
+    startDate: Date;
+    endDate: Date;
+    usedSlots?: Array<{ date: string; start_time: string; end_time: string }>;
+  }> {
     // ✅ NEW: Handle both old format (single schedule config) and new format (array of schedules)
     let departmentSchedules: DepartmentSchedule[];
 
@@ -455,7 +462,7 @@ export class CampaignService {
     }
 
     // ✅ NEW: Collect all slots from all schedules
-    let allSlots: any[] = [];
+    const allSlots: any[] = [];
     for (const schedule of departmentSchedules) {
       const departmentConfig = schedule.schedule_config as any;
       if (departmentConfig?.slots && Array.isArray(departmentConfig.slots)) {
@@ -468,8 +475,12 @@ export class CampaignService {
       campaignConfig?.time_of_day ||
       (campaignConfig?.start_time && campaignConfig?.end_time)
     );
-    let validSlots: any[] = [];
-    let usedSlots: Array<{ date: string; start_time: string; end_time: string }> = [];
+    const validSlots: any[] = [];
+    let usedSlots: Array<{
+      date: string;
+      start_time: string;
+      end_time: string;
+    }> = [];
 
     // ✅ UPDATED: Enhanced logic for 3-day campaigns
     let requiredDaysOfWeek: number[] = [];
@@ -497,7 +508,7 @@ export class CampaignService {
     }
     // ✅ UPDATED: Enhanced slot processing for 3-day campaigns
     for (const slot of allSlots) {
-      let slotDates: Array<{ date: Date; slot: any }> = [];
+      const slotDates: Array<{ date: Date; slot: any }> = [];
 
       if (slot.applicable_date) {
         // ✅ Xử lý applicable_date
@@ -530,7 +541,9 @@ export class CampaignService {
                 if (campaignConfig && campaignConfig.time_of_day) {
                   slotDates.push({ date: applicableDate, slot });
                 } else {
-                  const [endHour, endMin] = slot.end_time.split(':').map(Number);
+                  const [endHour, endMin] = slot.end_time
+                    .split(':')
+                    .map(Number);
                   const slotEndTime = new Date(now);
                   slotEndTime.setHours(endHour, endMin, 0, 0);
 
@@ -545,7 +558,8 @@ export class CampaignService {
             }
           } else {
             // Non-3-day logic (original)
-            const isToday = applicableDateOnly.getTime() === nowDateOnly.getTime();
+            const isToday =
+              applicableDateOnly.getTime() === nowDateOnly.getTime();
             if (isToday && allowExpiredSlotsToday) {
               slotDates.push({ date: applicableDate, slot });
             } else if (isToday) {
@@ -654,7 +668,14 @@ export class CampaignService {
     if (validSlots.length === 0) {
       this.logger.warn('No valid future slots found', {
         allSlotsCount: allSlots.length,
-        campaignConfigPreview: campaignConfig ? { type: campaignConfig.type, time_of_day: campaignConfig.time_of_day, start_time: campaignConfig.start_time, end_time: campaignConfig.end_time } : null,
+        campaignConfigPreview: campaignConfig
+          ? {
+              type: campaignConfig.type,
+              time_of_day: campaignConfig.time_of_day,
+              start_time: campaignConfig.start_time,
+              end_time: campaignConfig.end_time,
+            }
+          : null,
       });
       throw new Error('No valid future slots found');
     }
@@ -674,8 +695,6 @@ export class CampaignService {
       slotsGroupedByDate.get(key)!.entries.push(slotEntry);
     }
 
-    
-
     // ✅ NEW: For 3-day campaigns, find the earliest valid consecutive sequence
     if (campaignConfig?.type === '3_day' && requiredDaysOfWeek.length === 3) {
       const consecutiveSequence = this.findEarliestConsecutive3DaySequence(
@@ -690,7 +709,10 @@ export class CampaignService {
           endDate: consecutiveSequence.endDate,
           usedSlots: consecutiveSequence.usedSlots
             ? consecutiveSequence.usedSlots.map((s: any) => ({
-                date: (s.date instanceof Date) ? s.date.toISOString() : String(s.date),
+                date:
+                  s.date instanceof Date
+                    ? s.date.toISOString()
+                    : String(s.date),
                 start_time: s.slot.start_time,
                 end_time: s.slot.end_time,
               }))
@@ -756,7 +778,8 @@ export class CampaignService {
           const bestDuration =
             this.parseTime(best.end_time) - this.parseTime(best.start_time);
           const currentDuration =
-            this.parseTime(current.end_time) - this.parseTime(current.start_time);
+            this.parseTime(current.end_time) -
+            this.parseTime(current.start_time);
           return currentDuration > bestDuration ? current : best;
         });
 
@@ -768,11 +791,14 @@ export class CampaignService {
         };
 
         // Choose a representative entry that belongs to the selected group
-        const chosen = dateGroup.entries.find((entry) =>
-          selectedGroup.slots.some(
-            (s) => s.start_time === entry.slot.start_time && s.end_time === entry.slot.end_time,
-          ),
-        ) || dateGroup.entries[0];
+        const chosen =
+          dateGroup.entries.find((entry) =>
+            selectedGroup.slots.some(
+              (s) =>
+                s.start_time === entry.slot.start_time &&
+                s.end_time === entry.slot.end_time,
+            ),
+          ) || dateGroup.entries[0];
         nearestSlotData = { date: chosen.date, slot: chosen.slot };
         break;
       }
@@ -790,7 +816,10 @@ export class CampaignService {
           const slotStartMinutes = this.parseTime(slotData.slot.start_time);
           const slotEndMinutes = this.parseTime(slotData.slot.end_time);
           // overlap if slotStart < campaignEnd && slotEnd > campaignStart
-          return slotStartMinutes < campaignEndMinutes && slotEndMinutes > campaignStartMinutes;
+          return (
+            slotStartMinutes < campaignEndMinutes &&
+            slotEndMinutes > campaignStartMinutes
+          );
         });
 
         if (matchingSlots.length > 0 && !nearestSlotData) {
@@ -844,7 +873,11 @@ export class CampaignService {
       this.logger.warn('Attempted time match failed: no nearestSlotData', {
         campaignConfig,
         validSlotsCount: validSlots.length,
-        sampleValidSlots: validSlots.slice(0, 5).map(s => ({ date: s.date.toISOString(), start: s.slot.start_time, end: s.slot.end_time })),
+        sampleValidSlots: validSlots.slice(0, 5).map((s) => ({
+          date: s.date.toISOString(),
+          start: s.slot.start_time,
+          end: s.slot.end_time,
+        })),
       });
       throw new Error('không hợp lệ');
     }
@@ -887,8 +920,11 @@ export class CampaignService {
         let consecutiveGroup: { start_time: string; end_time: string };
 
         if (campaignConfig?.time_of_day) {
-          const campaignTimeMinutes = this.parseTime(campaignConfig.time_of_day);
-          const groupsWithSlots = this.buildConsecutiveSlotGroups(slotsForTargetDay);
+          const campaignTimeMinutes = this.parseTime(
+            campaignConfig.time_of_day,
+          );
+          const groupsWithSlots =
+            this.buildConsecutiveSlotGroups(slotsForTargetDay);
 
           let selectedGroupInfo: {
             start_time: string;
@@ -912,7 +948,9 @@ export class CampaignService {
             const containingGroups = groupsWithSlots.filter((group) => {
               const gStart = this.parseTime(group.start_time);
               const gEnd = this.parseTime(group.end_time);
-              return campaignTimeMinutes >= gStart && campaignTimeMinutes < gEnd;
+              return (
+                campaignTimeMinutes >= gStart && campaignTimeMinutes < gEnd
+              );
             });
 
             if (containingGroups.length > 0) {
@@ -923,9 +961,11 @@ export class CampaignService {
               if (activeGroups.length > 0) {
                 selectedGroupInfo = activeGroups.reduce((best, current) => {
                   const bestDuration =
-                    this.parseTime(best.end_time) - this.parseTime(best.start_time);
+                    this.parseTime(best.end_time) -
+                    this.parseTime(best.start_time);
                   const currentDuration =
-                    this.parseTime(current.end_time) - this.parseTime(current.start_time);
+                    this.parseTime(current.end_time) -
+                    this.parseTime(current.start_time);
                   return currentDuration > bestDuration ? current : best;
                 });
               }
@@ -946,37 +986,56 @@ export class CampaignService {
             // NEW: Prefer the consecutive group that is connected to the slot
             // which contains the campaign time (even if that slot is expired).
             // 1) Find candidate slots that contain campaign time (including expired)
-            const campaignTimeMinutes = this.parseTime(campaignConfig.time_of_day);
+            const campaignTimeMinutes = this.parseTime(
+              campaignConfig.time_of_day,
+            );
             const candidateSlots = slotsForTargetDay.filter((slot) => {
               const sStart = this.parseTime(slot.start_time);
               const sEnd = this.parseTime(slot.end_time);
-              return campaignTimeMinutes >= sStart && campaignTimeMinutes < sEnd;
+              return (
+                campaignTimeMinutes >= sStart && campaignTimeMinutes < sEnd
+              );
             });
 
-            let connectedGroup: { start_time: string; end_time: string } | null = null;
+            let connectedGroup: {
+              start_time: string;
+              end_time: string;
+            } | null = null;
             let connectedSlotsForUsed: any[] = [];
 
             if (candidateSlots.length > 0) {
               // Expand to all connected slots (backward + forward) within the day's slots
-              const connected = this.findAllConnectedSlots(slotsForTargetDay, candidateSlots);
+              const connected = this.findAllConnectedSlots(
+                slotsForTargetDay,
+                candidateSlots,
+              );
               if (connected && connected.length > 0) {
                 // Build group from connected slots
-                const sortedConnected = connected.sort((a,b) => this.parseTime(a.start_time) - this.parseTime(b.start_time));
+                const sortedConnected = connected.sort(
+                  (a, b) =>
+                    this.parseTime(a.start_time) - this.parseTime(b.start_time),
+                );
                 connectedGroup = {
                   start_time: sortedConnected[0].start_time,
-                  end_time: sortedConnected[sortedConnected.length - 1].end_time,
+                  end_time:
+                    sortedConnected[sortedConnected.length - 1].end_time,
                 };
                 connectedSlotsForUsed = sortedConnected;
               }
             }
 
-              if (connectedGroup) {
+            if (connectedGroup) {
               // Only accept if the connected group is truly contiguous (it is by construction)
               // and its end is still in the future relative to now
               const nowTs = Date.now();
               const endMinutes = this.parseTime(connectedGroup.end_time);
               const groupEndDate = new Date(targetDate);
-              groupEndDate.setHours(Math.floor(endMinutes / 60), endMinutes % 60, 0, 0);
+              groupEndDate.setHours(
+                Math.floor(endMinutes / 60),
+                endMinutes % 60,
+                0,
+                0,
+              );
 
               if (groupEndDate.getTime() >= nowTs) {
                 consecutiveGroup = connectedGroup;
@@ -987,21 +1046,27 @@ export class CampaignService {
                 }));
               } else {
                 // Connected group already expired entirely — treat as invalid (no fallback)
-                this.logger.warn('Connected group containing campaign time is already expired', {
-                  campaignTime: campaignConfig.time_of_day,
-                  targetDate: targetDate.toISOString(),
-                  connectedGroup,
-                });
+                this.logger.warn(
+                  'Connected group containing campaign time is already expired',
+                  {
+                    campaignTime: campaignConfig.time_of_day,
+                    targetDate: targetDate.toISOString(),
+                    connectedGroup,
+                  },
+                );
                 throw new Error('không hợp lệ');
               }
             } else {
               // No connected group found for the campaign time — treat as invalid
-              this.logger.warn('No connected group found containing campaign time', {
-                campaignTime: campaignConfig.time_of_day,
-                targetDate: targetDate.toISOString(),
-                slotsForTargetDayCount: slotsForTargetDay.length,
-                sampleSlots: slotsForTargetDay.slice(0, 6),
-              });
+              this.logger.warn(
+                'No connected group found containing campaign time',
+                {
+                  campaignTime: campaignConfig.time_of_day,
+                  targetDate: targetDate.toISOString(),
+                  slotsForTargetDayCount: slotsForTargetDay.length,
+                  sampleSlots: slotsForTargetDay.slice(0, 6),
+                },
+              );
               throw new Error('không hợp lệ');
             }
           }
@@ -1016,17 +1081,22 @@ export class CampaignService {
             return slotStart < campaignEnd && slotEnd > campaignStart;
           });
 
-              if (candidateSlots.length > 0) {
+          if (candidateSlots.length > 0) {
             const expandedSlots = this.findAllConnectedSlots(
               slotsForTargetDay,
               candidateSlots,
             );
-            const slotsToUse = (expandedSlots && expandedSlots.length > 0)
-              ? expandedSlots
-              : candidateSlots;
+            const slotsToUse =
+              expandedSlots && expandedSlots.length > 0
+                ? expandedSlots
+                : candidateSlots;
 
-            const minStart = Math.min(...slotsToUse.map(s => this.parseTime(s.start_time)));
-            const maxEnd = Math.max(...slotsToUse.map(s => this.parseTime(s.end_time)));
+            const minStart = Math.min(
+              ...slotsToUse.map((s) => this.parseTime(s.start_time)),
+            );
+            const maxEnd = Math.max(
+              ...slotsToUse.map((s) => this.parseTime(s.end_time)),
+            );
 
             consecutiveGroup = {
               start_time: this.minutesToTime(minStart),
@@ -1040,22 +1110,29 @@ export class CampaignService {
             }));
           } else {
             // Only treat as invalid when campaign specified an explicit range
-            if (campaignConfig && (campaignConfig.start_time && campaignConfig.end_time)) {
-              this.logger.warn('No candidate slots overlap campaign start/end on target date', {
-                campaignStart: campaignConfig.start_time,
-                campaignEnd: campaignConfig.end_time,
-                slotsForTargetDayCount: slotsForTargetDay.length,
-                sampleSlots: slotsForTargetDay.slice(0, 5),
-              });
+            if (
+              campaignConfig &&
+              campaignConfig.start_time &&
+              campaignConfig.end_time
+            ) {
+              this.logger.warn(
+                'No candidate slots overlap campaign start/end on target date',
+                {
+                  campaignStart: campaignConfig.start_time,
+                  campaignEnd: campaignConfig.end_time,
+                  slotsForTargetDayCount: slotsForTargetDay.length,
+                  sampleSlots: slotsForTargetDay.slice(0, 5),
+                },
+              );
               throw new Error('không hợp lệ');
             }
-            consecutiveGroup = this.findLargestConsecutiveSlotGroup(slotsForTargetDay);
+            consecutiveGroup =
+              this.findLargestConsecutiveSlotGroup(slotsForTargetDay);
           }
         } else {
           // Không chỉ định time cụ thể -> trả group lớn nhất như cũ
-          const fallbackGroup = this.findLargestConsecutiveSlotGroup(
-            slotsForTargetDay,
-          );
+          const fallbackGroup =
+            this.findLargestConsecutiveSlotGroup(slotsForTargetDay);
           const fallbackStart = this.parseTime(fallbackGroup.start_time);
           const fallbackEnd = this.parseTime(fallbackGroup.end_time);
 
@@ -1080,14 +1157,22 @@ export class CampaignService {
         if (usedSlots.length === 1) {
           try {
             const single = usedSlots[0];
-            const matchingObj = slotsForTargetDay.find((s) =>
-              s.start_time === single.start_time && s.end_time === single.end_time,
+            const matchingObj = slotsForTargetDay.find(
+              (s) =>
+                s.start_time === single.start_time &&
+                s.end_time === single.end_time,
             );
             if (matchingObj) {
-              const expanded = this.findAllConnectedSlots(slotsForTargetDay, [matchingObj]);
+              const expanded = this.findAllConnectedSlots(slotsForTargetDay, [
+                matchingObj,
+              ]);
               if (expanded && expanded.length > 1) {
-                const minStart = Math.min(...expanded.map((s) => this.parseTime(s.start_time)));
-                const maxEnd = Math.max(...expanded.map((s) => this.parseTime(s.end_time)));
+                const minStart = Math.min(
+                  ...expanded.map((s) => this.parseTime(s.start_time)),
+                );
+                const maxEnd = Math.max(
+                  ...expanded.map((s) => this.parseTime(s.end_time)),
+                );
                 usedSlots = expanded.map((s: any) => ({
                   date: targetDate.toISOString(),
                   start_time: s.start_time,
@@ -1165,12 +1250,17 @@ export class CampaignService {
                 slotsForThisDay,
                 candidateSlots,
               );
-              const slotsToUse = (expandedSlots && expandedSlots.length > 0)
-                ? expandedSlots
-                : candidateSlots;
+              const slotsToUse =
+                expandedSlots && expandedSlots.length > 0
+                  ? expandedSlots
+                  : candidateSlots;
 
-              const minStart = Math.min(...slotsToUse.map(s => this.parseTime(s.start_time)));
-              const maxEnd = Math.max(...slotsToUse.map(s => this.parseTime(s.end_time)));
+              const minStart = Math.min(
+                ...slotsToUse.map((s) => this.parseTime(s.start_time)),
+              );
+              const maxEnd = Math.max(
+                ...slotsToUse.map((s) => this.parseTime(s.end_time)),
+              );
 
               consecutiveGroup = {
                 start_time: this.minutesToTime(minStart),
@@ -1183,15 +1273,23 @@ export class CampaignService {
               }));
             } else {
               // For weekly/time_of_day prefer fallback to largest consecutive group
-              if (campaignConfig && (campaignConfig.start_time && campaignConfig.end_time)) {
-                this.logger.warn('Weekly branch: no candidate slots overlap campaign start/end', {
-                  campaignStart: campaignConfig.start_time,
-                  campaignEnd: campaignConfig.end_time,
-                  slotsForThisDayCount: slotsForThisDay.length,
-                });
+              if (
+                campaignConfig &&
+                campaignConfig.start_time &&
+                campaignConfig.end_time
+              ) {
+                this.logger.warn(
+                  'Weekly branch: no candidate slots overlap campaign start/end',
+                  {
+                    campaignStart: campaignConfig.start_time,
+                    campaignEnd: campaignConfig.end_time,
+                    slotsForThisDayCount: slotsForThisDay.length,
+                  },
+                );
                 throw new Error('không hợp lệ');
               }
-              consecutiveGroup = this.findLargestConsecutiveSlotGroup(slotsForThisDay);
+              consecutiveGroup =
+                this.findLargestConsecutiveSlotGroup(slotsForThisDay);
             }
           } else if (campaignConfig.time_of_day) {
             const campaignTime = campaignConfig.time_of_day;
@@ -1201,7 +1299,8 @@ export class CampaignService {
               const slotStart = this.parseTime(slot.start_time);
               const slotEnd = this.parseTime(slot.end_time);
               return (
-                campaignTimeMinutes >= slotStart && campaignTimeMinutes < slotEnd
+                campaignTimeMinutes >= slotStart &&
+                campaignTimeMinutes < slotEnd
               );
             });
 
@@ -1210,15 +1309,19 @@ export class CampaignService {
                 slotsForThisDay,
                 candidateSlots,
               );
-              consecutiveGroup = this.findLargestConsecutiveSlotGroup(expandedSlots);
+              consecutiveGroup =
+                this.findLargestConsecutiveSlotGroup(expandedSlots);
             } else {
-              consecutiveGroup = this.findLargestConsecutiveSlotGroup(slotsForThisDay);
+              consecutiveGroup =
+                this.findLargestConsecutiveSlotGroup(slotsForThisDay);
             }
           } else {
-            consecutiveGroup = this.findLargestConsecutiveSlotGroup(slotsForThisDay);
+            consecutiveGroup =
+              this.findLargestConsecutiveSlotGroup(slotsForThisDay);
           }
         } else {
-          consecutiveGroup = this.findLargestConsecutiveSlotGroup(slotsForThisDay);
+          consecutiveGroup =
+            this.findLargestConsecutiveSlotGroup(slotsForThisDay);
         }
 
         earliestStartTime = consecutiveGroup.start_time;
@@ -1234,7 +1337,10 @@ export class CampaignService {
             .filter((s) => {
               const sStart = this.parseTime(s.start_time);
               const sEnd = this.parseTime(s.end_time);
-              return sStart >= this.parseTime(groupStart) && sEnd <= this.parseTime(groupEnd);
+              return (
+                sStart >= this.parseTime(groupStart) &&
+                sEnd <= this.parseTime(groupEnd)
+              );
             })
             .map((s: any) => ({
               date: targetDate.toISOString(),
@@ -1246,14 +1352,22 @@ export class CampaignService {
         // If we still only have a single slot, attempt to expand to connected slots
         if (usedSlots.length === 1) {
           const single = usedSlots[0];
-          const matchingObj = slotsForThisDay.find((s) =>
-            s.start_time === single.start_time && s.end_time === single.end_time,
+          const matchingObj = slotsForThisDay.find(
+            (s) =>
+              s.start_time === single.start_time &&
+              s.end_time === single.end_time,
           );
           if (matchingObj) {
-            const expanded = this.findAllConnectedSlots(slotsForThisDay, [matchingObj]);
+            const expanded = this.findAllConnectedSlots(slotsForThisDay, [
+              matchingObj,
+            ]);
             if (expanded && expanded.length > 1) {
-              const minStart = Math.min(...expanded.map((s) => this.parseTime(s.start_time)));
-              const maxEnd = Math.max(...expanded.map((s) => this.parseTime(s.end_time)));
+              const minStart = Math.min(
+                ...expanded.map((s) => this.parseTime(s.start_time)),
+              );
+              const maxEnd = Math.max(
+                ...expanded.map((s) => this.parseTime(s.end_time)),
+              );
               usedSlots = expanded.map((s: any) => ({
                 date: targetDate.toISOString(),
                 start_time: s.start_time,
@@ -1265,7 +1379,10 @@ export class CampaignService {
           }
         }
       } catch (e) {
-        this.logger.warn('Failed to build/expand usedSlots for weekly branch: ' + (e && e.message));
+        this.logger.warn(
+          'Failed to build/expand usedSlots for weekly branch: ' +
+            (e && e.message),
+        );
       }
 
       startDate = new Date(targetDate);
@@ -1711,7 +1828,7 @@ export class CampaignService {
                 ) {
                   latestEndTime = slotData.slot.end_time;
                 }
-                selectedSlots[dayIndex] = slotData as any;
+                selectedSlots[dayIndex] = slotData;
                 break;
               }
             }
@@ -1887,8 +2004,14 @@ export class CampaignService {
         }
       }
     } catch (error) {
-      this.logger.warn(`validateCampaignScheduleAgainstDepartment failed: ${error?.message || error}`);
-      this.logger.debug({ campaignScheduleConfig, departmentScheduleConfig, scheduleType });
+      this.logger.warn(
+        `validateCampaignScheduleAgainstDepartment failed: ${error?.message || error}`,
+      );
+      this.logger.debug({
+        campaignScheduleConfig,
+        departmentScheduleConfig,
+        scheduleType,
+      });
       return false;
     }
   }
@@ -1999,7 +2122,9 @@ export class CampaignService {
 
     // 2) Try matched consecutive group that contains the campaign time
     try {
-      const groups = this.buildConsecutiveSlotGroups(departmentConfig.slots || []);
+      const groups = this.buildConsecutiveSlotGroups(
+        departmentConfig.slots || [],
+      );
       const groupMatches = groups.some((group) => {
         const firstSlot = group.slots && group.slots[0];
         if (!firstSlot) return false;
@@ -2327,7 +2452,6 @@ export class CampaignService {
             this.parseTime(current.start_time);
           return currentDuration > largestDuration ? current : largest;
         });
-
       } else {
         // Fallback: chọn group lớn nhất
         selectedGroup = commonGroups.reduce((largest, current) => {
@@ -2550,21 +2674,27 @@ export class CampaignService {
             };
           });
 
-          this.logger.warn('No matching department schedule found for campaign schedule_config', {
-            campaignId: campaign.id,
-            campaignScheduleConfig: campaignSchedule?.schedule_config,
-            departmentSchedulesCount: departmentSchedules.length,
-            departmentScheduleIds: departmentSchedules.map((s) => s.id),
-            departmentSchedulesPreview: schedulesPreview,
-          });
+          this.logger.warn(
+            'No matching department schedule found for campaign schedule_config',
+            {
+              campaignId: campaign.id,
+              campaignScheduleConfig: campaignSchedule?.schedule_config,
+              departmentSchedulesCount: departmentSchedules.length,
+              departmentScheduleIds: departmentSchedules.map((s) => s.id),
+              departmentSchedulesPreview: schedulesPreview,
+            },
+          );
         } catch (e) {
-          this.logger.warn('No matching department schedule found (failed to build preview)', {
-            campaignId: campaign.id,
-            campaignScheduleConfig: campaignSchedule?.schedule_config,
-            departmentSchedulesCount: departmentSchedules.length,
-            departmentScheduleIds: departmentSchedules.map((s) => s.id),
-            previewError: e?.message || String(e),
-          });
+          this.logger.warn(
+            'No matching department schedule found (failed to build preview)',
+            {
+              campaignId: campaign.id,
+              campaignScheduleConfig: campaignSchedule?.schedule_config,
+              departmentSchedulesCount: departmentSchedules.length,
+              departmentScheduleIds: departmentSchedules.map((s) => s.id),
+              previewError: e?.message || String(e),
+            },
+          );
         }
 
         shouldSetNullDates = true;
@@ -2595,34 +2725,38 @@ export class CampaignService {
             campaign.campaign_type.includes('hourly') ||
             campaign.campaign_type.includes('daily')
           ) {
-              // ✅ SỬA: Truyền tất cả schedules để gom slots cùng ngày
-              const dateRangeResult =
-                await this.calculateDateRangeFromHourlySlotsWithApplicableDate(
-                  departmentSchedules, // Pass all schedules instead of just one
-                  campaignSchedule?.schedule_config,
-                  campaign.campaign_type,
+            // ✅ SỬA: Truyền tất cả schedules để gom slots cùng ngày
+            const dateRangeResult =
+              await this.calculateDateRangeFromHourlySlotsWithApplicableDate(
+                departmentSchedules, // Pass all schedules instead of just one
+                campaignSchedule?.schedule_config,
+                campaign.campaign_type,
+              );
+            dateRange = dateRangeResult;
+
+            // Persist computed exact slots into campaign schedule as computed_slots (non-breaking)
+            if (dateRangeResult.usedSlots && campaignSchedule) {
+              try {
+                const newConfig = {
+                  ...(campaignSchedule.schedule_config || {}),
+                  computed_slots: dateRangeResult.usedSlots,
+                };
+
+                await this.campaignScheduleRepository
+                  .createQueryBuilder()
+                  .update()
+                  .set({ schedule_config: newConfig })
+                  .where('campaign_id = :campaignId', {
+                    campaignId: campaign.id,
+                  })
+                  .execute();
+              } catch (e) {
+                // Non-fatal: log and continue
+                this.logger.warn(
+                  'Failed to persist computed_slots: ' + e.message,
                 );
-              dateRange = dateRangeResult;
-
-              // Persist computed exact slots into campaign schedule as computed_slots (non-breaking)
-              if (dateRangeResult.usedSlots && campaignSchedule) {
-                try {
-                  const newConfig = {
-                    ...(campaignSchedule.schedule_config || {}),
-                    computed_slots: dateRangeResult.usedSlots,
-                  };
-
-                  await this.campaignScheduleRepository
-                    .createQueryBuilder()
-                    .update()
-                    .set({ schedule_config: newConfig })
-                    .where('campaign_id = :campaignId', { campaignId: campaign.id })
-                    .execute();
-                } catch (e) {
-                  // Non-fatal: log and continue
-                  this.logger.warn('Failed to persist computed_slots: ' + e.message);
-                }
               }
+            }
           } else {
             if (campaignSchedule?.schedule_config?.type === '3_day') {
               dateRange = await this.calculate3DayDateRange(
@@ -2651,10 +2785,14 @@ export class CampaignService {
                     .createQueryBuilder()
                     .update()
                     .set({ schedule_config: newConfig })
-                    .where('campaign_id = :campaignId', { campaignId: campaign.id })
+                    .where('campaign_id = :campaignId', {
+                      campaignId: campaign.id,
+                    })
                     .execute();
                 } catch (e) {
-                  this.logger.warn('Failed to persist computed_slots: ' + e.message);
+                  this.logger.warn(
+                    'Failed to persist computed_slots: ' + e.message,
+                  );
                 }
               }
             }
@@ -3142,6 +3280,7 @@ export class CampaignService {
           phone_number: map.campaign_customer.phone_number,
           full_name: map.full_name,
           salutation: map.salutation,
+          zalo_name: map.zalo_name,
         });
         return acc;
       },
@@ -3151,6 +3290,7 @@ export class CampaignService {
           phone_number: string;
           full_name: string;
           salutation?: string;
+          zalo_name?: string | null;
         }>
       >,
     );
@@ -3390,6 +3530,7 @@ export class CampaignService {
         phone_number: map.campaign_customer.phone_number,
         full_name: map.full_name,
         salutation: map.salutation,
+        zalo_name: map.zalo_name,
       })),
       start_date,
       end_date,
@@ -3525,7 +3666,6 @@ export class CampaignService {
           if (!customer) {
             customer = queryRunner.manager.create(CampaignCustomer, {
               phone_number: customerData.phone_number,
-              // Bỏ full_name và salutation ở đây
             });
             customer = await queryRunner.manager.save(
               CampaignCustomer,
@@ -3539,6 +3679,7 @@ export class CampaignService {
             customer_id: Number(customer.id),
             full_name: customerData.full_name, // Lưu vào map
             salutation: customerData.salutation, // Lưu vào map
+            zalo_name: customerData.zalo_name || null, // Lưu vào map
             campaign: savedCampaign,
             campaign_customer: customer,
           });
@@ -3712,7 +3853,6 @@ export class CampaignService {
           if (!customer) {
             customer = queryRunner.manager.create(CampaignCustomer, {
               phone_number: customerData.phone_number,
-              // Bỏ full_name và salutation
             });
             customer = await queryRunner.manager.save(
               CampaignCustomer,
@@ -3726,6 +3866,7 @@ export class CampaignService {
             customer_id: Number(customer.id),
             full_name: customerData.full_name,
             salutation: customerData.salutation,
+            zalo_name: customerData.zalo_name || null,
             campaign: updatedCampaign,
             campaign_customer: customer,
           });
@@ -3793,7 +3934,8 @@ export class CampaignService {
       } else if (error.message.includes('chưa cấu hình lịch')) {
         errorMessage = 'Chưa cấu hình lịch cho chiến dịch';
       } else if (error.message.includes('không hợp lệ')) {
-        errorMessage = 'Cấu hình thời gian không hợp lệ hoặc không có khung giờ phù hợp';
+        errorMessage =
+          'Cấu hình thời gian không hợp lệ hoặc không có khung giờ phù hợp';
       } else if (error.message.includes('chưa có lịch hoạt động')) {
         errorMessage = 'Phòng ban chưa có lịch hoạt động phù hợp';
       } else if (error.message.includes('không trong khung thời gian')) {
@@ -3973,6 +4115,7 @@ export class CampaignService {
         'map.added_at as added_at',
         'customer.id as customer_id',
         'customer.phone_number as phone_number',
+        'map.zalo_name as zalo_name',
         'customer.created_at as customer_created_at',
         'customer.updated_at as customer_updated_at',
         'log.status as interaction_status',
@@ -3984,7 +4127,7 @@ export class CampaignService {
     // Filter by search
     if (query.search) {
       qb.andWhere(
-        '(map.full_name LIKE :search OR customer.phone_number LIKE :search)',
+        '(map.full_name LIKE :search OR customer.phone_number LIKE :search OR map.zalo_name LIKE :search)',
         {
           search: `%${query.search}%`,
         },
@@ -4011,7 +4154,7 @@ export class CampaignService {
     // Apply same filters to count query
     if (query.search) {
       countQb.andWhere(
-        '(map.full_name LIKE :search OR customer.phone_number LIKE :search)',
+        '(map.full_name LIKE :search OR customer.phone_number LIKE :search OR map.zalo_name LIKE :search)',
         {
           search: `%${query.search}%`,
         },
@@ -4038,6 +4181,7 @@ export class CampaignService {
       phone_number: string;
       full_name: string;
       salutation: string;
+      zalo_name: string | null;
       created_at: Date;
       updated_at: Date;
       added_at: Date;
@@ -4059,6 +4203,7 @@ export class CampaignService {
             phone_number: row.phone_number,
             full_name: row.full_name,
             salutation: row.salutation,
+            zalo_name: row.zalo_name,
             created_at: row.customer_created_at,
             updated_at: row.customer_updated_at,
             added_at: row.added_at,
@@ -4086,8 +4231,14 @@ export class CampaignService {
       if (customer.logs.length > 0) {
         // Sắp xếp logs theo sent_at (safe: handle null sent_at)
         customer.logs.sort((a, b) => {
-          const ta = a.sent_at instanceof Date ? a.sent_at.getTime() : Number.POSITIVE_INFINITY;
-          const tb = b.sent_at instanceof Date ? b.sent_at.getTime() : Number.POSITIVE_INFINITY;
+          const ta =
+            a.sent_at instanceof Date
+              ? a.sent_at.getTime()
+              : Number.POSITIVE_INFINITY;
+          const tb =
+            b.sent_at instanceof Date
+              ? b.sent_at.getTime()
+              : Number.POSITIVE_INFINITY;
           return ta - tb;
         });
 
@@ -4316,6 +4467,7 @@ export class CampaignService {
         {
           full_name: data.full_name?.trim() || '',
           salutation: data.salutation?.trim() || undefined,
+          zalo_name: data.zalo_name !== undefined ? (data.zalo_name || null) : customerMap.zalo_name,
         },
       );
 
@@ -5296,9 +5448,7 @@ export class CampaignService {
 
     Object.entries(customerStats).forEach(([status, count], index) => {
       const rowNum = statsHeaderRow + 1 + index;
-      const percentage = (((count as number) / totalCustomers) * 100).toFixed(
-        1,
-      );
+      const percentage = ((count / totalCustomers) * 100).toFixed(1);
 
       // Status column
       const statusCell = summarySheet.getCell(`A${rowNum}`);
@@ -5773,8 +5923,12 @@ export class CampaignService {
       if (customer.logs.length > 0) {
         // Sort logs by sent_at safely. If sent_at is missing/null, push them to the end.
         customer.logs.sort((a, b) => {
-          const ta = a.sent_at ? new Date(a.sent_at).getTime() : Number.POSITIVE_INFINITY;
-          const tb = b.sent_at ? new Date(b.sent_at).getTime() : Number.POSITIVE_INFINITY;
+          const ta = a.sent_at
+            ? new Date(a.sent_at).getTime()
+            : Number.POSITIVE_INFINITY;
+          const tb = b.sent_at
+            ? new Date(b.sent_at).getTime()
+            : Number.POSITIVE_INFINITY;
           return ta - tb;
         });
       }
@@ -5901,7 +6055,7 @@ export class CampaignService {
   }
 
   private calculateMessageStats(logs: any[]) {
-    let conversationStats = {
+    const conversationStats = {
       totalConversationMessages: 0,
       customerConversationMessages: 0,
       staffConversationMessages: 0,

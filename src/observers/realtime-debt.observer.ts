@@ -118,7 +118,10 @@ export class RealTimeDebtObserver implements OnModuleInit, OnModuleDestroy {
         }
       }
     } catch (batchError) {
-      this.logger.error('Error marking batch processed, falling back to per-record flow:', batchError.stack);
+      this.logger.error(
+        'Error marking batch processed, falling back to per-record flow:',
+        batchError.stack,
+      );
 
       // Fallback: original per-record behavior
       for (const change of newChanges) {
@@ -185,7 +188,6 @@ export class RealTimeDebtObserver implements OnModuleInit, OnModuleDestroy {
     newValues: any,
     changedFields: string[],
   ) {
-
     // Get full entity với relations
     const debtLog = await this.debtLogRepo.findOne({
       where: { id: recordId },
@@ -337,41 +339,52 @@ export class RealTimeDebtObserver implements OnModuleInit, OnModuleDestroy {
       if (this.wsDebounceTimerDebtLog) {
         clearTimeout(this.wsDebounceTimerDebtLog);
       }
-      this.wsDebounceTimerDebtLog = setTimeout(() => this.flushWsEventsDebtLog(), this.WS_DEBOUNCE_MS);
+      this.wsDebounceTimerDebtLog = setTimeout(
+        () => this.flushWsEventsDebtLog(),
+        this.WS_DEBOUNCE_MS,
+      );
     } else if (event.ws_type === 'debt_config_realtime_updated') {
       this.wsEventQueueDebtConfig.push(event);
       if (this.wsDebounceTimerDebtConfig) {
         clearTimeout(this.wsDebounceTimerDebtConfig);
       }
-      this.wsDebounceTimerDebtConfig = setTimeout(() => this.flushWsEventsDebtConfig(), this.WS_DEBOUNCE_MS);
+      this.wsDebounceTimerDebtConfig = setTimeout(
+        () => this.flushWsEventsDebtConfig(),
+        this.WS_DEBOUNCE_MS,
+      );
     } else if (event.ws_type === 'debt_realtime_updated') {
       this.wsEventQueueDebt.push(event);
       if (this.wsDebounceTimerDebt) {
         clearTimeout(this.wsDebounceTimerDebt);
       }
-      this.wsDebounceTimerDebt = setTimeout(() => this.flushWsEventsDebt(), this.WS_DEBOUNCE_MS);
+      this.wsDebounceTimerDebt = setTimeout(
+        () => this.flushWsEventsDebt(),
+        this.WS_DEBOUNCE_MS,
+      );
     } else {
       // fallback: push to debt queue
       this.wsEventQueueDebt.push(event);
       if (this.wsDebounceTimerDebt) {
         clearTimeout(this.wsDebounceTimerDebt);
       }
-      this.wsDebounceTimerDebt = setTimeout(() => this.flushWsEventsDebt(), this.WS_DEBOUNCE_MS);
+      this.wsDebounceTimerDebt = setTimeout(
+        () => this.flushWsEventsDebt(),
+        this.WS_DEBOUNCE_MS,
+      );
     }
   }
-
 
   /**
    * Flush debt events
    */
   private flushWsEventsDebt() {
     if (this.wsEventQueueDebt.length > 0) {
-      const wsType = this.wsEventQueueDebt[0].ws_type || 'debt_batch_realtime_updated';
-      this.websocketGateway.emitToRoom(
-        'department:cong-no',
-        wsType,
-        { events: this.wsEventQueueDebt, refresh_request: true }
-      );
+      const wsType =
+        this.wsEventQueueDebt[0].ws_type || 'debt_batch_realtime_updated';
+      this.websocketGateway.emitToRoom('department:cong-no', wsType, {
+        events: this.wsEventQueueDebt,
+        refresh_request: true,
+      });
       this.wsEventQueueDebt = [];
     }
     if (this.wsDebounceTimerDebt) {
@@ -385,12 +398,12 @@ export class RealTimeDebtObserver implements OnModuleInit, OnModuleDestroy {
    */
   private flushWsEventsDebtLog() {
     if (this.wsEventQueueDebtLog.length > 0) {
-      const wsType = this.wsEventQueueDebtLog[0].ws_type || 'debt_log_realtime_updated';
-      this.websocketGateway.emitToRoom(
-        'department:cong-no',
-        wsType,
-        { events: this.wsEventQueueDebtLog, refresh_request: true }
-      );
+      const wsType =
+        this.wsEventQueueDebtLog[0].ws_type || 'debt_log_realtime_updated';
+      this.websocketGateway.emitToRoom('department:cong-no', wsType, {
+        events: this.wsEventQueueDebtLog,
+        refresh_request: true,
+      });
       this.wsEventQueueDebtLog = [];
     }
     if (this.wsDebounceTimerDebtLog) {
@@ -404,12 +417,13 @@ export class RealTimeDebtObserver implements OnModuleInit, OnModuleDestroy {
    */
   private flushWsEventsDebtConfig() {
     if (this.wsEventQueueDebtConfig.length > 0) {
-      const wsType = this.wsEventQueueDebtConfig[0].ws_type || 'debt_config_realtime_updated';
-      this.websocketGateway.emitToRoom(
-        'department:cong-no',
-        wsType,
-        { events: this.wsEventQueueDebtConfig, refresh_request: true }
-      );
+      const wsType =
+        this.wsEventQueueDebtConfig[0].ws_type ||
+        'debt_config_realtime_updated';
+      this.websocketGateway.emitToRoom('department:cong-no', wsType, {
+        events: this.wsEventQueueDebtConfig,
+        refresh_request: true,
+      });
       this.wsEventQueueDebtConfig = [];
     }
     if (this.wsDebounceTimerDebtConfig) {

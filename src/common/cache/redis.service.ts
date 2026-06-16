@@ -134,7 +134,7 @@ export class RedisService implements OnModuleDestroy {
   async lrange<T>(key: string, start: number, stop: number): Promise<T[]> {
     try {
       const result = await this.redis.lrange(key, start, stop);
-      return result.map(item => JSON.parse(item));
+      return result.map((item) => JSON.parse(item));
     } catch (error) {
       this.logger.error(`Error getting range from list ${key}:`, error);
       return [];
@@ -143,9 +143,9 @@ export class RedisService implements OnModuleDestroy {
 
   // Cache patterns
   async getOrSet<T>(
-    key: string, 
-    factory: () => Promise<T>, 
-    ttl: number = 300
+    key: string,
+    factory: () => Promise<T>,
+    ttl: number = 300,
   ): Promise<T> {
     try {
       const cached = await this.get<T>(key);
@@ -165,7 +165,7 @@ export class RedisService implements OnModuleDestroy {
   async mget<T>(keys: string[]): Promise<(T | null)[]> {
     try {
       const values = await this.redis.mget(...keys);
-      return values.map(value => value ? JSON.parse(value) : null);
+      return values.map((value) => (value ? JSON.parse(value) : null));
     } catch (error) {
       this.logger.error('Error in mget:', error);
       return keys.map(() => null);
@@ -272,7 +272,10 @@ export class RedisService implements OnModuleDestroy {
       // Set expiry for 1 hour
       await this.redis.expire('campaign_schedule_users', 3600);
     } catch (error) {
-      this.logger.error(`Error setting campaign schedule user ${userId}:`, error);
+      this.logger.error(
+        `Error setting campaign schedule user ${userId}:`,
+        error,
+      );
     }
   }
 
@@ -280,12 +283,17 @@ export class RedisService implements OnModuleDestroy {
     try {
       await this.redis.hdel('campaign_schedule_users', userId);
     } catch (error) {
-      this.logger.error(`Error removing campaign schedule user ${userId}:`, error);
+      this.logger.error(
+        `Error removing campaign schedule user ${userId}:`,
+        error,
+      );
     }
   }
 
   // Cell selection management for schedule collaboration
-  async getCellSelections(roomId: string = 'default'): Promise<Record<string, any>> {
+  async getCellSelections(
+    roomId: string = 'default',
+  ): Promise<Record<string, any>> {
     try {
       const selections = await this.hgetall(`sched:cellSelections:${roomId}`);
       return selections || {};
@@ -295,32 +303,54 @@ export class RedisService implements OnModuleDestroy {
     }
   }
 
-  async setCellSelections(userId: string, selections: any, roomId: string): Promise<void> {
+  async setCellSelections(
+    userId: string,
+    selections: any,
+    roomId: string,
+  ): Promise<void> {
     const key = `sched:cellSelections:${roomId}`;
-    const dataToStore = { ...selections, userId, updatedAt: new Date().toISOString() };
-    await this.hset(key, `user:${userId}`, dataToStore);     // ✅ SỬA: Sử dụng helper function để xử lý Unicode
+    const dataToStore = {
+      ...selections,
+      userId,
+      updatedAt: new Date().toISOString(),
+    };
+    await this.hset(key, `user:${userId}`, dataToStore); // ✅ SỬA: Sử dụng helper function để xử lý Unicode
     await this.getClient().expire(key, 1800);
   }
 
   async removeCellSelections(userId: string, roomId: string): Promise<void> {
-    await this.getClient().hdel(`sched:cellSelections:${roomId}`, `user:${userId}`);
+    await this.getClient().hdel(
+      `sched:cellSelections:${roomId}`,
+      `user:${userId}`,
+    );
   }
 
-  async getAllCellSelections(roomId: string): Promise<Array<{ userId: string; selections: any }>> {
+  async getAllCellSelections(
+    roomId: string,
+  ): Promise<Array<{ userId: string; selections: any }>> {
     const key = `sched:cellSelections:${roomId}`;
-    const obj = await this.hgetall<any>(key);                 // 👈 wrapper parse sẵn
+    const obj = await this.hgetall<any>(key); // 👈 wrapper parse sẵn
     if (!obj) return [];
     return Object.entries(obj).map(([field, selections]) => ({
       userId: field.replace('user:', ''),
-      selections,                                            // 👈 là OBJECT thật
+      selections, // 👈 là OBJECT thật
     }));
   }
 
-  async getCellSelectionByUser(userId: string, roomId: string = 'default'): Promise<any | null> {
+  async getCellSelectionByUser(
+    userId: string,
+    roomId: string = 'default',
+  ): Promise<any | null> {
     try {
-      return await this.hget(`sched:cellSelections:${roomId}`, `user:${userId}`); // object hoặc null
+      return await this.hget(
+        `sched:cellSelections:${roomId}`,
+        `user:${userId}`,
+      ); // object hoặc null
     } catch (error) {
-      this.logger.error(`Error getting cell selections for user ${userId}:`, error);
+      this.logger.error(
+        `Error getting cell selections for user ${userId}:`,
+        error,
+      );
       return null;
     }
   }

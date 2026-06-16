@@ -91,7 +91,7 @@ import { SendHistoryModule } from './send_history/send_history.module';
     CampaignDepartmentsSchedulesModule,
     AutoReplyModule,
     AutoGreetingModule,
-  SendHistoryModule,
+    SendHistoryModule,
     OrderInquiryPresetModule,
     CommonModule,
   ],

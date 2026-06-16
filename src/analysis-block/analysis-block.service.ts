@@ -47,7 +47,10 @@ export class AnalysisBlockService {
     return null;
   }
 
-  private setCachedCustomerName(zaloContactId: string, customerName: string): void {
+  private setCachedCustomerName(
+    zaloContactId: string,
+    customerName: string,
+  ): void {
     this.customerNameCache.set(zaloContactId, customerName);
     this.cacheExpiry.set(zaloContactId, Date.now() + this.CACHE_TTL);
   }
@@ -80,7 +83,13 @@ export class AnalysisBlockService {
     findDto: FindAnalysisBlockDto,
   ): Promise<{ data: AnalysisBlock[]; total: number }> {
     try {
-      const { userId, zaloContactId, blockType, page = 1, limit = 10 } = findDto;
+      const {
+        userId,
+        zaloContactId,
+        blockType,
+        page = 1,
+        limit = 10,
+      } = findDto;
       const queryBuilder =
         this.analysisBlockRepository.createQueryBuilder('analysisBlock');
 
@@ -131,10 +140,13 @@ export class AnalysisBlockService {
     }
   }
 
-  async update(id: number, updateDto: UpdateAnalysisBlockDto): Promise<AnalysisBlock> {
+  async update(
+    id: number,
+    updateDto: UpdateAnalysisBlockDto,
+  ): Promise<AnalysisBlock> {
     try {
       const analysisBlock = await this.findOne(id);
-      
+
       Object.assign(analysisBlock, updateDto);
       const updated = await this.analysisBlockRepository.save(analysisBlock);
       return updated;
@@ -169,7 +181,11 @@ export class AnalysisBlockService {
     }
   }
 
-  async isBlocked(userId: number, zaloContactId: string, blockType: string): Promise<boolean> {
+  async isBlocked(
+    userId: number,
+    zaloContactId: string,
+    blockType: string,
+  ): Promise<boolean> {
     try {
       const count = await this.analysisBlockRepository.count({
         where: {
@@ -187,10 +203,14 @@ export class AnalysisBlockService {
     }
   }
 
-  async getBlockedContactsForUser(userId: number, blockType?: string): Promise<string[]> {
+  async getBlockedContactsForUser(
+    userId: number,
+    blockType?: string,
+  ): Promise<string[]> {
     try {
       const where: any = {};
-      if (blockType) where.blockType = blockType as 'analysis' | 'reporting' | 'stats';
+      if (blockType)
+        where.blockType = blockType as 'analysis' | 'reporting' | 'stats';
 
       const blocks = await this.analysisBlockRepository.find({
         where,
@@ -199,10 +219,7 @@ export class AnalysisBlockService {
 
       return blocks.map((block) => block.zaloContactId);
     } catch (error) {
-      this.logger.error(
-        `Error getting blocked contacts:`,
-        error,
-      );
+      this.logger.error(`Error getting blocked contacts:`, error);
       throw error;
     }
   }
@@ -237,14 +254,17 @@ export class AnalysisBlockService {
       const orderDetail = await this.orderDetailRepository
         .createQueryBuilder('od')
         .where('od.metadata IS NOT NULL')
-        .andWhere("JSON_EXTRACT(od.metadata, '$.customer_id') = :zaloContactId", {
-          zaloContactId,
-        })
+        .andWhere(
+          "JSON_EXTRACT(od.metadata, '$.customer_id') = :zaloContactId",
+          {
+            zaloContactId,
+          },
+        )
         .select(['od.customer_name'])
         .getOne();
 
       const customerName = orderDetail?.customer_name || null;
-      
+
       // Lưu vào cache nếu có kết quả
       if (customerName) {
         this.setCachedCustomerName(zaloContactId, customerName);
@@ -289,7 +309,7 @@ export class AnalysisBlockService {
         : [];
 
       const isAdmin = userRoles.includes('admin');
-      
+
       // Chỉ admin mới được xem analysis blocks
       if (!isAdmin) {
         return { data: [], total: 0 };
@@ -314,7 +334,7 @@ export class AnalysisBlockService {
       }
 
       // Tạo main query
-      let queryBuilder = this.analysisBlockRepository
+      const queryBuilder = this.analysisBlockRepository
         .createQueryBuilder('analysisBlock')
         .leftJoinAndSelect('analysisBlock.user', 'user')
         .leftJoinAndSelect('user.departments', 'departments');
@@ -342,9 +362,12 @@ export class AnalysisBlockService {
       }
 
       if (search && matchingZaloContactIds.length > 0) {
-        queryBuilder.andWhere('analysisBlock.zaloContactId IN (:...contactIds)', {
-          contactIds: matchingZaloContactIds,
-        });
+        queryBuilder.andWhere(
+          'analysisBlock.zaloContactId IN (:...contactIds)',
+          {
+            contactIds: matchingZaloContactIds,
+          },
+        );
       }
 
       // Count total
@@ -373,7 +396,10 @@ export class AnalysisBlockService {
 
       return { data: enrichedData, total };
     } catch (error) {
-      this.logger.error('Error finding analysis blocks with permissions:', error);
+      this.logger.error(
+        'Error finding analysis blocks with permissions:',
+        error,
+      );
       throw error;
     }
   }
@@ -389,13 +415,13 @@ export class AnalysisBlockService {
         : [];
 
       const isAdmin = userRoles.includes('admin');
-      
+
       // Chỉ admin mới được xem departments
       if (!isAdmin) {
         return [];
       }
 
-      let queryBuilder = this.departmentRepository
+      const queryBuilder = this.departmentRepository
         .createQueryBuilder('d')
         .select(['d.id', 'd.name']);
 
@@ -428,13 +454,13 @@ export class AnalysisBlockService {
         : [];
 
       const isAdmin = userRoles.includes('admin');
-      
+
       // Chỉ admin mới được xem users
       if (!isAdmin) {
         return [];
       }
 
-      let queryBuilder = this.userRepository
+      const queryBuilder = this.userRepository
         .createQueryBuilder('u')
         .select(['u.id', 'u.fullName', 'u.username']);
 

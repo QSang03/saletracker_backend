@@ -11,23 +11,32 @@ export class CampaignEmailReportService {
   ) {}
 
   async getByCampaign(campaign_id: string): Promise<CampaignEmailReport> {
-    const report = await this.campaignEmailReportRepository.findOne({ where: { campaign: { id: campaign_id } } });
+    const report = await this.campaignEmailReportRepository.findOne({
+      where: { campaign: { id: campaign_id } },
+    });
     if (!report) throw new Error('Report not found');
     return report;
   }
 
-  async create(data: Partial<CampaignEmailReport>): Promise<CampaignEmailReport> {
+  async create(
+    data: Partial<CampaignEmailReport>,
+  ): Promise<CampaignEmailReport> {
     const report = this.campaignEmailReportRepository.create(data);
     return this.campaignEmailReportRepository.save(report);
   }
 
-  async update(id: string, data: Partial<CampaignEmailReport>): Promise<CampaignEmailReport> {
+  async update(
+    id: string,
+    data: Partial<CampaignEmailReport>,
+  ): Promise<CampaignEmailReport> {
     await this.campaignEmailReportRepository.update(id, data);
     return this.getById(id);
   }
 
   async getById(id: string): Promise<CampaignEmailReport> {
-    const report = await this.campaignEmailReportRepository.findOne({ where: { id } });
+    const report = await this.campaignEmailReportRepository.findOne({
+      where: { id },
+    });
     if (!report) throw new Error('Report not found');
     return report;
   }

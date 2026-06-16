@@ -62,7 +62,9 @@ export class AnalysisBlockController {
     // Chỉ admin mới được xem danh sách analysis blocks
     const userRoles = req.user.roles ? req.user.roles.map((r) => r.name) : [];
     if (!userRoles.includes('admin')) {
-      throw new ForbiddenException('Chỉ admin mới có quyền xem danh sách analysis blocks');
+      throw new ForbiddenException(
+        'Chỉ admin mới có quyền xem danh sách analysis blocks',
+      );
     }
 
     const filters = {
@@ -125,7 +127,9 @@ export class AnalysisBlockController {
     // Chỉ admin mới được xem blocked contacts
     const userRoles = req.user.roles ? req.user.roles.map((r) => r.name) : [];
     if (!userRoles.includes('admin')) {
-      throw new ForbiddenException('Chỉ admin mới có quyền xem blocked contacts');
+      throw new ForbiddenException(
+        'Chỉ admin mới có quyền xem blocked contacts',
+      );
     }
 
     return await this.analysisBlockService.getBlockedContactsForUser(
@@ -143,7 +147,9 @@ export class AnalysisBlockController {
     // Chỉ admin mới được check analysis block status
     const userRoles = req.user.roles ? req.user.roles.map((r) => r.name) : [];
     if (!userRoles.includes('admin')) {
-      throw new ForbiddenException('Chỉ admin mới có quyền check analysis block status');
+      throw new ForbiddenException(
+        'Chỉ admin mới có quyền check analysis block status',
+      );
     }
 
     const isBlocked = await this.analysisBlockService.isBlocked(
@@ -159,7 +165,9 @@ export class AnalysisBlockController {
     // Chỉ admin mới được xem chi tiết analysis block
     const userRoles = req.user.roles ? req.user.roles.map((r) => r.name) : [];
     if (!userRoles.includes('admin')) {
-      throw new ForbiddenException('Chỉ admin mới có quyền xem chi tiết analysis block');
+      throw new ForbiddenException(
+        'Chỉ admin mới có quyền xem chi tiết analysis block',
+      );
     }
 
     const analysisBlock = await this.analysisBlockService.findOne(+id);
@@ -175,7 +183,9 @@ export class AnalysisBlockController {
     // Chỉ admin mới được cập nhật analysis block
     const userRoles = req.user.roles ? req.user.roles.map((r) => r.name) : [];
     if (!userRoles.includes('admin')) {
-      throw new ForbiddenException('Chỉ admin mới có quyền cập nhật analysis block');
+      throw new ForbiddenException(
+        'Chỉ admin mới có quyền cập nhật analysis block',
+      );
     }
 
     return await this.analysisBlockService.update(+id, updateDto);
@@ -196,8 +206,9 @@ export class AnalysisBlockController {
   @Post('bulk-add')
   @HttpCode(HttpStatus.CREATED)
   async bulkAdd(
-    @Body() data: { 
-      zaloContactIds: string[]; 
+    @Body()
+    data: {
+      zaloContactIds: string[];
       reason?: string;
       blockType: 'analysis' | 'reporting' | 'stats';
     },
@@ -206,7 +217,9 @@ export class AnalysisBlockController {
     // Chỉ admin mới được bulk add analysis blocks
     const userRoles = req.user.roles ? req.user.roles.map((r) => r.name) : [];
     if (!userRoles.includes('admin')) {
-      throw new ForbiddenException('Chỉ admin mới có quyền bulk add analysis blocks');
+      throw new ForbiddenException(
+        'Chỉ admin mới có quyền bulk add analysis blocks',
+      );
     }
 
     const results: BulkAddResult[] = [];
@@ -219,18 +232,19 @@ export class AnalysisBlockController {
           reason: data.reason,
           blockType: data.blockType,
         });
-        results.push({ 
-          success: true, 
-          zaloContactId, 
+        results.push({
+          success: true,
+          zaloContactId,
           blockType: data.blockType,
-          data: analysisBlock 
+          data: analysisBlock,
         });
       } catch (error: any) {
-        results.push({ 
-          success: false, 
-          zaloContactId, 
+        results.push({
+          success: false,
+          zaloContactId,
           blockType: data.blockType,
-          error: error.message || 'Không thể tạo analysis block cho contact này'
+          error:
+            error.message || 'Không thể tạo analysis block cho contact này',
         });
       }
     }

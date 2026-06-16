@@ -18,14 +18,8 @@ import { AuthModule } from '../auth/auth.module';
     ]),
     AuthModule,
   ],
-  providers: [
-    AutoGreetingService,
-  ],
-  controllers: [
-    AutoGreetingController,
-  ],
-  exports: [
-    AutoGreetingService,
-  ],
+  providers: [AutoGreetingService],
+  controllers: [AutoGreetingController],
+  exports: [AutoGreetingService],
 })
 export class AutoGreetingModule {}

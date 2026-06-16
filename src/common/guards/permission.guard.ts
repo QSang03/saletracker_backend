@@ -68,7 +68,9 @@ export class PermissionGuard implements CanActivate {
       if (action === 'read' || action === 'export') {
         return true;
       }
-      throw new ForbiddenException('Role view chỉ có quyền xem và export dữ liệu');
+      throw new ForbiddenException(
+        'Role view chỉ có quyền xem và export dữ liệu',
+      );
     }
 
     if (!hasRole || !hasPermission) {

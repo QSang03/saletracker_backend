@@ -43,24 +43,28 @@ export class UserController {
   async getUserRolesWithPermissions(@Req() req: CustomRequest) {
     const userId = req.user.id;
     const user = await this.userService.findOneWithDetails(userId);
-    
+
     if (!user) {
       throw new NotFoundException('User not found');
     }
 
     return {
-      roles: user.roles?.map((role) => ({
-        id: role.id,
-        name: role.name,
-        display_name: role.display_name,
-        rolePermissions: role.rolePermissions?.map((rp) => ({
-          isActive: rp.isActive,
-          permission: rp.permission ? {
-            name: rp.permission.name,
-            action: rp.permission.action,
-          } : null,
+      roles:
+        user.roles?.map((role) => ({
+          id: role.id,
+          name: role.name,
+          display_name: role.display_name,
+          rolePermissions:
+            role.rolePermissions?.map((rp) => ({
+              isActive: rp.isActive,
+              permission: rp.permission
+                ? {
+                    name: rp.permission.name,
+                    action: rp.permission.action,
+                  }
+                : null,
+            })) || [],
         })) || [],
-      })) || [],
     };
   }
 
@@ -213,7 +217,10 @@ export class UserController {
       viewSubRoleName?: string; // Thêm thông tin để tạo role "view con"
       pmPrivateRoleName?: string; // Thêm thông tin để tạo role "pm riêng" (pm_<username>)
       pmCustomRoleNames?: string[]; // Danh sách tên các PM custom roles
-      pmCustomRolePermissions?: Array<{ roleName: string; permissions: number[] }>; // Quyền cho từng PM custom role
+      pmCustomRolePermissions?: Array<{
+        roleName: string;
+        permissions: number[];
+      }>; // Quyền cho từng PM custom role
       pmMode?: 'general' | 'custom'; // Chế độ PM
     },
   ) {
@@ -340,7 +347,7 @@ export class UserController {
         {
           ...updateUserDto,
           employeeCode: updateUserDto.employeeCode,
-        } as UpdateUserDto,
+        },
         currentUser.id,
       );
     }
@@ -444,7 +451,11 @@ export class UserController {
     @Query('page') page = '1',
     @Query('limit') limit = '10',
   ) {
-    return this.userService.getZaloLinkStatusLogs(id, Number(page), Number(limit));
+    return this.userService.getZaloLinkStatusLogs(
+      id,
+      Number(page),
+      Number(limit),
+    );
   }
 
   @Post(':id/trigger-zalo-link-error')
@@ -455,22 +466,22 @@ export class UserController {
     @Req() req: CustomRequest,
   ) {
     const success = await this.userStatusObserver.triggerZaloLinkError(
-      id, 
+      id,
       body.errorType || 'manual_trigger',
-      `admin_${req.user.id}`
+      `admin_${req.user.id}`,
     );
-    
+
     if (success) {
       return {
         success: true,
         message: `Đã trigger lỗi liên kết cho user ${id}`,
-        timestamp: new Date()
+        timestamp: new Date(),
       };
     } else {
       return {
         success: false,
         message: `Không thể trigger lỗi liên kết cho user ${id}`,
-        timestamp: new Date()
+        timestamp: new Date(),
       };
     }
   }
@@ -479,11 +490,12 @@ export class UserController {
   @UseGuards(AdminAuthGuard)
   async getZaloLinkMonitorStatus() {
     // Import ZaloLinkMonitorCronjob để lấy status
-    const { ZaloLinkMonitorCronjob } = await import('../cronjobs/zalo-link-monitor.cronjob');
+    const { ZaloLinkMonitorCronjob } =
+      await import('../cronjobs/zalo-link-monitor.cronjob');
     return {
       message: 'Zalo Link Monitor đang chạy mỗi 30 giây',
       processedUsers: [], // Sẽ được implement sau
-      timestamp: new Date()
+      timestamp: new Date(),
     };
   }
 
@@ -491,7 +503,8 @@ export class UserController {
   @UseGuards(AdminAuthGuard)
   async testPythonApi() {
     try {
-      const pythonApiUrl = process.env.CONTACTS_API_BASE_URL || 'http://192.168.117.19:5555';
+      const pythonApiUrl =
+        process.env.CONTACTS_API_BASE_URL || 'http://192.168.117.19:5555';
       const testPayload = {
         userId: 999,
         errorType: 'test',
@@ -500,27 +513,33 @@ export class UserController {
           username: 'test',
           fullName: 'Test User',
           email: 'test@example.com',
-          employeeCode: 'TEST-001'
-        }
+          employeeCode: 'TEST-001',
+        },
       };
 
       const axios = await import('axios');
-      const response = await axios.default.post(`${pythonApiUrl}/send-error-notification`, testPayload, {
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${process.env.PYTHON_API_TOKEN || ''}`,
-          'X-Master-Key': process.env.NEXT_PUBLIC_MASTER_KEY || process.env.MASTER_KEY || ''
+      const response = await axios.default.post(
+        `${pythonApiUrl}/send-error-notification`,
+        testPayload,
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${process.env.PYTHON_API_TOKEN || ''}`,
+            'X-Master-Key':
+              process.env.NEXT_PUBLIC_MASTER_KEY ||
+              process.env.MASTER_KEY ||
+              '',
+          },
+          timeout: 5000,
         },
-        timeout: 5000
-      });
+      );
 
       return {
         success: true,
         message: 'Python API connection successful',
         response: response.data,
-        timestamp: new Date()
+        timestamp: new Date(),
       };
-
     } catch (error: any) {
       return {
         success: false,
@@ -531,9 +550,9 @@ export class UserController {
           token: process.env.PYTHON_API_TOKEN ? 'Configured' : 'Not configured',
           responseStatus: error.response?.status || 'No response',
           responseData: error.response?.data || null,
-          responseHeaders: error.response?.headers || null
+          responseHeaders: error.response?.headers || null,
         },
-        timestamp: new Date()
+        timestamp: new Date(),
       };
     }
   }
@@ -542,15 +561,16 @@ export class UserController {
   @UseGuards(AdminAuthGuard)
   async testPythonApiWithRealUser() {
     try {
-      const pythonApiUrl = process.env.CONTACTS_API_BASE_URL || 'http://192.168.117.19:5555';
-      
+      const pythonApiUrl =
+        process.env.CONTACTS_API_BASE_URL || 'http://192.168.117.19:5555';
+
       // Lấy user thật từ database để test
       const realUser = await this.userService.findOneWithDetails(12);
       if (!realUser) {
         return {
           success: false,
           message: 'User 12 not found',
-          timestamp: new Date()
+          timestamp: new Date(),
         };
       }
 
@@ -562,28 +582,34 @@ export class UserController {
           username: realUser.username,
           fullName: realUser.fullName,
           email: realUser.email,
-          employeeCode: realUser.employeeCode || ''
-        }
+          employeeCode: realUser.employeeCode || '',
+        },
       };
 
       const axios = await import('axios');
-      const response = await axios.default.post(`${pythonApiUrl}/send-error-notification`, testPayload, {
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${process.env.PYTHON_API_TOKEN || ''}`,
-          'X-Master-Key': process.env.NEXT_PUBLIC_MASTER_KEY || process.env.MASTER_KEY || ''
+      const response = await axios.default.post(
+        `${pythonApiUrl}/send-error-notification`,
+        testPayload,
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${process.env.PYTHON_API_TOKEN || ''}`,
+            'X-Master-Key':
+              process.env.NEXT_PUBLIC_MASTER_KEY ||
+              process.env.MASTER_KEY ||
+              '',
+          },
+          timeout: 5000,
         },
-        timeout: 5000
-      });
+      );
 
       return {
         success: true,
         message: 'Python API connection successful with real user',
         payload: testPayload,
         response: response.data,
-        timestamp: new Date()
+        timestamp: new Date(),
       };
-
     } catch (error: any) {
       return {
         success: false,
@@ -594,9 +620,9 @@ export class UserController {
           token: process.env.PYTHON_API_TOKEN ? 'Configured' : 'Not configured',
           responseStatus: error.response?.status || 'No response',
           responseData: error.response?.data || null,
-          responseHeaders: error.response?.headers || null
+          responseHeaders: error.response?.headers || null,
         },
-        timestamp: new Date()
+        timestamp: new Date(),
       };
     }
   }

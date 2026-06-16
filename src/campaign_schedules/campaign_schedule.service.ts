@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  BadRequestException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { CampaignSchedule } from './campaign_schedule.entity';
@@ -14,11 +18,14 @@ export class CampaignScheduleService {
     private readonly campaignRepository: Repository<Campaign>,
   ) {}
 
-  async getByCampaign(campaignId: string, user: User): Promise<CampaignSchedule> {
+  async getByCampaign(
+    campaignId: string,
+    user: User,
+  ): Promise<CampaignSchedule> {
     // Verify campaign exists and user has access
     const campaign = await this.campaignRepository.findOne({
       where: { id: campaignId },
-      relations: ['department']
+      relations: ['department'],
     });
 
     if (!campaign) {
@@ -31,24 +38,29 @@ export class CampaignScheduleService {
       throw new BadRequestException('Không có quyền truy cập chiến dịch này');
     }
 
-    const schedule = await this.campaignScheduleRepository.findOne({ 
+    const schedule = await this.campaignScheduleRepository.findOne({
       where: { campaign: { id: campaignId } },
-      relations: ['campaign']
+      relations: ['campaign'],
     });
 
     if (!schedule) {
-      throw new NotFoundException('Không tìm thấy lịch trình cho chiến dịch này');
+      throw new NotFoundException(
+        'Không tìm thấy lịch trình cho chiến dịch này',
+      );
     }
 
     return schedule;
   }
 
-  async create(data: Partial<CampaignSchedule>, user: User): Promise<CampaignSchedule> {
+  async create(
+    data: Partial<CampaignSchedule>,
+    user: User,
+  ): Promise<CampaignSchedule> {
     // Verify campaign exists and user has access if campaign is specified
     if (data.campaign?.id) {
       const campaign = await this.campaignRepository.findOne({
         where: { id: data.campaign.id },
-        relations: ['department']
+        relations: ['department'],
       });
 
       if (!campaign) {
@@ -62,7 +74,7 @@ export class CampaignScheduleService {
 
       // Check if schedule already exists for this campaign
       const existingSchedule = await this.campaignScheduleRepository.findOne({
-        where: { campaign: { id: data.campaign.id } }
+        where: { campaign: { id: data.campaign.id } },
       });
 
       if (existingSchedule) {
@@ -74,17 +86,21 @@ export class CampaignScheduleService {
     return this.campaignScheduleRepository.save(schedule);
   }
 
-  async update(id: string, data: Partial<CampaignSchedule>, user: User): Promise<CampaignSchedule> {
+  async update(
+    id: string,
+    data: Partial<CampaignSchedule>,
+    user: User,
+  ): Promise<CampaignSchedule> {
     const schedule = await this.getById(id, user);
-    
+
     Object.assign(schedule, data);
     return this.campaignScheduleRepository.save(schedule);
   }
 
   async getById(id: string, user: User): Promise<CampaignSchedule> {
-    const schedule = await this.campaignScheduleRepository.findOne({ 
+    const schedule = await this.campaignScheduleRepository.findOne({
       where: { id },
-      relations: ['campaign', 'campaign.department']
+      relations: ['campaign', 'campaign.department'],
     });
 
     if (!schedule) {
@@ -93,7 +109,10 @@ export class CampaignScheduleService {
 
     // Check department access
     const userDepartment = user.departments?.[0];
-    if (userDepartment && schedule.campaign.department.id !== userDepartment.id) {
+    if (
+      userDepartment &&
+      schedule.campaign.department.id !== userDepartment.id
+    ) {
       throw new BadRequestException('Không có quyền truy cập lịch trình này');
     }
 

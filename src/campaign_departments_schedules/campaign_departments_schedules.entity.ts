@@ -13,8 +13,8 @@ import { User } from '../users/user.entity';
 
 // Enum cho loại lịch trình
 export enum ScheduleType {
-  DAILY_DATES = 'daily_dates',      // Lịch theo ngày trong tháng
-  HOURLY_SLOTS = 'hourly_slots',    // Lịch theo khung giờ trong ngày
+  DAILY_DATES = 'daily_dates', // Lịch theo ngày trong tháng
+  HOURLY_SLOTS = 'hourly_slots', // Lịch theo khung giờ trong ngày
 }
 
 // Enum cho trạng thái lịch trình
@@ -32,9 +32,9 @@ export enum ScheduleStatus {
 export interface DailyDatesConfig {
   type: 'daily_dates';
   dates: Array<{
-    day_of_month: number;        // 1-31
-    month?: number;              // 1-12, null = mọi tháng
-    year?: number;               // null = mọi năm
+    day_of_month: number; // 1-31
+    month?: number; // 1-12, null = mọi tháng
+    year?: number; // null = mọi năm
     activity_description?: string;
     metadata?: {
       priority?: 'low' | 'medium' | 'high';
@@ -50,10 +50,10 @@ export interface DailyDatesConfig {
 export interface HourlySlotsConfig {
   type: 'hourly_slots';
   slots: Array<{
-    day_of_week?: number;         // 2-7 (2=Thứ 2, ..., 7=Thứ 7), không bao gồm Chủ nhật, null = mọi ngày
-    applicable_date?: string;     // "YYYY-MM-DD", ngày áp dụng cụ thể, null = mọi ngày
-    start_time: string;           // "HH:mm:ss"
-    end_time: string;             // "HH:mm:ss"
+    day_of_week?: number; // 2-7 (2=Thứ 2, ..., 7=Thứ 7), không bao gồm Chủ nhật, null = mọi ngày
+    applicable_date?: string; // "YYYY-MM-DD", ngày áp dụng cụ thể, null = mọi ngày
+    start_time: string; // "HH:mm:ss"
+    end_time: string; // "HH:mm:ss"
     activity_description?: string;
     metadata?: {
       priority?: 'low' | 'medium' | 'high';
@@ -89,7 +89,11 @@ export class DepartmentSchedule {
   schedule_type: ScheduleType;
 
   @Index()
-  @Column({ type: 'enum', enum: ScheduleStatus, default: ScheduleStatus.ACTIVE })
+  @Column({
+    type: 'enum',
+    enum: ScheduleStatus,
+    default: ScheduleStatus.ACTIVE,
+  })
   status: ScheduleStatus;
 
   // JSON config chứa toàn bộ thông tin lịch trình

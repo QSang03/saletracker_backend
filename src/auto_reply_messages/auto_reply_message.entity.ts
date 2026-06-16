@@ -18,7 +18,6 @@ export enum AutoReplyMessageRole {
 
 @Index('idx_fingerprint', ['convId', 'messageFingerprint'])
 @Entity('auto_reply_messages')
-
 export class AutoReplyMessage {
   @PrimaryGeneratedColumn({ name: 'msg_id', type: 'int' })
   msgId: number;

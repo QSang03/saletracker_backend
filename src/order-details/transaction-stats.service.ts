@@ -97,8 +97,9 @@ export class TransactionStatsService {
   private buildBlacklistFilter(user: any): string {
     if (!user) return '';
 
-    const hasManagerOrUserRole = user.roles?.some((r: any) =>
-      r.name === 'manager' || r.name === 'user' || r.name.includes('manager')
+    const hasManagerOrUserRole = user.roles?.some(
+      (r: any) =>
+        r.name === 'manager' || r.name === 'user' || r.name.includes('manager'),
     );
 
     if (!hasManagerOrUserRole) return '';
@@ -147,9 +148,14 @@ export class TransactionStatsService {
       // Calculate previous period based on the period type and current range duration
       if (period === 'day') {
         // For day period: previous day(s) with same duration
-        const durationDays = Math.ceil((current.to.getTime() - current.from.getTime()) / (1000 * 60 * 60 * 24));
+        const durationDays = Math.ceil(
+          (current.to.getTime() - current.from.getTime()) /
+            (1000 * 60 * 60 * 24),
+        );
         const previousEnd = new Date(current.from.getTime() - 1); // End just before current period
-        const previousStart = new Date(previousEnd.getTime() - (durationDays - 1) * (1000 * 60 * 60 * 24));
+        const previousStart = new Date(
+          previousEnd.getTime() - (durationDays - 1) * (1000 * 60 * 60 * 24),
+        );
         previous = {
           from: startOfDay(previousStart),
           to: endOfDay(previousEnd),
@@ -279,7 +285,7 @@ export class TransactionStatsService {
     const permissionFilter = this.buildPermissionFilter(params.user);
     // Build blacklist filter (exclude blacklisted contacts for manager/user roles)
     const blacklistFilter = this.buildBlacklistFilter(params.user);
-    
+
     // Build EXISTS filters for employees and departments (avoid JOIN fan-out)
     const employeeFilter = params.employees
       ? `AND EXISTS (SELECT 1 FROM orders o2 WHERE o2.id = od.order_id AND o2.sale_by IN (${params.employees}))`
@@ -424,7 +430,7 @@ export class TransactionStatsService {
   ): Promise<ChartDataPoint[]> {
     const permissionFilter = this.buildPermissionFilter(params.user);
     const blacklistFilter = this.buildBlacklistFilter(params.user);
-    
+
     // Build EXISTS filters for employees and departments (avoid JOIN fan-out)
     const employeeFilter = params.employees
       ? `AND EXISTS (SELECT 1 FROM orders o2 WHERE o2.id = od.order_id AND o2.sale_by IN (${params.employees}))`
@@ -456,7 +462,8 @@ export class TransactionStatsService {
     } else {
       // Quarter
       dateFormat = 'Q%q %Y';
-      groupBy = 'CONCAT(YEAR(deduped.created_at), "-", QUARTER(deduped.created_at))';
+      groupBy =
+        'CONCAT(YEAR(deduped.created_at), "-", QUARTER(deduped.created_at))';
     }
 
     // Use subquery to deduplicate first, then aggregate without DISTINCT
@@ -514,7 +521,7 @@ export class TransactionStatsService {
   ): Promise<CustomerStat[]> {
     const permissionFilter = this.buildPermissionFilter(params.user);
     const blacklistFilter = this.buildBlacklistFilter(params.user);
-    
+
     // Build EXISTS filters for employees and departments (avoid JOIN fan-out)
     const employeeFilter = params.employees
       ? `AND EXISTS (SELECT 1 FROM orders o2 WHERE o2.id = od.order_id AND o2.sale_by IN (${params.employees}))`
@@ -582,7 +589,7 @@ export class TransactionStatsService {
   ): Promise<EmployeeStat[]> {
     const permissionFilter = this.buildPermissionFilter(params.user);
     const blacklistFilter = this.buildBlacklistFilter(params.user);
-    
+
     // Build EXISTS filters for employees and departments (avoid JOIN fan-out)
     const employeeFilter = params.employees
       ? `AND EXISTS (SELECT 1 FROM orders o2 WHERE o2.id = od.order_id AND o2.sale_by IN (${params.employees}))`
@@ -661,7 +668,7 @@ export class TransactionStatsService {
   ): Promise<ExpiredStats> {
     const permissionFilter = this.buildPermissionFilter(params.user);
     const blacklistFilter = this.buildBlacklistFilter(params.user);
-    
+
     // Build EXISTS filters for employees and departments (avoid JOIN fan-out)
     const employeeFilter = params.employees
       ? `AND EXISTS (SELECT 1 FROM orders o2 WHERE o2.id = od.order_id AND o2.sale_by IN (${params.employees}))`
@@ -881,12 +888,12 @@ export class TransactionStatsService {
         ${status && status !== 'all' ? 'AND od.status = ?' : ''}
         ${permissionFilter}
     `;
-    
+
     const countParams: any[] = [periodStart, periodEnd];
     if (status && status !== 'all') {
       countParams.push(status);
     }
-    
+
     const countResult = await this.orderDetailRepository.query(
       countQuery,
       countParams,

@@ -160,8 +160,12 @@ export class OrderService {
         }
       }
 
-      const nowVN = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh' }));
-      const todayYmd = nowVN.toLocaleDateString('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' });
+      const nowVN = new Date(
+        new Date().toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh' }),
+      );
+      const todayYmd = nowVN.toLocaleDateString('en-CA', {
+        timeZone: 'Asia/Ho_Chi_Minh',
+      });
       const todayDate = new Date(todayYmd + 'T00:00:00+07:00');
 
       const updates = [] as { id: number; extended: number }[];
@@ -170,19 +174,30 @@ export class OrderService {
         // start từ ngày sau last_extended_at (nếu có), ngược lại từ ngày tạo
         let startYmd: string;
         if (detail.last_extended_at) {
-          startYmd = new Date(detail.last_extended_at).toLocaleDateString('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' });
+          startYmd = new Date(detail.last_extended_at).toLocaleDateString(
+            'en-CA',
+            { timeZone: 'Asia/Ho_Chi_Minh' },
+          );
         } else {
-          startYmd = new Date(detail.order.created_at).toLocaleDateString('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' });
+          startYmd = new Date(detail.order.created_at).toLocaleDateString(
+            'en-CA',
+            { timeZone: 'Asia/Ho_Chi_Minh' },
+          );
         }
 
         let startDate = new Date(startYmd + 'T00:00:00+07:00');
         // nếu có last_extended_at thì bắt đầu từ ngày kế tiếp
-        if (detail.last_extended_at) startDate = new Date(startDate.getTime() + 24 * 60 * 60 * 1000);
+        if (detail.last_extended_at)
+          startDate = new Date(startDate.getTime() + 24 * 60 * 60 * 1000);
 
         let iter = new Date(startDate);
         let daysToExtend = 0;
         while (iter.getTime() <= todayDate.getTime()) {
-          const ymd = new Date(new Date(iter).toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh' })).toLocaleDateString('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' });
+          const ymd = new Date(
+            new Date(iter).toLocaleString('en-US', {
+              timeZone: 'Asia/Ho_Chi_Minh',
+            }),
+          ).toLocaleDateString('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' });
           const dayDateVN = new Date(ymd + 'T12:00:00+07:00');
           const dayOfWeek = dayDateVN.getDay();
           const isHoliday = holidaySet.has(ymd);
@@ -2269,7 +2284,6 @@ export class OrderService {
                     }
                   },
                 );
-
               } catch (error) {
                 this.logger.error(
                   '❌ [Order PM Custom Mode] Error parsing rolePermissions:',
@@ -2357,23 +2371,26 @@ export class OrderService {
       if (isAdminUser || isViewRole) {
         // Admin hoặc View role: áp dụng filter trực tiếp không cần check permissions
         console.log('[DEBUG] Admin/View role - applying filters directly');
-        
+
         const hasBrands = filters.brands && filters.brands.trim();
         const hasCategories = filters.categories && filters.categories.trim();
-        
+
         if (hasBrands && hasCategories) {
           // Có cả brands và categories: tạo tổ hợp bắt buộc
-          const brandSlugs = filters.brands!
-            .split(',')
+          const brandSlugs = filters
+            .brands!.split(',')
             .map((slug) => slug.trim())
             .filter((slug) => slug);
-          const categorySlugs = filters.categories!
-            .split(',')
+          const categorySlugs = filters
+            .categories!.split(',')
             .map((slug) => slug.trim())
             .filter((slug) => slug);
-          
-          console.log('[DEBUG] Combined brand+category filter for admin/view:', { brandSlugs, categorySlugs });
-          
+
+          console.log(
+            '[DEBUG] Combined brand+category filter for admin/view:',
+            { brandSlugs, categorySlugs },
+          );
+
           if (brandSlugs.length > 0 && categorySlugs.length > 0) {
             // Truy vấn ngược: brands + categories → products → order_details
             const productIds = await this.productRepository
@@ -2382,32 +2399,39 @@ export class OrderService {
               .leftJoin('product.category', 'category')
               .select('product.id')
               .where('brand.slug IN (:...brandSlugs)', { brandSlugs })
-              .andWhere('category.slug IN (:...categorySlugs)', { categorySlugs })
+              .andWhere('category.slug IN (:...categorySlugs)', {
+                categorySlugs,
+              })
               .getRawMany();
-            
-            console.log('[DEBUG] Found products for combined filter (admin/view):', { 
-              brandSlugs, 
-              categorySlugs,
-              productCount: productIds.length,
-              productIds: productIds.map(p => p.product_id)
-            });
-            
-            const productIdList = productIds.map(p => p.product_id);
+
+            console.log(
+              '[DEBUG] Found products for combined filter (admin/view):',
+              {
+                brandSlugs,
+                categorySlugs,
+                productCount: productIds.length,
+                productIds: productIds.map((p) => p.product_id),
+              },
+            );
+
+            const productIdList = productIds.map((p) => p.product_id);
             if (productIdList.length > 0) {
-              qb.andWhere('details.product_id IN (:...productIdList)', { productIdList });
+              qb.andWhere('details.product_id IN (:...productIdList)', {
+                productIdList,
+              });
             } else {
               qb.andWhere('1 = 0');
             }
           }
         } else if (hasBrands) {
           // Chỉ có brands
-          const brandSlugs = filters.brands!
-            .split(',')
+          const brandSlugs = filters
+            .brands!.split(',')
             .map((slug) => slug.trim())
             .filter((slug) => slug);
-          
+
           console.log('[DEBUG] Brand filter for admin/view:', { brandSlugs });
-          
+
           if (brandSlugs.length > 0) {
             // Truy vấn ngược: brands → products → order_details
             const productIds = await this.productRepository
@@ -2416,29 +2440,33 @@ export class OrderService {
               .select('product.id')
               .where('brand.slug IN (:...brandSlugs)', { brandSlugs })
               .getRawMany();
-            
-            console.log('[DEBUG] Found products for brands (admin/view):', { 
-              brandSlugs, 
+
+            console.log('[DEBUG] Found products for brands (admin/view):', {
+              brandSlugs,
               productCount: productIds.length,
-              productIds: productIds.map(p => p.product_id)
+              productIds: productIds.map((p) => p.product_id),
             });
-            
-            const productIdList = productIds.map(p => p.product_id);
+
+            const productIdList = productIds.map((p) => p.product_id);
             if (productIdList.length > 0) {
-              qb.andWhere('details.product_id IN (:...productIdList)', { productIdList });
+              qb.andWhere('details.product_id IN (:...productIdList)', {
+                productIdList,
+              });
             } else {
               qb.andWhere('1 = 0');
             }
           }
         } else if (hasCategories) {
           // Chỉ có categories
-          const categorySlugs = filters.categories!
-            .split(',')
+          const categorySlugs = filters
+            .categories!.split(',')
             .map((slug) => slug.trim())
             .filter((slug) => slug);
-          
-          console.log('[DEBUG] Category filter for admin/view:', { categorySlugs });
-          
+
+          console.log('[DEBUG] Category filter for admin/view:', {
+            categorySlugs,
+          });
+
           if (categorySlugs.length > 0) {
             // Truy vấn ngược: categories → products → order_details
             const productIds = await this.productRepository
@@ -2447,16 +2475,18 @@ export class OrderService {
               .select('product.id')
               .where('category.slug IN (:...categorySlugs)', { categorySlugs })
               .getRawMany();
-            
-            console.log('[DEBUG] Found products for categories (admin/view):', { 
-              categorySlugs, 
+
+            console.log('[DEBUG] Found products for categories (admin/view):', {
+              categorySlugs,
               productCount: productIds.length,
-              productIds: productIds.map(p => p.product_id)
+              productIds: productIds.map((p) => p.product_id),
             });
-            
-            const productIdList = productIds.map(p => p.product_id);
+
+            const productIdList = productIds.map((p) => p.product_id);
             if (productIdList.length > 0) {
-              qb.andWhere('details.product_id IN (:...productIdList)', { productIdList });
+              qb.andWhere('details.product_id IN (:...productIdList)', {
+                productIdList,
+              });
             } else {
               qb.andWhere('1 = 0');
             }
@@ -3313,10 +3343,12 @@ export class OrderService {
           .where('brand.slug IN (:...brandSlugs)', { brandSlugs })
           .andWhere('category.slug IN (:...categorySlugs)', { categorySlugs })
           .getRawMany();
-        
-        const productIdList = productIds.map(p => p.product_id);
+
+        const productIdList = productIds.map((p) => p.product_id);
         if (productIdList.length > 0) {
-          qb.andWhere('details.product_id IN (:...productIdList)', { productIdList });
+          qb.andWhere('details.product_id IN (:...productIdList)', {
+            productIdList,
+          });
         } else {
           // Không có products nào khớp cả brand và category → trả về empty
           qb.andWhere('1 = 0');
@@ -3334,26 +3366,30 @@ export class OrderService {
         if (brandSlugs.length > 0) {
           // Truy vấn ngược: brands → products → order_details
           console.log('[DEBUG] Brand filter:', { brandSlugs });
-          
+
           const productIds = await this.productRepository
             .createQueryBuilder('product')
             .leftJoin('product.brand', 'brand')
             .select('product.id')
             .where('brand.slug IN (:...brandSlugs)', { brandSlugs })
             .getRawMany();
-          
-          console.log('[DEBUG] Found products for brands:', { 
-            brandSlugs, 
+
+          console.log('[DEBUG] Found products for brands:', {
+            brandSlugs,
             productCount: productIds.length,
-            productIds: productIds.map(p => p.product_id)
+            productIds: productIds.map((p) => p.product_id),
           });
-          
-          const productIdList = productIds.map(p => p.product_id);
+
+          const productIdList = productIds.map((p) => p.product_id);
           if (productIdList.length > 0) {
-            qb.andWhere('details.product_id IN (:...productIdList)', { productIdList });
+            qb.andWhere('details.product_id IN (:...productIdList)', {
+              productIdList,
+            });
           } else {
             // Không có products nào khớp → trả về empty
-            console.log('[DEBUG] No products found for brands, returning empty result');
+            console.log(
+              '[DEBUG] No products found for brands, returning empty result',
+            );
             qb.andWhere('1 = 0');
           }
         }
@@ -3368,26 +3404,30 @@ export class OrderService {
         if (categorySlugs.length > 0) {
           // Truy vấn ngược: categories → products → order_details
           console.log('[DEBUG] Category filter:', { categorySlugs });
-          
+
           const productIds = await this.productRepository
             .createQueryBuilder('product')
             .leftJoin('product.category', 'category')
             .select('product.id')
             .where('category.slug IN (:...categorySlugs)', { categorySlugs })
             .getRawMany();
-          
-          console.log('[DEBUG] Found products for categories:', { 
-            categorySlugs, 
+
+          console.log('[DEBUG] Found products for categories:', {
+            categorySlugs,
             productCount: productIds.length,
-            productIds: productIds.map(p => p.product_id)
+            productIds: productIds.map((p) => p.product_id),
           });
-          
-          const productIdList = productIds.map(p => p.product_id);
+
+          const productIdList = productIds.map((p) => p.product_id);
           if (productIdList.length > 0) {
-            qb.andWhere('details.product_id IN (:...productIdList)', { productIdList });
+            qb.andWhere('details.product_id IN (:...productIdList)', {
+              productIdList,
+            });
           } else {
             // Không có products nào khớp → trả về empty
-            console.log('[DEBUG] No products found for categories, returning empty result');
+            console.log(
+              '[DEBUG] No products found for categories, returning empty result',
+            );
             qb.andWhere('1 = 0');
           }
         }
@@ -4821,8 +4861,8 @@ export class OrderService {
     }
 
     // ✅ Đơn giản hóa: Tất cả đơn trả về đều là "hết hạn hôm nay"
-    let expiredToday = rows.length;
-    let overdue = 0; // Không có overdue vì chỉ lấy đơn ẩn hôm nay
+    const expiredToday = rows.length;
+    const overdue = 0; // Không có overdue vì chỉ lấy đơn ẩn hôm nay
 
     const byEmp = new Map<
       number,

@@ -8,7 +8,9 @@ import { User } from '../users/user.entity';
 import { Department } from '../departments/department.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([AnalysisBlock, OrderDetail, User, Department])],
+  imports: [
+    TypeOrmModule.forFeature([AnalysisBlock, OrderDetail, User, Department]),
+  ],
   controllers: [AnalysisBlockController],
   providers: [AnalysisBlockService],
   exports: [AnalysisBlockService],

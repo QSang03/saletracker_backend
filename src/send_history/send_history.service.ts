@@ -22,13 +22,16 @@ export class SendHistoryService {
   }) {
     try {
       console.log('Send history service query with filter:', filter);
-      
-      const qb = this.repo.createQueryBuilder('sh')
+
+      const qb = this.repo
+        .createQueryBuilder('sh')
         .leftJoinAndSelect('sh.user', 'user')
         .orderBy('sh.created_at', 'DESC');
 
       if (filter.zalo_customer_id) {
-        qb.andWhere('sh.zaloCustomerId = :zalo', { zalo: filter.zalo_customer_id });
+        qb.andWhere('sh.zaloCustomerId = :zalo', {
+          zalo: filter.zalo_customer_id,
+        });
       }
 
       if (filter.user_id) {
@@ -52,7 +55,8 @@ export class SendHistoryService {
       }
 
       const page = filter.page && filter.page > 0 ? filter.page : 1;
-      const pageSize = filter.pageSize && filter.pageSize > 0 ? filter.pageSize : 20;
+      const pageSize =
+        filter.pageSize && filter.pageSize > 0 ? filter.pageSize : 20;
 
       console.log('Query SQL:', qb.getSql());
       console.log('Query parameters:', qb.getParameters());
@@ -62,7 +66,9 @@ export class SendHistoryService {
         .take(pageSize)
         .getManyAndCount();
 
-      console.log(`Found ${total} records, returning ${data.length} for page ${page}`);
+      console.log(
+        `Found ${total} records, returning ${data.length} for page ${page}`,
+      );
 
       return {
         data,

@@ -1,6 +1,15 @@
-import { Column, CreateDateColumn, Entity, JoinColumn, ManyToOne, PrimaryGeneratedColumn, Unique, UpdateDateColumn } from "typeorm";
-import { AutoReplyProduct } from "./auto_reply_product.entity";
-import { AutoReplyKeywordRoute } from "src/auto_reply_keyword_routes/auto_reply_keyword_route.entity";
+import {
+  Column,
+  CreateDateColumn,
+  Entity,
+  JoinColumn,
+  ManyToOne,
+  PrimaryGeneratedColumn,
+  Unique,
+  UpdateDateColumn,
+} from 'typeorm';
+import { AutoReplyProduct } from './auto_reply_product.entity';
+import { AutoReplyKeywordRoute } from 'src/auto_reply_keyword_routes/auto_reply_keyword_route.entity';
 
 @Entity('auto_reply_route_products')
 @Unique('uq_route_product', ['routeId', 'productId'])
@@ -14,11 +23,15 @@ export class AutoReplyRouteProduct {
   @Column({ name: 'product_id' })
   productId: number;
 
-  @ManyToOne(() => AutoReplyKeywordRoute, (route) => route.routeProducts, { onDelete: 'CASCADE' })
+  @ManyToOne(() => AutoReplyKeywordRoute, (route) => route.routeProducts, {
+    onDelete: 'CASCADE',
+  })
   @JoinColumn({ name: 'route_id', referencedColumnName: 'routeId' })
   route: AutoReplyKeywordRoute;
 
-  @ManyToOne(() => AutoReplyProduct, (product) => product.routeProducts, { onDelete: 'CASCADE' })
+  @ManyToOne(() => AutoReplyProduct, (product) => product.routeProducts, {
+    onDelete: 'CASCADE',
+  })
   @JoinColumn({ name: 'product_id', referencedColumnName: 'productId' })
   product: AutoReplyProduct;
 

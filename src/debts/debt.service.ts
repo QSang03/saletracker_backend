@@ -32,7 +32,9 @@ export class DebtService {
         : (r.code || r.name || '').toLowerCase(),
     );
     const isAdminOrManager =
-      roleNames.includes('admin') || roleNames.includes('manager-cong-no') || roleNames.includes('view');
+      roleNames.includes('admin') ||
+      roleNames.includes('manager-cong-no') ||
+      roleNames.includes('view');
     const qb = this.debtRepository
       .createQueryBuilder('debt')
       .leftJoinAndSelect('debt.sale', 'sale')
@@ -108,8 +110,8 @@ export class DebtService {
       typeof query.employeeCodes === 'string' &&
       query.employeeCodes.trim()
     ) {
-      let employeeCodes: string[] = [];
-      let employeeNames: string[] = [];
+      const employeeCodes: string[] = [];
+      const employeeNames: string[] = [];
       if (typeof query.employeeCodes === 'string') {
         query.employeeCodes
           .split(',')
@@ -518,12 +520,10 @@ export class DebtService {
               due_date: parseDate(row['Ngày đến hạn']) || new Date(),
               total_amount: row['Thành tiền chứng từ'] || 0,
               remaining: row['Còn lại'] || 0,
-              sale: sale_id ? ({ id: sale_id } as any) : undefined,
+              sale: sale_id ? { id: sale_id } : undefined,
               sale_name_raw,
               employee_code_raw,
-              debt_config: debtConfig
-                ? ({ id: debtConfig.id } as any)
-                : undefined,
+              debt_config: debtConfig ? { id: debtConfig.id } : undefined,
               created_at: new Date(),
               updated_at: new Date(),
               pay_later: pay_later ?? null,
@@ -725,7 +725,9 @@ export class DebtService {
         : (r.code || r.name || '').toLowerCase(),
     );
     const isAdminOrManager =
-      roleNames.includes('admin') || roleNames.includes('manager-cong-no') || roleNames.includes('view');
+      roleNames.includes('admin') ||
+      roleNames.includes('manager-cong-no') ||
+      roleNames.includes('view');
 
     // 1. Lấy các debt config hợp lệ theo quyền
     const configs = await this.debtConfigRepository.find({
@@ -792,7 +794,9 @@ export class DebtService {
         : (r.code || r.name || '').toLowerCase(),
     );
     const isAdminOrManager =
-      roleNames.includes('admin') || roleNames.includes('manager-cong-no') || roleNames.includes('view');
+      roleNames.includes('admin') ||
+      roleNames.includes('manager-cong-no') ||
+      roleNames.includes('view');
 
     // Lấy employee_code_raw từ bảng debt
     let employeeQuery = this.debtRepository

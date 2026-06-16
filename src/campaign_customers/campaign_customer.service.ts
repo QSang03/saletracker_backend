@@ -1,4 +1,8 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  BadRequestException,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { CampaignCustomer } from './campaign_customer.entity';
@@ -10,6 +14,7 @@ import * as ExcelJS from 'exceljs';
 export interface CustomerImportData {
   phone_number: string;
   full_name: string;
+  zalo_name?: string;
   salutation?: string;
   metadata?: Record<string, any>;
 }
@@ -25,15 +30,19 @@ export class CampaignCustomerService {
     private readonly campaignRepository: Repository<Campaign>,
   ) {}
 
-  async findAll(query: any, user: User): Promise<{ data: CampaignCustomer[]; total: number }> {
+  async findAll(
+    query: any,
+    user: User,
+  ): Promise<{ data: CampaignCustomer[]; total: number }> {
     const qb = this.campaignCustomerRepository.createQueryBuilder('customer');
 
-    // Filter by search (phone or name)
+    // Filter by search (phone, name, or zalo_name)
     if (query.search) {
-      qb.andWhere(
-        '(customer.phone_number LIKE :search OR customer.full_name LIKE :search)',
-        { search: `%${query.search}%` }
-      );
+      qb.leftJoin('campaign_customer_map', 'map', 'map.campaign_customer_id = customer.id')
+        .andWhere(
+          '(customer.phone_number LIKE :search OR map.zalo_name LIKE :search OR map.full_name LIKE :search)',
+          { search: `%${query.search}%` },
+        );
     }
 
     // Pagination
@@ -49,14 +58,19 @@ export class CampaignCustomerService {
   }
 
   async findOne(id: string, user: User): Promise<CampaignCustomer> {
-    const customer = await this.campaignCustomerRepository.findOne({ where: { id } });
+    const customer = await this.campaignCustomerRepository.findOne({
+      where: { id },
+    });
     if (!customer) {
       throw new NotFoundException('Không tìm thấy khách hàng');
     }
     return customer;
   }
 
-  async create(data: Partial<CampaignCustomer>, user: User): Promise<CampaignCustomer> {
+  async create(
+    data: Partial<CampaignCustomer>,
+    user: User,
+  ): Promise<CampaignCustomer> {
     // Validate phone number format
     if (data.phone_number && !this.isValidPhoneNumber(data.phone_number)) {
       throw new BadRequestException('Số điện thoại không hợp lệ');
@@ -66,18 +80,22 @@ export class CampaignCustomerService {
     return this.campaignCustomerRepository.save(customer);
   }
 
-  async bulkCreate(customersData: CustomerImportData[]): Promise<CampaignCustomer[]> {
+  async bulkCreate(
+    customersData: CustomerImportData[],
+  ): Promise<CampaignCustomer[]> {
     // Validate all phone numbers
-    const invalidPhones = customersData.filter(customer => 
-      !this.isValidPhoneNumber(customer.phone_number)
+    const invalidPhones = customersData.filter(
+      (customer) => !this.isValidPhoneNumber(customer.phone_number),
     );
 
     if (invalidPhones.length > 0) {
-      throw new BadRequestException(`Có ${invalidPhones.length} số điện thoại không hợp lệ`);
+      throw new BadRequestException(
+        `Có ${invalidPhones.length} số điện thoại không hợp lệ`,
+      );
     }
 
     // Check for duplicates within the batch
-    const phoneNumbers = customersData.map(c => c.phone_number);
+    const phoneNumbers = customersData.map((c) => c.phone_number);
     const uniquePhones = new Set(phoneNumbers);
     if (phoneNumbers.length !== uniquePhones.size) {
       throw new BadRequestException('Có số điện thoại trùng lặp trong file');
@@ -91,27 +109,33 @@ export class CampaignCustomerService {
 
     if (existingCustomers.length > 0) {
       throw new BadRequestException(
-        `Có ${existingCustomers.length} số điện thoại đã tồn tại trong hệ thống`
+        `Có ${existingCustomers.length} số điện thoại đã tồn tại trong hệ thống`,
       );
     }
 
-    const customers = customersData.map(data => 
-      this.campaignCustomerRepository.create(data)
+    const customers = customersData.map((data) =>
+      this.campaignCustomerRepository.create({
+        phone_number: data.phone_number,
+      }),
     );
 
     return this.campaignCustomerRepository.save(customers);
   }
 
-  async importFromExcel(file: Express.Multer.File, campaignId: string, user: User): Promise<{ 
-    success: boolean; 
-    imported: number; 
-    errors: string[] 
+  async importFromExcel(
+    file: Express.Multer.File,
+    campaignId: string,
+    user: User,
+  ): Promise<{
+    success: boolean;
+    imported: number;
+    errors: string[];
   }> {
     try {
       // Verify campaign exists and user has access
       const campaign = await this.campaignRepository.findOne({
         where: { id: campaignId },
-        relations: ['department']
+        relations: ['department'],
       });
 
       if (!campaign) {
@@ -125,8 +149,8 @@ export class CampaignCustomerService {
       }
 
       const workbook = new ExcelJS.Workbook();
-      await workbook.xlsx.load(file.buffer);
-      
+      await workbook.xlsx.load(file.buffer as any);
+
       const worksheet = workbook.getWorksheet(1);
       if (!worksheet) {
         throw new BadRequestException('File Excel không có worksheet');
@@ -134,17 +158,17 @@ export class CampaignCustomerService {
 
       const data: any[] = [];
       const headers: { [key: number]: string } = {};
-      
+
       // Get headers from first row
       const headerRow = worksheet.getRow(1);
       headerRow.eachCell((cell, colNumber) => {
         headers[colNumber] = String(cell.value || '');
       });
-      
+
       // Process data rows
       worksheet.eachRow((row, rowNumber) => {
         if (rowNumber === 1) return; // Skip header row
-        
+
         const rowData: any = {};
         row.eachCell((cell, colNumber) => {
           const headerName = headers[colNumber];
@@ -152,7 +176,7 @@ export class CampaignCustomerService {
             rowData[headerName] = cell.value;
           }
         });
-        
+
         if (Object.keys(rowData).length > 0) {
           data.push(rowData);
         }
@@ -165,18 +189,38 @@ export class CampaignCustomerService {
       const errors: string[] = [];
       const customers: CustomerImportData[] = [];
 
+      const getVal = (rowObj: any, keys: string[]) => {
+        for (const k of keys) {
+          if (rowObj[k] !== undefined && rowObj[k] !== null) return rowObj[k];
+          const foundKey = Object.keys(rowObj).find(
+            (rk) => rk.toLowerCase().trim() === k.toLowerCase().trim()
+          );
+          if (foundKey && rowObj[foundKey] !== undefined && rowObj[foundKey] !== null) {
+            return rowObj[foundKey];
+          }
+        }
+        return undefined;
+      };
+
       data.forEach((row: any, index: number) => {
         const rowNum = index + 2; // Excel rows start from 1, plus header
 
+        const rawPhone = getVal(row, ['Số điện thoại', 'Điện thoại', 'SĐT', 'phone_number', 'phone']);
+        const rawName = getVal(row, ['Tên khách hàng', 'Họ và tên', 'Họ tên', 'Tên', 'name', 'full_name']);
+        const rawSalutation = getVal(row, ['Xưng hô', 'Người liên hệ', 'Danh xưng', 'salutation']);
+        const rawZaloName = getVal(row, ['Tên Zalo', 'zalo_name', 'zaloName']);
+
         // Validate required fields
-        if (!row['Số điện thoại'] || !row['Họ và tên']) {
-          errors.push(`Dòng ${rowNum}: Thiếu số điện thoại hoặc họ tên`);
+        if (!rawPhone || !rawName) {
+          errors.push(`Dòng ${rowNum}: Thiếu số điện thoại hoặc tên khách hàng`);
           return;
         }
 
-        const phoneNumber = String(row['Số điện thoại']).trim();
-        const fullName = String(row['Họ và tên']).trim();
-        const salutation = row['Xưng hô'] ? String(row['Xưng hô']).trim() : undefined;
+        const phoneNumber = String(rawPhone).trim();
+        const fullName = String(rawName).trim();
+        const salutation = rawSalutation ? String(rawSalutation).trim() : undefined;
+        // Tên Zalo: optional, khuyến khích nhập để bot search chính xác hơn
+        const zaloName = rawZaloName ? String(rawZaloName).trim() || undefined : undefined;
 
         if (!this.isValidPhoneNumber(phoneNumber)) {
           errors.push(`Dòng ${rowNum}: Số điện thoại không hợp lệ`);
@@ -186,12 +230,13 @@ export class CampaignCustomerService {
         customers.push({
           phone_number: phoneNumber,
           full_name: fullName,
+          zalo_name: zaloName,
           salutation,
           metadata: {
             importedAt: new Date().toISOString(),
             rowNumber: rowNum,
-            campaignId: campaignId
-          }
+            campaignId: campaignId,
+          },
         });
       });
 
@@ -204,12 +249,14 @@ export class CampaignCustomerService {
       for (const customerData of customers) {
         // Try to find existing customer
         let customer = await this.campaignCustomerRepository.findOne({
-          where: { phone_number: customerData.phone_number }
+          where: { phone_number: customerData.phone_number },
         });
 
         // Create customer if not exists
         if (!customer) {
-          customer = this.campaignCustomerRepository.create(customerData);
+          customer = this.campaignCustomerRepository.create({
+            phone_number: customerData.phone_number,
+          });
           customer = await this.campaignCustomerRepository.save(customer);
         }
 
@@ -217,8 +264,8 @@ export class CampaignCustomerService {
         const existingMap = await this.campaignCustomerMapRepository.findOne({
           where: {
             campaign_id: parseInt(campaignId),
-            customer_id: parseInt(customer.id)
-          }
+            customer_id: parseInt(customer.id),
+          },
         });
 
         // Create mapping if not exists
@@ -226,29 +273,40 @@ export class CampaignCustomerService {
           const map = this.campaignCustomerMapRepository.create({
             campaign_id: parseInt(campaignId),
             customer_id: parseInt(customer.id),
+            full_name: customerData.full_name,
+            salutation: customerData.salutation,
+            zalo_name: customerData.zalo_name || null,
             campaign: campaign,
-            campaign_customer: customer
+            campaign_customer: customer,
           });
           await this.campaignCustomerMapRepository.save(map);
           imported++;
         }
       }
 
-      return { 
-        success: true, 
-        imported, 
-        errors: [] 
+      return {
+        success: true,
+        imported,
+        errors: [],
       };
-
     } catch (error) {
-      if (error instanceof BadRequestException || error instanceof NotFoundException) {
+      if (
+        error instanceof BadRequestException ||
+        error instanceof NotFoundException
+      ) {
         throw error;
       }
-      throw new BadRequestException('Không thể đọc file Excel: ' + error.message);
+      throw new BadRequestException(
+        'Không thể đọc file Excel: ' + error.message,
+      );
     }
   }
 
-  async update(id: string, data: Partial<CampaignCustomer>, user: User): Promise<CampaignCustomer> {
+  async update(
+    id: string,
+    data: Partial<CampaignCustomer>,
+    user: User,
+  ): Promise<CampaignCustomer> {
     await this.campaignCustomerRepository.update(id, data);
     return this.findOne(id, user);
   }

@@ -3,7 +3,7 @@
 export interface TransactionStatsParams {
   period: 'day' | 'week' | 'quarter' | 'custom';
   dateFrom?: string; // YYYY-MM-DD format
-  dateTo?: string;   // YYYY-MM-DD format
+  dateTo?: string; // YYYY-MM-DD format
   employees?: string; // comma-separated employee IDs
   departments?: string; // comma-separated department IDs
   user: any; // for permission filtering
@@ -20,12 +20,12 @@ export interface SummaryStats {
   totalRevenue: number;
   avgOrderValue: number;
   conversionRate: number; // completed / (completed + quoted) * 100
-  
+
   // Working days stats
   gdToday: number;
   gdYesterday: number;
   gd2DaysAgo: number;
-  
+
   // Previous period stats for comparison
   prevChaoBan: number;
   prevCompleted: number;
@@ -78,7 +78,7 @@ export interface TransactionStatsResponse {
   customerStats: CustomerStat[];
   employeeStats: EmployeeStat[];
   expiredStats: ExpiredStats;
-  
+
   // Meta info
   totalRecords: number;
   dateRange: {

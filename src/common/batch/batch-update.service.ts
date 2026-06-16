@@ -43,7 +43,7 @@ export class BatchUpdateService {
     type: string,
     id: string,
     data: any,
-    priority: 'high' | 'normal' | 'low' = 'normal'
+    priority: 'high' | 'normal' | 'low' = 'normal',
   ): void {
     const item: BatchUpdateItem = {
       id,
@@ -93,7 +93,7 @@ export class BatchUpdateService {
   private setBatchTimer(type: string, startTime: number): void {
     // Clear existing timer
     if (this.timers.has(type)) {
-      clearTimeout(this.timers.get(type)!);
+      clearTimeout(this.timers.get(type));
     }
 
     const timeElapsed = Date.now() - startTime;
@@ -115,7 +115,7 @@ export class BatchUpdateService {
 
     // Clear timer
     if (this.timers.has(type)) {
-      clearTimeout(this.timers.get(type)!);
+      clearTimeout(this.timers.get(type));
       this.timers.delete(type);
     }
 
@@ -123,9 +123,11 @@ export class BatchUpdateService {
     const sortedBatch = this.sortBatchByPriority(batch);
 
     // Group by priority
-    const highPriority = sortedBatch.filter(item => item.priority === 'high');
-    const normalPriority = sortedBatch.filter(item => item.priority === 'normal');
-    const lowPriority = sortedBatch.filter(item => item.priority === 'low');
+    const highPriority = sortedBatch.filter((item) => item.priority === 'high');
+    const normalPriority = sortedBatch.filter(
+      (item) => item.priority === 'normal',
+    );
+    const lowPriority = sortedBatch.filter((item) => item.priority === 'low');
 
     // Process high priority first
     if (highPriority.length > 0) {
@@ -153,7 +155,8 @@ export class BatchUpdateService {
     const priorityOrder = { high: 0, normal: 1, low: 2 };
 
     return batch.sort((a, b) => {
-      const priorityDiff = priorityOrder[a.priority] - priorityOrder[b.priority];
+      const priorityDiff =
+        priorityOrder[a.priority] - priorityOrder[b.priority];
       if (priorityDiff !== 0) return priorityDiff;
       return a.timestamp - b.timestamp;
     });
@@ -165,7 +168,7 @@ export class BatchUpdateService {
   private async processPriorityBatch(
     type: string,
     items: BatchUpdateItem[],
-    priority: string
+    priority: string,
   ): Promise<void> {
     try {
       // Emit batch update event
@@ -185,11 +188,10 @@ export class BatchUpdateService {
         count: items.length,
         timestamp: Date.now(),
       });
-
     } catch (error) {
       this.logger.error(
         `Error processing batch for ${type} (${priority}):`,
-        error
+        error,
       );
     }
   }
@@ -206,9 +208,9 @@ export class BatchUpdateService {
         oldestItem: batch[0]?.timestamp,
         age: batch[0] ? Date.now() - batch[0].timestamp : 0,
         priorities: {
-          high: batch.filter(item => item.priority === 'high').length,
-          normal: batch.filter(item => item.priority === 'normal').length,
-          low: batch.filter(item => item.priority === 'low').length,
+          high: batch.filter((item) => item.priority === 'high').length,
+          normal: batch.filter((item) => item.priority === 'normal').length,
+          low: batch.filter((item) => item.priority === 'low').length,
         },
       };
     }
@@ -221,7 +223,7 @@ export class BatchUpdateService {
    */
   async forceProcessAll(): Promise<void> {
     const types = Array.from(this.batches.keys());
-    
+
     for (const type of types) {
       await this.processBatch(type);
     }

@@ -39,9 +39,9 @@ import { User } from '../users/user.entity';
     ]),
     forwardRef(() => WebsocketModule),
     forwardRef(() => UserModule),
-  forwardRef(() => WebhookModule),
-  // Ensure JwtService/AuthGuard are available in this module context
-  forwardRef(() => AuthModule),
+    forwardRef(() => WebhookModule),
+    // Ensure JwtService/AuthGuard are available in this module context
+    forwardRef(() => AuthModule),
   ],
   controllers: [AutoReplyController],
   providers: [AutoReplyService],

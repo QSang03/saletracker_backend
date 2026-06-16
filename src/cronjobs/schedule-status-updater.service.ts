@@ -48,14 +48,19 @@ export class ScheduleStatusUpdaterService {
         try {
           const newStatus = this.calculateScheduleStatus(schedule, now);
           if (newStatus !== schedule.status) {
-            await this.departmentScheduleRepository.update(schedule.id, { status: newStatus });
+            await this.departmentScheduleRepository.update(schedule.id, {
+              status: newStatus,
+            });
             updatedCount++;
             this.logger.log(
               `Updated schedule "${schedule.name}" (ID: ${schedule.id}) from ${schedule.status} to ${newStatus}`,
             );
           }
         } catch (error: any) {
-          this.logger.error(`Lỗi khi cập nhật schedule ID ${schedule.id}: ${error.message}`, error.stack);
+          this.logger.error(
+            `Lỗi khi cập nhật schedule ID ${schedule.id}: ${error.message}`,
+            error.stack,
+          );
         }
       }
 
@@ -65,7 +70,10 @@ export class ScheduleStatusUpdaterService {
         this.logger.debug('Không có schedule nào cần cập nhật status');
       }
     } catch (error: any) {
-      this.logger.error('Lỗi trong quá trình cập nhật schedule statuses:', error.stack);
+      this.logger.error(
+        'Lỗi trong quá trình cập nhật schedule statuses:',
+        error.stack,
+      );
     }
   }
 
@@ -73,7 +81,9 @@ export class ScheduleStatusUpdaterService {
   @Cron('59 23 * * 0')
   async resetInvalidScheduledCampaigns(): Promise<void> {
     try {
-      this.logger.debug('Bắt đầu kiểm tra và reset campaigns SCHEDULED không hợp lệ...');
+      this.logger.debug(
+        'Bắt đầu kiểm tra và reset campaigns SCHEDULED không hợp lệ...',
+      );
 
       const scheduledCampaigns = await this.campaignRepository.find({
         where: { status: CampaignStatus.SCHEDULED },
@@ -84,29 +94,43 @@ export class ScheduleStatusUpdaterService {
 
       for (const campaign of scheduledCampaigns) {
         try {
-          const campaignSchedule = await this.campaignScheduleRepository.findOne({
-            where: { campaign: { id: campaign.id } },
-          });
+          const campaignSchedule =
+            await this.campaignScheduleRepository.findOne({
+              where: { campaign: { id: campaign.id } },
+            });
 
-          if (!campaignSchedule || (!campaignSchedule.start_date && !campaignSchedule.end_date)) {
-            await this.campaignRepository.update(campaign.id, { status: CampaignStatus.DRAFT });
+          if (
+            !campaignSchedule ||
+            (!campaignSchedule.start_date && !campaignSchedule.end_date)
+          ) {
+            await this.campaignRepository.update(campaign.id, {
+              status: CampaignStatus.DRAFT,
+            });
             resetCount++;
             this.logger.log(
               `Reset campaign "${campaign.name}" (ID: ${campaign.id}) từ SCHEDULED về DRAFT (không có start_date & end_date)`,
             );
           }
         } catch (error: any) {
-          this.logger.error(`Lỗi khi kiểm tra campaign ID ${campaign.id}: ${error.message}`, error.stack);
+          this.logger.error(
+            `Lỗi khi kiểm tra campaign ID ${campaign.id}: ${error.message}`,
+            error.stack,
+          );
         }
       }
 
       if (resetCount > 0) {
-        this.logger.log(`Đã reset ${resetCount} campaigns SCHEDULED không hợp lệ về DRAFT`);
+        this.logger.log(
+          `Đã reset ${resetCount} campaigns SCHEDULED không hợp lệ về DRAFT`,
+        );
       } else {
         this.logger.debug('Không có campaign SCHEDULED nào cần reset');
       }
     } catch (error: any) {
-      this.logger.error('Lỗi trong quá trình reset campaigns SCHEDULED không hợp lệ:', error.stack);
+      this.logger.error(
+        'Lỗi trong quá trình reset campaigns SCHEDULED không hợp lệ:',
+        error.stack,
+      );
     }
   }
 
@@ -131,7 +155,11 @@ export class ScheduleStatusUpdaterService {
 
   /** So sánh YYYY-MM-DD theo local time */
   private sameYMD(a: Date, b: Date): boolean {
-    return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+    return (
+      a.getFullYear() === b.getFullYear() &&
+      a.getMonth() === b.getMonth() &&
+      a.getDate() === b.getDate()
+    );
   }
 
   /** Parse "YYYY-MM-DD" thành local date lúc 00:00 */
@@ -179,7 +207,9 @@ export class ScheduleStatusUpdaterService {
 
     for (const slot of slots) {
       const slotDowLegacy: number | null =
-        typeof (slot as any).day_of_week === 'number' ? Number((slot as any).day_of_week) : null;
+        typeof (slot as any).day_of_week === 'number'
+          ? Number((slot as any).day_of_week)
+          : null;
 
       // 1) Slot theo ngày cụ thể (applicable_date)
       if ((slot as any)?.applicable_date) {
@@ -187,19 +217,19 @@ export class ScheduleStatusUpdaterService {
 
         // Validate day_of_week nếu có (phải khớp thứ của CHÍNH applicable_date)
         if (slotDowLegacy != null) {
-          const isoBase = this.isoDow(base);                // 1..7
+          const isoBase = this.isoDow(base); // 1..7
           const legacyOfBase = this.legacyFromIso(isoBase); // 2..7 hoặc null nếu CN
           if (legacyOfBase == null || legacyOfBase !== slotDowLegacy) {
             // THAY ĐỔI: Thay vì continue, vẫn xử lý slot nhưng log warning
             this.logger.warn(
-              `Schedule slot có day_of_week=${slotDowLegacy} không khớp với applicable_date=${(slot as any).applicable_date} (thứ ${legacyOfBase || 'CN'}). Vẫn xử lý slot này.`
+              `Schedule slot có day_of_week=${slotDowLegacy} không khớp với applicable_date=${(slot as any).applicable_date} (thứ ${legacyOfBase || 'CN'}). Vẫn xử lý slot này.`,
             );
             // Không continue, vẫn xử lý slot này để tránh bị đánh dấu EXPIRED sai
           }
         }
 
         // Tính start/end (xử lý qua đêm)
-        let start = this.combine(base, (slot as any).start_time);
+        const start = this.combine(base, (slot as any).start_time);
         let end = this.combine(base, (slot as any).end_time);
         if (end <= start) end = new Date(end.getTime() + ONE_DAY);
 
@@ -228,7 +258,7 @@ export class ScheduleStatusUpdaterService {
         occurDate.setDate(now.getDate() + delta);
         occurDate.setHours(0, 0, 0, 0);
 
-        let start = this.combine(occurDate, (slot as any).start_time);
+        const start = this.combine(occurDate, (slot as any).start_time);
         let end = this.combine(occurDate, (slot as any).end_time);
         if (end <= start) end = new Date(end.getTime() + ONE_DAY);
 
@@ -243,7 +273,7 @@ export class ScheduleStatusUpdaterService {
         const occurDate = new Date(now);
         occurDate.setHours(0, 0, 0, 0);
 
-        let start = this.combine(occurDate, (slot as any).start_time);
+        const start = this.combine(occurDate, (slot as any).start_time);
         let end = this.combine(occurDate, (slot as any).end_time);
         if (end <= start) end = new Date(end.getTime() + ONE_DAY);
 
@@ -269,7 +299,9 @@ export class ScheduleStatusUpdaterService {
           const base = this.parseLocalYMD((slot as any).applicable_date);
           if (base > today) {
             hasFuture = true;
-            this.logger.debug(`Phát hiện slot tương lai bị bỏ qua: ${(slot as any).applicable_date}, đã set hasFuture=true`);
+            this.logger.debug(
+              `Phát hiện slot tương lai bị bỏ qua: ${(slot as any).applicable_date}, đã set hasFuture=true`,
+            );
             break;
           }
         }
@@ -295,11 +327,12 @@ export class ScheduleStatusUpdaterService {
       }
 
       // Giữ nguyên cho các loại khác (e.g. DAILY_DATES)
-      const isCurrentlyInSchedule = ScheduleCalculatorHelper.isCurrentTimeInSchedule(
-        schedule.schedule_config,
-        schedule.schedule_type,
-        currentTime,
-      );
+      const isCurrentlyInSchedule =
+        ScheduleCalculatorHelper.isCurrentTimeInSchedule(
+          schedule.schedule_config,
+          schedule.schedule_type,
+          currentTime,
+        );
       if (isCurrentlyInSchedule) return ScheduleStatus.ACTIVE;
 
       const scheduleDetails = ScheduleCalculatorHelper.getScheduleDetails(
@@ -311,33 +344,47 @@ export class ScheduleStatusUpdaterService {
       }
       return ScheduleStatus.INACTIVE;
     } catch (e: any) {
-      this.logger.warn(`Không thể tính status cho schedule ID ${schedule.id}: ${e.message}`);
+      this.logger.warn(
+        `Không thể tính status cho schedule ID ${schedule.id}: ${e.message}`,
+      );
       return schedule.status;
     }
   }
 
   /** Manual trigger: update status */
-  async manualUpdateScheduleStatuses(): Promise<{ updated: number; total: number }> {
+  async manualUpdateScheduleStatuses(): Promise<{
+    updated: number;
+    total: number;
+  }> {
     this.logger.log('Manual trigger schedule status update...');
 
-    const schedules = await this.departmentScheduleRepository.find({ relations: ['department'] });
+    const schedules = await this.departmentScheduleRepository.find({
+      relations: ['department'],
+    });
     let updatedCount = 0;
     const now = new Date();
 
     for (const schedule of schedules) {
       const newStatus = this.calculateScheduleStatus(schedule, now);
       if (newStatus !== schedule.status) {
-        await this.departmentScheduleRepository.update(schedule.id, { status: newStatus });
+        await this.departmentScheduleRepository.update(schedule.id, {
+          status: newStatus,
+        });
         updatedCount++;
       }
     }
 
-    this.logger.log(`Manual update completed: ${updatedCount}/${schedules.length} schedules updated`);
+    this.logger.log(
+      `Manual update completed: ${updatedCount}/${schedules.length} schedules updated`,
+    );
     return { updated: updatedCount, total: schedules.length };
   }
 
   /** Manual trigger: reset scheduled campaigns invalid */
-  async manualResetInvalidScheduledCampaigns(): Promise<{ reset: number; total: number }> {
+  async manualResetInvalidScheduledCampaigns(): Promise<{
+    reset: number;
+    total: number;
+  }> {
     this.logger.log('Manual trigger reset invalid scheduled campaigns...');
 
     const scheduledCampaigns = await this.campaignRepository.find({
@@ -352,22 +399,40 @@ export class ScheduleStatusUpdaterService {
         where: { campaign: { id: campaign.id } },
       });
 
-      if (!campaignSchedule || (!campaignSchedule.start_date && !campaignSchedule.end_date)) {
-        await this.campaignRepository.update(campaign.id, { status: CampaignStatus.DRAFT });
+      if (
+        !campaignSchedule ||
+        (!campaignSchedule.start_date && !campaignSchedule.end_date)
+      ) {
+        await this.campaignRepository.update(campaign.id, {
+          status: CampaignStatus.DRAFT,
+        });
         resetCount++;
       }
     }
 
-    this.logger.log(`Manual reset completed: ${resetCount}/${scheduledCampaigns.length} campaigns reset`);
+    this.logger.log(
+      `Manual reset completed: ${resetCount}/${scheduledCampaigns.length} campaigns reset`,
+    );
     return { reset: resetCount, total: scheduledCampaigns.length };
   }
 
   /** Thống kê status */
-  async getScheduleStatusStats(): Promise<{ active: number; inactive: number; expired: number; total: number }> {
+  async getScheduleStatusStats(): Promise<{
+    active: number;
+    inactive: number;
+    expired: number;
+    total: number;
+  }> {
     const [active, inactive, expired, total] = await Promise.all([
-      this.departmentScheduleRepository.count({ where: { status: ScheduleStatus.ACTIVE } }),
-      this.departmentScheduleRepository.count({ where: { status: ScheduleStatus.INACTIVE } }),
-      this.departmentScheduleRepository.count({ where: { status: ScheduleStatus.EXPIRED } }),
+      this.departmentScheduleRepository.count({
+        where: { status: ScheduleStatus.ACTIVE },
+      }),
+      this.departmentScheduleRepository.count({
+        where: { status: ScheduleStatus.INACTIVE },
+      }),
+      this.departmentScheduleRepository.count({
+        where: { status: ScheduleStatus.EXPIRED },
+      }),
       this.departmentScheduleRepository.count(),
     ]);
     return { active, inactive, expired, total };

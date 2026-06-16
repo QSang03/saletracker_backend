@@ -17,11 +17,15 @@ export class WebhookService {
   async queueRenameContact(payload: RenameWebhookPayload) {
     // Realtime notify requestor if provided
     if (payload.requestedByUserId) {
-      this.ws.emitToUser(String(payload.requestedByUserId), 'autoReply:renameQueued', {
-        contactId: payload.contactId,
-        zaloContactId: payload.zaloContactId,
-        newName: payload.newName,
-      });
+      this.ws.emitToUser(
+        String(payload.requestedByUserId),
+        'autoReply:renameQueued',
+        {
+          contactId: payload.contactId,
+          zaloContactId: payload.zaloContactId,
+          newName: payload.newName,
+        },
+      );
     }
     return { queued: true };
   }

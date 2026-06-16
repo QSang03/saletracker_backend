@@ -29,17 +29,27 @@ export class SeedService implements OnModuleInit {
     await this.seedCampaignTriggerService.seedTriggers();
     await this.seedUserTriggerService.seedTriggers();
 
+    // Ensure default roles exist
+    const defaultRoleNames = ['admin', 'user', 'manager', 'view'];
+    const roleMap: Record<string, Role> = {};
+
+    for (const roleName of defaultRoleNames) {
+      let role = await this.roleRepo.findOne({ where: { name: roleName } });
+      if (!role) {
+        role = new Role();
+        role.name = roleName;
+        role = await this.roleRepo.save(role);
+        console.log(`✅ Seeder: Đã tạo role: ${roleName}`);
+      }
+      roleMap[roleName] = role;
+    }
+
     const existed = await this.userRepo.findOne({
       where: { username: 'admin' },
     });
     if (existed) {
       console.log('⚠️ Seeder skipped - admin already exists.');
     } else {
-      // 1. Tạo role admin
-      const adminRole = new Role();
-      adminRole.name = 'admin';
-      await this.roleRepo.save(adminRole);
-
       // 2. Tạo user admin
       const now = new Date();
       const adminUser = new User();
@@ -50,7 +60,7 @@ export class SeedService implements OnModuleInit {
       adminUser.isBlock = false;
       adminUser.employeeCode = 'EMP-ADMIN';
       adminUser.password = await bcrypt.hash('admin', 10);
-      adminUser.roles = [adminRole];
+      adminUser.roles = [roleMap['admin']];
       adminUser.departments = [];
       adminUser.lastLogin = now;
 
@@ -407,7 +417,7 @@ export class SeedService implements OnModuleInit {
       console.log('✅ Seeder: Đã tạo system_config thành công!');
     } else {
       console.log('⚠️ Seeder skipped - system_config đã có dữ liệu.');
-      
+
       // Vẫn kiểm tra và thêm các config mới nếu chưa có
       const configsToCheck = [
         {
@@ -419,11 +429,15 @@ export class SeedService implements OnModuleInit {
           status: 1,
         },
       ];
-      
+
       for (const config of configsToCheck) {
-        const existing = await this.systemConfigRepo.findOne({ where: { name: config.name } });
+        const existing = await this.systemConfigRepo.findOne({
+          where: { name: config.name },
+        });
         if (!existing) {
-          await this.systemConfigRepo.save(this.systemConfigRepo.create(config));
+          await this.systemConfigRepo.save(
+            this.systemConfigRepo.create(config),
+          );
           console.log(`✅ Đã thêm config mới: ${config.name}`);
         }
       }

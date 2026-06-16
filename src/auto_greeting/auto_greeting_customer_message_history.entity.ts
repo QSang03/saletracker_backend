@@ -21,9 +21,13 @@ export class AutoGreetingCustomerMessageHistory {
   @Column({ name: 'customer_id', type: 'bigint', unsigned: true })
   customerId: string;
 
-  @ManyToOne(() => AutoGreetingCustomer, (autoGreetingCustomer) => autoGreetingCustomer.messageHistories, {
-    onDelete: 'CASCADE',
-  })
+  @ManyToOne(
+    () => AutoGreetingCustomer,
+    (autoGreetingCustomer) => autoGreetingCustomer.messageHistories,
+    {
+      onDelete: 'CASCADE',
+    },
+  )
   @JoinColumn({ name: 'customer_id', referencedColumnName: 'id' })
   autoGreetingCustomer: AutoGreetingCustomer;
 
@@ -39,4 +43,3 @@ export class AutoGreetingCustomerMessageHistory {
   @CreateDateColumn()
   created_at: Date;
 }
-

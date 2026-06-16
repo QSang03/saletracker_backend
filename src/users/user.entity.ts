@@ -18,7 +18,9 @@ import { AutoReplySalesPersona } from 'src/auto_reply_sales_personas/auto_reply_
 import { AutoReplyContact } from 'src/auto_reply_contacts/auto_reply_contact.entity';
 import { OrderInquiryPreset } from '../order_inquiry_presets/order_inquiry_preset.entity';
 
-@Index('idx_users_ar', ['id', 'isAutoReplyEnabled'], { where: '"is_auto_reply_enabled" = true' })
+@Index('idx_users_ar', ['id', 'isAutoReplyEnabled'], {
+  where: '"is_auto_reply_enabled" = true',
+})
 @Entity('users')
 export class User {
   toJSON() {
@@ -125,12 +127,12 @@ export class User {
 
   @OneToMany(() => Notification, (notification) => notification.user)
   notifications: Notification[];
-  
-  @Column({ 
-    nullable: true, 
-    name: 'refresh_token', 
+
+  @Column({
+    nullable: true,
+    name: 'refresh_token',
     select: false,
-    type: 'text' // Changed from default varchar to text to handle longer tokens
+    type: 'text', // Changed from default varchar to text to handle longer tokens
   })
   refreshToken?: string;
 

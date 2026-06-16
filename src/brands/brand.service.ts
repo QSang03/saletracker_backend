@@ -3,7 +3,10 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Brand } from './brand.entity';
 import slugify from 'slugify';
-import { getPermissions, getRoleNames } from '../common/utils/user-permission.helper';
+import {
+  getPermissions,
+  getRoleNames,
+} from '../common/utils/user-permission.helper';
 
 @Injectable()
 export class BrandService {
@@ -14,7 +17,9 @@ export class BrandService {
 
   async findAll(filter?: { user?: any }) {
     // Return only basic fields for filter dropdowns
-    const rows = await this.brandRepository.find({ select: ['id', 'name', 'slug'] });
+    const rows = await this.brandRepository.find({
+      select: ['id', 'name', 'slug'],
+    });
     const user = filter?.user;
     if (!user) return rows;
     const roles = getRoleNames(user).map((r) => String(r).toLowerCase());
@@ -29,10 +34,14 @@ export class BrandService {
       .filter((name) => /^pm_brand_/i.test(name))
       .map((name) => name.replace(/^pm_brand_/i, ''))
       .map((s) => slugify(s, { lower: true, strict: true }));
-    
+
     if (brandPerms.length === 0) return [];
-    
-    return rows.filter((b) => brandPerms.includes(b.slug || slugify(b.name || '', { lower: true, strict: true })));
+
+    return rows.filter((b) =>
+      brandPerms.includes(
+        b.slug || slugify(b.name || '', { lower: true, strict: true }),
+      ),
+    );
   }
 
   findOne(id: number) {

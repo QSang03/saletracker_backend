@@ -25,7 +25,9 @@ export class AutoReplyKeywordRoute {
   @Column({ type: 'boolean', default: true })
   active: boolean;
 
-  @OneToMany(() => AutoReplyRouteProduct, (rp) => rp.route, { cascade: ['insert','update'] })
+  @OneToMany(() => AutoReplyRouteProduct, (rp) => rp.route, {
+    cascade: ['insert', 'update'],
+  })
   routeProducts: AutoReplyRouteProduct[];
 
   @Column({ type: 'int', name: 'contact_id' })

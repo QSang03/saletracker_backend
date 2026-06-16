@@ -14,7 +14,13 @@ import { DatabaseChangeLog } from '../observers/change_log.entity';
 
 @Module({
   imports: [
-  TypeOrmModule.forFeature([User, Role, Department, ChangeUserLog, DatabaseChangeLog]),
+    TypeOrmModule.forFeature([
+      User,
+      Role,
+      Department,
+      ChangeUserLog,
+      DatabaseChangeLog,
+    ]),
     JwtModule.register({}),
     RolesPermissionsModule,
   ],

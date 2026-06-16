@@ -14,7 +14,9 @@ export class SeedUserTriggerService {
     try {
       const existing = await this.checkExistingTrigger();
       if (existing) {
-        this.logger.log('User trigger already exists, recreating to ensure latest version...');
+        this.logger.log(
+          'User trigger already exists, recreating to ensure latest version...',
+        );
       }
       await this.createTrigger();
       this.logger.log('User trigger created/updated successfully');
@@ -65,7 +67,9 @@ export class SeedUserTriggerService {
         END IF;
       END
     `;
-    await this.dataSource.query(`DROP TRIGGER IF EXISTS \`${this.UPDATE_TRIGGER_NAME}\``);
+    await this.dataSource.query(
+      `DROP TRIGGER IF EXISTS \`${this.UPDATE_TRIGGER_NAME}\``,
+    );
     await this.dataSource.query(sql);
   }
 }

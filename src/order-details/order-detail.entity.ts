@@ -31,16 +31,28 @@ export enum ExtendReason {
 @Index('idx_order_details_created_at', ['created_at'])
 @Index('idx_order_details_deleted_at', ['deleted_at'])
 @Index('idx_order_details_customer_created', ['customer_name', 'created_at'])
-@Index('idx_order_details_customer_created_deleted', ['customer_name', 'created_at', 'deleted_at'])
+@Index('idx_order_details_customer_created_deleted', [
+  'customer_name',
+  'created_at',
+  'deleted_at',
+])
 // Phase 2.1: Tối ưu hóa index cho order_details table
-@Index('idx_order_details_created_status', ['created_at', 'status', 'deleted_at'])
+@Index('idx_order_details_created_status', [
+  'created_at',
+  'status',
+  'deleted_at',
+])
 @Index('idx_order_details_order_created', ['order_id', 'created_at'])
 @Index('idx_order_details_sale_status', ['order_id', 'status'])
 // Phase 2.6: Index cho hidden orders
-@Index('idx_order_details_hidden_at', ['hidden_at'], { where: 'hidden_at IS NOT NULL' })
+@Index('idx_order_details_hidden_at', ['hidden_at'], {
+  where: 'hidden_at IS NOT NULL',
+})
 @Index('idx_order_details_hidden_status', ['hidden_at', 'status', 'deleted_at'])
 @Index('idx_order_details_hidden_employee', ['hidden_at', 'order_id'])
-@Index('idx_order_details_hidden_pagination', ['hidden_at', 'id'], { where: 'hidden_at IS NOT NULL' })
+@Index('idx_order_details_hidden_pagination', ['hidden_at', 'id'], {
+  where: 'hidden_at IS NOT NULL',
+})
 // Generated columns for JSON extractions and calculations
 @Index('idx_order_details_meta_customer_id', ['meta_customer_id'])
 @Index('idx_order_details_meta_is_group', ['meta_is_group'])
@@ -117,7 +129,11 @@ export class OrderDetail {
   notes: string;
 
   @Column('json', { nullable: true })
-  notes_history: { user_id: number | null; content: string; changed_at: string }[];
+  notes_history: {
+    user_id: number | null;
+    content: string;
+    changed_at: string;
+  }[];
 
   @Column('json', { nullable: true, default: null })
   edit_history: {
@@ -157,7 +173,6 @@ export class OrderDetail {
   @Column('bigint', { nullable: true })
   inquiry_preset_id: number | null;
 
-  @Index()
   @CreateDateColumn({ type: 'timestamp' })
   created_at: Date;
 
@@ -168,7 +183,6 @@ export class OrderDetail {
   @DeleteDateColumn({ type: 'timestamp', nullable: true })
   deleted_at: Date;
 
-  @Index()
   @Column('timestamp', { nullable: true })
   hidden_at: Date | null;
 
@@ -177,7 +191,8 @@ export class OrderDetail {
     type: 'varchar',
     length: 50,
     nullable: true,
-    asExpression: "CASE WHEN JSON_UNQUOTE(JSON_EXTRACT(`metadata`, '$.customer_id')) = 'null' OR JSON_UNQUOTE(JSON_EXTRACT(`metadata`, '$.customer_id')) IS NULL THEN NULL ELSE JSON_UNQUOTE(JSON_EXTRACT(`metadata`, '$.customer_id')) END",
+    asExpression:
+      "CASE WHEN JSON_UNQUOTE(JSON_EXTRACT(`metadata`, '$.customer_id')) = 'null' OR JSON_UNQUOTE(JSON_EXTRACT(`metadata`, '$.customer_id')) IS NULL THEN NULL ELSE JSON_UNQUOTE(JSON_EXTRACT(`metadata`, '$.customer_id')) END",
     generatedType: 'STORED',
   })
   meta_customer_id: string | null;
@@ -185,7 +200,8 @@ export class OrderDetail {
   @Column({
     type: 'tinyint',
     nullable: true,
-    asExpression: "CASE WHEN JSON_UNQUOTE(JSON_EXTRACT(`metadata`, '$.conversation_info.is_group')) IN ('null', 'false', '') OR JSON_UNQUOTE(JSON_EXTRACT(`metadata`, '$.conversation_info.is_group')) IS NULL THEN 0 WHEN JSON_UNQUOTE(JSON_EXTRACT(`metadata`, '$.conversation_info.is_group')) = 'true' THEN 1 ELSE CAST(JSON_UNQUOTE(JSON_EXTRACT(`metadata`, '$.conversation_info.is_group')) AS UNSIGNED) END",
+    asExpression:
+      "CASE WHEN JSON_UNQUOTE(JSON_EXTRACT(`metadata`, '$.conversation_info.is_group')) IN ('null', 'false', '') OR JSON_UNQUOTE(JSON_EXTRACT(`metadata`, '$.conversation_info.is_group')) IS NULL THEN 0 WHEN JSON_UNQUOTE(JSON_EXTRACT(`metadata`, '$.conversation_info.is_group')) = 'true' THEN 1 ELSE CAST(JSON_UNQUOTE(JSON_EXTRACT(`metadata`, '$.conversation_info.is_group')) AS UNSIGNED) END",
     generatedType: 'STORED',
   })
   meta_is_group: number | null;
@@ -193,7 +209,7 @@ export class OrderDetail {
   @Column({
     type: 'int',
     nullable: true,
-    asExpression: "(TO_DAYS(DATE(`created_at`)) + COALESCE(`extended`, 0))",
+    asExpression: '(TO_DAYS(DATE(`created_at`)) + COALESCE(`extended`, 0))',
     generatedType: 'STORED',
   })
   expiry_days: number | null;

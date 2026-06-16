@@ -1,13 +1,13 @@
-import { 
-  Controller, 
-  Get, 
-  Post, 
-  Body, 
-  Param, 
-  Patch, 
-  Delete, 
-  UseGuards, 
-  Req 
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Param,
+  Patch,
+  Delete,
+  UseGuards,
+  Req,
 } from '@nestjs/common';
 import { CampaignScheduleService } from './campaign_schedule.service';
 import { CampaignSchedule } from './campaign_schedule.entity';
@@ -18,26 +18,34 @@ import { AuthGuard } from '@nestjs/passport';
 @Controller('campaign-schedules')
 @UseGuards(AuthGuard('jwt'), PermissionGuard)
 export class CampaignScheduleController {
-  constructor(private readonly campaignScheduleService: CampaignScheduleService) {}
+  constructor(
+    private readonly campaignScheduleService: CampaignScheduleService,
+  ) {}
 
   @Get(':campaignId')
   @Permission('chien-dich', 'read')
-  async getByCampaign(@Param('campaignId') campaignId: string, @Req() req): Promise<CampaignSchedule> {
+  async getByCampaign(
+    @Param('campaignId') campaignId: string,
+    @Req() req,
+  ): Promise<CampaignSchedule> {
     return this.campaignScheduleService.getByCampaign(campaignId, req.user);
   }
 
   @Post()
   @Permission('chien-dich', 'create')
-  async create(@Body() data: Partial<CampaignSchedule>, @Req() req): Promise<CampaignSchedule> {
+  async create(
+    @Body() data: Partial<CampaignSchedule>,
+    @Req() req,
+  ): Promise<CampaignSchedule> {
     return this.campaignScheduleService.create(data, req.user);
   }
 
   @Patch(':id')
   @Permission('chien-dich', 'update')
   async update(
-    @Param('id') id: string, 
+    @Param('id') id: string,
     @Body() data: Partial<CampaignSchedule>,
-    @Req() req
+    @Req() req,
   ): Promise<CampaignSchedule> {
     return this.campaignScheduleService.update(id, data, req.user);
   }

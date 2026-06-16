@@ -45,13 +45,13 @@ export function getEmployeeCode(user: any): string {
 }
 
 export function hasPMRole(user: any): boolean {
-  const roleNames = getRoleNames(user).map(r => String(r).toLowerCase());
-  return roleNames.includes('pm') || roleNames.some(r => r.startsWith('pm-'));
+  const roleNames = getRoleNames(user).map((r) => String(r).toLowerCase());
+  return roleNames.includes('pm') || roleNames.some((r) => r.startsWith('pm-'));
 }
 
 export function getPMDepartments(user: any): string[] {
-  const roleNames = getRoleNames(user).map(r => String(r).toLowerCase());
+  const roleNames = getRoleNames(user).map((r) => String(r).toLowerCase());
   return roleNames
-    .filter(role => role.startsWith('pm-'))
-    .map(role => role.replace('pm-', ''));
+    .filter((role) => role.startsWith('pm-'))
+    .map((role) => role.replace('pm-', ''));
 }

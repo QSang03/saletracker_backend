@@ -20,13 +20,23 @@ export class SendHistory {
   @Column({ type: 'timestamp', comment: 'Ngày giờ gửi tin nhắn' })
   sent_at: Date;
 
-  @Column({ type: 'varchar', length: 255, comment: 'Người/Hệ thống gửi tin nhắn' })
+  @Column({
+    type: 'varchar',
+    length: 255,
+    comment: 'Người/Hệ thống gửi tin nhắn',
+  })
   sent_from: string;
 
   @Column({ type: 'varchar', length: 255, comment: 'Người nhận tin nhắn' })
   sent_to: string;
 
-  @Column({ type: 'varchar', length: 255, nullable: true, name: 'zalo_customer_id', comment: 'Zalo customer id của người nhận' })
+  @Column({
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+    name: 'zalo_customer_id',
+    comment: 'Zalo customer id của người nhận',
+  })
   zaloCustomerId?: string;
 
   @ManyToOne(() => User, { nullable: true })
@@ -38,7 +48,8 @@ export class SendHistory {
     length: 100,
     nullable: true,
     name: 'send_function',
-    comment: "Phân loại hàm/loại gửi (ví dụ: auto_greeting, manual, scheduled, ...)",
+    comment:
+      'Phân loại hàm/loại gửi (ví dụ: auto_greeting, manual, scheduled, ...)',
   })
   sendFunction?: string;
 
