@@ -19,6 +19,7 @@ export class CronjobService {
       'DebtHistoriesCronjobService: Clone debt logs sang histories và reset lúc 23h',
       'DatabaseCleanupCronjobService: Dọn dẹp database change log theo batch lúc 23h',
       'OrderCleanupCronjobService: Ẩn order details hết hạn hoặc gia hạn extended lúc 01h',
+      'CampaignCleanupCronjobService: Dọn dẹp các chiến dịch cũ (3 tháng) và dữ liệu liên quan lúc 02h sáng',
     ];
   }
 }

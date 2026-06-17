@@ -19,6 +19,11 @@ import { DatabaseChangeLog } from 'src/observers/change_log.entity';
 import { DepartmentSchedule } from '../campaign_departments_schedules/campaign_departments_schedules.entity';
 import { Campaign } from '../campaigns/campaign.entity';
 import { CampaignSchedule } from '../campaign_schedules/campaign_schedule.entity';
+import { CampaignContent } from '../campaign_contents/campaign_content.entity';
+import { CampaignEmailReport } from '../campaign_email_reports/campaign_email_report.entity';
+import { CampaignInteractionLog } from '../campaign_interaction_logs/campaign_interaction_log.entity';
+import { CampaignCustomerMap } from '../campaign_customer_map/campaign_customer_map.entity';
+import { CampaignCleanupCronjobService } from './campaign-cleanup.cronjob.service';
 import { PermissionModule } from '../permissions/permission.module';
 import { ScheduleStatusUpdaterService } from './schedule-status-updater.service';
 import { OrderDetail } from 'src/order-details/order-detail.entity';
@@ -45,6 +50,10 @@ import { UserModule } from '../users/user.module';
       DepartmentSchedule,
       Campaign,
       CampaignSchedule,
+      CampaignContent,
+      CampaignEmailReport,
+      CampaignInteractionLog,
+      CampaignCustomerMap,
       OrderDetail, // Entity cho order details
       SystemConfig,
       User, // Thêm User entity
@@ -60,6 +69,7 @@ import { UserModule } from '../users/user.module';
     DatabaseCleanupCronjobService,
     ProductV2CronjobService,
     ZaloLinkMonitorCronjob, // Thêm cronjob monitor Zalo link
+    CampaignCleanupCronjobService,
   ],
   exports: [
     CronjobService,
@@ -70,6 +80,7 @@ import { UserModule } from '../users/user.module';
     DatabaseCleanupCronjobService,
     ProductV2CronjobService,
     ZaloLinkMonitorCronjob,
+    CampaignCleanupCronjobService,
   ],
 })
 export class CronjobModule {}

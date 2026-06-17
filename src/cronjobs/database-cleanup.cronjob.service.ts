@@ -94,10 +94,18 @@ export class DatabaseCleanupCronjobService {
 
     while (hasMoreData && batches < maxBatches) {
       try {
-        // Lấy ID của các bản ghi cũ nhất để xóa
+        const retentionDays = parseInt(
+          process.env.DB_CHANGE_LOG_RETENTION_DAYS || '7',
+          10,
+        );
+        const cutoffDate = new Date();
+        cutoffDate.setDate(cutoffDate.getDate() - retentionDays);
+
+        // Lấy ID của các bản ghi cũ nhất để xóa và cũ hơn cutoffDate
         const recordsToDelete = await this.changeLogRepository
           .createQueryBuilder('log')
           .select('log.id')
+          .where('log.triggered_at < :cutoffDate', { cutoffDate })
           .orderBy('log.triggered_at', 'ASC') // Xóa từ cũ nhất
           .limit(batchSize)
           .getMany();
