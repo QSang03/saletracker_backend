@@ -405,6 +405,17 @@ export class AutoReplyController {
     return this.svc.listProductsByIds(parsed);
   }
 
+  @Patch('products/:productId/price-stock')
+  updatePriceStock(
+    @Param('productId', ParseIntPipe) productId: number,
+    @Body() body: { price: number; stock: number },
+  ) {
+    if (body.price === undefined || body.stock === undefined) {
+      throw new BadRequestException('Missing price or stock in body');
+    }
+    return this.svc.updateProductPriceAndStock(productId, body.price, body.stock);
+  }
+
   @Post('products/preview')
   @UseInterceptors(FileInterceptor('file', { storage: memoryStorage() }))
   previewProducts(@UploadedFile() file: Express.Multer.File) {

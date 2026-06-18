@@ -8,6 +8,7 @@ import {
 } from '../auto_reply_contacts/auto_reply_contact.entity';
 import { AutoReplyCustomerProfile } from '../auto_reply_customer_profiles/auto_reply_customer_profile.entity';
 import { AutoReplyProduct } from '../auto_reply_products/auto_reply_product.entity';
+import { AutoReplyProductPriceTier } from '../auto_reply_products/auto_reply_product_price_tier.entity';
 import { AutoReplyContactAllowedProduct } from '../auto_reply_contact_allowed_products/auto_reply_contact_allowed_product.entity';
 import { AutoReplyKeywordRoute } from '../auto_reply_keyword_routes/auto_reply_keyword_route.entity';
 import { AutoReplyRouteProduct } from '../auto_reply_products/auto_reply_route_product.entity';
@@ -30,6 +31,8 @@ export class AutoReplyService {
     private profileRepo: Repository<AutoReplyCustomerProfile>,
     @InjectRepository(AutoReplyProduct)
     private productRepo: Repository<AutoReplyProduct>,
+    @InjectRepository(AutoReplyProductPriceTier)
+    private priceTierRepo: Repository<AutoReplyProductPriceTier>,
     @InjectRepository(AutoReplyContactAllowedProduct)
     private capRepo: Repository<AutoReplyContactAllowedProduct>,
     @InjectRepository(AutoReplyKeywordRoute)
@@ -771,6 +774,28 @@ export class AutoReplyService {
         row.getCell(headerMap['NhomHang']).value ?? '',
       ).trim();
 
+      const priceVal = headerMap['GiaBan'] ? row.getCell(headerMap['GiaBan']).value : null;
+      let price = 0;
+      if (priceVal !== null && priceVal !== undefined) {
+        if (typeof priceVal === 'object' && (priceVal as any).result !== undefined) {
+          price = Number((priceVal as any).result);
+        } else {
+          price = Number(priceVal);
+        }
+        if (isNaN(price)) price = 0;
+      }
+
+      const stockVal = headerMap['TonKho'] ? row.getCell(headerMap['TonKho']).value : null;
+      let stock = 0;
+      if (stockVal !== null && stockVal !== undefined) {
+        if (typeof stockVal === 'object' && (stockVal as any).result !== undefined) {
+          stock = Number((stockVal as any).result);
+        } else {
+          stock = Number(stockVal);
+        }
+        if (isNaN(stock)) stock = 0;
+      }
+
       // Validate required fields
       const rowErrors: string[] = [];
       if (!name) rowErrors.push('Tên sản phẩm không được để trống');
@@ -787,6 +812,8 @@ export class AutoReplyService {
         name,
         brand,
         cate,
+        price,
+        stock,
         errors: rowErrors,
         isValid: rowErrors.length === 0,
       });
@@ -922,6 +949,28 @@ export class AutoReplyService {
       }
 
       try {
+        const priceVal = headerMap['GiaBan'] ? row.getCell(headerMap['GiaBan']).value : null;
+        let price = 0;
+        if (priceVal !== null && priceVal !== undefined) {
+          if (typeof priceVal === 'object' && (priceVal as any).result !== undefined) {
+            price = Number((priceVal as any).result);
+          } else {
+            price = Number(priceVal);
+          }
+          if (isNaN(price)) price = 0;
+        }
+
+        const stockVal = headerMap['TonKho'] ? row.getCell(headerMap['TonKho']).value : null;
+        let stock = 0;
+        if (stockVal !== null && stockVal !== undefined) {
+          if (typeof stockVal === 'object' && (stockVal as any).result !== undefined) {
+            stock = Number((stockVal as any).result);
+          } else {
+            stock = Number(stockVal);
+          }
+          if (isNaN(stock)) stock = 0;
+        }
+
         let product = await this.productRepo.findOne({ where: { code } });
         if (!product) {
           product = this.productRepo.create({
@@ -929,13 +978,16 @@ export class AutoReplyService {
             name,
             brand,
             cate,
-            stock: 0,
+            stock: stockVal !== null && stockVal !== undefined ? stock : 0,
           });
           created++;
         } else {
           product.name = name || product.name;
           product.brand = brand || product.brand;
           product.cate = cate || product.cate;
+          if (stockVal !== null && stockVal !== undefined) {
+            product.stock = stock;
+          }
           updated++;
         }
 
@@ -947,7 +999,26 @@ export class AutoReplyService {
           (product as any).attrs = nkc.properties;
         }
 
-        await this.productRepo.save(product);
+        const savedProduct = await this.productRepo.save(product);
+
+        // Upsert 1 priceTier with minQuantity=1
+        if (priceVal !== null && priceVal !== undefined && price >= 0) {
+          const existingTier = await this.priceTierRepo.findOne({
+            where: { productId: savedProduct.productId, minQuantity: 1 },
+          });
+          if (existingTier) {
+            existingTier.pricePerUnit = String(price);
+            await this.priceTierRepo.save(existingTier);
+          } else {
+            await this.priceTierRepo.save(
+              this.priceTierRepo.create({
+                productId: savedProduct.productId,
+                minQuantity: 1,
+                pricePerUnit: String(price),
+              }),
+            );
+          }
+        }
       } catch (e: any) {
         errors.push(`Row ${r}: ${e?.message || 'unknown error'}`);
       }
@@ -958,6 +1029,46 @@ export class AutoReplyService {
 
     return { total: created + updated, created, updated, errors };
   }
+
+  async updateProductPriceAndStock(
+    productId: number,
+    price: number,
+    stock: number,
+  ) {
+    const product = await this.productRepo.findOne({ where: { productId } });
+    if (!product) {
+      throw new Error(`Không tìm thấy sản phẩm với ID ${productId}`);
+    }
+
+    product.stock = stock;
+    await this.productRepo.save(product);
+
+    const existingTier = await this.priceTierRepo.findOne({
+      where: { productId, minQuantity: 1 },
+    });
+    if (existingTier) {
+      existingTier.pricePerUnit = String(price);
+      await this.priceTierRepo.save(existingTier);
+    } else {
+      await this.priceTierRepo.save(
+        this.priceTierRepo.create({
+          productId,
+          minQuantity: 1,
+          pricePerUnit: String(price),
+        }),
+      );
+    }
+
+    const updatedProduct = await this.productRepo.findOne({
+      where: { productId },
+      relations: ['priceTiers'],
+    });
+
+    this.ws.emitToAll('autoReply:productUpdated', { productId });
+
+    return updatedProduct;
+  }
+
   async getAllowedProducts(contactId: number) {
     return this.capRepo.find({ where: { contactId } });
   }
