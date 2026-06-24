@@ -14,16 +14,16 @@ export class DatabaseCleanupCronjobService {
     private changeLogRepository: Repository<DatabaseChangeLog>,
   ) {
     this.logger.log(
-      '🎯 [DatabaseCleanupCronjobService] Service đã được khởi tạo - Cronjob xóa database_change_log sẽ chạy lúc 23h đêm hàng ngày (giờ Việt Nam)',
+      '🎯 [DatabaseCleanupCronjobService] Service đã được khởi tạo - Cronjob xóa database_change_log sẽ chạy định kỳ (mặc định lúc 00:00 sáng Thứ Hai hàng tuần giờ Việt Nam)',
     );
   }
 
   /**
-   * Cronjob xóa database_change_log theo batch mỗi ngày lúc 23h đêm giờ Việt Nam
-   * Cron expression: '0 23 * * *' = 23:00 mỗi ngày
+   * Cronjob xóa database_change_log theo batch định kỳ giờ Việt Nam
+   * Mặc định chạy vào lúc 00:00 sáng Thứ Hai hàng tuần (Cron: '0 0 * * 1')
    * Xóa theo batch để tránh tải nặng cho database
    */
-  @Cron(process.env.CRON_DB_CLEANUP_TIME || '0 23 * * *', {
+  @Cron(process.env.CRON_DB_CLEANUP_TIME || '0 0 * * 1', {
     timeZone: 'Asia/Ho_Chi_Minh', // Sử dụng timezone Việt Nam
   })
   async clearDatabaseChangeLog() {
@@ -42,22 +42,37 @@ export class DatabaseCleanupCronjobService {
     );
 
     try {
-      // Đếm số bản ghi trước khi xóa để log
-      const countBefore = await this.changeLogRepository.count();
+      const retentionDays = Number(process.env.DB_CHANGE_LOG_RETENTION_DAYS || 7);
+      const limitDate = new Date();
+      limitDate.setDate(limitDate.getDate() - retentionDays);
+
+      const limitDateStr = limitDate.toLocaleString('vi-VN', {
+        timeZone: 'Asia/Ho_Chi_Minh',
+      });
+
+      this.logger.log(
+        `📅 [Database Cleanup Cron] Cấu hình giữ lại log trong ${retentionDays} ngày. Sẽ xóa các log trước ngày: ${limitDateStr}`,
+      );
+
+      // Đếm số bản ghi hết hạn trước khi xóa để log
+      const countBefore = await this.changeLogRepository
+        .createQueryBuilder('log')
+        .where('log.triggered_at < :limitDate', { limitDate })
+        .getCount();
       
       if (countBefore === 0) {
         this.logger.log(
-          'ℹ️ [Database Cleanup Cron] Bảng database_change_log đã trống, không có gì để xóa',
+          'ℹ️ [Database Cleanup Cron] Không có bản ghi nào hết hạn cần xóa',
         );
         return;
       }
 
       this.logger.log(
-        `📊 [Database Cleanup Cron] Tìm thấy ${countBefore} bản ghi trong database_change_log`,
+        `📊 [Database Cleanup Cron] Tìm thấy ${countBefore} bản ghi hết hạn trong database_change_log`,
       );
 
       // Xóa theo batch để tránh tải nặng
-      const result = await this.clearDatabaseChangeLogInBatches();
+      const result = await this.clearDatabaseChangeLogInBatches(limitDate);
 
       this.logger.log(
         `✅ [Database Cleanup Cron] Đã xóa thành công ${result.totalDeleted} bản ghi từ database_change_log trong ${result.batches} batch`,
@@ -75,10 +90,12 @@ export class DatabaseCleanupCronjobService {
 
   /**
    * Xóa database_change_log theo batch để tránh tải nặng cho database
+   * @param limitDate Mốc thời gian để xóa các bản ghi cũ hơn
    * @param batchSize Kích thước mỗi batch (mặc định 1000)
    * @param maxBatches Số batch tối đa để tránh chạy quá lâu (mặc định 100)
    */
   private async clearDatabaseChangeLogInBatches(
+    limitDate: Date,
     batchSize: number = 1000,
     maxBatches: number = 100,
   ): Promise<{ totalDeleted: number; batches: number }> {
@@ -92,10 +109,11 @@ export class DatabaseCleanupCronjobService {
 
     while (hasMoreData && batches < maxBatches) {
       try {
-        // Lấy ID của các bản ghi cũ nhất để xóa
+        // Lấy ID của các bản ghi cũ nhất (và nhỏ hơn limitDate) để xóa
         const recordsToDelete = await this.changeLogRepository
           .createQueryBuilder('log')
           .select('log.id')
+          .where('log.triggered_at < :limitDate', { limitDate })
           .orderBy('log.triggered_at', 'ASC') // Xóa từ cũ nhất
           .limit(batchSize)
           .getMany();
