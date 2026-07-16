@@ -59,7 +59,7 @@ export class DatabaseCleanupCronjobService {
       );
 
       // Xóa theo batch để tránh tải nặng
-      const result = await this.clearDatabaseChangeLogInBatches(limitDate);
+      const result = await this.clearDatabaseChangeLogInBatches();
 
       this.logger.log(
         `✅ [Database Cleanup Cron] Đã xóa thành công ${result.totalDeleted} bản ghi từ database_change_log trong ${result.batches} batch`,
@@ -77,12 +77,10 @@ export class DatabaseCleanupCronjobService {
 
   /**
    * Xóa database_change_log theo batch để tránh tải nặng cho database
-   * @param limitDate Mốc thời gian để xóa các bản ghi cũ hơn
    * @param batchSize Kích thước mỗi batch (mặc định 1000)
    * @param maxBatches Số batch tối đa để tránh chạy quá lâu (mặc định 100)
    */
   private async clearDatabaseChangeLogInBatches(
-    limitDate: Date,
     batchSize: number = 1000,
     maxBatches: number = 100,
   ): Promise<{ totalDeleted: number; batches: number }> {

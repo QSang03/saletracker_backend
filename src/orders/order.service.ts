@@ -38,14 +38,14 @@ interface OrderFilters {
   pmCustomMode?: string; // 'true' hoặc 'false' để xác định chế độ PM
   rolePermissions?: string; // Thông tin từng role từ frontend
   sortField?:
-    | 'quantity'
-    | 'unit_price'
-    | 'extended'
-    | 'dynamicExtended'
-    | 'created_at'
-    | 'conversation_start'
-    | 'conversation_end'
-    | null;
+  | 'quantity'
+  | 'unit_price'
+  | 'extended'
+  | 'dynamicExtended'
+  | 'created_at'
+  | 'conversation_start'
+  | 'conversation_end'
+  | null;
   sortDirection?: 'asc' | 'desc' | null;
   user?: any; // truyền cả user object
   includeHidden?: string; // '1' | 'true' to include hidden items (admin only)
@@ -74,7 +74,7 @@ export class OrderService {
     @InjectRepository(SystemConfig)
     private systemConfigRepository: Repository<SystemConfig>,
     private orderBlacklistService: OrderBlacklistService,
-  ) {}
+  ) { }
 
   // Phase 2.6: Tối ưu hóa - Bulk hide operations
   async bulkHideOrderDetails(
@@ -2834,7 +2834,7 @@ export class OrderService {
     );
     const isAdminUser = roleNamesForHidden.includes('admin');
     const hasPmRole = roleNamesForHidden.some((r: string) =>
-      r.startsWith('pm-'),
+      r.startsWith('pm'),
     );
     const allowHiddenByRole = isAdminUser || hasPmRole;
 
@@ -3573,7 +3573,7 @@ export class OrderService {
     );
     const isAdminUser = roleNamesForHidden.includes('admin');
     const hasPmRole = roleNamesForHidden.some((r: string) =>
-      r.startsWith('pm-'),
+      r.startsWith('pm'),
     );
     const allowHiddenByRole = isAdminUser || hasPmRole;
 
