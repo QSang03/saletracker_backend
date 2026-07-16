@@ -8,10 +8,10 @@
   "scripts": {
     "build": "nest build",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
-    "start": "nest start --host 0.0.0.0 --port 22222",
+    "start": "nest start --host 0.0.0.0",
     "start:dev": "nest start --watch --host 0.0.0.0",
     "start:debug": "nest start --debug --watch --host 0.0.0.0",
-    "start:prod": "node -e \"process.env.PORT=22222; require('./dist/main.js')\"",
+    "start:prod": "node dist/main.js",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
     "test": "jest",
     "test:watch": "jest --watch",
