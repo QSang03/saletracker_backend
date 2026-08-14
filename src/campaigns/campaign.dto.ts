@@ -10,7 +10,6 @@ import {
   ValidateNested,
   IsBoolean,
   IsNumber,
-  IsPhoneNumber,
   Matches,
 } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -187,8 +186,10 @@ export class CustomerDto {
   @IsString()
   @IsNotEmpty({ message: 'Số điện thoại không được để trống' })
   @Matches(/^\S+$/, { message: 'Số điện thoại không được chứa khoảng trắng' })
-  @IsPhoneNumber('VN', {
-    message: 'Số điện thoại không đúng định dạng (VD: 0987654321)',
+  // Quy tắc đơn giản: số điện thoại bắt đầu bằng 0 và đủ 10 chữ số.
+  // Không giới hạn đầu số (cho phép toàn bộ 08x, 02x, 04x...).
+  @Matches(/^0\d{9}$/, {
+    message: 'Số điện thoại phải bắt đầu bằng 0 và đủ 10 chữ số (VD: 0987654321)',
   })
   phone_number: string;
 

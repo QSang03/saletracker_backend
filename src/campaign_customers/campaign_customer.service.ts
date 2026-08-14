@@ -320,8 +320,8 @@ export class CampaignCustomerService {
   }
 
   private isValidPhoneNumber(phone: string): boolean {
-    // Vietnamese phone number validation
-    const phoneRegex = /^(84|0)(3|5|7|8|9)[0-9]{8}$/;
+    // Quy tắc đơn giản: bắt đầu bằng 0 và đủ 10 chữ số (không giới hạn đầu số)
+    const phoneRegex = /^0\d{9}$/;
     const cleanPhone = phone.replace(/[\s\-\(\)]/g, '');
     return phoneRegex.test(cleanPhone);
   }
