@@ -78,21 +78,19 @@ export class DatabaseCleanupCronjobService {
   /**
    * Xóa database_change_log theo batch để tránh tải nặng cho database
    * @param batchSize Kích thước mỗi batch (mặc định 1000)
-   * @param maxBatches Số batch tối đa để tránh chạy quá lâu (mặc định 100)
    */
   private async clearDatabaseChangeLogInBatches(
     batchSize: number = 1000,
-    maxBatches: number = 100,
   ): Promise<{ totalDeleted: number; batches: number }> {
     let totalDeleted = 0;
     let batches = 0;
     let hasMoreData = true;
 
     this.logger.log(
-      `📦 [Batch Delete] Bắt đầu xóa theo batch - Kích thước: ${batchSize}, Tối đa: ${maxBatches} batch`,
+      `📦 [Batch Delete] Bắt đầu xóa theo batch - Kích thước: ${batchSize}, không giới hạn số batch`,
     );
 
-    while (hasMoreData && batches < maxBatches) {
+    while (hasMoreData) {
       try {
         const retentionDays = parseInt(
           process.env.DB_CHANGE_LOG_RETENTION_DAYS || '7',
@@ -140,7 +138,7 @@ export class DatabaseCleanupCronjobService {
         }
 
         // Nghỉ ngắn giữa các batch để giảm tải cho database
-        if (hasMoreData && batches < maxBatches) {
+        if (hasMoreData) {
           await new Promise((resolve) => setTimeout(resolve, 100)); // Nghỉ 100ms
         }
       } catch (error) {
@@ -152,16 +150,108 @@ export class DatabaseCleanupCronjobService {
       }
     }
 
-    if (batches >= maxBatches) {
-      this.logger.warn(
-        `⚠️ [Batch Delete] Đã đạt giới hạn ${maxBatches} batch, có thể còn dữ liệu chưa xóa`,
-      );
-    }
-
     this.logger.log(
       `📦 [Batch Delete] Hoàn thành: ${totalDeleted} bản ghi trong ${batches} batch`,
     );
 
     return { totalDeleted, batches };
+  }
+
+  /**
+   * Cronjob xóa records của bảng users trong database_change_log hàng ngày
+   * Chạy lúc 03:00 sáng giờ Việt Nam
+   * Giữ 7 ngày (theo DB_CHANGE_LOG_RETENTION_DAYS)
+   */
+  @Cron(process.env.CRON_USER_LOG_CLEANUP_TIME || '0 3 * * *', {
+    timeZone: 'Asia/Ho_Chi_Minh',
+  })
+  async clearUserChangeLogs() {
+    const vietnamTime = new Date().toLocaleString('vi-VN', {
+      timeZone: 'Asia/Ho_Chi_Minh',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+
+    this.logger.log(
+      `🔄 [User Log Cleanup Cron] Bắt đầu xóa users records trong database_change_log lúc ${vietnamTime}`,
+    );
+
+    try {
+      const retentionDays = parseInt(
+        process.env.DB_CHANGE_LOG_RETENTION_DAYS || '7',
+        10,
+      );
+      const cutoffDate = new Date();
+      cutoffDate.setDate(cutoffDate.getDate() - retentionDays);
+
+      // Đếm số bản ghi trước khi xóa
+      const countBefore = await this.changeLogRepository
+        .createQueryBuilder('log')
+        .where('log.table_name = :tableName', { tableName: 'users' })
+        .andWhere('log.triggered_at < :cutoffDate', { cutoffDate })
+        .getCount();
+
+      if (countBefore === 0) {
+        this.logger.log(
+          'ℹ️ [User Log Cleanup Cron] Không có users records nào hết hạn cần xóa',
+        );
+        return;
+      }
+
+      this.logger.log(
+        `📊 [User Log Cleanup Cron] Tìm thấy ${countBefore} users records hết hạn`,
+      );
+
+      // Xóa theo batch
+      let totalDeleted = 0;
+      let hasMoreData = true;
+      const batchSize = 1000;
+
+      while (hasMoreData) {
+        const recordsToDelete = await this.changeLogRepository
+          .createQueryBuilder('log')
+          .select('log.id')
+          .where('log.table_name = :tableName', { tableName: 'users' })
+          .andWhere('log.triggered_at < :cutoffDate', { cutoffDate })
+          .orderBy('log.triggered_at', 'ASC')
+          .limit(batchSize)
+          .getMany();
+
+        if (recordsToDelete.length === 0) {
+          hasMoreData = false;
+          break;
+        }
+
+        const idsToDelete = recordsToDelete.map((record) => record.id);
+        const deleteResult = await this.changeLogRepository
+          .createQueryBuilder()
+          .delete()
+          .where('id IN (:...ids)', { ids: idsToDelete })
+          .execute();
+
+        totalDeleted += deleteResult.affected || 0;
+
+        if ((deleteResult.affected || 0) < batchSize) {
+          hasMoreData = false;
+        }
+
+        if (hasMoreData) {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+      }
+
+      this.logger.log(
+        `✅ [User Log Cleanup Cron] Đã xóa ${totalDeleted} users records từ database_change_log`,
+      );
+    } catch (error) {
+      this.logger.error(
+        '❌ [User Log Cleanup Cron] Lỗi khi xóa users records:',
+        error.stack,
+      );
+    }
   }
 }

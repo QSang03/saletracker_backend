@@ -17,8 +17,8 @@ export class SeedCampaignTriggerService implements OnModuleInit {
       'status', // Campaign status changes (draft, active, paused, completed, cancelled)
     ],
     campaign_interaction_logs: [
-      'message_content_sent', // Message content that was sent
-      'attachment_sent', // Attachments sent to customer
+      // 'message_content_sent' removed - too large, frontend reads from campaign_interaction_logs directly
+      // 'attachment_sent' removed - too large, frontend reads from campaign_interaction_logs directly
       'status', // Log status (pending, sent, delivered, failed, etc.)
       'sent_at', // When message was sent
       'customer_replied_at', // When customer replied
@@ -267,23 +267,19 @@ export class SeedCampaignTriggerService implements OnModuleInit {
         ) VALUES (
           'campaign_interaction_logs', NEW.id, 'INSERT',
           JSON_OBJECT(
-            'id', NEW.id,
-            'campaign_id', NEW.campaign_id,
-            'customer_id', NEW.customer_id,
-            'message_content_sent', NEW.message_content_sent,
-            'attachment_sent', NEW.attachment_sent,
-            'status', NEW.status,
-            'sent_at', NEW.sent_at,
-            'customer_replied_at', NEW.customer_replied_at,
-            'customer_reply_content', NEW.customer_reply_content,
-            'staff_handled_at', NEW.staff_handled_at,
-            'staff_reply_content', NEW.staff_reply_content,
-            'staff_handler_id', NEW.staff_handler_id,
-            'error_details', NEW.error_details,
-            'conversation_metadata', NEW.conversation_metadata,
-            'reminder_metadata', NEW.reminder_metadata,
-            'created_at', NEW.created_at,
-            'updated_at', NEW.updated_at
+          'id', NEW.id,
+          'campaign_id', NEW.campaign_id,
+          'customer_id', NEW.customer_id,
+          'status', NEW.status,
+          'sent_at', NEW.sent_at,
+          'customer_replied_at', NEW.customer_replied_at,
+          'customer_reply_content', NEW.customer_reply_content,
+          'staff_handled_at', NEW.staff_handled_at,
+          'staff_reply_content', NEW.staff_reply_content,
+          'staff_handler_id', NEW.staff_handler_id,
+          'conversation_metadata', NEW.conversation_metadata,
+          'created_at', NEW.created_at,
+          'updated_at', NEW.updated_at
           ),
           NOW()
         );
@@ -300,17 +296,8 @@ export class SeedCampaignTriggerService implements OnModuleInit {
         DECLARE changed_fields JSON DEFAULT JSON_ARRAY();
         
         -- Track all specified fields for campaign interaction logs
-        
-        -- message_content_sent: Message content sent to customer
-        IF OLD.message_content_sent != NEW.message_content_sent OR (OLD.message_content_sent IS NULL AND NEW.message_content_sent IS NOT NULL) OR (OLD.message_content_sent IS NOT NULL AND NEW.message_content_sent IS NULL) THEN
-          SET changed_fields = JSON_ARRAY_APPEND(changed_fields, '$', 'message_content_sent');
-        END IF;
-        
-        -- attachment_sent: Attachments sent to customer
-        IF JSON_UNQUOTE(OLD.attachment_sent) != JSON_UNQUOTE(NEW.attachment_sent) OR (OLD.attachment_sent IS NULL AND NEW.attachment_sent IS NOT NULL) OR (OLD.attachment_sent IS NOT NULL AND NEW.attachment_sent IS NULL) THEN
-          SET changed_fields = JSON_ARRAY_APPEND(changed_fields, '$', 'attachment_sent');
-        END IF;
-        
+        -- 'message_content_sent' and 'attachment_sent' removed - too large for change_log, frontend reads from campaign_interaction_logs directly
+
         -- status: Interaction log status
         IF OLD.status != NEW.status THEN
           SET changed_fields = JSON_ARRAY_APPEND(changed_fields, '$', 'status');
@@ -356,8 +343,6 @@ export class SeedCampaignTriggerService implements OnModuleInit {
               'id', OLD.id,
               'campaign_id', OLD.campaign_id,
               'customer_id', OLD.customer_id,
-              'message_content_sent', OLD.message_content_sent,
-              'attachment_sent', OLD.attachment_sent,
               'status', OLD.status,
               'sent_at', OLD.sent_at,
               'customer_replied_at', OLD.customer_replied_at,
@@ -372,8 +357,6 @@ export class SeedCampaignTriggerService implements OnModuleInit {
               'id', NEW.id,
               'campaign_id', NEW.campaign_id,
               'customer_id', NEW.customer_id,
-              'message_content_sent', NEW.message_content_sent,
-              'attachment_sent', NEW.attachment_sent,
               'status', NEW.status,
               'sent_at', NEW.sent_at,
               'customer_replied_at', NEW.customer_replied_at,
