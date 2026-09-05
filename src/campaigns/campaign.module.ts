@@ -10,6 +10,7 @@ import { CampaignSchedule } from 'src/campaign_schedules/campaign_schedule.entit
 import { CampaignEmailReport } from 'src/campaign_email_reports/campaign_email_report.entity';
 import { CampaignCustomer } from 'src/campaign_customers/campaign_customer.entity';
 import { DepartmentSchedule } from '../campaign_departments_schedules/campaign_departments_schedules.entity';
+import { SystemConfig } from '../system_config/system_config.entity';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { DepartmentSchedule } from '../campaign_departments_schedules/campaign_d
       CampaignCustomer,
       CampaignInteractionLog,
       DepartmentSchedule,
+      SystemConfig,
     ]),
   ],
   providers: [CampaignService],

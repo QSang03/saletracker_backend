@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Like, In, IsNull } from 'typeorm';
-import { Campaign, CampaignStatus, CampaignType } from './campaign.entity';
+import { Campaign, CampaignStatus, CampaignType, SendMethod } from './campaign.entity';
 import { Department } from '../departments/department.entity';
 import {
   CreateCampaignDto,
@@ -25,6 +25,7 @@ import {
   ScheduleType,
   ScheduleStatus,
 } from '../campaign_departments_schedules/campaign_departments_schedules.entity';
+import { SystemConfig } from '../system_config/system_config.entity';
 import {
   PromoMessageFlow,
   InitialMessage,
@@ -85,6 +86,8 @@ export interface CampaignWithDetails extends Campaign {
 export interface CampaignResponse {
   data: CampaignWithDetails[];
   total: number;
+  // Override toàn cục 'campaign_send_method' từ system_config ('api'/'bot' hoặc null nếu không override)
+  send_method_override?: SendMethod | null;
   stats: {
     totalCampaigns: number;
     draftCampaigns: number;
@@ -127,7 +130,40 @@ export class CampaignService {
     private readonly campaignCustomerRepository: Repository<CampaignCustomer>,
     @InjectRepository(DepartmentSchedule)
     private readonly departmentScheduleRepository: Repository<DepartmentSchedule>,
+    @InjectRepository(SystemConfig)
+    private readonly systemConfigRepo: Repository<SystemConfig>,
   ) {}
+
+  // Cache override toàn cục 'campaign_send_method' (60s — mirror Python CAMPAIGN_SEND_METHOD_CACHE_TTL)
+  private sendMethodOverrideCache: { at: number; value: SendMethod | null } | null = null;
+
+  /**
+   * Đọc override phương thức gửi toàn cục từ system_config ('campaign_send_method').
+   * Mirror logic Python get_effective_send_method: chỉ nhận 'api'/'bot' với status=1,
+   * giá trị khác/không tồn tại → null (không override). Trả null khi lỗi DB.
+   * Có cache 60s để hạn chế query DB — sau khi đổi config, list phản ánh trong tối đa ~1 phút.
+   */
+  private async getSendMethodOverride(): Promise<SendMethod | null> {
+    const cached = this.sendMethodOverrideCache;
+    if (cached && Date.now() - cached.at < 60_000) {
+      return cached.value;
+    }
+
+    let value: SendMethod | null = null;
+    try {
+      const config = await this.systemConfigRepo.findOne({
+        where: { name: 'campaign_send_method', status: 1 } as any,
+      });
+      const raw = (config?.value || '').trim().toLowerCase();
+      if (raw === SendMethod.API || raw === SendMethod.BOT) {
+        value = raw as SendMethod;
+      }
+    } catch (err) {
+      // Lỗi DB → coi như không có override, không chặn list
+    }
+    this.sendMethodOverrideCache = { at: Date.now(), value };
+    return value;
+  }
 
   private async getAllDepartmentSchedules(
     departmentId: number,
@@ -3356,7 +3392,8 @@ export class CampaignService {
     );
 
     const stats = await this.getStats(user);
-    return { data, total, stats };
+    const send_method_override = await this.getSendMethodOverride();
+    return { data, total, stats, send_method_override };
   }
 
   async findOne(id: string, user: User): Promise<CampaignWithDetails> {
@@ -4957,7 +4994,7 @@ export class CampaignService {
       archivedCampaigns: total,
     };
 
-    return { data, total, stats };
+    return { data, total, stats, send_method_override: await this.getSendMethodOverride() };
   }
 
   async getCopyData(id: string, user: User): Promise<CreateCampaignDto> {
