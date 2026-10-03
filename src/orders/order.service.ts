@@ -572,7 +572,12 @@ export class OrderService {
   }
 
   // Helper method để lấy user IDs dựa trên role của user
-  private async getUserIdsByRole(user: any): Promise<number[] | null> {
+  /**
+   * Danh sách user mà `user` được phép xem. Trả null = được xem tất cả (admin).
+   * Public để các module khác (ví dụ sale-response) dùng chung đúng một nguồn
+   * quyền, tránh mỗi module tự viết lại luật role rồi lệch nhau.
+   */
+  async getUserIdsByRole(user: any): Promise<number[] | null> {
     if (!user) return null;
 
     const roleNames = (user.roles || []).map((r: any) =>

@@ -22,18 +22,32 @@ import { Permission } from 'src/common/guards/permission.decorator';
 export class DepartmentController {
   constructor(private readonly departmentService: DepartmentService) {}
 
+  // Một số caller cũ gửi `limit` thay vì `pageSize` — chấp nhận cả hai
+  // để không âm thầm rơi về default 10 khi tên param sai.
+  private parsePage(raw: string | undefined): number {
+    const n = parseInt(raw ?? '', 10);
+    return Number.isFinite(n) && n > 0 ? n : 1;
+  }
+
+  private parsePageSize(raw: string | undefined, fallback: number): number {
+    const n = parseInt(raw ?? '', 10);
+    if (!Number.isFinite(n) || n <= 0) return fallback;
+    return Math.min(n, 1000);
+  }
+
   @Get()
   async findAll(
     @Req() req: Request,
     @Query('page') page?: string,
     @Query('pageSize') pageSize?: string,
+    @Query('limit') limit?: string,
     @Query('search') search?: string,
   ) {
     const user = req.user;
     return this.departmentService.findAll(
       user,
-      page ? parseInt(page, 10) : 1,
-      pageSize ? parseInt(pageSize, 10) : 10,
+      this.parsePage(page),
+      this.parsePageSize(pageSize ?? limit, 10),
       search,
     );
   }
@@ -84,12 +98,13 @@ export class DepartmentController {
     @Req() req: Request,
     @Query('page') page?: string,
     @Query('pageSize') pageSize?: string,
+    @Query('limit') limit?: string,
   ) {
     const user = req.user;
     return this.departmentService.findDeleted(
       user,
-      page ? parseInt(page, 10) : 1,
-      pageSize ? parseInt(pageSize, 10) : 20,
+      this.parsePage(page),
+      this.parsePageSize(pageSize ?? limit, 20),
     );
   }
 

@@ -37,6 +37,7 @@ import { CampaignScheduleModule } from './campaign_schedules/campaign_schedule.m
 import { CampaignContentModule } from './campaign_contents/campaign_content.module';
 import { CampaignDepartmentsSchedulesModule } from './campaign_departments_schedules/campaign_departments_schedules.module';
 import { OrderBlacklistModule } from './order-blacklist/order-blacklist.module';
+import { SaleResponseModule } from './sale-response/sale-response.module';
 import { AnalysisBlockModule } from './analysis-block/analysis-block.module';
 import { AutoReplyModule } from './auto_reply/auto_reply.module';
 import { AutoGreetingModule } from './auto_greeting/auto_greeting.module';
@@ -77,6 +78,7 @@ import { SendHistoryModule } from './send_history/send_history.module';
     OrderModule,
     OrderDetailModule,
     OrderBlacklistModule,
+    SaleResponseModule,
     AnalysisBlockModule,
     WebhookModule,
     DebtStatisticModule,
