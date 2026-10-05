@@ -13,6 +13,7 @@ import { Category } from '../categories/category.entity';
 import { SeedDebtTriggerService } from './seed-debt-trigger.service';
 import { SeedCampaignTriggerService } from './seed-campaign-trigger.service';
 import { SeedUserTriggerService } from './seed-user-trigger.service';
+import { SeedCustomerPermissionService } from './seed-customer-permission.service';
 
 @Module({
   imports: [
@@ -33,6 +34,7 @@ import { SeedUserTriggerService } from './seed-user-trigger.service';
     SeedDebtTriggerService,
     SeedCampaignTriggerService,
     SeedUserTriggerService,
+    SeedCustomerPermissionService,
   ],
 })
 export class SeedModule {}

@@ -9,6 +9,7 @@ import { SystemConfig } from '../system_config/system_config.entity';
 import { SeedDebtTriggerService } from './seed-debt-trigger.service';
 import { SeedCampaignTriggerService } from './seed-campaign-trigger.service';
 import { SeedUserTriggerService } from './seed-user-trigger.service';
+import { SeedCustomerPermissionService } from './seed-customer-permission.service';
 
 @Injectable()
 export class SeedService implements OnModuleInit {
@@ -22,12 +23,14 @@ export class SeedService implements OnModuleInit {
     private readonly seedDebtTriggerService: SeedDebtTriggerService,
     private readonly seedCampaignTriggerService: SeedCampaignTriggerService,
     private readonly seedUserTriggerService: SeedUserTriggerService,
+    private readonly seedCustomerPermissionService: SeedCustomerPermissionService,
   ) {}
 
   async onModuleInit() {
     await this.seedDebtTriggerService.seedTriggers();
     await this.seedCampaignTriggerService.seedTriggers();
     await this.seedUserTriggerService.seedTriggers();
+    await this.seedCustomerPermissionService.seedCustomerPermissions();
 
     // Ensure default roles exist
     const defaultRoleNames = ['admin', 'user', 'manager', 'view'];

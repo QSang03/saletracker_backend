@@ -12,6 +12,8 @@
     "start:dev": "nest start --watch --host 0.0.0.0",
     "start:debug": "nest start --debug --watch --host 0.0.0.0",
     "start:prod": "node dist/main.js",
+    "kill:dev": "node scripts/kill-backend.js",
+    "test:customer-kpi": "node scripts/test-customer-kpi.mjs",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
     "test": "jest",
     "test:watch": "jest --watch",
