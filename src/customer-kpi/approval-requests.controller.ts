@@ -2,6 +2,8 @@ import {
   Body,
   Controller,
   Get,
+  HttpCode,
+  HttpStatus,
   Param,
   ParseIntPipe,
   Post,
@@ -38,6 +40,7 @@ export class ApprovalRequestsController {
   }
 
   @Post(':id/decide')
+  @HttpCode(HttpStatus.OK)
   @Permission('khach-hang', 'approve')
   decide(
     @Param('id', ParseIntPipe) id: number,

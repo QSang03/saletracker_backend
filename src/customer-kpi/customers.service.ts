@@ -23,6 +23,8 @@ import {
   CreateCustomerDto,
   ZaloContactQueryDto,
 } from './dto/create-customer.dto';
+import { ApprovalRequest, ApprovalRequestType, ApprovalStatus } from './approval-request.entity';
+import { ApprovalRequestCustomerItem, ApprovalCustomerAction } from './approval-request-customer-item.entity';
 
 /** DB Zalo nằm cùng MySQL host — đọc thẳng bảng liên hệ để chọn tay cặp khớp. */
 const ZALO_DB = 'zalo_automation';
@@ -52,7 +54,53 @@ export class CustomersService {
     private readonly userRepo: Repository<User>,
     @InjectDataSource()
     private readonly dataSource: DataSource,
+    @InjectRepository(ApprovalRequest)
+    private readonly approvalRequestRepo: Repository<ApprovalRequest>,
+    @InjectRepository(ApprovalRequestCustomerItem)
+    private readonly approvalCustomerItemRepo: Repository<ApprovalRequestCustomerItem>,
   ) {}
+
+  /**
+   * Nhân viên (không phải admin/trưởng phòng) ghi thao tác → tạo ĐỀ XUẤT chờ
+   * trưởng phòng duyệt thay vì áp dụng thẳng (thiết kế phần vai trò).
+   */
+  private async createCustomerProposal(
+    user: any,
+    targetSaleId: number,
+    action: ApprovalCustomerAction,
+    customer: Customer | null,
+    draft: {
+      customer_code: string;
+      sap_code: string;
+      department_slug: string | null;
+      customer_tier: string | null;
+      old_data: any;
+      new_data: any;
+    },
+  ) {
+    const request = await this.approvalRequestRepo.save(
+      this.approvalRequestRepo.create({
+        request_type: ApprovalRequestType.CUSTOMER_LIST,
+        requested_by: { id: user.id } as any,
+        target_user_id: targetSaleId,
+        status: ApprovalStatus.PENDING,
+      }),
+    );
+    await this.approvalCustomerItemRepo.save(
+      this.approvalCustomerItemRepo.create({
+        request_id: request.id,
+        action,
+        customer_code: draft.customer_code,
+        sap_code: draft.sap_code,
+        customer_name: customer?.customer_name ?? null,
+        department_slug: draft.department_slug,
+        customer_tier: (draft.customer_tier ?? null) as any,
+        old_data: draft.old_data,
+        new_data: draft.new_data,
+      }),
+    );
+    return { proposal: true, requestId: request.id, status: 'pending_approval' };
+  }
 
   private lowerRoles(user: any): string[] {
     return (user?.roles || []).map((r: any) =>
@@ -445,9 +493,26 @@ export class CustomersService {
     const isManagerOrAdmin =
       roles.includes('admin') || roles.some((r) => r.startsWith('manager-'));
     if (!isManagerOrAdmin) {
-      throw new NotImplementedException(
-        'Nhân viên thêm khách sẽ đi qua luồng đề xuất → trưởng phòng duyệt — Mục 2 (cv 5-6)',
-      );
+      // Nhân viên chỉ được đề xuất thêm khách cho CHÍNH MÌNH
+      if (dto.sale_id !== user.id) {
+        throw new ForbiddenException('Chỉ được đề xuất thêm khách cho chính mình');
+      }
+      return this.createCustomerProposal(user, dto.sale_id, ApprovalCustomerAction.CREATE, null, {
+        customer_code: dto.customer_code,
+        sap_code: dto.sap_code ?? '',
+        department_slug: dto.department_slug,
+        customer_tier: dto.customer_tier,
+        old_data: null,
+        new_data: {
+          customer_code: dto.customer_code,
+          sap_code: dto.sap_code ?? '',
+          customer_name: dto.customer_name ?? null,
+          customer_role: dto.customer_role ?? null,
+          debt_limit: dto.debt_limit ?? null,
+          department_slug: dto.department_slug,
+          customer_tier: dto.customer_tier,
+        },
+      });
     }
     if (!(await this.canManageSale(user, dto.sale_id))) {
       throw new ForbiddenException('Sale không thuộc phạm vi quản lý của bạn');
@@ -537,8 +602,22 @@ export class CustomersService {
     const isManagerOrAdmin =
       roles.includes('admin') || roles.some((r) => r.startsWith('manager-'));
     if (!isManagerOrAdmin) {
-      throw new NotImplementedException(
-        'Nhân viên xoá khách sẽ đi qua luồng đề xuất → trưởng phòng duyệt — Mục 2 (cv 5-6)',
+      if (assignment.sale_id !== user.id) {
+        throw new ForbiddenException('Chỉ được đề xuất xoá khách của chính mình');
+      }
+      return this.createCustomerProposal(
+        user,
+        assignment.sale_id,
+        ApprovalCustomerAction.DELETE,
+        assignment.customer,
+        {
+          customer_code: assignment.customer.customer_code,
+          sap_code: assignment.customer.sap_code,
+          department_slug: assignment.department_slug,
+          customer_tier: assignment.customer_tier,
+          old_data: { status: assignment.customer.status },
+          new_data: { status: CustomerStatus.DELETED },
+        },
       );
     }
     if (!(await this.canManageSale(user, assignment.sale_id))) {
@@ -656,16 +735,94 @@ export class CustomersService {
   }
 
   /**
-   * Sửa tier / CHÍNH-PHỤ / hạn mức. Hiện tại CHƯA xây luồng:
-   * admin + trưởng phòng sửa thẳng, nhân viên tạo đề xuất chờ duyệt
-   * (Mục 2 — công việc con 5, 6).
+   * Sửa tier / CHÍNH-PHỤ / tên / hạn mức (Mục 2, cv 5):
+   * - admin + trưởng phòng (cùng phòng với sale): áp dụng thẳng.
+   * - nhân viên: chỉ được đề xuất sửa DANH SÁCH CỦA CHÍNH MÌNH → tạo đề xuất
+   *   chờ trưởng phòng duyệt (cv 6).
    */
   async update(assignmentId: number, dto: UpdateCustomerDto, user: any) {
-    void assignmentId;
-    void dto;
-    void user;
-    throw new NotImplementedException(
-      'Sửa danh sách khách hàng và luồng duyệt sẽ xây ở Mục 2 (công việc con 5-6)',
-    );
+    if (
+      !dto.customer_tier &&
+      !dto.customer_role &&
+      dto.customer_name === undefined &&
+      dto.debt_limit === undefined
+    ) {
+      throw new BadRequestException('Cần ít nhất một trường để sửa');
+    }
+
+    const userIds = await this.scopeUserIds(user);
+    const assignment = await this.assignmentRepo.findOne({
+      where: { id: assignmentId },
+      relations: ['customer'],
+    });
+    if (!assignment) {
+      throw new ForbiddenException('Không tìm thấy khách hàng hoặc không thuộc phạm vi của bạn');
+    }
+    if (userIds !== undefined && !userIds.includes(assignment.sale_id)) {
+      throw new ForbiddenException('Khách hàng không thuộc phạm vi của bạn');
+    }
+
+    const oldData = {
+      customer_tier: assignment.customer_tier,
+      customer_role: assignment.customer.customer_role,
+      customer_name: assignment.customer.customer_name,
+      debt_limit: assignment.customer.debt_limit,
+    };
+    const newData: any = {};
+    if (dto.customer_tier) newData.customer_tier = dto.customer_tier;
+    if (dto.customer_role) newData.customer_role = dto.customer_role;
+    if (dto.customer_name !== undefined) newData.customer_name = dto.customer_name;
+    if (dto.debt_limit !== undefined) newData.debt_limit = dto.debt_limit;
+
+    const roles = this.lowerRoles(user);
+    const isManagerOrAdmin =
+      roles.includes('admin') || roles.some((r) => r.startsWith('manager-'));
+
+    if (!isManagerOrAdmin) {
+      if (assignment.sale_id !== user.id) {
+        throw new ForbiddenException('Chỉ được đề xuất sửa danh sách của chính mình');
+      }
+      return this.createCustomerProposal(
+        user,
+        assignment.sale_id,
+        ApprovalCustomerAction.UPDATE,
+        assignment.customer,
+        {
+          customer_code: assignment.customer.customer_code,
+          sap_code: assignment.customer.sap_code,
+          department_slug: assignment.department_slug,
+          customer_tier: (newData.customer_tier ?? null) as string,
+          old_data: oldData,
+          new_data: newData,
+        },
+      );
+    }
+
+    if (!(await this.canManageSale(user, assignment.sale_id))) {
+      throw new ForbiddenException('Sale không thuộc phạm vi quản lý của bạn');
+    }
+
+    if (newData.customer_tier) {
+      assignment.customer_tier = newData.customer_tier as CustomerTier;
+      await this.assignmentRepo.save(assignment);
+    }
+    const customer = assignment.customer;
+    if (newData.customer_role) customer.customer_role = newData.customer_role as CustomerRole;
+    if (newData.customer_name !== undefined) customer.customer_name = newData.customer_name;
+    if (newData.debt_limit !== undefined) customer.debt_limit = newData.debt_limit;
+    await this.customerRepo.save(customer);
+
+    return {
+      applied: true,
+      assignmentId: assignment.id,
+      customerTier: assignment.customer_tier,
+      customer: {
+        id: customer.id,
+        customerCode: customer.customer_code,
+        customerName: customer.customer_name,
+        customerRole: customer.customer_role,
+        debtLimit: customer.debt_limit,
+      },
+    };
   }
 }

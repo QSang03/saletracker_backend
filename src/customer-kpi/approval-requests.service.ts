@@ -1,4 +1,6 @@
 import {
+  BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
   NotImplementedException,
@@ -6,10 +8,14 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { User } from '../users/user.entity';
+import { Customer, CustomerStatus } from './customer.entity';
+import { CustomerAssignment, CustomerTier } from './customer-assignment.entity';
 import {
   ApprovalRequest,
   ApprovalRequestType,
+  ApprovalStatus,
 } from './approval-request.entity';
+import { ApprovalCustomerAction } from './approval-request-customer-item.entity';
 import { ApprovalRequestCustomerItem } from './approval-request-customer-item.entity';
 import { ApprovalRequestTargetItem } from './approval-request-target-item.entity';
 import { ApprovalRequestQueryDto, DecideApprovalDto } from './dto/approval-request.dto';
@@ -36,7 +42,41 @@ export class ApprovalRequestsService {
     private readonly targetItemRepo: Repository<ApprovalRequestTargetItem>,
     @InjectRepository(User)
     private readonly userRepo: Repository<User>,
+    @InjectRepository(Customer)
+    private readonly customerRepo: Repository<Customer>,
+    @InjectRepository(CustomerAssignment)
+    private readonly assignmentRepo: Repository<CustomerAssignment>,
   ) {}
+
+  /**
+   * Phạm vi nhìn hàng chờ duyệt: admin/PM/view toàn công ty; manager thấy
+   * đề xuất CỦA người trong phòng mình (để duyệt); còn lại chỉ của mình.
+   */
+  private async visibleUserIds(user: any): Promise<number[] | undefined> {
+    const roles = (user?.roles || []).map((r: any) =>
+      (typeof r === 'string' ? r : r?.name || '').toLowerCase(),
+    );
+    if (
+      roles.includes('admin') ||
+      roles.includes('pm') ||
+      roles.includes('view') ||
+      roles.some((r) => r.startsWith('pm-'))
+    ) {
+      return undefined;
+    }
+    if (roles.some((r) => r.startsWith('manager-'))) {
+      const departmentIds = (user?.departments || []).map((d: any) => d?.id).filter(Boolean);
+      if (!departmentIds.length) return [];
+      const users = await this.userRepo
+        .createQueryBuilder('u')
+        .leftJoin('u.departments', 'd')
+        .where('d.id IN (:...departmentIds)', { departmentIds })
+        .andWhere('u.deletedAt IS NULL')
+        .getMany();
+      return users.map((u) => u.id);
+    }
+    return [user.id];
+  }
 
   async list(query: ApprovalRequestQueryDto, user: any) {
     const page = query.page ?? 1;
@@ -46,10 +86,14 @@ export class ApprovalRequestsService {
       .createQueryBuilder('r')
       .leftJoinAndSelect('r.requested_by', 'u');
 
-    if (!isAdmin(user)) {
-      // Người thường chỉ thấy đề xuất mình gửi hoặc mình là đối tượng tác động
-      qb.andWhere('(r.requested_by = :userId OR r.target_user_id = :userId)', {
-        userId: user.id,
+    const visibleIds = await this.visibleUserIds(user);
+    if (visibleIds !== undefined) {
+      if (visibleIds.length === 0) {
+        return { data: [], total: 0, page, pageSize };
+      }
+      // manager: thấy đề xuất do mình gửi hoặc nhắm tới người trong phòng
+      qb.andWhere('(r.requested_by IN (:...visibleIds) OR r.target_user_id IN (:...visibleIds))', {
+        visibleIds,
       });
     }
     if (query.request_type) {
@@ -122,11 +166,11 @@ export class ApprovalRequestsService {
     const items =
       request.request_type === ApprovalRequestType.CUSTOMER_LIST
         ? await this.customerItemRepo.find({
-            where: { request: { id } },
+            where: { request_id: id },
             order: { created_at: 'ASC' },
           })
         : await this.targetItemRepo.find({
-            where: { request: { id } },
+            where: { request_id: id },
             order: { created_at: 'ASC' },
           });
 
@@ -159,12 +203,140 @@ export class ApprovalRequestsService {
     };
   }
 
+  /** Caller và sale bị tác động có chung phòng ban không? */
+  private async sharesDepartmentWith(user: any, targetUserId: number): Promise<boolean> {
+    const callerDeptIds = (user?.departments || []).map((d: any) => d?.id).filter(Boolean);
+    if (!callerDeptIds.length) return false;
+    const found = await this.userRepo
+      .createQueryBuilder('u')
+      .leftJoin('u.departments', 'd')
+      .where('u.id = :targetUserId', { targetUserId })
+      .andWhere('d.id IN (:...callerDeptIds)', { callerDeptIds })
+      .getOne();
+    return !!found;
+  }
+
+  /**
+   * Duyệt / từ chối (Mục 2, cv 6):
+   * - customer_list: admin HOẶC trưởng phòng CÙNG PHÒNG với sale bị tác động.
+   *   Duyệt → áp các mục vào dữ liệu thật; từ chối → chỉ ghi lý do.
+   * - kpi_target: hiện thực cùng Mục 4 (giao chỉ tiêu).
+   */
   async decide(id: number, dto: DecideApprovalDto, user: any) {
-    void id;
-    void dto;
-    void user;
-    throw new NotImplementedException(
-      'Duyệt / từ chối (ghi thay đổi vào dữ liệu + nhật ký) sẽ xây ở Mục 2 (cv 6) và Mục 4 (cv 4)',
+    const request = await this.requestRepo.findOne({
+      where: { id },
+      relations: ['requested_by'],
+    });
+    if (!request) throw new NotFoundException('Không tìm thấy đề xuất');
+    if (request.status !== ApprovalStatus.PENDING) {
+      throw new BadRequestException('Đề xuất đã được xử lý');
+    }
+    if (dto.action === 'reject' && !dto.reject_reason) {
+      throw new BadRequestException('Từ chối đề xuất phải kèm lý do');
+    }
+
+    if (request.request_type === ApprovalRequestType.KPI_TARGET) {
+      throw new NotImplementedException('Duyệt chỉ tiêu sẽ hiện thực cùng Mục 4 (giao chỉ tiêu)');
+    }
+
+    const roles = (user?.roles || []).map((r: any) =>
+      (typeof r === 'string' ? r : r?.name || '').toLowerCase(),
     );
+    const isAdmin = roles.includes('admin');
+    if (!isAdmin) {
+      const isDeptManager =
+        roles.some((r) => r.startsWith('manager-')) &&
+        request.target_user_id != null &&
+        (await this.sharesDepartmentWith(user, request.target_user_id));
+      if (!isDeptManager) {
+        throw new ForbiddenException('Chỉ trưởng phòng của sale này mới được duyệt đề xuất');
+      }
+    }
+
+    if (dto.action === 'reject') {
+      request.status = ApprovalStatus.REJECTED;
+      request.decided_by = user.id;
+      request.decided_at = new Date();
+      request.reject_reason = dto.reject_reason ?? null;
+      await this.requestRepo.save(request);
+      return { decided: true, status: 'rejected' };
+    }
+
+    // Duyệt → áp các mục vào dữ liệu thật
+    const items = await this.customerItemRepo.find({ where: { request_id: id } });
+    let applied = 0;
+    for (const item of items) {
+      const customer = await this.customerRepo.findOne({
+        where: { customer_code: item.customer_code, sap_code: item.sap_code ?? '' },
+      });
+
+      if (item.action === ApprovalCustomerAction.DELETE) {
+        if (customer && customer.status !== CustomerStatus.DELETED) {
+          customer.status = CustomerStatus.DELETED;
+          await this.customerRepo.save(customer);
+          applied++;
+        }
+        continue;
+      }
+
+      let target = customer;
+      if (!target && item.action === ApprovalCustomerAction.CREATE) {
+        const nd = item.new_data || {};
+        target = await this.customerRepo.save(
+          this.customerRepo.create({
+            customer_code: item.customer_code,
+            sap_code: item.sap_code ?? '',
+            customer_name: nd.customer_name ?? item.customer_name ?? null,
+            customer_role: nd.customer_role ?? null,
+            debt_limit: nd.debt_limit ?? null,
+            status: CustomerStatus.ACTIVE,
+          }),
+        );
+      }
+      if (!target) continue;
+
+      const nd = item.new_data || {};
+      if (item.action === ApprovalCustomerAction.CREATE) {
+        if (item.department_slug && request.target_user_id) {
+          const duplicated = await this.assignmentRepo.findOne({
+            where: { customer_id: target.id, department_slug: item.department_slug },
+          });
+          if (!duplicated) {
+            await this.assignmentRepo.save(
+              this.assignmentRepo.create({
+                customer_id: target.id,
+                sale_id: request.target_user_id,
+                department_slug: item.department_slug,
+                customer_tier: (item.customer_tier ?? 'NON') as CustomerTier,
+              }),
+            );
+            applied++;
+          }
+        }
+        continue;
+      }
+
+      // UPDATE
+      if (nd.customer_tier && item.department_slug) {
+        const assignment = await this.assignmentRepo.findOne({
+          where: { customer_id: target.id, department_slug: item.department_slug },
+        });
+        if (assignment) {
+          assignment.customer_tier = nd.customer_tier;
+          await this.assignmentRepo.save(assignment);
+        }
+      }
+      if (nd.customer_role) target.customer_role = nd.customer_role;
+      if (nd.customer_name) target.customer_name = nd.customer_name;
+      if (nd.debt_limit != null) target.debt_limit = nd.debt_limit;
+      await this.customerRepo.save(target);
+      applied++;
+    }
+
+    request.status = ApprovalStatus.APPROVED;
+    request.decided_by = user.id;
+    request.decided_at = new Date();
+    await this.requestRepo.save(request);
+    return { decided: true, status: 'approved', appliedItems: applied };
   }
 }

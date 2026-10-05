@@ -23,6 +23,9 @@ export class ApprovalRequestCustomerItem {
   @PrimaryGeneratedColumn()
   id: number;
 
+  @Column({ type: 'int' })
+  request_id: number;
+
   @ManyToOne(() => ApprovalRequest, { nullable: false, onDelete: 'CASCADE' })
   @JoinColumn({ name: 'request_id' })
   request: ApprovalRequest;

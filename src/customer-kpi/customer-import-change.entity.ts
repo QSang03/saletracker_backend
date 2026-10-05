@@ -36,6 +36,11 @@ export class CustomerImportChange {
   @PrimaryGeneratedColumn()
   id: number;
 
+  // Cột scalar đi cùng relation bên dưới — em.create({session_id}) không có
+  // property này thì TypeORM lặng lẽ bỏ qua khi INSERT
+  @Column({ type: 'int' })
+  session_id: number;
+
   @ManyToOne(() => CustomerImportSession, { nullable: false, onDelete: 'CASCADE' })
   @JoinColumn({ name: 'session_id' })
   session: CustomerImportSession;

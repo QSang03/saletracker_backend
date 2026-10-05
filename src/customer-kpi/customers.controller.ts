@@ -85,7 +85,7 @@ export class CustomersController {
   @Permission('khach-hang', 'update')
   updateZaloLink(
     @Param('id', ParseIntPipe) id: number,
-    dto: UpdateZaloLinkDto,
+    @Body() dto: UpdateZaloLinkDto,
     @Req() req: any,
   ) {
     return this.customersService.updateZaloLink(id, dto, req.user);
@@ -101,7 +101,7 @@ export class CustomersController {
   @Permission('khach-hang', 'update')
   update(
     @Param('id', ParseIntPipe) id: number,
-    dto: UpdateCustomerDto,
+    @Body() dto: UpdateCustomerDto,
     @Req() req: any,
   ) {
     return this.customersService.update(id, dto, req.user);

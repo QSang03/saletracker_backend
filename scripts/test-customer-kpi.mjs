@@ -18,6 +18,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 
 const BASE = (process.argv[2] || process.env.BASE_URL || 'http://localhost:4000').replace(/\/$/, '');
 const ADMIN_USER = process.argv[3] || process.env.ADMIN_USER || 'admin';
@@ -170,19 +171,14 @@ await expect('GET import-sessions/99999999/preview → 404', 404,
 await expect('GET /approval-requests/99999999 → 404', 404,
   async () => (await call('GET', '/approval-requests/99999999', H())).status);
 
-// ============ D. HOP DONG 501 (phan cho Muc 2-4) ============
-console.log('\n-- D. Hợp đồng 501 (chờ Mục 2-4) --');
-await expect('PATCH /customers/1 (sửa + duyệt) → 501', 501,
-  async () => (await call('PATCH', '/customers/1', { ...H(), body: { customer_tier: 'KEY' } })).status);
+// ============ D. HOP DONG 501 (phan cho Muc 3-4) ============
+console.log('\n-- D. Hợp đồng 501 (chờ Mục 3-4) --');
 await expect('PATCH /customers/zalo-links/1 (sửa tay khớp) → 501', 501,
   async () => (await call('PATCH', '/customers/zalo-links/1', { ...H(), body: { is_active: false } })).status);
 await expect('POST /customer-assignments/import thiếu file → 400', 400,
   async () => (await call('POST', '/customer-assignments/import', H())).status);
-await expect('POST import-sessions/1/apply → 501', 501,
-  async () => (await call('POST', '/customer-assignments/import-sessions/1/apply', H())).status);
-await expect('POST import-sessions/1/rollback → 501', 501,
-  async () => (await call('POST', '/customer-assignments/import-sessions/1/rollback', H())).status);
-await expect('GET /customer-kpi-reports/overview → 501', 501,
+  // duyệt (decide) đã hiện thực cho customer_list — nhóm H test hành vi thật
+  await expect('GET /customer-kpi-reports/overview → 501', 501,
   async () => (await call('GET', '/customer-kpi-reports/overview?from=2026-10-01&to=2026-10-05', H())).status);
 await expect('GET /customer-kpi-reports/by-sale → 501', 501,
   async () => (await call('GET', '/customer-kpi-reports/by-sale?from=2026-10-01&to=2026-10-05', H())).status);
@@ -193,8 +189,6 @@ await expect('POST /customer-kpi-targets (gán chỉ tiêu) → 501', 501,
     ...H(),
     body: { criterion_key: 'doanh_so_key', period_month: '2026-10', scope: 'sale', sale_ids: [1], target_value: 1000000 },
   })).status);
-await expect('POST /approval-requests/1/decide → 501', 501,
-  async () => (await call('POST', '/approval-requests/1/decide', { ...H(), body: { action: 'approve' } })).status);
 
 // ============ E. PHAN QUYEN (tuy chon) ============
 if (TEST_USER && TEST_PASS) {
@@ -260,13 +254,16 @@ const ROLE_MATRIX = [
   {
     role: 'manager-khach-hang',
     label: 'Trưởng phòng',
-    expectUpdate: 501, // guard cho qua (update bật) → chạm stub 501
-    expectDecide: 501, // approve bật → stub 501
+    // PATCH giờ thật: manager test không có phòng ban (chưa vào nhóm H) → 403 phạm vi
+    expectUpdate: 403,
+    // approve bật → qua guard → id không tồn tại → 404
+    expectDecide: 404,
   },
   {
     role: 'user-khach-hang',
     label: 'Nhân viên',
-    expectUpdate: 501, // update bật (đề xuất qua luồng duyệt ở Mục 2) → stub 501
+    // PATCH /customers/1: sale 1 không phải của mình → 403 (chỉ đề xuất được danh sách của mình)
+    expectUpdate: 403,
     expectDecide: 403, // approve tắt
   },
   {
@@ -319,8 +316,8 @@ const createdTestUserIds = [];
         async () => (await call('PATCH', '/customer-kpi-definitions/1', { ...U, body: { name: 'hack' } })).status);
       await T('POST /customer-assignments/import (import) → 403', 403,
         async () => (await call('POST', '/customer-assignments/import', U)).status);
-      await T(`POST /approval-requests/1/decide (approve) → ${expectDecide}`, expectDecide,
-        async () => (await call('POST', '/approval-requests/1/decide', { ...U, body: { action: 'approve' } })).status);
+      await T(`POST /approval-requests/99999999/decide (approve) → ${expectDecide}`, expectDecide,
+        async () => (await call('POST', '/approval-requests/99999999/decide', { ...U, body: { action: 'approve' } })).status);
     } catch (e) {
       bad(`[${label}] Chuẩn bị user ${username}`, e.message);
     }
@@ -589,6 +586,59 @@ console.log('\n-- H. Phạm vi manager với phòng ban tự tạo --');
       async () => (await call('GET', '/customers/zalo-contacts?limit=5', U)).status);
     await expect('[H] Nhân viên zalo-contacts accountId người khác → 403', 403,
       async () => (await call('GET', '/customers/zalo-contacts?accountId=3&limit=5', U)).status);
+
+    // 6. Luồng sửa của NHÂN VIÊN → đề xuất → trưởng phòng duyệt (cv 5-6)
+    let proposalId = null;
+    if (createdCustomerAid) {
+      await expect('[H] Manager sửa trực tiếp khách trong phòng → 200 (applied)', 200, async () => {
+        const r = await call('PATCH', `/customers/${createdCustomerAid}`, { ...M, body: { customer_tier: 'NON' } });
+        assert(r.json?.applied === true, `body=${JSON.stringify(r.json).slice(0, 120)}`);
+        return r.status;
+      });
+      await expect('[H] Nhân viên sửa khách của mình → tạo đề xuất chờ duyệt', 200, async () => {
+        const r = await call('PATCH', `/customers/${createdCustomerAid}`, { ...U, body: { customer_tier: 'KEY' } });
+        assert(r.json?.proposal === true && r.json?.requestId, `body=${JSON.stringify(r.json).slice(0, 150)}`);
+        proposalId = r.json.requestId;
+        return r.status;
+      });
+      const pr = await call('POST', '/auth/login', {
+        body: { username: 'kpi_test_pm_khach_hang', password: DEFAULT_PASSWORD },
+      });
+      const pmToken = pr.json?.access_token || pr.json?.token || pr.json?.accessToken;
+      assert(pmToken, 'Login pm test thất bại');
+      await expect('[H] PM duyệt đề xuất của phòng khác → 403', 403,
+        async () => (await call('POST', `/approval-requests/${proposalId}/decide`, { token: pmToken, body: { action: 'approve' } })).status);
+      await expect('[H] Manager duyệt đề xuất → 200 approved', 200, async () => {
+        const r = await call('POST', `/approval-requests/${proposalId}/decide`, { ...M, body: { action: 'approve' } });
+        assert(r.json?.status === 'approved', `body=${JSON.stringify(r.json).slice(0, 120)}`);
+        return r.status;
+      });
+      await expect('[H] Sau duyệt: tier đúng như đề xuất (KEY)', 200, async () => {
+        const r = await call('GET', `/customers/${createdCustomerAid}`, M);
+        assert(r.json?.customerTier === 'KEY', `tier=${r.json?.customerTier}`);
+        return r.status;
+      });
+      await expect('[H] Nhân viên đề xuất lần 2 (đổi về NON)', 200, async () => {
+        const r = await call('PATCH', `/customers/${createdCustomerAid}`, { ...U, body: { customer_tier: 'NON' } });
+        assert(r.json?.proposal === true && r.json?.requestId, `body=${JSON.stringify(r.json).slice(0, 120)}`);
+        proposalId = r.json.requestId;
+        return r.status;
+      });
+      await expect('[H] Manager từ chối kèm lý do → 200 rejected', 200, async () => {
+        const r = await call('POST', `/approval-requests/${proposalId}/decide`, {
+          ...M, body: { action: 'reject', reject_reason: 'Chưa đủ điều kiện nâng Key' },
+        });
+        assert(r.json?.status === 'rejected', `body=${JSON.stringify(r.json).slice(0, 120)}`);
+        return r.status;
+      });
+      await expect('[H] Sau từ chối: tier không đổi (vẫn KEY)', 200, async () => {
+        const r = await call('GET', `/customers/${createdCustomerAid}`, M);
+        assert(r.json?.customerTier === 'KEY', `tier=${r.json?.customerTier}`);
+        return r.status;
+      });
+      await expect('[H] Duyệt lại đề xuất đã từ chối → 400', 400,
+        async () => (await call('POST', `/approval-requests/${proposalId}/decide`, { ...M, body: { action: 'approve' } })).status);
+    }
   } catch (e) {
     bad('[H] Chuẩn bị phòng ban / user test', e.message);
   }
@@ -606,6 +656,270 @@ console.log('\n-- H. Phạm vi manager với phòng ban tự tạo --');
   }
   if (deptId) {
     try { await call('DELETE', `/departments/${deptId}`, H()); } catch {}
+  }
+}
+
+// ============ I. IMPORT EXCEL THẬT (file demo trong test-fixtures) ============
+console.log('\n-- I. Import Excel thật (test-fixtures) --');
+{
+  let sessionId = null;
+  try {
+    const fixturePath = path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      '..', 'test-fixtures', 'DSKH KDS_CHÍNH PHỤ_KEY NON.xlsx',
+    );
+    const buf = readFileSync(fixturePath); // thiếu file sẽ ném lỗi → rơi vào catch bên dưới
+
+    // 1) Upload file demo
+    const fd = new FormData();
+    fd.append('file', new Blob([buf]), 'DSKH demo.xlsx');
+    const up = await fetch(`${BASE}/customer-assignments/import`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${adminToken}` },
+      body: fd,
+      signal: AbortSignal.timeout(180000),
+    });
+    const upJson = await up.json();
+    if (up.status === 201 && upJson?.sessionId) {
+      ok(`Upload file demo → 201 (session ${upJson.sessionId}, ${JSON.stringify(upJson.summary)})`);
+      sessionId = upJson.sessionId;
+    } else {
+      bad('Upload file demo', `HTTP ${up.status}: ${JSON.stringify(upJson).slice(0, 200)}`);
+    }
+
+    if (sessionId) {
+      const s = upJson.summary || {};
+      const expectExact = (name, got, want) => {
+        if (got === want) ok(name);
+        else bad(name, `nhận ${got}, kỳ vọng ${want}`);
+      };
+      expectExact('Đọc đủ 4.750 dòng dữ liệu', s.rowsParsed, 4750);
+      expectExact('2 cặp (mã, SAP) trùng trong file', s.duplicatePairs, 2);
+      if (s.customersParsed >= 4740 && s.customersParsed <= 4750) ok(`Số khách sau gộp hợp lý (${s.customersParsed})`);
+      else bad('Số khách sau gộp', `nhận ${s.customersParsed}, kỳ vọng 4740..4750`);
+      if (s.errorRows >= 14 && s.errorRows <= 18) ok(`Dòng lỗi dữ liệu bẩn trong khoảng 14..18 (${s.errorRows})`);
+      else bad('Dòng lỗi dữ liệu bẩn', `nhận ${s.errorRows}, kỳ vọng 14..18`);
+      if (s.create >= 9000) ok(`Số thay đổi tạo mới hợp lý (${s.create})`);
+      else bad('Số thay đổi tạo mới', `nhận ${s.create}, kỳ vọng ≥9000 (mỗi khách tối đa 6 phòng)`);
+
+      // 2) Preview session
+      const pv = await call('GET', `/customer-assignments/import-sessions/${sessionId}/preview?pageSize=5`, H());
+      if (pv.status === 200 && Array.isArray(pv.json?.data) && pv.json.data.length > 0
+          && pv.json?.summary?.create === s.create) {
+        ok('Preview session → 200, có thay đổi, khớp tổng');
+      } else {
+        bad('Preview session', `HTTP ${pv.status}, summary=${JSON.stringify(pv.json?.summary)?.slice(0, 120)}`);
+      }
+
+      // 3) Đặt quyết định Giữ/Bỏ cho 1 thay đổi — xác nhận qua preview (dữ liệu DB là chuẩn)
+      const firstChange = pv.json?.data?.[0];
+      if (firstChange?.id) {
+        await expect('PATCH decision của 1 thay đổi → 200 + preview xác nhận', 200, async () => {
+          const r = await call('PATCH',
+            `/customer-assignments/import-sessions/${sessionId}/changes/${firstChange.id}`,
+            { ...H(), body: { decision: 'skip' } });
+          if (r.json?.decision !== 'skip') {
+            throw new Error(`HTTP ${r.status}, body=${JSON.stringify(r.json).slice(0, 200)}`);
+          }
+          const pv2 = await call('GET',
+            `/customer-assignments/import-sessions/${sessionId}/preview?pageSize=100`, H());
+          const found = (pv2.json?.data || []).find((c) => c.id === firstChange.id);
+          assert(found?.decision === 'skip', `preview thấy decision=${found?.decision}`);
+          return r.status;
+        });
+      }
+    }
+
+    // 4) File mẫu
+    {
+      const res = await fetch(`${BASE}/customer-assignments/template`, {
+        headers: { Authorization: `Bearer ${adminToken}` },
+        signal: AbortSignal.timeout(30000),
+      });
+      const ab = await res.arrayBuffer();
+      const ct = res.headers.get('content-type') || '';
+      if (res.status === 200 && ct.includes('spreadsheetml') && ab.byteLength > 3000) {
+        ok(`Tải file mẫu → 200 (${Math.round(ab.byteLength / 1024)}KB)`);
+      } else {
+        bad('Tải file mẫu', `HTTP ${res.status}, content-type=${ct}, size=${ab.byteLength}`);
+      }
+    }
+
+    // 5) Upload file không phải .xlsx → 400
+    {
+      const fd = new FormData();
+      fd.append('file', new Blob(['khong phai excel']), 'ghi-chu.txt');
+      const res = await fetch(`${BASE}/customer-assignments/import`, {
+        method: 'POST', headers: { Authorization: `Bearer ${adminToken}` }, body: fd,
+      });
+      if (res.status === 400) ok('Upload file .txt → 400');
+      else bad('Upload file .txt', `HTTP ${res.status}, kỳ vọng 400`);
+    }
+
+    // 6) Huỷ session — xoá sạch danh sách thay đổi
+    if (sessionId) {
+      await expect('Huỷ session import → 200', 200,
+        async () => (await call('DELETE', `/customer-assignments/import-sessions/${sessionId}`, H())).status);
+      await expect('Sau huỷ, preview không còn thay đổi', 200, async () => {
+        const pv = await call('GET', `/customer-assignments/import-sessions/${sessionId}/preview`, H());
+        assert((pv.json?.data || []).length === 0, `vẫn còn ${pv.json?.data?.length} thay đổi`);
+        return pv.status;
+      });
+      await expect('Huỷ lần 2 → 400 (đã huỷ)', 400,
+        async () => (await call('DELETE', `/customer-assignments/import-sessions/${sessionId}`, H())).status);
+      sessionId = null;
+    }
+  } catch (e) {
+    bad('[I] Chuẩn bị file demo', `${e.message} — kiểm tra test-fixtures có file DSKH demo chưa`);
+  }
+}
+
+// ============ J. APPLY + ROLLBACK (file demo thật + nhân viên test) ============
+// DB dev không có user bán hàng theo mã NKDS → nhóm này tự tạo user với đúng
+// mã NV trích từ file demo, rồi apply/rollback trên quy mô thật. Dọn sạch sau.
+console.log('\n-- J. Apply + Rollback (file demo thật + nhân viên test) --');
+{
+  let sessionId = null;
+  const createdEmpIds = [];
+  try {
+    const backendRequire = createRequire(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'package.json'),
+    );
+    const ExcelJS = backendRequire('exceljs');
+    const fixturePath = path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      '..', 'test-fixtures', 'DSKH KDS_CHÍNH PHỤ_KEY NON.xlsx',
+    );
+
+    // 1. Trích các mã NV (NKDS*) từ file demo
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.readFile(fixturePath);
+    const ws = wb.getWorksheet('File Chi Tiết');
+    const codes = new Set();
+    for (let r = 2; r <= ws.rowCount; r++) {
+      const row = ws.getRow(r);
+      if (!String(row.getCell(3).value ?? '').trim()) continue;
+      for (let col = 4; col <= 9; col++) {
+        const raw = String(row.getCell(col).value ?? '').trim();
+        if (raw) codes.add(raw.split('-')[0].trim().toUpperCase());
+      }
+    }
+    assert(codes.size >= 30, `chỉ trích được ${codes.size} mã NV từ file`);
+
+    // 2. Tạo user với đúng mã NV (lần chạy sau: restore user đã xoá mềm)
+    for (const code of codes) {
+      const username = `kpi_emp_${code.toLowerCase()}`;
+      const r = await call('POST', '/users', {
+        ...H(),
+        body: { username, fullName: `NV test ${code}`, employeeCode: code },
+      });
+      if (r.status === 201) {
+        createdEmpIds.push(r.json?.id);
+      } else if (r.status === 409 && r.json?.code === 'SOFT_DELETED_DUPLICATE') {
+        const id = r.json?.userId;
+        await call('PATCH', `/users/${id}/restore`, H());
+        createdEmpIds.push(id);
+      } else if (r.status === 409) {
+        const s = await call('GET', `/users?search=${encodeURIComponent(username)}&limit=10`, H());
+        const list = Array.isArray(s.json) ? s.json : s.json?.data || [];
+        const u = list.find((x) => x.username === username);
+        assert(u?.id, `user ${username} không tìm thấy được`);
+        createdEmpIds.push(u.id);
+      } else {
+        throw new Error(`Không tạo được NV ${code}: HTTP ${r.status} ${JSON.stringify(r.json).slice(0, 150)}`);
+      }
+    }
+    ok(`Chuẩn bị ${createdEmpIds.length} nhân viên test theo mã NKDS trong file`);
+
+    // 3. Upload file demo (session riêng cho nhóm J)
+    const buf = readFileSync(fixturePath);
+    const fd = new FormData();
+    fd.append('file', new Blob([buf]), 'DSKH apply-rollback.xlsx');
+    const up = await fetch(`${BASE}/customer-assignments/import`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${adminToken}` },
+      body: fd,
+      signal: AbortSignal.timeout(180000),
+    });
+    const upJson = await up.json();
+    sessionId = upJson?.sessionId;
+    assert(up.status === 201 && sessionId, `upload HTTP ${up.status}`);
+    const s = upJson.summary || {};
+
+    // 4. Tổng khách trước khi apply
+    const before = await call('GET', '/customers?pageSize=1', H());
+
+    // 5. Apply — ~9.8k thay đổi, mất chục giây
+    const ap = await fetch(`${BASE}/customer-assignments/import-sessions/${sessionId}/apply`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${adminToken}` },
+      signal: AbortSignal.timeout(600000),
+    });
+    const apJson = await ap.json();
+    if (ap.status === 200 && (apJson?.applied ?? 0) >= 9000) {
+      ok(`Apply → 200 (applied ${apJson.applied}, bỏ qua ${apJson.skippedErrors} dòng lỗi, conflict ${apJson.conflicts?.length})`);
+    } else {
+      bad('Apply', `HTTP ${ap.status}, body=${JSON.stringify(apJson).slice(0, 250)}`);
+    }
+    if ((apJson?.skippedErrors ?? 0) === 13) {
+      ok(`Bỏ qua đúng 13 change mang lỗi (15 khách bẩn, 2 khách không có phân công nào)`);
+    } else {
+      bad('Số dòng lỗi bị bỏ qua', `nhận ${apJson?.skippedErrors}, kỳ vọng 13`);
+    }
+
+    // 6. Khách xuất hiện — 2 khách (2 SAP) × 4 phòng = 8 dòng phân công
+    await expect('[J] Sau apply: CONGNGHE247 = 2 khách × 4 phòng → 8 dòng phân công, 2 SAP', 200, async () => {
+      const r = await call('GET', '/customers?search=HQS_Q03_SM_CONGNGHE247&pageSize=20', H());
+      assert(r.json?.total === 8, `total=${r.json?.total}`);
+      const saps = [...new Set((r.json?.data || []).map((x) => x.customer?.sapCode))].sort();
+      assert(JSON.stringify(saps) === JSON.stringify(['C30112', 'C30200']), `sap=${saps}`);
+      return r.status;
+    });
+    await expect('[J] Sau apply: tổng khách ≥ 9000', 200, async () => {
+      const r = await call('GET', '/customers?pageSize=1', H());
+      assert((r.json?.total ?? 0) >= 9000, `total=${r.json?.total}`);
+      return r.status;
+    });
+    await expect('[J] Apply lần 2 → 400', 400,
+      async () => (await call('POST', `/customer-assignments/import-sessions/${sessionId}/apply`, H())).status);
+
+    // 7. Rollback — hoàn tác toàn bộ
+    const rb = await fetch(`${BASE}/customer-assignments/import-sessions/${sessionId}/rollback`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${adminToken}` },
+      signal: AbortSignal.timeout(600000),
+    });
+    const rbJson = await rb.json();
+    if (rb.status === 200 && (rbJson?.restored ?? 0) >= 9000) {
+      ok(`Rollback → 200 (restored ${rbJson.restored}, skip ${rbJson.skipped?.length})`);
+    } else {
+      bad('Rollback', `HTTP ${rb.status}, body=${JSON.stringify(rbJson).slice(0, 250)}`);
+    }
+
+    // 8. Dữ liệu trở về đúng trạng thái ban đầu
+    await expect('[J] Sau rollback: khách demo biến mất → total 0', 200, async () => {
+      const r = await call('GET', '/customers?search=HQS_Q03_SM_CONGNGHE247&pageSize=10', H());
+      assert(r.json?.total === 0, `total=${r.json?.total}`);
+      return r.status;
+    });
+    await expect('[J] Sau rollback: tổng khách về đúng số trước apply', 200, async () => {
+      const r = await call('GET', '/customers?pageSize=1', H());
+      assert(r.json?.total === before.json?.total, `total=${r.json?.total}, trước đó=${before.json?.total}`);
+      return r.status;
+    });
+    await expect('[J] Rollback lần 2 → 400', 400,
+      async () => (await call('POST', `/customer-assignments/import-sessions/${sessionId}/rollback`, H())).status);
+
+    // 9. Huỷ session đã hoàn tác — dọn changes + backup
+    await expect('[J] Huỷ session sau rollback → 200 (dọn changes + backup)', 200,
+      async () => (await call('DELETE', `/customer-assignments/import-sessions/${sessionId}`, H())).status);
+    sessionId = null;
+  } catch (e) {
+    bad('[J] Chuẩn bị', e.message);
+  }
+  // 10. Dọn user nhân viên test (xoá mềm — lần sau restore)
+  for (const id of createdEmpIds) {
+    try { await call('DELETE', `/users/${id}`, H()); } catch {}
   }
 }
 

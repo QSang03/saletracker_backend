@@ -2,13 +2,17 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
+  HttpCode,
+  HttpStatus,
   Param,
   ParseIntPipe,
   Patch,
   Post,
   Query,
   Req,
+  Res,
   UploadedFile,
   UseGuards,
   UseInterceptors,
@@ -42,8 +46,23 @@ export class CustomerAssignmentsController {
 
   @Get('template')
   @Permission('khach-hang', 'read')
-  template() {
-    return this.assignmentsService.getTemplate();
+  async template(@Res() res: any) {
+    const { buffer, fileName } = await this.assignmentsService.getTemplate();
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    res.send(buffer);
+  }
+
+  @Delete('import-sessions/:id')
+  @Permission('khach-hang', 'import')
+  cancel(
+    @Param('id', ParseIntPipe) id: number,
+    @Req() req: any,
+  ) {
+    return this.assignmentsService.cancelSession(id, req.user);
   }
 
   @Get('import-sessions')
@@ -72,19 +91,21 @@ export class CustomerAssignmentsController {
   setDecision(
     @Param('id', ParseIntPipe) id: number,
     @Param('changeId', ParseIntPipe) changeId: number,
-    dto: ChangeDecisionDto,
+    @Body() dto: ChangeDecisionDto,
     @Req() req: any,
   ) {
     return this.assignmentsService.setChangeDecision(id, changeId, dto, req.user);
   }
 
   @Post('import-sessions/:id/apply')
+  @HttpCode(HttpStatus.OK)
   @Permission('khach-hang', 'import')
   apply(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
     return this.assignmentsService.applySession(id, req.user);
   }
 
   @Post('import-sessions/:id/rollback')
+  @HttpCode(HttpStatus.OK)
   @Permission('khach-hang', 'import')
   rollback(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
     return this.assignmentsService.rollbackSession(id, req.user);
