@@ -336,6 +336,7 @@ const createdTestUserIds = [];
 console.log('\n-- G. Thêm/sửa/xoá bằng tay + biên + tra cứu Zalo (admin) --');
 {
   let gAssignmentId = null;
+  let gAssignmentId2 = null;
   const gCode = `TEST_AUTO_${Date.now()}`;
   const gBody = {
     customer_code: gCode,
@@ -352,6 +353,12 @@ console.log('\n-- G. Thêm/sửa/xoá bằng tay + biên + tra cứu Zalo (admin
   });
   await expect('POST /customers trùng phân công → 409', 409,
     async () => (await call('POST', '/customers', { ...H(), body: { ...gBody, customer_tier: 'NON' } })).status);
+  await expect('POST /customers cùng mã KHÁC SAP → 201 (khách khác thật sự, giữ cả hai)', 201, async () => {
+    const r = await call('POST', '/customers', { ...H(), body: { ...gBody, sap_code: 'C99999' } });
+    gAssignmentId2 = r.json?.assignmentId;
+    assert(gAssignmentId2 && gAssignmentId2 !== gAssignmentId, 'phải tạo dòng phân công MỚI cho khách (mã, SAP)');
+    return r.status;
+  });
   await expect('POST /customers sai phòng ban → 400', 400,
     async () => (await call('POST', '/customers', { ...H(), body: { ...gBody, customer_code: gCode + '_X', department_slug: 'khong-ton-tai' } })).status);
   await expect('POST /customers thiếu mã khách → 400', 400,
@@ -422,11 +429,6 @@ console.log('\n-- G. Thêm/sửa/xoá bằng tay + biên + tra cứu Zalo (admin
       async () => (await call('DELETE', `/customers/${gAssignmentId}`, H())).status);
     await expect('DELETE lần 2 → 404 (đã xoá trước đó)', 404,
       async () => (await call('DELETE', `/customers/${gAssignmentId}`, H())).status);
-    await expect('Danh sách sau xoá không còn khách đó', 200, async () => {
-      const r = await call('GET', `/customers?search=${gCode}`, H());
-      assert((r.json?.total ?? 1) === 0, `vẫn còn ${r.json?.total} dòng`);
-      return r.status;
-    });
     await expect('bulk-update trên khách đã xoá → skipped kèm lý do (không sửa lặng lẽ)', 200, async () => {
       const r = await call('POST', '/customers/bulk-update', {
         ...H(), body: { assignmentIds: [gAssignmentId], customer_tier: 'KEY' },
@@ -440,6 +442,16 @@ console.log('\n-- G. Thêm/sửa/xoá bằng tay + biên + tra cứu Zalo (admin
     });
     gAssignmentId = null;
   }
+  if (gAssignmentId2) {
+    await expect('DELETE khách SAP thứ hai → 200', 200,
+      async () => (await call('DELETE', `/customers/${gAssignmentId2}`, H())).status);
+    gAssignmentId2 = null;
+  }
+  await expect('Danh sách sau xoá không còn khách nào cùng mã (cả 2 SAP)', 200, async () => {
+    const r = await call('GET', `/customers?search=${gCode}`, H());
+    assert((r.json?.total ?? 1) === 0, `vẫn còn ${r.json?.total} dòng`);
+    return r.status;
+  });
   await expect('GET /customer-kpi-reports/export → 501', 501,
     async () => (await call('GET', '/customer-kpi-reports/export?from=2026-10-01&to=2026-10-05', H())).status);
 

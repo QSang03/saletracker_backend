@@ -453,9 +453,10 @@ export class CustomersService {
       throw new ForbiddenException('Sale không thuộc phạm vi quản lý của bạn');
     }
 
-    // Tìm hoặc tạo khách theo mã — khách là danh tính dùng chung toàn công ty
+    // Tìm hoặc tạo khách theo CẶP (mã, SAP) — cùng mã khác SAP là khách khác,
+    // được tạo thêm dòng mới (ví dụ HQS_Q03_SR_PHUCHAI với C00375 và C00552)
     const existing = await this.customerRepo.findOne({
-      where: { customer_code: dto.customer_code },
+      where: { customer_code: dto.customer_code, sap_code: dto.sap_code ?? '' },
     });
     let customer: Customer;
     if (existing) {
@@ -469,7 +470,7 @@ export class CustomersService {
         this.customerRepo.create({
           customer_code: dto.customer_code,
           customer_name: dto.customer_name ?? null,
-          sap_code: dto.sap_code ?? null,
+          sap_code: dto.sap_code ?? '',
           customer_role: (dto.customer_role ?? null) as CustomerRole | null,
           debt_limit: dto.debt_limit ?? null,
           status: CustomerStatus.ACTIVE,

@@ -33,6 +33,10 @@ export class ApprovalRequestCustomerItem {
   @Column({ type: 'varchar', length: 64 })
   customer_code: string;
 
+  /** Cùng mã khác SAP là khách khác — định danh đầy đủ là cặp (mã, SAP). */
+  @Column({ type: 'varchar', length: 32, default: '' })
+  sap_code: string;
+
   @Column({ type: 'varchar', length: 255, nullable: true })
   customer_name: string | null;
 
