@@ -22,7 +22,7 @@ import { User } from '../users/user.entity';
  * archive sau 30 ngày, nên drill-down quá khứ xa sẽ không còn dữ liệu.
  */
 @Entity('sale_work_activity_daily')
-@Index(['userId', 'stat_date'], { unique: true })
+@Index(['user_id', 'stat_date'], { unique: true })
 @Index(['stat_date'])
 export class SaleWorkActivityDaily {
   @PrimaryGeneratedColumn('increment', { type: 'bigint' })

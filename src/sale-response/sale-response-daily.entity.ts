@@ -19,7 +19,7 @@ import { User } from '../users/user.entity';
  * service dưới dạng string 'YYYY-MM-DD' chứ không phải Date.
  */
 @Entity('sale_response_daily')
-@Index(['userId', 'stat_date'], { unique: true })
+@Index(['user_id', 'stat_date'], { unique: true })
 @Index(['stat_date'])
 export class SaleResponseDaily {
   @PrimaryGeneratedColumn('increment', { type: 'bigint' })

@@ -34,9 +34,11 @@ export enum ResponseIntervalStatus {
  * giờ không tạo bản ghi nào — được tính sang bảng sale_work_activity_daily.
  */
 @Entity('sale_response_intervals')
-@Index(['userId', 'started_at'])
+@Index(['user_id', 'started_at'])
 @Index(['status', 'started_at'])
-@Index(['zaloContactId', 'started_at'])
+// LƯU Ý: property đã đổi tên zaloContactId -> zalo_contact_id, index phải
+// theo tên property (zaloContactId làm TypeORM văng lỗi khi build metadata)
+@Index(['zalo_contact_id', 'started_at'])
 @Index(['first_inbound_message_id'], { unique: true })
 export class SaleResponseInterval {
   @PrimaryGeneratedColumn('increment', { type: 'bigint' })
