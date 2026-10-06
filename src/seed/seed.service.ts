@@ -442,6 +442,14 @@ export class SeedService implements OnModuleInit {
           section: 'system',
           status: 1,
         },
+        {
+          name: 'customer_kpi_rollup_rest_time',
+          display_name: 'Thời gian nghỉ giữa các lần tổng hợp số liệu KPI (giây)',
+          value: '21600',
+          type: 'number',
+          section: 'system',
+          status: 1,
+        },
       ];
 
       for (const config of configsToCheck) {
