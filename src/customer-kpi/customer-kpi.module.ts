@@ -4,6 +4,8 @@ import { User } from '../users/user.entity';
 import { Customer } from './customer.entity';
 import { CustomerAssignment } from './customer-assignment.entity';
 import { CustomerZalo } from './customer-zalo.entity';
+import { CustomerZaloScanResult } from './customer-zalo-scan-result.entity';
+import { ZaloPythonApiClient } from './zalo-python-api.client';
 import { CustomerActivityDaily } from './customer-activity-daily.entity';
 import { CustomerResponseDaily } from './customer-response-daily.entity';
 import { KpiDefinition } from './kpi-definition.entity';
@@ -43,6 +45,7 @@ import { ApprovalRequestsService } from './approval-requests.service';
       Customer,
       CustomerAssignment,
       CustomerZalo,
+      CustomerZaloScanResult,
       CustomerActivityDaily,
       CustomerResponseDaily,
       KpiDefinition,
@@ -65,6 +68,7 @@ import { ApprovalRequestsService } from './approval-requests.service';
     ApprovalRequestsController,
   ],
   providers: [
+    ZaloPythonApiClient,
     CustomersService,
     CustomerAssignmentsService,
     CustomerKpiReportsService,

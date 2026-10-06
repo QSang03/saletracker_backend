@@ -20,8 +20,10 @@ import {
 import { ImportSessionQueryDto, ChangeDecisionDto } from './dto/import-session-query.dto';
 import { parseImportWorkbook, ParsedCustomerRow } from './customer-import-parser';
 
-/** DB Zalo cùng MySQL host — tra tài khoản Zalo của sale khi tạo phân công. */
-const ZALO_DB = 'zalo_automation';
+/**
+ * Quy tắc kiến trúc: KHÔNG tra DB Zalo khi import — zalo_account_id để trống,
+ * job Python (customer_zalo_matcher_service) tự gắn trong vòng quét ≤ 5 phút.
+ */
 /** 6 slug phòng ban cố định của file Excel (Phụ lục A.4). */
 const DEPARTMENT_SLUGS = ['may-in', 'pc', 'linh-kien', 'laptop', 'ptkh1', 'ptkh2'];
 
@@ -174,18 +176,7 @@ export class CustomerAssignmentsService {
       users.map((u) => [u.employeeCode as string, u.id as number]),
     );
 
-    // 2) Tài khoản Zalo của từng sale (DB zalo_automation, cùng host)
-    const mappedUserIds = [...new Set([...userIdByEmp.values()])];
-    const accountIdByUser = new Map<number, number>();
-    if (mappedUserIds.length) {
-      const rows: any[] = await this.dataSource.query(
-        `SELECT id, user_id FROM \`${ZALO_DB}\`.zalo_accounts WHERE user_id IN (?) ORDER BY id`,
-        [mappedUserIds],
-      );
-      for (const r of rows) {
-        accountIdByUser.set(Number(r.user_id), Number(r.id));
-      }
-    }
+    // 2) (đã bỏ) tra tài khoản Zalo của sale — chuyển sang job Python
 
     // 3) Trạng thái hiện tại trong DB
     const dbCustomers = await this.customerRepo.find();
@@ -278,7 +269,7 @@ export class CustomerAssignmentsService {
         const newRow = {
           sale_id: saleId,
           customer_tier: a.tier,
-          zalo_account_id: saleId ? accountIdByUser.get(saleId) ?? null : null,
+          zalo_account_id: null, // job Python tự gắn ≤ 5 phút sau khi apply
         };
         const error = changeErrorFor(p, saleId ?? undefined);
 

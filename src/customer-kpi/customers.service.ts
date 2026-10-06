@@ -6,19 +6,20 @@ import {
   BadRequestException,
   NotFoundException,
 } from '@nestjs/common';
-import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
-import { DataSource, In, Repository } from 'typeorm';
+import { InjectRepository } from '@nestjs/typeorm';
+import { In, Repository } from 'typeorm';
 import { User } from '../users/user.entity';
 import { Customer, CustomerStatus } from './customer.entity';
 import { CustomerAssignment, CustomerTier } from './customer-assignment.entity';
 import { CustomerZalo, MatchMethod } from './customer-zalo.entity';
+import { CustomerZaloScanResult } from './customer-zalo-scan-result.entity';
+import { ZaloPythonApiClient } from './zalo-python-api.client';
 import { CustomerResponseDaily } from './customer-response-daily.entity';
 import { CustomerActivityDaily } from './customer-activity-daily.entity';
 import { CustomerRole } from './customer.entity';
 import { CustomerQueryDto } from './dto/customer-query.dto';
 import { UpdateCustomerDto } from './dto/update-customer.dto';
 import { UpdateZaloLinkDto, CreateZaloLinkDto } from './dto/update-zalo-link.dto';
-import { findCodeInName, positionOf } from './zalo-match.util';
 import {
   BulkUpdateCustomersDto,
   CreateCustomerDto,
@@ -27,8 +28,11 @@ import {
 import { ApprovalRequest, ApprovalRequestType, ApprovalStatus } from './approval-request.entity';
 import { ApprovalRequestCustomerItem, ApprovalCustomerAction } from './approval-request-customer-item.entity';
 
-/** DB Zalo nằm cùng MySQL host — đọc thẳng bảng liên hệ để chọn tay cặp khớp. */
-const ZALO_DB = 'zalo_automation';
+/**
+ * Quy tắc kiến trúc (Mục 3): backend KHÔNG đọc DB Zalo (zalo_automation) —
+ * dữ liệu liên hệ/tài khoản Zalo chỉ lấy qua API Python (ZaloPythonApiClient)
+ * hoặc từ bảng customer_zalo_scan_results do job Python bổ sung vào main DB.
+ */
 
 /** 6 slug phòng ban cố định của file Excel (Phụ lục A.4). */
 const DEPARTMENT_SLUGS = ['may-in', 'pc', 'linh-kien', 'laptop', 'ptkh1', 'ptkh2'];
@@ -47,14 +51,15 @@ export class CustomersService {
     private readonly customerRepo: Repository<Customer>,
     @InjectRepository(CustomerZalo)
     private readonly zaloRepo: Repository<CustomerZalo>,
+    @InjectRepository(CustomerZaloScanResult)
+    private readonly scanRepo: Repository<CustomerZaloScanResult>,
+    private readonly pythonApi: ZaloPythonApiClient,
     @InjectRepository(CustomerResponseDaily)
     private readonly responseRepo: Repository<CustomerResponseDaily>,
     @InjectRepository(CustomerActivityDaily)
     private readonly activityRepo: Repository<CustomerActivityDaily>,
     @InjectRepository(User)
     private readonly userRepo: Repository<User>,
-    @InjectDataSource()
-    private readonly dataSource: DataSource,
     @InjectRepository(ApprovalRequest)
     private readonly approvalRequestRepo: Repository<ApprovalRequest>,
     @InjectRepository(ApprovalRequestCustomerItem)
@@ -408,9 +413,8 @@ export class CustomersService {
       : [];
     const userMap = new Map(users.map((u) => [u.id, u]));
 
-    // Mục 3 cv3 — lý do chi tiết theo từng dòng: quét tên liên hệ của ĐÚNG
-    // tài khoản Zalo của sale (chuỗi liên kết mục 4.2) để biết khách vắng bóng
-    // vì sale chưa kết nối, tài khoản chưa có liên hệ, hay tên thiếu mã khách.
+    // Mục 3 cv3 — lý do chi tiết ĐỌC TỪ MAIN DB: job Python quét xong bổ sung
+    // vào customer_zalo_scan_results (backend không được đọc DB Zalo).
     const REASON_TEXT: Record<string, string> = {
       sale_chua_ket_noi_zalo: 'Sale chưa kết nối tài khoản Zalo',
       tai_khoan_chua_co_lien_he: 'Tài khoản Zalo chưa đồng bộ liên hệ nào',
@@ -418,49 +422,24 @@ export class CustomersService {
         'Chưa có tên Zalo nào chứa mã khách — nhắc sale đặt tên theo mã khách hàng',
       ma_khong_xac_dinh_duoc:
         'Tên Zalo có chứa mã nhưng chưa liên kết được — chờ job chạy lại hoặc admin sửa tay',
+      chua_quet: 'Job tự khớp chưa quét dòng này — chờ vài phút rồi tải lại',
     };
-    const bySale = new Map<number, CustomerAssignment[]>();
-    for (const a of assignments) {
-      const list = bySale.get(a.sale_id) ?? [];
-      list.push(a);
-      bySale.set(a.sale_id, list);
-    }
-    const reasons = new Map<number, string>();
-    for (const [saleId, group] of bySale) {
-      const accounts: any[] = await this.dataSource.query(
-        `SELECT id FROM \`${ZALO_DB}\`.zalo_accounts WHERE user_id = ? AND is_active = 1`,
-        [saleId],
-      );
-      if (accounts.length === 0) {
-        for (const a of group) reasons.set(a.id, 'sale_chua_ket_noi_zalo');
-        continue;
-      }
-      const accountIds = accounts.map((r) => Number(r.id));
-      const contacts: any[] = await this.dataSource.query(
-        `SELECT display_name FROM \`${ZALO_DB}\`.zalo_contacts
-         WHERE zalo_account_id IN (?) AND is_active = 1 AND is_blocked = 0
-           AND display_name IS NOT NULL AND display_name <> ''`,
-        [accountIds],
-      );
-      if (contacts.length === 0) {
-        for (const a of group) reasons.set(a.id, 'tai_khoan_chua_co_lien_he');
-        continue;
-      }
-      const names = contacts.map((c) => String(c.display_name));
-      for (const a of group) {
-        const found = names.some(
-          (n) => findCodeInName(n, a.customer.customer_code) !== -1,
-        );
-        reasons.set(
-          a.id,
-          found ? 'ma_khong_xac_dinh_duoc' : 'ten_zalo_thieu_ma_khach',
-        );
-      }
-    }
+    const assignmentIds = assignments.map((a) => a.id);
+    const scanRows = assignmentIds.length
+      ? await this.scanRepo.find({ where: { assignment_id: In(assignmentIds) } })
+      : [];
+    const scanMap = new Map(scanRows.map((s) => [s.assignment_id, s]));
 
     const data = assignments.map((a) => {
       const u = userMap.get(a.sale_id);
-      const reason = reasons.get(a.id) ?? 'chua_tim_thay';
+      const scan = scanMap.get(a.id);
+      let reason = 'chua_quet';
+      if (scan) {
+        if (!scan.zalo_account_id) reason = 'sale_chua_ket_noi_zalo';
+        else if (scan.contacts_scanned === 0) reason = 'tai_khoan_chua_co_lien_he';
+        else if (scan.code_found) reason = 'ma_khong_xac_dinh_duoc';
+        else reason = 'ten_zalo_thieu_ma_khach';
+      }
       return {
         assignmentId: a.id,
         departmentSlug: a.department_slug,
@@ -517,14 +496,20 @@ export class CustomersService {
     return link;
   }
 
-  /** Liên hệ Zalo thật trên một tài khoản (đọc chéo DB zalo_automation). */
+  /** Liên hệ Zalo thật trên một tài khoản — hỏi qua API Python, không đọc DB Zalo. */
   private async fetchZaloContact(accountId: number, zaloContactId: string) {
-    const rows: any[] = await this.dataSource.query(
-      `SELECT zalo_contact_id, display_name FROM \`${ZALO_DB}\`.zalo_contacts
-       WHERE zalo_account_id = ? AND zalo_contact_id = ? LIMIT 1`,
-      [accountId, zaloContactId],
+    const accounts = await this.pythonApi.getAccounts(200);
+    const account = accounts.find((a) => a.accountId === Number(accountId));
+    if (!account) return null;
+    const rows = await this.pythonApi.getContacts({
+      userId: account.userId ?? undefined,
+      search: zaloContactId,
+      limit: 200,
+    });
+    const hit = rows.find(
+      (r) => r.zaloContactId === zaloContactId && r.accountId === Number(accountId),
     );
-    return rows[0] ?? null;
+    return hit ? { display_name: hit.displayName } : null;
   }
 
   private toZaloLinkDto(link: CustomerZalo) {
@@ -567,7 +552,9 @@ export class CustomersService {
       throw new NotFoundException('Không tìm thấy cặp khớp Zalo');
     }
 
-    const targetContactId = dto.zalo_contact_id ?? link.zalo_contact_id;
+    const targetContactId = dto.zalo_contact_id
+      ? dto.zalo_contact_id.trim()
+      : link.zalo_contact_id;
     const targetAccountId = dto.zalo_account_id ?? link.zalo_account_id;
     if (dto.zalo_contact_id !== undefined || dto.zalo_account_id !== undefined) {
       if (dto.zalo_contact_id === '') {
@@ -631,20 +618,18 @@ export class CustomersService {
 
     let accountId = dto.zalo_account_id ?? assignment.zalo_account_id ?? null;
     if (!accountId) {
-      const rows: any[] = await this.dataSource.query(
-        `SELECT id FROM \`${ZALO_DB}\`.zalo_accounts WHERE user_id = ? ORDER BY id LIMIT 1`,
-        [assignment.sale_id],
-      );
-      accountId = rows[0]?.id ?? null;
+      // Không đọc DB Zalo — hỏi qua API Python: tài khoản active đầu tiên của sale
+      const accounts = await this.pythonApi.getAccounts(200);
+      accountId =
+        accounts.find((a) => a.userId === assignment.sale_id && a.isActive)
+          ?.accountId ?? null;
     }
     if (!accountId) {
       throw new BadRequestException('Sale chưa có tài khoản Zalo để gắn liên hệ');
     }
 
-    const contact = await this.fetchZaloContact(
-      Number(accountId),
-      dto.zalo_contact_id,
-    );
+    const contactId = dto.zalo_contact_id.trim();
+    const contact = await this.fetchZaloContact(Number(accountId), contactId);
     if (!contact) {
       throw new BadRequestException('Liên hệ không tồn tại trên tài khoản Zalo này');
     }
@@ -652,7 +637,7 @@ export class CustomersService {
     let link = await this.zaloRepo.findOne({
       where: {
         assignment_id: assignment.id,
-        zalo_contact_id: dto.zalo_contact_id,
+        zalo_contact_id: contactId,
       },
     });
     if (link && link.match_method === 'manual') {
@@ -665,18 +650,13 @@ export class CustomersService {
       link.matched_name = name;
       link.is_active = true;
     } else {
-      const codeIndex = name
-        ? findCodeInName(name, assignment.customer.customer_code)
-        : -1;
+      // Khoá tay không tính vào thống kê vị trí tên (thống kê chỉ dành cho khớp tự động)
       link = this.zaloRepo.create({
         assignment_id: assignment.id,
         zalo_account_id: Number(accountId),
-        zalo_contact_id: dto.zalo_contact_id,
+        zalo_contact_id: contactId,
         matched_name: name,
-        matched_position:
-          name && codeIndex !== -1
-            ? positionOf(name, codeIndex, assignment.customer.customer_code.length)
-            : null,
+        matched_position: null,
         match_method: MatchMethod.MANUAL,
         is_active: true,
       });
@@ -772,15 +752,9 @@ export class CustomersService {
       );
     }
 
-    // Tự tra tài khoản Zalo của sale nếu không truyền — zalo_accounts ở DB zalo_automation
-    let zaloAccountId = dto.zalo_account_id ?? null;
-    if (!zaloAccountId) {
-      const rows: any[] = await this.dataSource.query(
-        `SELECT id FROM \`${ZALO_DB}\`.zalo_accounts WHERE user_id = ? ORDER BY id LIMIT 1`,
-        [dto.sale_id],
-      );
-      zaloAccountId = rows[0]?.id ?? null;
-    }
+    // Không tra DB Zalo (quy tắc kiến trúc) — bỏ trống để job Python tự gắn
+    // zalo_account_id trong vòng quét ≤ 5 phút
+    const zaloAccountId = dto.zalo_account_id ?? null;
 
     const assignment = await this.assignmentRepo.save(
       this.assignmentRepo.create({
@@ -904,50 +878,59 @@ export class CustomersService {
 
   /**
    * Tra cứu liên hệ Zalo để chọn tay khi sửa cặp khớp (Mục 3, màn hình 5-5).
-   * Đọc thẳng zalo_automation.zalo_contacts (cùng MySQL host — đã kiểm chứng
-   * quyền đọc). Phạm vi: admin/PM/view tra mọi tài khoản; manager tra tài khoản
-   * của người trong phòng; nhân viên chỉ tài khoản của chính mình.
+   * KHÔNG đọc DB Zalo — hỏi qua API Python (zalo_entities_api). Phạm vi:
+   * admin/PM/view tra mọi tài khoản; manager tra tài khoản của người trong
+   * phòng; nhân viên chỉ tài khoản của chính mình.
    */
   async zaloContacts(query: ZaloContactQueryDto, user: any) {
     const limit = Math.min(query.limit ?? 50, 200);
     const userIds = await this.scopeUserIds(user);
 
-    let allowedAccountIds: number[] | null = null; // null = không giới hạn
-    if (userIds !== undefined) {
-      if (userIds.length === 0) return { data: [] };
-      const rows: any[] = await this.dataSource.query(
-        `SELECT id FROM \`${ZALO_DB}\`.zalo_accounts WHERE user_id IN (?) ORDER BY id`,
-        [userIds],
-      );
-      allowedAccountIds = rows.map((r) => Number(r.id));
-      // Kiểm tra accountId TRƯỚC khi rút gọn — user không có tài khoản nào
-      // vẫn phải bị 403 khi đòi tra tài khoản người khác, không được trả rỗng lặng lẽ
-      if (query.accountId && !allowedAccountIds.includes(query.accountId)) {
-        throw new ForbiddenException('Tài khoản Zalo không thuộc phạm vi của bạn');
+    const accounts = await this.pythonApi.getAccounts(200);
+    const allowedAccounts =
+      userIds === undefined
+        ? accounts
+        : accounts.filter((a) => a.userId !== null && userIds.includes(a.userId));
+    // Kiểm tra accountId TRƯỚC khi rút gọn — user không có tài khoản nào
+    // vẫn phải bị 403 khi đòi tra tài khoản người khác, không được trả rỗng lặng lẽ
+    if (query.accountId && !allowedAccounts.some((a) => a.accountId === query.accountId)) {
+      throw new ForbiddenException('Tài khoản Zalo không thuộc phạm vi của bạn');
+    }
+    if (userIds !== undefined && allowedAccounts.length === 0) return { data: [] };
+
+    let rows;
+    if (query.accountId) {
+      const account = accounts.find((a) => a.accountId === query.accountId);
+      rows = await this.pythonApi.getContacts({
+        userId: account?.userId ?? undefined,
+        search: query.search,
+        limit: 200,
+      });
+      rows = rows.filter((r) => r.accountId === query.accountId);
+    } else if (userIds !== undefined) {
+      const scopedUserIds = [...new Set(allowedAccounts.map((a) => a.userId as number))];
+      if (scopedUserIds.length === 1) {
+        rows = await this.pythonApi.getContacts({
+          userId: scopedUserIds[0],
+          search: query.search,
+          limit: 200,
+        });
+      } else {
+        rows = await this.pythonApi.getContacts({ search: query.search, limit: 200 });
+        const allowedIds = new Set(allowedAccounts.map((a) => a.accountId));
+        rows = rows.filter((r) => allowedIds.has(r.accountId));
       }
-      if (allowedAccountIds.length === 0) return { data: [] };
+    } else {
+      rows = await this.pythonApi.getContacts({ search: query.search, limit: 200 });
     }
 
-    const params: any[] = [];
-    let sql = `SELECT zc.zalo_account_id AS accountId, zc.zalo_contact_id AS zaloContactId,
-                      zc.display_name AS displayName, zc.is_blocked AS isBlocked
-               FROM \`${ZALO_DB}\`.zalo_contacts zc WHERE zc.is_active = 1`;
-    if (allowedAccountIds !== null) {
-      sql += ' AND zc.zalo_account_id IN (?)';
-      params.push(allowedAccountIds);
-    } else if (query.accountId) {
-      sql += ' AND zc.zalo_account_id = ?';
-      params.push(query.accountId);
-    }
-    if (query.search) {
-      sql += ' AND zc.display_name LIKE ?';
-      params.push(`%${query.search}%`);
-    }
-    sql += ' ORDER BY zc.display_name ASC LIMIT ?';
-    params.push(limit);
-
-    const data: any[] = await this.dataSource.query(sql, params);
-    return { data };
+    return {
+      data: rows.slice(0, limit).map((r) => ({
+        accountId: r.accountId,
+        zaloContactId: r.zaloContactId,
+        displayName: r.displayName,
+      })),
+    };
   }
 
   /**
