@@ -11,13 +11,14 @@ import { DataSource, In, Repository } from 'typeorm';
 import { User } from '../users/user.entity';
 import { Customer, CustomerStatus } from './customer.entity';
 import { CustomerAssignment, CustomerTier } from './customer-assignment.entity';
-import { CustomerZalo } from './customer-zalo.entity';
+import { CustomerZalo, MatchMethod } from './customer-zalo.entity';
 import { CustomerResponseDaily } from './customer-response-daily.entity';
 import { CustomerActivityDaily } from './customer-activity-daily.entity';
 import { CustomerRole } from './customer.entity';
 import { CustomerQueryDto } from './dto/customer-query.dto';
 import { UpdateCustomerDto } from './dto/update-customer.dto';
-import { UpdateZaloLinkDto } from './dto/update-zalo-link.dto';
+import { UpdateZaloLinkDto, CreateZaloLinkDto } from './dto/update-zalo-link.dto';
+import { findCodeInName, positionOf } from './zalo-match.util';
 import {
   BulkUpdateCustomersDto,
   CreateCustomerDto,
@@ -407,16 +408,67 @@ export class CustomersService {
       : [];
     const userMap = new Map(users.map((u) => [u.id, u]));
 
+    // Mục 3 cv3 — lý do chi tiết theo từng dòng: quét tên liên hệ của ĐÚNG
+    // tài khoản Zalo của sale (chuỗi liên kết mục 4.2) để biết khách vắng bóng
+    // vì sale chưa kết nối, tài khoản chưa có liên hệ, hay tên thiếu mã khách.
+    const REASON_TEXT: Record<string, string> = {
+      sale_chua_ket_noi_zalo: 'Sale chưa kết nối tài khoản Zalo',
+      tai_khoan_chua_co_lien_he: 'Tài khoản Zalo chưa đồng bộ liên hệ nào',
+      ten_zalo_thieu_ma_khach:
+        'Chưa có tên Zalo nào chứa mã khách — nhắc sale đặt tên theo mã khách hàng',
+      ma_khong_xac_dinh_duoc:
+        'Tên Zalo có chứa mã nhưng chưa liên kết được — chờ job chạy lại hoặc admin sửa tay',
+    };
+    const bySale = new Map<number, CustomerAssignment[]>();
+    for (const a of assignments) {
+      const list = bySale.get(a.sale_id) ?? [];
+      list.push(a);
+      bySale.set(a.sale_id, list);
+    }
+    const reasons = new Map<number, string>();
+    for (const [saleId, group] of bySale) {
+      const accounts: any[] = await this.dataSource.query(
+        `SELECT id FROM \`${ZALO_DB}\`.zalo_accounts WHERE user_id = ? AND is_active = 1`,
+        [saleId],
+      );
+      if (accounts.length === 0) {
+        for (const a of group) reasons.set(a.id, 'sale_chua_ket_noi_zalo');
+        continue;
+      }
+      const accountIds = accounts.map((r) => Number(r.id));
+      const contacts: any[] = await this.dataSource.query(
+        `SELECT display_name FROM \`${ZALO_DB}\`.zalo_contacts
+         WHERE zalo_account_id IN (?) AND is_active = 1 AND is_blocked = 0
+           AND display_name IS NOT NULL AND display_name <> ''`,
+        [accountIds],
+      );
+      if (contacts.length === 0) {
+        for (const a of group) reasons.set(a.id, 'tai_khoan_chua_co_lien_he');
+        continue;
+      }
+      const names = contacts.map((c) => String(c.display_name));
+      for (const a of group) {
+        const found = names.some(
+          (n) => findCodeInName(n, a.customer.customer_code) !== -1,
+        );
+        reasons.set(
+          a.id,
+          found ? 'ma_khong_xac_dinh_duoc' : 'ten_zalo_thieu_ma_khach',
+        );
+      }
+    }
+
     const data = assignments.map((a) => {
       const u = userMap.get(a.sale_id);
-      const offline = (u?.zaloLinkStatus ?? 0) !== 1;
+      const reason = reasons.get(a.id) ?? 'chua_tim_thay';
       return {
         assignmentId: a.id,
         departmentSlug: a.department_slug,
         customerTier: a.customer_tier,
         saleId: a.sale_id,
         saleName: u?.fullName ?? null,
-        reason: offline ? 'sale_chua_ket_noi_zalo' : 'chua_tim_thay',
+        reason,
+        reasonText: REASON_TEXT[reason] ?? reason,
         customer: {
           id: a.customer.id,
           customerCode: a.customer.customer_code,
@@ -465,17 +517,181 @@ export class CustomersService {
     return link;
   }
 
+  /** Liên hệ Zalo thật trên một tài khoản (đọc chéo DB zalo_automation). */
+  private async fetchZaloContact(accountId: number, zaloContactId: string) {
+    const rows: any[] = await this.dataSource.query(
+      `SELECT zalo_contact_id, display_name FROM \`${ZALO_DB}\`.zalo_contacts
+       WHERE zalo_account_id = ? AND zalo_contact_id = ? LIMIT 1`,
+      [accountId, zaloContactId],
+    );
+    return rows[0] ?? null;
+  }
+
+  private toZaloLinkDto(link: CustomerZalo) {
+    return {
+      id: link.id,
+      assignmentId: link.assignment_id,
+      zaloContactId: link.zalo_contact_id,
+      zaloAccountId: link.zalo_account_id,
+      matchedName: link.matched_name,
+      matchedPosition: link.matched_position,
+      matchMethod: link.match_method,
+      isActive: link.is_active,
+      lastVerifiedAt: link.last_verified_at,
+    };
+  }
+
   /**
-   * Sửa tay cặp khớp Zalo ↔ khách hàng (đặt match_method = 'manual' để job
-   * tự khớp không ghi đè). Thuộc Mục 3 — công việc con 2.
+   * Sửa tay cặp khớp Zalo ↔ khách hàng (Mục 3, cv 2) — CHỈ quản trị viên.
+   * Mọi thay đổi đặt `match_method = 'manual'` để job tự khớp không ghi đè
+   * lại ở lần sau (thiết kế mục 4.3.2).
    */
   async updateZaloLink(linkId: number, dto: UpdateZaloLinkDto, user: any) {
-    void linkId;
-    void dto;
-    void user;
-    throw new NotImplementedException(
-      'Sửa tay cặp khớp Zalo sẽ xây ở Mục 3 (công việc con 2)',
+    if (!this.lowerRoles(user).includes('admin')) {
+      throw new ForbiddenException('Chỉ quản trị viên được sửa tay cặp khớp Zalo');
+    }
+    if (
+      !dto.zalo_contact_id &&
+      dto.zalo_account_id === undefined &&
+      dto.matched_name === undefined &&
+      dto.is_active === undefined
+    ) {
+      throw new BadRequestException('Cần ít nhất một trường để sửa');
+    }
+
+    const link = await this.zaloRepo.findOne({
+      where: { id: linkId },
+      relations: ['assignment', 'assignment.customer'],
+    });
+    if (!link) {
+      throw new NotFoundException('Không tìm thấy cặp khớp Zalo');
+    }
+
+    const targetContactId = dto.zalo_contact_id ?? link.zalo_contact_id;
+    const targetAccountId = dto.zalo_account_id ?? link.zalo_account_id;
+    if (dto.zalo_contact_id !== undefined || dto.zalo_account_id !== undefined) {
+      if (dto.zalo_contact_id === '') {
+        throw new BadRequestException('zalo_contact_id không được rỗng');
+      }
+      const contact = await this.fetchZaloContact(
+        Number(targetAccountId),
+        targetContactId,
+      );
+      if (!contact) {
+        throw new BadRequestException(
+          'Liên hệ không tồn tại trên tài khoản Zalo này',
+        );
+      }
+      if (
+        targetContactId !== link.zalo_contact_id ||
+        Number(targetAccountId) !== Number(link.zalo_account_id)
+      ) {
+        const duplicated = await this.zaloRepo.findOne({
+          where: {
+            assignment_id: link.assignment_id,
+            zalo_contact_id: targetContactId,
+          },
+        });
+        if (duplicated && duplicated.id !== link.id) {
+          throw new ConflictException(
+            'Phân công này đã có cặp khớp với liên hệ trên — ngừng kích hoạt nó trước khi sửa',
+          );
+        }
+      }
+      link.zalo_contact_id = targetContactId;
+      link.zalo_account_id = Number(targetAccountId);
+      link.matched_name = dto.matched_name ?? contact.display_name ?? link.matched_name;
+    } else if (dto.matched_name !== undefined) {
+      link.matched_name = dto.matched_name;
+    }
+    if (dto.is_active !== undefined) link.is_active = dto.is_active;
+    link.match_method = MatchMethod.MANUAL;
+    link.last_verified_at = new Date();
+    await this.zaloRepo.save(link);
+
+    return this.toZaloLinkDto(link);
+  }
+
+  /**
+   * Gắn tay cặp khớp MỚI khi job không tìm ra (Mục 3, cv 2) — CHỈ quản trị
+   * viên. Dòng tạo ra mang `match_method = 'manual'` ngay từ đầu.
+   */
+  async createZaloLink(dto: CreateZaloLinkDto, user: any) {
+    if (!this.lowerRoles(user).includes('admin')) {
+      throw new ForbiddenException('Chỉ quản trị viên được gắn tay cặp khớp Zalo');
+    }
+
+    const assignment = await this.assignmentRepo.findOne({
+      where: { id: dto.assignment_id },
+      relations: ['customer'],
+    });
+    if (!assignment) {
+      throw new NotFoundException('Không tìm thấy dòng phân công');
+    }
+
+    let accountId = dto.zalo_account_id ?? assignment.zalo_account_id ?? null;
+    if (!accountId) {
+      const rows: any[] = await this.dataSource.query(
+        `SELECT id FROM \`${ZALO_DB}\`.zalo_accounts WHERE user_id = ? ORDER BY id LIMIT 1`,
+        [assignment.sale_id],
+      );
+      accountId = rows[0]?.id ?? null;
+    }
+    if (!accountId) {
+      throw new BadRequestException('Sale chưa có tài khoản Zalo để gắn liên hệ');
+    }
+
+    const contact = await this.fetchZaloContact(
+      Number(accountId),
+      dto.zalo_contact_id,
     );
+    if (!contact) {
+      throw new BadRequestException('Liên hệ không tồn tại trên tài khoản Zalo này');
+    }
+
+    let link = await this.zaloRepo.findOne({
+      where: {
+        assignment_id: assignment.id,
+        zalo_contact_id: dto.zalo_contact_id,
+      },
+    });
+    if (link && link.match_method === 'manual') {
+      throw new ConflictException('Cặp khớp tay này đã tồn tại');
+    }
+    const name = contact.display_name ?? null;
+    if (link) {
+      // Bản ghi tự khớp đang trỏ liên hệ này → chuyển thành khớp tay
+      link.zalo_account_id = Number(accountId);
+      link.matched_name = name;
+      link.is_active = true;
+    } else {
+      const codeIndex = name
+        ? findCodeInName(name, assignment.customer.customer_code)
+        : -1;
+      link = this.zaloRepo.create({
+        assignment_id: assignment.id,
+        zalo_account_id: Number(accountId),
+        zalo_contact_id: dto.zalo_contact_id,
+        matched_name: name,
+        matched_position:
+          name && codeIndex !== -1
+            ? positionOf(name, codeIndex, assignment.customer.customer_code.length)
+            : null,
+        match_method: MatchMethod.MANUAL,
+        is_active: true,
+      });
+    }
+    link.match_method = MatchMethod.MANUAL;
+    link.last_verified_at = new Date();
+    link = await this.zaloRepo.save(link);
+
+    // Ghi nhớ tài khoản Zalo của sale vào dòng phân công cho lần sau
+    if (!assignment.zalo_account_id) {
+      assignment.zalo_account_id = Number(accountId);
+      await this.assignmentRepo.save(assignment);
+    }
+
+    return this.toZaloLinkDto(link);
   }
 
   /**

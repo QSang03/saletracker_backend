@@ -355,12 +355,9 @@ export class SeedCustomerTriggerService {
           SET changed_fields = JSON_ARRAY_APPEND(changed_fields, '$', 'is_active');
         END IF;
 
-        -- last_verified_at: nullable datetime
-        IF OLD.last_verified_at != NEW.last_verified_at OR (OLD.last_verified_at IS NULL AND NEW.last_verified_at IS NOT NULL) OR (OLD.last_verified_at IS NOT NULL AND NEW.last_verified_at IS NULL) THEN
-          SET changed_fields = JSON_ARRAY_APPEND(changed_fields, '$', 'last_verified_at');
-        END IF;
-
-        -- NOTE: zalo_contact_id là danh tính liên hệ (không track)
+        -- NOTE: zalo_contact_id là danh tính liên hệ (không track);
+        -- last_verified_at là timestamp máy chạy job, không track để job xác
+        -- thực lại mỗi 5 phút không làm ngập nhật ký
 
         IF JSON_LENGTH(changed_fields) > 0 THEN
           INSERT INTO \`database_change_log\` (

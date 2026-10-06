@@ -434,6 +434,14 @@ export class SeedService implements OnModuleInit {
           section: 'zalo_chat',
           status: 1,
         },
+        {
+          name: 'customer_zalo_matcher_rest_time',
+          display_name: 'Thời gian nghỉ giữa các lần tự khớp khách-Zalo (giây)',
+          value: '300',
+          type: 'number',
+          section: 'system',
+          status: 1,
+        },
       ];
 
       for (const config of configsToCheck) {

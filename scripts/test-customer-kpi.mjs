@@ -923,6 +923,146 @@ console.log('\n-- J. Apply + Rollback (file demo thật + nhân viên test) --')
   }
 }
 
+// ============ K. MUC 3 — LIEN KET ZALO: SUA TAY + DANH SACH CHUA KHOP ============
+console.log('\n-- K. Liên kết Zalo: sửa tay + danh sách chưa khớp (Mục 3) --');
+{
+  const CODE_A = 'KPI_ZALO_TEST_A';
+  let assignmentId = null;
+  let linkId = null;
+  let existingLinks = [];
+  try {
+    // 1. Chuẩn bị khách test của admin — chạy lại an toàn: nếu phân công còn
+    //    từ lần trước thì tái sử dụng, không tạo trùng (409)
+    const search = await call('GET', `/customers?search=${encodeURIComponent(CODE_A)}&pageSize=50`, H());
+    const existingRow = (search.json?.data || []).find(
+      (x) => x.customer?.customerCode === CODE_A && x.departmentSlug === 'laptop',
+    );
+    if (existingRow?.assignmentId) {
+      assignmentId = existingRow.assignmentId;
+      ok(`Tái sử dụng phân công #${assignmentId} từ lần chạy trước`);
+    } else {
+      const cr = await call('POST', '/customers', {
+        ...H(),
+        body: {
+          customer_code: CODE_A,
+          sap_code: 'KZTA1',
+          customer_name: 'Khách test Zalo A',
+          department_slug: 'laptop',
+          customer_tier: 'KEY',
+          sale_id: 1,
+        },
+      });
+      assert(cr.status === 201 && cr.json?.assignmentId, `POST /customers HTTP ${cr.status} ${JSON.stringify(cr.json).slice(0, 150)}`);
+      assignmentId = cr.json.assignmentId;
+      ok('Tạo khách test chưa có link Zalo');
+    }
+
+    // 2. Ngừng kích hoạt link tay còn active từ lần chạy trước → quay về unmatched
+    const detail = await call('GET', `/customers/${assignmentId}`, H());
+    existingLinks = detail.json?.zaloAccounts || [];
+    for (const z of existingLinks.filter((x) => x.isActive && x.matchMethod === 'manual')) {
+      await call('PATCH', `/customers/zalo-links/${z.id}`, { ...H(), body: { is_active: false } });
+    }
+
+    // 3. unmatched: khách test phải nằm trong danh sách với lý do chi tiết
+    await expect('[K] unmatched chứa khách test + reason/reasonText chi tiết', 200, async () => {
+      const r = await call('GET', `/customers/unmatched?search=${encodeURIComponent(CODE_A)}&pageSize=10`, H());
+      assert((r.json?.total ?? 0) >= 1, `total=${r.json?.total}`);
+      const row = (r.json?.data || []).find((x) => x.assignmentId === assignmentId);
+      assert(row, 'không thấy dòng phân công trong unmatched');
+      const KNOWN = ['sale_chua_ket_noi_zalo', 'tai_khoan_chua_co_lien_he', 'ten_zalo_thieu_ma_khach', 'ma_khong_xac_dinh_duoc'];
+      assert(KNOWN.includes(row.reason), `reason=${row.reason} (phải là 1 trong 4 lý do Mục 3)`);
+      assert(!!row.reasonText && row.reasonText !== row.reason, 'thiếu reasonText mô tả tiếng Việt');
+      return r.status;
+    });
+
+    // 4. Lấy 1 liên hệ Zalo thật (đọc chéo DB zalo_automation qua API có sẵn)
+    const ctr = await call('GET', '/customers/zalo-contacts?limit=1', H());
+    assert((ctr.json?.data || []).length >= 1, 'DB zalo_automation chưa có liên hệ nào để test');
+    const contact = ctr.json.data[0];
+
+    // 5. Gắn tay cặp khớp mới — chỉ admin (chạy lại: dùng lại link đã có)
+    const reused = existingLinks.find((x) => x.zaloContactId === contact.zaloContactId);
+    if (reused) {
+      linkId = reused.id;
+      ok(`Dùng lại cặp khớp tay #${linkId} từ lần chạy trước`);
+    } else {
+      await expect('[K] POST zalo-links gắn tay → 201, matchMethod manual', 201, async () => {
+        const r = await call('POST', '/customers/zalo-links', {
+          ...H(),
+          body: {
+            assignment_id: assignmentId,
+            zalo_contact_id: contact.zaloContactId,
+            zalo_account_id: contact.accountId,
+          },
+        });
+        assert(r.json?.id && r.json?.matchMethod === 'manual' && r.json?.isActive === true,
+          `body=${JSON.stringify(r.json).slice(0, 150)}`);
+        linkId = r.json.id;
+        return r.status;
+      });
+    }
+
+    // 6. Chi tiết phân công + chi tiết cặp khớp
+    await expect('[K] GET /customers/:id thấy link manual trong zaloAccounts', 200, async () => {
+      const r = await call('GET', `/customers/${assignmentId}`, H());
+      const z = (r.json?.zaloAccounts || []).find((x) => x.id === linkId);
+      assert(z, 'không thấy link trong zaloAccounts');
+      assert(z.matchMethod === 'manual' && z.isActive === true, `z=${JSON.stringify(z)}`);
+      return r.status;
+    });
+    await expect('[K] GET zalo-links/:id → 200 đúng cặp', 200, async () => {
+      const r = await call('GET', `/customers/zalo-links/${linkId}`, H());
+      assert(r.json?.id === linkId, `body=${JSON.stringify(r.json).slice(0, 100)}`);
+      return r.status;
+    });
+
+    // 7. PATCH sửa tay bật/tắt — matchMethod giữ nguyên 'manual' (job không ghi đè)
+    await expect('[K] PATCH zalo-links is_active=false → 200 vẫn manual', 200, async () => {
+      const r = await call('PATCH', `/customers/zalo-links/${linkId}`, { ...H(), body: { is_active: false } });
+      assert(r.json?.isActive === false && r.json?.matchMethod === 'manual', `body=${JSON.stringify(r.json).slice(0, 150)}`);
+      return r.status;
+    });
+    await expect('[K] PATCH is_active=true phục hồi → 200', 200, async () => {
+      const r = await call('PATCH', `/customers/zalo-links/${linkId}`, { ...H(), body: { is_active: true } });
+      assert(r.json?.isActive === true, `body=${JSON.stringify(r.json).slice(0, 100)}`);
+      return r.status;
+    });
+
+    // 8. Chỉ quản trị viên được sửa tay/gắn tay
+    const roleId = await findRoleId('manager-khach-hang');
+    assert(roleId, 'thiếu role manager-khach-hang — seed nhóm quyền đã chạy chưa?');
+    await ensureTestUser('kpi_test_manager_khach_hang', [roleId]);
+    const lr = await call('POST', '/auth/login', { body: { username: 'kpi_test_manager_khach_hang', password: DEFAULT_PASSWORD } });
+    const managerToken = lr.json?.access_token || lr.json?.token || lr.json?.accessToken;
+    assert(managerToken, `Login manager HTTP ${lr.status}`);
+    await expect('[K] Manager sửa tay cặp khớp → 403 (chỉ admin)', 403,
+      async () => (await call('PATCH', `/customers/zalo-links/${linkId}`, { token: managerToken, body: { is_active: false } })).status);
+    await expect('[K] Manager gắn tay cặp mới → 403 (chỉ admin)', 403,
+      async () => (await call('POST', '/customers/zalo-links', { token: managerToken, body: { assignment_id: assignmentId, zalo_contact_id: contact.zaloContactId } })).status);
+
+    // 9. Dữ liệu sai → 400; cặp khớp không tồn tại → 404
+    await expect('[K] POST zalo-links liên hệ không tồn tại → 400', 400,
+      async () => (await call('POST', '/customers/zalo-links', { ...H(), body: { assignment_id: assignmentId, zalo_contact_id: 'khong_ton_tai_xyz' } })).status);
+    await expect('[K] PATCH zalo-links id ảo → 404', 404,
+      async () => (await call('PATCH', '/customers/zalo-links/99999999', { ...H(), body: { is_active: false } })).status);
+
+    // 10. Xoá mềm khách test — không để rác trong unmatched
+    await expect('[K] DELETE khách test → 200', 200,
+      async () => (await call('DELETE', `/customers/${assignmentId}`, H())).status);
+    assignmentId = null;
+  } catch (e) {
+    bad('[K] Chuẩn bị', e.message);
+  }
+  // Dọn user manager test (xoá mềm — nhóm F/K lần sau restore)
+  try {
+    const s = await call('GET', `/users?search=${encodeURIComponent('kpi_test_manager_khach_hang')}&limit=10`, H());
+    const list = Array.isArray(s.json) ? s.json : s.json?.data || [];
+    const u = list.find((x) => x.username === 'kpi_test_manager_khach_hang');
+    if (u?.id) await call('DELETE', `/users/${u.id}`, H());
+  } catch {}
+}
+
 // ============ DỌN DẸP AN TOÀN ============
 if (createdId) {
   try { await call('DELETE', `/customer-kpi-definitions/${createdId}`, H()); } catch {}

@@ -19,7 +19,7 @@ import { Permission } from '../common/guards/permission.decorator';
 import { CustomersService } from './customers.service';
 import { CustomerQueryDto } from './dto/customer-query.dto';
 import { UpdateCustomerDto } from './dto/update-customer.dto';
-import { UpdateZaloLinkDto } from './dto/update-zalo-link.dto';
+import { UpdateZaloLinkDto, CreateZaloLinkDto } from './dto/update-zalo-link.dto';
 import {
   BulkUpdateCustomersDto,
   CreateCustomerDto,
@@ -79,6 +79,13 @@ export class CustomersController {
   @Permission('khach-hang', 'read')
   getZaloLink(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
     return this.customersService.getZaloLink(id, req.user);
+  }
+
+  /** Gắn tay cặp khớp MỚI khi job không tìm ra — chỉ admin (Mục 3 cv 2). */
+  @Post('zalo-links')
+  @Permission('khach-hang', 'update')
+  createZaloLink(@Body() dto: CreateZaloLinkDto, @Req() req: any) {
+    return this.customersService.createZaloLink(dto, req.user);
   }
 
   @Patch('zalo-links/:id')

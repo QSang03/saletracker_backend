@@ -28,3 +28,23 @@ export class UpdateZaloLinkDto {
   @IsBoolean()
   is_active?: boolean;
 }
+
+/**
+ * Gắn tay một cặp khớp MỚI khi job không tìm ra (Mục 3 cv 2) — tạo dòng
+ * customer_zalo với `match_method = 'manual'` ngay từ đầu.
+ */
+export class CreateZaloLinkDto {
+  @Type(() => Number)
+  @IsInt()
+  assignment_id: number;
+
+  /** ID liên hệ Zalo (zalo_contacts.zalo_contact_id) — bắt buộc kèm tài khoản. */
+  @IsString()
+  zalo_contact_id: string;
+
+  /** Bỏ trống → tự tra tài khoản Zalo của sale của dòng phân công. */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  zalo_account_id?: number;
+}
