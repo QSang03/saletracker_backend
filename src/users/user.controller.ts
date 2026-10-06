@@ -150,8 +150,8 @@ export class UserController {
 
   @Get('all-for-filter')
   @Permission('chien-dich', 'read')
-  async getAllUsersForFilter(@Req() req) {
-    return this.userService.getAllUsersForFilter(req.user);
+  async getAllUsersForFilter(@Req() req, @Query('search') search?: string) {
+    return this.userService.getAllUsersForFilter(req.user, search);
   }
 
   @Get('for-filter')

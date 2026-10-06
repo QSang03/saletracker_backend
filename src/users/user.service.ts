@@ -1531,7 +1531,7 @@ export class UserService {
     }));
   }
 
-  async getAllUsersForFilter(user: User) {
+  async getAllUsersForFilter(user: User, search?: string) {
     const roleNames = (user?.roles || []).map((r: any) =>
       typeof r === 'string'
         ? r.toLowerCase()
@@ -1557,6 +1557,14 @@ export class UserService {
       ])
       .andWhere('user.deletedAt IS NULL')
       .orderBy('user.fullName', 'ASC');
+
+    if (search && search.trim()) {
+      const keyword = `%${search.trim().toLowerCase()}%`;
+      qb.andWhere(
+        '(LOWER(user.fullName) LIKE :keyword OR LOWER(user.employeeCode) LIKE :keyword OR LOWER(user.username) LIKE :keyword)',
+        { keyword },
+      );
+    }
 
     if (isAdmin) {
       // qb.andWhere('department.id IS NOT NULL');
