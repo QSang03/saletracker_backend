@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import * as ExcelJS from 'exceljs';
@@ -362,39 +362,61 @@ export class CustomerKpiReportsService {
 
   // ------------------------------------------------------------- API
 
-  async overview(query: any, user: any) {
+  /**
+   * Pipeline dùng chung cho overview / by-sale / export: nạp phân công +
+   * hoạt động (kèm lookback cho bài toán gợi ý) + chỉ tiêu rồi chấm điểm.
+   * Map rỗng = người dùng không thấy sale nào trong phạm vi.
+   */
+  private async buildScoredFor(
+    saleId: number | undefined,
+    from: string,
+    to: string,
+    user: any,
+  ) {
     const userIds = await this.scopeUserIds(user);
     if (userIds !== undefined && userIds.length === 0) {
-      return { from: query.from, to: query.to, sales: [] };
+      return new Map();
     }
-    const lookbackFrom = this.shiftDate(query.from, -SUGGESTION_GAP_DAYS);
-    const assignments = await this.loadAssignments(userIds, query.saleId);
+    if (saleId !== undefined) {
+      this.assertSaleInScope(saleId, userIds);
+    }
+    const lookbackFrom = this.shiftDate(from, -SUGGESTION_GAP_DAYS);
+    const assignments = await this.loadAssignments(userIds, saleId);
     const definitions = await this.loadDefinitions();
     const activity = await this.loadActivity(
       assignments.map((row) => row.assignmentId),
       lookbackFrom,
-      query.to,
+      to,
     );
     const targets = await this.loadTargets(
       assignments.map((row) => row.saleId),
       definitions.map((definition) => definition.key),
-      this.monthsInRange(query.from, query.to),
+      this.monthsInRange(from, to),
     );
     const saleInfos = await this.loadSaleInfos([
       ...new Set(assignments.map((row) => row.saleId)),
     ]);
-    const scored = this.buildScoredData(
+    return this.buildScoredData(
       assignments,
       activity,
       targets,
       definitions,
       saleInfos,
-      query.from,
-      this.monthsInRange(query.from, query.to),
+      from,
+      this.monthsInRange(from, to),
     );
+  }
+
+  async overview(query: any, user: any) {
+    const scored = await this.buildScoredFor(query.saleId, query.from, query.to, user);
+
+    // search = lọc theo TÊN SALE (dataset là các sale trong phạm vi — khách
+    // hàng không nằm trong response của overview)
+    const search = String(query.search ?? '').trim().toLowerCase();
 
     const sales = [...scored.entries()]
       .sort((a, b) => a[0] - b[0])
+      .filter(([, data]) => !search || data.saleName.toLowerCase().includes(search))
       .map(([saleId, data]) => ({
         saleId,
         saleName: data.saleName,
@@ -405,58 +427,58 @@ export class CustomerKpiReportsService {
   }
 
   async bySale(query: any, user: any) {
-    const userIds = await this.scopeUserIds(user);
-    if (userIds !== undefined && userIds.length === 0) {
-      return { from: query.from, to: query.to, sales: [] };
+    // Bảng khách hàng của MỘT sale — không cho quét toàn công ty trong một call
+    // (9.8k khách × tiêu chí sẽ là payload hàng chục MB nếu thiếu saleId)
+    if (query.saleId === undefined) {
+      throw new BadRequestException('by-sale bắt buộc truyền saleId (bảng khách hàng của một sale)');
     }
-    if (query.saleId !== undefined) {
-      this.assertSaleInScope(query.saleId, userIds);
-    }
-    const lookbackFrom = this.shiftDate(query.from, -SUGGESTION_GAP_DAYS);
-    const assignments = await this.loadAssignments(userIds, query.saleId);
-    const definitions = await this.loadDefinitions();
-    const activity = await this.loadActivity(
-      assignments.map((row) => row.assignmentId),
-      lookbackFrom,
-      query.to,
-    );
-    const targets = await this.loadTargets(
-      assignments.map((row) => row.saleId),
-      definitions.map((definition) => definition.key),
-      this.monthsInRange(query.from, query.to),
-    );
-    const saleInfos = await this.loadSaleInfos([
-      ...new Set(assignments.map((row) => row.saleId)),
-    ]);
-    const scored = this.buildScoredData(
-      assignments,
-      activity,
-      targets,
-      definitions,
-      saleInfos,
-      query.from,
-      this.monthsInRange(query.from, query.to),
-    );
+    const page = Math.max(1, Number(query.page) || 1);
+    const pageSize = Math.min(200, Math.max(1, Number(query.pageSize) || 100));
+    const scored = await this.buildScoredFor(query.saleId, query.from, query.to, user);
 
-    const sales = [...scored.entries()]
-      .sort((a, b) => a[0] - b[0])
-      .map(([saleId, data]) => ({
-        saleId,
-        saleName: data.saleName,
-        zaloLinked: data.zaloLinked,
-        criteria: data.criteria,
-        customers: data.customers.map((customer) => ({
-          assignmentId: customer.row.assignmentId,
-          customerId: customer.row.customerId,
-          customerCode: customer.row.customerCode,
-          customerName: customer.row.customerName,
-          customerTier: customer.row.customerTier,
-          zaloLinked: customer.zaloLinked,
-          totals: customer.totals,
-          criteria: customer.criteria,
-        })),
-      }));
-    return { from: query.from, to: query.to, sales };
+    const entry = scored.get(query.saleId);
+    if (!entry) {
+      return { from: query.from, to: query.to, page, pageSize, total: 0, sales: [] };
+    }
+
+    // search = lọc khách theo mã hoặc tên (chấm điểm vẫn tính trên TOÀN BỘ
+    // khách của sale — lọc chỉ tác động tới danh sách hiển thị)
+    const search = String(query.search ?? '').trim().toLowerCase();
+    const customers = search
+      ? entry.customers.filter(
+          (customer) =>
+            customer.row.customerCode.toLowerCase().includes(search) ||
+            (customer.row.customerName ?? '').toLowerCase().includes(search),
+        )
+      : entry.customers;
+    const total = customers.length;
+    const paged = customers.slice((page - 1) * pageSize, page * pageSize).map((customer) => ({
+      assignmentId: customer.row.assignmentId,
+      customerId: customer.row.customerId,
+      customerCode: customer.row.customerCode,
+      customerName: customer.row.customerName,
+      customerTier: customer.row.customerTier,
+      zaloLinked: customer.zaloLinked,
+      totals: customer.totals,
+      criteria: customer.criteria,
+    }));
+
+    return {
+      from: query.from,
+      to: query.to,
+      page,
+      pageSize,
+      total,
+      sales: [
+        {
+          saleId: query.saleId,
+          saleName: entry.saleName,
+          zaloLinked: entry.zaloLinked,
+          criteria: entry.criteria,
+          customers: paged,
+        },
+      ],
+    };
   }
 
   /**
@@ -580,23 +602,26 @@ export class CustomerKpiReportsService {
   // ------------------------------------------------------------- export
 
   async exportReport(saleId: number | undefined, from: string, to: string, user: any) {
-    const overview = await this.overview({ saleId, from, to }, user);
-    const detail = await this.bySale({ saleId, from, to }, user);
+    // Dùng pipeline chung một lần duy nhất — export KHÔNG truyền saleId vẫn
+    // được (toàn công ty) vì sheet CHI TIET được dựng từ dữ liệu đã chấm,
+    // không đi qua by-sale (nơi bắt buộc saleId để giới hạn payload)
+    const scored = await this.buildScoredFor(saleId, from, to, user);
+    const saleRows = [...scored.entries()].sort((a, b) => a[0] - b[0]);
 
     const wb = new ExcelJS.Workbook();
     wb.creator = 'saletracker';
     const summary = wb.addWorksheet('TONG KET');
-    const criteriaNames = detail.sales[0]?.criteria.map((c) => c.name) ?? [];
+    const criteriaNames = saleRows[0]?.[1].criteria.map((c) => c.name) ?? [];
 
     summary.addRow([
       `Báo cáo KPI khách hàng ${from} → ${to}`,
     ]);
     summary.addRow([]);
     summary.addRow(['Sale', ...criteriaNames]);
-    for (const sale of overview.sales) {
+    for (const [, data] of saleRows) {
       summary.addRow([
-        sale.saleName,
-        ...sale.criteria.map((c) => this.criterionCell(c)),
+        data.saleName,
+        ...data.criteria.map((c) => this.criterionCell(c)),
       ]);
     }
 
@@ -613,13 +638,13 @@ export class CustomerKpiReportsService {
       'Doanh thu',
       ...criteriaNames,
     ]);
-    for (const sale of detail.sales) {
-      for (const customer of sale.customers) {
+    for (const [, data] of saleRows) {
+      for (const customer of data.customers) {
         detailSheet.addRow([
-          sale.saleName,
-          customer.customerCode,
-          customer.customerName,
-          customer.customerTier ?? '',
+          data.saleName,
+          customer.row.customerCode,
+          customer.row.customerName,
+          customer.row.customerTier ?? '',
           customer.zaloLinked ? 'Có' : 'Không',
           customer.totals.inbound,
           customer.totals.outbound,

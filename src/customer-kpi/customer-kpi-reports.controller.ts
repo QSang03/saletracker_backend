@@ -46,11 +46,16 @@ export class CustomerKpiReportsController {
     @Query('saleId') saleId: string | undefined,
     @Query('from') from: string | undefined,
     @Query('to') to: string | undefined,
+    @Query('search') search: string | undefined,
     @Req() req: any,
   ) {
     const range = this.normalizeRange(from, to);
     return this.reportsService.overview(
-      { saleId: saleId ? Number(saleId) : undefined, ...range },
+      {
+        saleId: saleId ? Number(saleId) : undefined,
+        search,
+        ...range,
+      },
       req.user,
     );
   }
@@ -61,11 +66,20 @@ export class CustomerKpiReportsController {
     @Query('saleId') saleId: string | undefined,
     @Query('from') from: string | undefined,
     @Query('to') to: string | undefined,
+    @Query('search') search: string | undefined,
+    @Query('page') page: string | undefined,
+    @Query('pageSize') pageSize: string | undefined,
     @Req() req: any,
   ) {
     const range = this.normalizeRange(from, to);
     return this.reportsService.bySale(
-      { saleId: saleId ? Number(saleId) : undefined, ...range },
+      {
+        saleId: saleId ? Number(saleId) : undefined,
+        search,
+        page,
+        pageSize,
+        ...range,
+      },
       req.user,
     );
   }

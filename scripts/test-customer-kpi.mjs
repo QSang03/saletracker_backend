@@ -34,7 +34,7 @@ let _prevMark = T0;
 const _log = console.log.bind(console);
 console.log = (...args) => {
   const msg = String(args[0] ?? '');
-  if (msg.startsWith('--')) {
+  if (msg.trimStart().startsWith('--')) {
     const now = Date.now();
     _log(`   ⏱ nhóm trước: ${((now - _prevMark) / 1000).toFixed(1)}s (tổng ${((now - T0) / 1000).toFixed(1)}s)`);
     _prevMark = now;
@@ -197,7 +197,7 @@ await expect('POST /customer-assignments/import thiếu file → 400', 400,
 // Mục 4 đã hiện thực engine chấm điểm — các endpoint trả dữ liệu thật (nhóm M test nội dung)
 await expect('GET /customer-kpi-reports/overview → 200 (hết 501)', 200,
   async () => (await call('GET', '/customer-kpi-reports/overview?from=2026-10-01&to=2026-10-05', H())).status);
-await expect('GET /customer-kpi-reports/by-sale → 200 (hết 501)', 200,
+await expect('GET /customer-kpi-reports/by-sale thiếu saleId → 400 (hợp đồng mới, nhóm M test nội dung)', 400,
   async () => (await call('GET', '/customer-kpi-reports/by-sale?from=2026-10-01&to=2026-10-05', H())).status);
 await expect('GET /customer-kpi-reports/suggestions → 200 (hết 501)', 200,
   async () => (await call('GET', '/customer-kpi-reports/suggestions', H())).status);
@@ -1449,6 +1449,7 @@ console.log('\n-- M. Mục 4: rollup Python → engine KPI → chỉ tiêu → g
     let oldZaloStatus = null;
     let userRid = null;
     let lowUserId = null;
+    let overviewSaleName = null;
     const asgIds = {};
     const customerIds = {};
     const convIds = {};
@@ -1704,6 +1705,7 @@ console.log('\n-- M. Mục 4: rollup Python → engine KPI → chỉ tiêu → g
         assert(ack && ack.status === 'pass' && ack.passedCriteria === 1 && ack.totalCriteria === 2, JSON.stringify(ack));
         const rev = byKey.get('doanh_so_key');
         assert(rev && rev.status === 'no_data' && (rev.reason || '').includes('doanh thu'), JSON.stringify(rev));
+        overviewSaleName = sale.saleName; // dùng cho test search ở dưới
         return r.status;
       });
 
@@ -1719,6 +1721,35 @@ console.log('\n-- M. Mục 4: rollup Python → engine KPI → chỉ tiêu → g
         assert(key.zaloLinked === true, 'khách KEY phải zaloLinked');
         const ackKey = key.criteria.find((c) => c.key === 'goi_y_thuc_hien');
         assert(ackKey && ackKey.status === 'pass', JSON.stringify(ackKey));
+        return r.status;
+      });
+
+      // 7b. search + phân trang (yêu cầu FE cho bảng khách hàng / xếp hạng sale)
+      await expect('[M] by-sale thiếu saleId → 400 (chặn quét toàn công ty)', 400, async () => {
+        const r = await call('GET', `/customer-kpi-reports/by-sale?from=${TODAY}&to=${TODAY}`, H());
+        return r.status;
+      });
+      await expect('[M] by-sale search theo mã khách → đúng 1 dòng, total=1', 200, async () => {
+        const r = await call('GET', `/customer-kpi-reports/by-sale?saleId=${saleUserId}&from=${TODAY}&to=${TODAY}&search=${encodeURIComponent(CODES.key)}`, H());
+        assert(r.status === 200, `HTTP ${r.status}: ${r.text?.slice(0, 200)}`);
+        assert(r.json?.total === 1, `total=${r.json?.total}`);
+        const first = r.json?.sales?.[0]?.customers?.[0];
+        assert(first && first.customerCode === CODES.key && first.assignmentId, JSON.stringify(first));
+        return r.status;
+      });
+      await expect('[M] by-sale phân trang pageSize=1 → 2 trang không trùng khách', 200, async () => {
+        const p1 = await call('GET', `/customer-kpi-reports/by-sale?saleId=${saleUserId}&from=${TODAY}&to=${TODAY}&page=1&pageSize=1`, H());
+        assert(p1.status === 200 && p1.json?.total === 2 && p1.json?.sales?.[0]?.customers?.length === 1, JSON.stringify({ total: p1.json?.total, n: p1.json?.sales?.[0]?.customers?.length }));
+        const p2 = await call('GET', `/customer-kpi-reports/by-sale?saleId=${saleUserId}&from=${TODAY}&to=${TODAY}&page=2&pageSize=1`, H());
+        assert(p2.status === 200 && p2.json?.sales?.[0]?.customers?.length === 1, JSON.stringify(p2.json?.sales?.[0]?.customers));
+        assert(p1.json.sales[0].customers[0].assignmentId !== p2.json.sales[0].customers[0].assignmentId, '2 trang trả cùng 1 khách');
+        return p1.status;
+      });
+      await expect('[M] overview search theo tên sale → chỉ còn sale test', 200, async () => {
+        assert(overviewSaleName, 'không có tên sale để search');
+        const r = await call('GET', `/customer-kpi-reports/overview?from=${TODAY}&to=${TODAY}&search=${encodeURIComponent(overviewSaleName)}`, H());
+        assert(r.status === 200, `HTTP ${r.status}`);
+        assert(r.json?.sales?.length === 1 && r.json.sales[0].saleId === saleUserId, JSON.stringify(r.json?.sales?.map((s) => s.saleId)));
         return r.status;
       });
 

@@ -316,7 +316,8 @@ export class CustomerKpiScoringService {
   /**
    * Chỉ tiêu cấp nhân viên khi chấm doanh số: = TỔNG các chỉ tiêu riêng của
    * khách hàng nếu có gán riêng (mục 5.1.7), không thì lấy dòng cấp nhân viên,
-   * không thì ngưỡng mặc định.
+   * không thì ngưỡng mặc định. Tiêu chí ratio không phải doanh số không có
+   * ngưỡng cấu hình thì mặc định 100 (%) — nhất quán với resolveCustomerTarget.
    */
   resolveSaleTarget(
     definition: KpiDefinition,
@@ -330,8 +331,8 @@ export class CustomerKpiScoringService {
       return customerTargets.reduce((acc, value) => acc + Number(value), 0);
     }
     const direct = saleTarget ?? definition.target_value;
-    return direct === null || direct === undefined
-      ? null
-      : Number(direct);
+    if (direct !== null && direct !== undefined) return Number(direct);
+    if (definition.denominator === KpiDenominator.TARGET_VALUE) return null;
+    return definition.scoring_mode === ScoringMode.RATIO ? 100 : null;
   }
 }
