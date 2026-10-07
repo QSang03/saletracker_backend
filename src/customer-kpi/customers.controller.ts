@@ -19,7 +19,10 @@ import { Permission } from '../common/guards/permission.decorator';
 import { CustomersService } from './customers.service';
 import { CustomerQueryDto } from './dto/customer-query.dto';
 import { UpdateCustomerDto } from './dto/update-customer.dto';
-import { UpdateZaloLinkDto, CreateZaloLinkDto } from './dto/update-zalo-link.dto';
+import {
+  UpdateZaloLinkDto,
+  CreateZaloLinkDto,
+} from './dto/update-zalo-link.dto';
 import {
   BulkUpdateCustomersDto,
   CreateCustomerDto,

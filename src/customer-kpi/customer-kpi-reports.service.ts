@@ -1,4 +1,8 @@
-import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import * as ExcelJS from 'exceljs';
@@ -9,6 +13,7 @@ import { CustomerActivityDaily } from './customer-activity-daily.entity';
 import { KpiDefinition } from './kpi-definition.entity';
 import { KpiTarget } from './kpi-target.entity';
 import { CustomersService } from './customers.service';
+import { diffDateStr, shiftDateStr, vnToday } from './vn-date';
 import {
   ActivityDayRow,
   CustomerCriterion,
@@ -22,6 +27,17 @@ const SUGGESTION_REASONS: Record<string, string> = {
   chua_phan_hoi: 'Khách nhắn tin chưa được phản hồi',
   key_chua_lien_lac: 'Khách KEY đã lâu không được liên lạc',
   non_don_moi_chua_cham: 'Khách NON có đơn mới nhưng chưa được chăm sóc',
+};
+
+/**
+ * Mức khẩn cấp tường minh của từng nhóm gợi ý (số nhỏ = khẩn hơn). Sắp xếp
+ * theo bảng này thay vì alphabetical reason code — đổi tên mã không làm vỡ
+ * thứ tự ưu tiên hiển thị.
+ */
+const SUGGESTION_REASON_PRIORITY: Record<string, number> = {
+  chua_phan_hoi: 1,
+  key_chua_lien_lac: 2,
+  non_don_moi_chua_cham: 3,
 };
 
 const SUGGESTION_LIMIT_PER_SALE = 20;
@@ -58,7 +74,7 @@ export class CustomerKpiReportsService {
     @InjectRepository(User)
     private readonly userRepo: Repository<User>,
     private readonly customersService: CustomersService,
-  ) {}
+  ) { }
 
   /**
    * Phạm vi xem báo cáo — cùng luật với scopeUserIds của CustomersService
@@ -67,7 +83,8 @@ export class CustomerKpiReportsService {
    * 'analysis' (quyết định ghi ở CustomerKpiModule).
    */
   private async scopeUserIds(user: any): Promise<number[] | undefined> {
-    if (!user?.id) throw new ForbiddenException('Không xác định được người dùng');
+    if (!user?.id)
+      throw new ForbiddenException('Không xác định được người dùng');
     const lower: string[] = (user.roles || []).map((r: any) =>
       (typeof r === 'string' ? r : r?.name || '').toLowerCase(),
     );
@@ -219,7 +236,11 @@ export class CustomerKpiReportsService {
     months: string[],
   ): Promise<Map<string, number>> {
     const result = new Map<string, number>();
-    if (saleIds.length === 0 || criterionKeys.length === 0 || months.length === 0) {
+    if (
+      saleIds.length === 0 ||
+      criterionKeys.length === 0 ||
+      months.length === 0
+    ) {
       return result;
     }
     const rows = await this.targetRepo.find({
@@ -266,7 +287,12 @@ export class CustomerKpiReportsService {
           row: AssignmentRow;
           zaloLinked: boolean;
           criteria: CustomerCriterion[];
-          totals: { inbound: number; outbound: number; orders: number; revenue: number };
+          totals: {
+            inbound: number;
+            outbound: number;
+            orders: number;
+            revenue: number;
+          };
         }[];
       }
     >();
@@ -278,7 +304,12 @@ export class CustomerKpiReportsService {
         row: AssignmentRow;
         zaloLinked: boolean;
         criteria: CustomerCriterion[];
-        totals: { inbound: number; outbound: number; orders: number; revenue: number };
+        totals: {
+          inbound: number;
+          outbound: number;
+          orders: number;
+          revenue: number;
+        };
       }[] = [];
 
       for (const definition of definitions) {
@@ -286,7 +317,8 @@ export class CustomerKpiReportsService {
           const days = activity.get(row.assignmentId) ?? [];
           const customerTarget = this.scoring.resolveCustomerTarget(
             definition,
-            targets.get(`${saleId}|${row.customerId}|${definition.key}`) ?? null,
+            targets.get(`${saleId}|${row.customerId}|${definition.key}`) ??
+            null,
             targets.get(`${saleId}|0|${definition.key}`) ?? null,
           );
           return {
@@ -302,7 +334,9 @@ export class CustomerKpiReportsService {
         });
 
         const customerTargets = perCustomer
-          .map((c) => targets.get(`${saleId}|${c.row.customerId}|${definition.key}`))
+          .map((c) =>
+            targets.get(`${saleId}|${c.row.customerId}|${definition.key}`),
+          )
           .filter((value): value is number => value !== undefined)
           .map(Number);
         const saleTarget = this.scoring.resolveSaleTarget(
@@ -327,10 +361,16 @@ export class CustomerKpiReportsService {
         const criteria = definitions.map((definition) => {
           const customerTarget = this.scoring.resolveCustomerTarget(
             definition,
-            targets.get(`${saleId}|${row.customerId}|${definition.key}`) ?? null,
+            targets.get(`${saleId}|${row.customerId}|${definition.key}`) ??
+            null,
             targets.get(`${saleId}|0|${definition.key}`) ?? null,
           );
-          return this.scoring.scoreCustomer(definition, days, customerTarget, fromDate);
+          return this.scoring.scoreCustomer(
+            definition,
+            days,
+            customerTarget,
+            fromDate,
+          );
         });
         const latest = days[days.length - 1];
         customerRows.push({
@@ -408,15 +448,24 @@ export class CustomerKpiReportsService {
   }
 
   async overview(query: any, user: any) {
-    const scored = await this.buildScoredFor(query.saleId, query.from, query.to, user);
+    const scored = await this.buildScoredFor(
+      query.saleId,
+      query.from,
+      query.to,
+      user,
+    );
 
     // search = lọc theo TÊN SALE (dataset là các sale trong phạm vi — khách
     // hàng không nằm trong response của overview)
-    const search = String(query.search ?? '').trim().toLowerCase();
+    const search = String(query.search ?? '')
+      .trim()
+      .toLowerCase();
 
     const sales = [...scored.entries()]
       .sort((a, b) => a[0] - b[0])
-      .filter(([, data]) => !search || data.saleName.toLowerCase().includes(search))
+      .filter(
+        ([, data]) => !search || data.saleName.toLowerCase().includes(search),
+      )
       .map(([saleId, data]) => ({
         saleId,
         saleName: data.saleName,
@@ -430,38 +479,56 @@ export class CustomerKpiReportsService {
     // Bảng khách hàng của MỘT sale — không cho quét toàn công ty trong một call
     // (9.8k khách × tiêu chí sẽ là payload hàng chục MB nếu thiếu saleId)
     if (query.saleId === undefined) {
-      throw new BadRequestException('by-sale bắt buộc truyền saleId (bảng khách hàng của một sale)');
+      throw new BadRequestException(
+        'by-sale bắt buộc truyền saleId (bảng khách hàng của một sale)',
+      );
     }
     const page = Math.max(1, Number(query.page) || 1);
     const pageSize = Math.min(200, Math.max(1, Number(query.pageSize) || 100));
-    const scored = await this.buildScoredFor(query.saleId, query.from, query.to, user);
+    const scored = await this.buildScoredFor(
+      query.saleId,
+      query.from,
+      query.to,
+      user,
+    );
 
     const entry = scored.get(query.saleId);
     if (!entry) {
-      return { from: query.from, to: query.to, page, pageSize, total: 0, sales: [] };
+      return {
+        from: query.from,
+        to: query.to,
+        page,
+        pageSize,
+        total: 0,
+        sales: [],
+      };
     }
 
     // search = lọc khách theo mã hoặc tên (chấm điểm vẫn tính trên TOÀN BỘ
     // khách của sale — lọc chỉ tác động tới danh sách hiển thị)
-    const search = String(query.search ?? '').trim().toLowerCase();
+    const search = String(query.search ?? '')
+      .trim()
+      .toLowerCase();
     const customers = search
       ? entry.customers.filter(
-          (customer) =>
-            customer.row.customerCode.toLowerCase().includes(search) ||
-            (customer.row.customerName ?? '').toLowerCase().includes(search),
-        )
+        (customer) =>
+          customer.row.customerCode.toLowerCase().includes(search) ||
+          (customer.row.customerName ?? '').toLowerCase().includes(search),
+      )
       : entry.customers;
     const total = customers.length;
-    const paged = customers.slice((page - 1) * pageSize, page * pageSize).map((customer) => ({
-      assignmentId: customer.row.assignmentId,
-      customerId: customer.row.customerId,
-      customerCode: customer.row.customerCode,
-      customerName: customer.row.customerName,
-      customerTier: customer.row.customerTier,
-      zaloLinked: customer.zaloLinked,
-      totals: customer.totals,
-      criteria: customer.criteria,
-    }));
+    const paged = customers
+      .slice((page - 1) * pageSize, page * pageSize)
+      .map((customer) => ({
+        assignmentId: customer.row.assignmentId,
+        customerId: customer.row.customerId,
+        customerCode: customer.row.customerCode,
+        customerName: customer.row.customerName,
+        customerTier: customer.row.customerTier,
+        zaloLinked: customer.zaloLinked,
+        totals: customer.totals,
+        criteria: customer.criteria,
+      }));
 
     return {
       from: query.from,
@@ -488,6 +555,21 @@ export class CustomerKpiReportsService {
    */
   async suggestions(saleId: number | undefined, user: any) {
     const userIds = await this.scopeUserIds(user);
+    return this.buildSuggestions(saleId, userIds);
+  }
+
+  /**
+   * Gợi ý TOÀN CÔNG TY cho cron buổi sáng (CustomerSuggestionsCronjob) — chạy
+   * ngoài phạm vi người dùng đăng nhập, dùng cùng pipeline với `suggestions`.
+   */
+  async suggestionsForAllSales() {
+    return this.buildSuggestions(undefined, undefined);
+  }
+
+  private async buildSuggestions(
+    saleId: number | undefined,
+    userIds: number[] | undefined,
+  ) {
     if (userIds !== undefined && userIds.length === 0) {
       return { date: this.today(), sales: [] };
     }
@@ -527,7 +609,11 @@ export class CustomerKpiReportsService {
             return suggestion;
           })
           .filter((item): item is NonNullable<typeof item> => item !== null)
-          .sort((a, b) => a.reason.localeCompare(b.reason))
+          .sort(
+            (a, b) =>
+              (SUGGESTION_REASON_PRIORITY[a.reason] ?? 99) -
+              (SUGGESTION_REASON_PRIORITY[b.reason] ?? 99),
+          )
           .slice(0, SUGGESTION_LIMIT_PER_SALE);
         return {
           saleId: sale,
@@ -540,12 +626,22 @@ export class CustomerKpiReportsService {
     return { date: today, sales };
   }
 
-  private suggestForCustomer(row: AssignmentRow, days: ActivityDayRow[], today: string) {
+  private suggestForCustomer(
+    row: AssignmentRow,
+    days: ActivityDayRow[],
+    today: string,
+  ) {
     const linked = days.filter((day) => day.zalo_linked);
     // khách chưa đo được dữ liệu Zalo nào → không gợi ý (đề xuất không gửi được)
     if (linked.length === 0) return null;
-    const lastOutboundDay = this.lastDayWhere(days, (day) => day.outbound_count > 0);
-    const lastInboundDay = this.lastDayWhere(days, (day) => day.inbound_count > 0);
+    const lastOutboundDay = this.lastDayWhere(
+      days,
+      (day) => day.outbound_count > 0,
+    );
+    const lastInboundDay = this.lastDayWhere(
+      days,
+      (day) => day.inbound_count > 0,
+    );
     const lastOrderDay = this.lastDayWhere(days, (day) => day.order_count > 0);
     const daysSinceOutbound = lastOutboundDay
       ? this.diffDays(lastOutboundDay, today)
@@ -560,14 +656,24 @@ export class CustomerKpiReportsService {
       this.diffDays(lastInboundDay, today) <= 3 &&
       (!lastOutboundDay || lastOutboundDay < lastInboundDay)
     ) {
-      return this.suggestion(row, 'chua_phan_hoi', lastInboundDay, lastOutboundDay);
+      return this.suggestion(
+        row,
+        'chua_phan_hoi',
+        lastInboundDay,
+        lastOutboundDay,
+      );
     }
     // 2. Khách KEY lâu không được liên lạc (mục 5.4)
     if (
       (row.customerTier ?? '').toUpperCase() === 'KEY' &&
       daysSinceOutbound >= SUGGESTION_GAP_DAYS
     ) {
-      return this.suggestion(row, 'key_chua_lien_lac', lastOutboundDay, lastOutboundDay);
+      return this.suggestion(
+        row,
+        'key_chua_lien_lac',
+        lastOutboundDay,
+        lastOutboundDay,
+      );
     }
     // 3. Khách NON có đơn gần đây nhưng bị bỏ bê
     if (
@@ -575,7 +681,12 @@ export class CustomerKpiReportsService {
       daysSinceOrder <= 30 &&
       daysSinceOutbound >= SUGGESTION_GAP_DAYS
     ) {
-      return this.suggestion(row, 'non_don_moi_chua_cham', lastOrderDay, lastOutboundDay);
+      return this.suggestion(
+        row,
+        'non_don_moi_chua_cham',
+        lastOrderDay,
+        lastOutboundDay,
+      );
     }
     return null;
   }
@@ -601,7 +712,12 @@ export class CustomerKpiReportsService {
 
   // ------------------------------------------------------------- export
 
-  async exportReport(saleId: number | undefined, from: string, to: string, user: any) {
+  async exportReport(
+    saleId: number | undefined,
+    from: string,
+    to: string,
+    user: any,
+  ) {
     // Dùng pipeline chung một lần duy nhất — export KHÔNG truyền saleId vẫn
     // được (toàn công ty) vì sheet CHI TIET được dựng từ dữ liệu đã chấm,
     // không đi qua by-sale (nơi bắt buộc saleId để giới hạn payload)
@@ -613,9 +729,7 @@ export class CustomerKpiReportsService {
     const summary = wb.addWorksheet('TONG KET');
     const criteriaNames = saleRows[0]?.[1].criteria.map((c) => c.name) ?? [];
 
-    summary.addRow([
-      `Báo cáo KPI khách hàng ${from} → ${to}`,
-    ]);
+    summary.addRow([`Báo cáo KPI khách hàng ${from} → ${to}`]);
     summary.addRow([]);
     summary.addRow(['Sale', ...criteriaNames]);
     for (const [, data] of saleRows) {
@@ -657,7 +771,7 @@ export class CustomerKpiReportsService {
 
     const buffer = await wb.xlsx.writeBuffer();
     return {
-      buffer: Buffer.from(buffer as ArrayBuffer),
+      buffer: Buffer.from(buffer),
       fileName: `bao-cao-kpi-khach-hang_${from}_${to}.xlsx`,
     };
   }
@@ -684,20 +798,15 @@ export class CustomerKpiReportsService {
   // ------------------------------------------------------------- helpers
 
   private today(): string {
-    const now = new Date();
-    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    return vnToday();
   }
 
   private shiftDate(date: string, days: number): string {
-    const d = new Date(`${date}T00:00:00`);
-    d.setDate(d.getDate() + days);
-    return d.toISOString().slice(0, 10);
+    return shiftDateStr(date, days);
   }
 
   private diffDays(earlier: string, later: string): number {
-    const a = new Date(`${earlier}T00:00:00`).getTime();
-    const b = new Date(`${later}T00:00:00`).getTime();
-    return Math.round((b - a) / 86400000);
+    return diffDateStr(earlier, later);
   }
 
   private lastDayWhere(
@@ -713,7 +822,12 @@ export class CustomerKpiReportsService {
     return latest;
   }
 
-  async getCustomerDetail(assignmentId: number, from: string, to: string, user: any) {
+  async getCustomerDetail(
+    assignmentId: number,
+    from: string,
+    to: string,
+    user: any,
+  ) {
     // findOne đã kiểm tra tồn tại + phạm vi
     const detail = await this.customersService.findOne(assignmentId, user);
     const daily = await this.customersService.getResponseDaily(

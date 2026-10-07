@@ -12,6 +12,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionGuard } from '../common/guards/permission.guard';
 import { Permission } from '../common/guards/permission.decorator';
 import { CustomerKpiReportsService } from './customer-kpi-reports.service';
+import { shiftDateStr, vnToday } from './vn-date';
 
 /**
  * Nhóm API báo cáo KPI.
@@ -27,16 +28,13 @@ export class CustomerKpiReportsController {
   constructor(private readonly reportsService: CustomerKpiReportsService) {}
 
   private normalizeRange(from?: string, to?: string) {
-    const toD = new Date();
-    const fromD = new Date();
-    fromD.setDate(fromD.getDate() - 30);
+    // Mặc định 30 ngày gần nhất tính theo ngày VN — không phụ thuộc múi giờ server
+    const today = vnToday();
     return {
       from: /^\d{4}-\d{2}-\d{2}$/.test(from ?? '')
         ? (from as string)
-        : fromD.toISOString().slice(0, 10),
-      to: /^\d{4}-\d{2}-\d{2}$/.test(to ?? '')
-        ? (to as string)
-        : toD.toISOString().slice(0, 10),
+        : shiftDateStr(today, -30),
+      to: /^\d{4}-\d{2}-\d{2}$/.test(to ?? '') ? (to as string) : today,
     };
   }
 
@@ -93,7 +91,12 @@ export class CustomerKpiReportsController {
     @Req() req: any,
   ) {
     const range = this.normalizeRange(from, to);
-    return this.reportsService.getCustomerDetail(id, range.from, range.to, req.user);
+    return this.reportsService.getCustomerDetail(
+      id,
+      range.from,
+      range.to,
+      req.user,
+    );
   }
 
   @Get('suggestions')

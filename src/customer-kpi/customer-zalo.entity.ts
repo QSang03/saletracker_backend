@@ -37,9 +37,13 @@ export enum MatchMethod {
  * Sale là quan hệ khác.
  */
 @Entity('customer_zalo')
-@Index('uq_customer_zalo_assignment_contact', ['assignment_id', 'zalo_contact_id'], {
-  unique: true,
-})
+@Index(
+  'uq_customer_zalo_assignment_contact',
+  ['assignment_id', 'zalo_contact_id'],
+  {
+    unique: true,
+  },
+)
 @Index('idx_customer_zalo_contact_active', ['zalo_contact_id', 'is_active'])
 export class CustomerZalo {
   @PrimaryGeneratedColumn()
@@ -56,7 +60,11 @@ export class CustomerZalo {
    * Bắt buộc kèm mọi truy vấn — zalo_contact_id chỉ duy nhất trong phạm vi một
    * tài khoản Zalo (zalo_accounts.id, DB zalo_automation, không FK được).
    */
-  @Column({ type: 'int', nullable: true, comment: 'zalo_accounts.id (DB zalo_automation)' })
+  @Column({
+    type: 'int',
+    nullable: true,
+    comment: 'zalo_accounts.id (DB zalo_automation)',
+  })
   zalo_account_id: number | null;
 
   /** ID liên hệ gốc từ Zalo (zalo_contacts.zalo_contact_id). */

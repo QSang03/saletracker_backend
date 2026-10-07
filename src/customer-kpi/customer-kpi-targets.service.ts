@@ -133,9 +133,7 @@ export class CustomerKpiTargetsService {
 
     // Điền mã khách hàng cho dòng chỉ tiêu riêng theo khách (customer_id > 0)
     const customerIds = [
-      ...new Set(
-        targets.map((t) => t.customer_id).filter((id) => id > 0),
-      ),
+      ...new Set(targets.map((t) => t.customer_id).filter((id) => id > 0)),
     ];
     const customers = customerIds.length
       ? await this.customerRepo.find({
@@ -154,7 +152,7 @@ export class CustomerKpiTargetsService {
       customerId: t.customer_id > 0 ? t.customer_id : null,
       customerCode:
         t.customer_id > 0
-          ? customerMap.get(t.customer_id)?.customer_code ?? null
+          ? (customerMap.get(t.customer_id)?.customer_code ?? null)
           : null,
       targetValue: t.target_value,
       createdBy: t.created_by,
@@ -309,7 +307,8 @@ export class CustomerKpiTargetsService {
           period_month: dto.period_month,
           sale_id: row.saleId,
           customer_id: row.customerId > 0 ? row.customerId : null,
-          old_target_value: existing.get(`${row.saleId}|${row.customerId}`) ?? null,
+          old_target_value:
+            existing.get(`${row.saleId}|${row.customerId}`) ?? null,
           new_target_value: row.targetValue,
         }),
       ),

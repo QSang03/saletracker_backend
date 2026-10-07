@@ -66,11 +66,18 @@ export class Customer {
   @Column({ type: 'decimal', precision: 18, scale: 2, nullable: true })
   debt_limit: number | null;
 
-  @Column({ type: 'enum', enum: CustomerStatus, default: CustomerStatus.ACTIVE })
+  @Column({
+    type: 'enum',
+    enum: CustomerStatus,
+    default: CustomerStatus.ACTIVE,
+  })
   status: CustomerStatus;
 
   /** Session import tạo ra dòng này (để truy vết). */
-  @ManyToOne(() => CustomerImportSession, { nullable: true, onDelete: 'SET NULL' })
+  @ManyToOne(() => CustomerImportSession, {
+    nullable: true,
+    onDelete: 'SET NULL',
+  })
   @JoinColumn({ name: 'import_session_id' })
   import_session: CustomerImportSession | null;
 

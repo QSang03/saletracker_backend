@@ -18,11 +18,16 @@ import {
 import { ApprovalCustomerAction } from './approval-request-customer-item.entity';
 import { ApprovalRequestCustomerItem } from './approval-request-customer-item.entity';
 import { ApprovalRequestTargetItem } from './approval-request-target-item.entity';
-import { ApprovalRequestQueryDto, DecideApprovalDto } from './dto/approval-request.dto';
+import {
+  ApprovalRequestQueryDto,
+  DecideApprovalDto,
+} from './dto/approval-request.dto';
 
 const isAdmin = (user: any) =>
   Array.isArray(user?.roles) &&
-  user.roles.some((r: any) => (typeof r === 'string' ? r : r?.name) === 'admin');
+  user.roles.some(
+    (r: any) => (typeof r === 'string' ? r : r?.name) === 'admin',
+  );
 
 /**
  * Hàng chờ duyệt dùng chung cho hai luồng:
@@ -67,7 +72,9 @@ export class ApprovalRequestsService {
       return undefined;
     }
     if (roles.some((r) => r.startsWith('manager-'))) {
-      const departmentIds = (user?.departments || []).map((d: any) => d?.id).filter(Boolean);
+      const departmentIds = (user?.departments || [])
+        .map((d: any) => d?.id)
+        .filter(Boolean);
       if (!departmentIds.length) return [];
       const users = await this.userRepo
         .createQueryBuilder('u')
@@ -94,9 +101,12 @@ export class ApprovalRequestsService {
         return { data: [], total: 0, page, pageSize };
       }
       // manager: thấy đề xuất do mình gửi hoặc nhắm tới người trong phòng
-      qb.andWhere('(r.requested_by IN (:...visibleIds) OR r.target_user_id IN (:...visibleIds))', {
-        visibleIds,
-      });
+      qb.andWhere(
+        '(r.requested_by IN (:...visibleIds) OR r.target_user_id IN (:...visibleIds))',
+        {
+          visibleIds,
+        },
+      );
     }
     if (query.request_type) {
       qb.andWhere('r.request_type = :requestType', {
@@ -206,8 +216,13 @@ export class ApprovalRequestsService {
   }
 
   /** Caller và sale bị tác động có chung phòng ban không? */
-  private async sharesDepartmentWith(user: any, targetUserId: number): Promise<boolean> {
-    const callerDeptIds = (user?.departments || []).map((d: any) => d?.id).filter(Boolean);
+  private async sharesDepartmentWith(
+    user: any,
+    targetUserId: number,
+  ): Promise<boolean> {
+    const callerDeptIds = (user?.departments || [])
+      .map((d: any) => d?.id)
+      .filter(Boolean);
     if (!callerDeptIds.length) return false;
     const found = await this.userRepo
       .createQueryBuilder('u')
@@ -245,7 +260,9 @@ export class ApprovalRequestsService {
 
     if (request.request_type === ApprovalRequestType.KPI_TARGET) {
       if (!isAdmin) {
-        throw new ForbiddenException('Chỉ quản trị viên mới được duyệt chỉ tiêu');
+        throw new ForbiddenException(
+          'Chỉ quản trị viên mới được duyệt chỉ tiêu',
+        );
       }
       if (dto.action === 'reject') {
         request.status = ApprovalStatus.REJECTED;
@@ -289,7 +306,9 @@ export class ApprovalRequestsService {
         request.target_user_id != null &&
         (await this.sharesDepartmentWith(user, request.target_user_id));
       if (!isDeptManager) {
-        throw new ForbiddenException('Chỉ trưởng phòng của sale này mới được duyệt đề xuất');
+        throw new ForbiddenException(
+          'Chỉ trưởng phòng của sale này mới được duyệt đề xuất',
+        );
       }
     }
 
@@ -303,11 +322,16 @@ export class ApprovalRequestsService {
     }
 
     // Duyệt → áp các mục vào dữ liệu thật
-    const items = await this.customerItemRepo.find({ where: { request_id: id } });
+    const items = await this.customerItemRepo.find({
+      where: { request_id: id },
+    });
     let applied = 0;
     for (const item of items) {
       const customer = await this.customerRepo.findOne({
-        where: { customer_code: item.customer_code, sap_code: item.sap_code ?? '' },
+        where: {
+          customer_code: item.customer_code,
+          sap_code: item.sap_code ?? '',
+        },
       });
 
       if (item.action === ApprovalCustomerAction.DELETE) {
@@ -339,7 +363,10 @@ export class ApprovalRequestsService {
       if (item.action === ApprovalCustomerAction.CREATE) {
         if (item.department_slug && request.target_user_id) {
           const duplicated = await this.assignmentRepo.findOne({
-            where: { customer_id: target.id, department_slug: item.department_slug },
+            where: {
+              customer_id: target.id,
+              department_slug: item.department_slug,
+            },
           });
           if (!duplicated) {
             await this.assignmentRepo.save(
@@ -356,10 +383,17 @@ export class ApprovalRequestsService {
         continue;
       }
 
-      // UPDATE
+      // UPDATE — khoanh đúng phân công của sale bị tác động: cùng một khách có
+      // thể đang nằm ở hai sale khác nhau (phòng khác), không được sửa nhầm dòng
       if (nd.customer_tier && item.department_slug) {
         const assignment = await this.assignmentRepo.findOne({
-          where: { customer_id: target.id, department_slug: item.department_slug },
+          where: {
+            customer_id: target.id,
+            department_slug: item.department_slug,
+            ...(request.target_user_id
+              ? { sale_id: request.target_user_id }
+              : {}),
+          },
         });
         if (assignment) {
           assignment.customer_tier = nd.customer_tier;

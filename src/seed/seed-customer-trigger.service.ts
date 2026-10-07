@@ -32,6 +32,11 @@ export class SeedCustomerTriggerService {
     'customer_assignments_after_delete',
     'customer_zalo_after_insert',
     'customer_zalo_after_update',
+    'kpi_targets_after_insert',
+    'kpi_targets_after_update',
+    'kpi_targets_after_delete',
+    'approval_requests_after_insert',
+    'approval_requests_after_update',
   ];
 
   constructor(
@@ -62,9 +67,14 @@ export class SeedCustomerTriggerService {
       await this.dataSource.query(this.assignmentsDeleteTrigger());
       await this.dataSource.query(this.zaloInsertTrigger());
       await this.dataSource.query(this.zaloUpdateTrigger());
+      await this.dataSource.query(this.kpiTargetsInsertTrigger());
+      await this.dataSource.query(this.kpiTargetsUpdateTrigger());
+      await this.dataSource.query(this.kpiTargetsDeleteTrigger());
+      await this.dataSource.query(this.approvalRequestsInsertTrigger());
+      await this.dataSource.query(this.approvalRequestsUpdateTrigger());
 
       this.logger.log(
-        '✅ [SeedCustomerTrigger] 7 trigger nhật ký bảng khách hàng đã sẵn sàng',
+        `✅ [SeedCustomerTrigger] ${SeedCustomerTriggerService.TRIGGER_NAMES.length} trigger nhật ký bảng khách hàng đã sẵn sàng`,
       );
     } catch (error) {
       this.logger.error(
@@ -389,6 +399,210 @@ export class SeedCustomerTriggerService {
               'last_verified_at', NEW.last_verified_at,
               'created_at', NEW.created_at,
               'updated_at', NEW.updated_at
+            ),
+            changed_fields,
+            NOW()
+          );
+        END IF;
+      END
+    `;
+  }
+
+  // ─── kpi_targets ──────────────────────────────────────────────────────────
+
+  private kpiTargetsInsertTrigger(): string {
+    return `
+      CREATE TRIGGER \`kpi_targets_after_insert\`
+      AFTER INSERT ON \`kpi_targets\`
+      FOR EACH ROW
+      BEGIN
+        INSERT INTO \`database_change_log\` (
+          \`table_name\`, \`record_id\`, \`action\`, \`new_values\`, \`triggered_at\`
+        ) VALUES (
+          'kpi_targets', NEW.id, 'INSERT',
+          JSON_OBJECT(
+            'id', NEW.id,
+            'criterion_key', NEW.criterion_key,
+            'period_month', NEW.period_month,
+            'sale_id', NEW.sale_id,
+            'customer_id', NEW.customer_id,
+            'target_value', NEW.target_value,
+            'created_by', NEW.created_by,
+            'created_at', NEW.created_at
+          ),
+          NOW()
+        );
+      END
+    `;
+  }
+
+  private kpiTargetsUpdateTrigger(): string {
+    return `
+      CREATE TRIGGER \`kpi_targets_after_update\`
+      AFTER UPDATE ON \`kpi_targets\`
+      FOR EACH ROW
+      BEGIN
+        DECLARE changed_fields JSON DEFAULT JSON_ARRAY();
+
+        -- target_value: giá trị chỉ tiêu (upsert gán lại cũng phải hiện)
+        IF OLD.target_value != NEW.target_value THEN
+          SET changed_fields = JSON_ARRAY_APPEND(changed_fields, '$', 'target_value');
+        END IF;
+
+        -- sale_id: đổi người nhận chỉ tiêu
+        IF OLD.sale_id != NEW.sale_id THEN
+          SET changed_fields = JSON_ARRAY_APPEND(changed_fields, '$', 'sale_id');
+        END IF;
+
+        -- customer_id: đổi mức chỉ tiêu (cả danh sách <-> từng khách)
+        IF OLD.customer_id != NEW.customer_id THEN
+          SET changed_fields = JSON_ARRAY_APPEND(changed_fields, '$', 'customer_id');
+        END IF;
+
+        -- period_month: đổi tháng áp dụng
+        IF OLD.period_month != NEW.period_month THEN
+          SET changed_fields = JSON_ARRAY_APPEND(changed_fields, '$', 'period_month');
+        END IF;
+
+        -- NOTE: criterion_key là danh tính tiêu chí, created_by không đổi — không track
+
+        IF JSON_LENGTH(changed_fields) > 0 THEN
+          INSERT INTO \`database_change_log\` (
+            \`table_name\`, \`record_id\`, \`action\`, \`old_values\`, \`new_values\`, \`changed_fields\`, \`triggered_at\`
+          ) VALUES (
+            'kpi_targets', NEW.id, 'UPDATE',
+            JSON_OBJECT(
+              'id', OLD.id,
+              'criterion_key', OLD.criterion_key,
+              'period_month', OLD.period_month,
+              'sale_id', OLD.sale_id,
+              'customer_id', OLD.customer_id,
+              'target_value', OLD.target_value,
+              'created_by', OLD.created_by
+            ),
+            JSON_OBJECT(
+              'id', NEW.id,
+              'criterion_key', NEW.criterion_key,
+              'period_month', NEW.period_month,
+              'sale_id', NEW.sale_id,
+              'customer_id', NEW.customer_id,
+              'target_value', NEW.target_value,
+              'created_by', NEW.created_by
+            ),
+            changed_fields,
+            NOW()
+          );
+        END IF;
+      END
+    `;
+  }
+
+  private kpiTargetsDeleteTrigger(): string {
+    return `
+      CREATE TRIGGER \`kpi_targets_after_delete\`
+      AFTER DELETE ON \`kpi_targets\`
+      FOR EACH ROW
+      BEGIN
+        INSERT INTO \`database_change_log\` (
+          \`table_name\`, \`record_id\`, \`action\`, \`old_values\`, \`triggered_at\`
+        ) VALUES (
+          'kpi_targets', OLD.id, 'DELETE',
+          JSON_OBJECT(
+            'id', OLD.id,
+            'criterion_key', OLD.criterion_key,
+            'period_month', OLD.period_month,
+            'sale_id', OLD.sale_id,
+            'customer_id', OLD.customer_id,
+            'target_value', OLD.target_value,
+            'created_by', OLD.created_by
+          ),
+          NOW()
+        );
+      END
+    `;
+  }
+
+  // ─── approval_requests ────────────────────────────────────────────────────
+
+  private approvalRequestsInsertTrigger(): string {
+    return `
+      CREATE TRIGGER \`approval_requests_after_insert\`
+      AFTER INSERT ON \`approval_requests\`
+      FOR EACH ROW
+      BEGIN
+        INSERT INTO \`database_change_log\` (
+          \`table_name\`, \`record_id\`, \`action\`, \`new_values\`, \`triggered_at\`
+        ) VALUES (
+          'approval_requests', NEW.id, 'INSERT',
+          JSON_OBJECT(
+            'id', NEW.id,
+            'request_type', NEW.request_type,
+            'requested_by', NEW.requested_by,
+            'target_user_id', NEW.target_user_id,
+            'status', NEW.status,
+            'note', NEW.note,
+            'created_at', NEW.created_at
+          ),
+          NOW()
+        );
+      END
+    `;
+  }
+
+  private approvalRequestsUpdateTrigger(): string {
+    return `
+      CREATE TRIGGER \`approval_requests_after_update\`
+      AFTER UPDATE ON \`approval_requests\`
+      FOR EACH ROW
+      BEGIN
+        DECLARE changed_fields JSON DEFAULT JSON_ARRAY();
+
+        -- duyệt/từ chối: status luôn đổi cùng decided_by/decided_at
+        IF OLD.status != NEW.status THEN
+          SET changed_fields = JSON_ARRAY_APPEND(changed_fields, '$', 'status');
+        END IF;
+
+        -- decided_by: nullable — ai quyết định
+        IF OLD.decided_by != NEW.decided_by OR (OLD.decided_by IS NULL AND NEW.decided_by IS NOT NULL) OR (OLD.decided_by IS NOT NULL AND NEW.decided_by IS NULL) THEN
+          SET changed_fields = JSON_ARRAY_APPEND(changed_fields, '$', 'decided_by');
+        END IF;
+
+        -- reject_reason: nullable — lý do từ chối
+        IF OLD.reject_reason != NEW.reject_reason OR (OLD.reject_reason IS NULL AND NEW.reject_reason IS NOT NULL) OR (OLD.reject_reason IS NOT NULL AND NEW.reject_reason IS NULL) THEN
+          SET changed_fields = JSON_ARRAY_APPEND(changed_fields, '$', 'reject_reason');
+        END IF;
+
+        -- target_user_id: nullable — sale bị tác động
+        IF OLD.target_user_id != NEW.target_user_id OR (OLD.target_user_id IS NULL AND NEW.target_user_id IS NOT NULL) OR (OLD.target_user_id IS NOT NULL AND NEW.target_user_id IS NULL) THEN
+          SET changed_fields = JSON_ARRAY_APPEND(changed_fields, '$', 'target_user_id');
+        END IF;
+
+        -- NOTE: nội dung mục đề xuất nằm ở approval_request_*_items (không track)
+
+        IF JSON_LENGTH(changed_fields) > 0 THEN
+          INSERT INTO \`database_change_log\` (
+            \`table_name\`, \`record_id\`, \`action\`, \`old_values\`, \`new_values\`, \`changed_fields\`, \`triggered_at\`
+          ) VALUES (
+            'approval_requests', NEW.id, 'UPDATE',
+            JSON_OBJECT(
+              'id', OLD.id,
+              'request_type', OLD.request_type,
+              'requested_by', OLD.requested_by,
+              'target_user_id', OLD.target_user_id,
+              'status', OLD.status,
+              'decided_by', OLD.decided_by,
+              'decided_at', OLD.decided_at,
+              'reject_reason', OLD.reject_reason
+            ),
+            JSON_OBJECT(
+              'id', NEW.id,
+              'request_type', NEW.request_type,
+              'requested_by', NEW.requested_by,
+              'target_user_id', NEW.target_user_id,
+              'status', NEW.status,
+              'decided_by', NEW.decided_by,
+              'decided_at', NEW.decided_at,
+              'reject_reason', NEW.reject_reason
             ),
             changed_fields,
             NOW()

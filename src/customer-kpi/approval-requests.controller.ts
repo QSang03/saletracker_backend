@@ -15,7 +15,10 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionGuard } from '../common/guards/permission.guard';
 import { Permission } from '../common/guards/permission.decorator';
 import { ApprovalRequestsService } from './approval-requests.service';
-import { ApprovalRequestQueryDto, DecideApprovalDto } from './dto/approval-request.dto';
+import {
+  ApprovalRequestQueryDto,
+  DecideApprovalDto,
+} from './dto/approval-request.dto';
 
 /**
  * Hàng chờ duyệt dùng chung: sửa danh sách khách hàng (nhân viên -> trưởng

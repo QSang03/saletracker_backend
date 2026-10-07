@@ -112,7 +112,10 @@ export class CustomerKpiScoringService {
       targetValue,
     };
 
-    if (definition.metric === 'revenue_key' || definition.metric === 'revenue_non') {
+    if (
+      definition.metric === 'revenue_key' ||
+      definition.metric === 'revenue_non'
+    ) {
       return { ...base, reason: REASON_NO_REVENUE_SOURCE };
     }
 
@@ -206,7 +209,10 @@ export class CustomerKpiScoringService {
       passedCriteria: null,
     };
 
-    if (definition.metric === 'revenue_key' || definition.metric === 'revenue_non') {
+    if (
+      definition.metric === 'revenue_key' ||
+      definition.metric === 'revenue_non'
+    ) {
       return { ...base, reason: REASON_NO_REVENUE_SOURCE };
     }
 

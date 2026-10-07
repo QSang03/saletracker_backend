@@ -26,7 +26,10 @@ export class CustomerImportBackup {
   @Column({ type: 'int' })
   session_id: number;
 
-  @ManyToOne(() => CustomerImportSession, { nullable: false, onDelete: 'CASCADE' })
+  @ManyToOne(() => CustomerImportSession, {
+    nullable: false,
+    onDelete: 'CASCADE',
+  })
   @JoinColumn({ name: 'session_id' })
   session: CustomerImportSession;
 

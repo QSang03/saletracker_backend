@@ -18,7 +18,9 @@ export class KpiTargetQueryDto {
 
   /** Định dạng YYYY-MM. */
   @IsOptional()
-  @Matches(/^\d{4}-\d{2}$/, { message: 'period_month phải theo định dạng YYYY-MM' })
+  @Matches(/^\d{4}-\d{2}$/, {
+    message: 'period_month phải theo định dạng YYYY-MM',
+  })
   period_month?: string;
 
   @IsOptional()
@@ -70,7 +72,9 @@ export class AssignKpiTargetsDto {
   @IsString()
   criterion_key: string;
 
-  @Matches(/^\d{4}-\d{2}$/, { message: 'period_month phải theo định dạng YYYY-MM' })
+  @Matches(/^\d{4}-\d{2}$/, {
+    message: 'period_month phải theo định dạng YYYY-MM',
+  })
   period_month: string;
 
   @IsIn(['department', 'sale', 'customer'])

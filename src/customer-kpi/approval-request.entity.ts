@@ -49,10 +49,18 @@ export class ApprovalRequest {
   requested_by: User;
 
   /** Đối tượng bị tác động (sale mà danh sách/chỉ tiêu thuộc về). */
-  @Column({ type: 'int', nullable: true, comment: 'users.id của sale bị tác động' })
+  @Column({
+    type: 'int',
+    nullable: true,
+    comment: 'users.id của sale bị tác động',
+  })
   target_user_id: number | null;
 
-  @Column({ type: 'enum', enum: ApprovalStatus, default: ApprovalStatus.PENDING })
+  @Column({
+    type: 'enum',
+    enum: ApprovalStatus,
+    default: ApprovalStatus.PENDING,
+  })
   status: ApprovalStatus;
 
   /** Lời nhắn của người đề xuất. */

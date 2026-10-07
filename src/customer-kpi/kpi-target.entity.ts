@@ -25,9 +25,13 @@ import { User } from '../users/user.entity';
  * dòng "chỉ tiêu cả danh sách". Vì vậy KHÔNG đặt FK sang customers.
  */
 @Entity('kpi_targets')
-@Index('uq_kpi_targets_lookup', ['criterion_key', 'period_month', 'sale_id', 'customer_id'], {
-  unique: true,
-})
+@Index(
+  'uq_kpi_targets_lookup',
+  ['criterion_key', 'period_month', 'sale_id', 'customer_id'],
+  {
+    unique: true,
+  },
+)
 @Index('idx_kpi_targets_sale_month', ['sale_id', 'period_month'])
 export class KpiTarget {
   @PrimaryGeneratedColumn()
@@ -49,7 +53,11 @@ export class KpiTarget {
   sale: User;
 
   /** 0 = chỉ tiêu cho CẢ DANH SÁCH của sale; >0 = customers.id. */
-  @Column({ type: 'int', default: 0, comment: '0 = cả danh sách; >0 = customers.id' })
+  @Column({
+    type: 'int',
+    default: 0,
+    comment: '0 = cả danh sách; >0 = customers.id',
+  })
   customer_id: number;
 
   @Column({ type: 'decimal', precision: 18, scale: 2 })

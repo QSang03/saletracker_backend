@@ -56,7 +56,9 @@ export class ZaloPythonApiClient {
 
   /** Tài khoản Zalo theo nhân viên (za.user_id) — tối đa 200 dòng/lần. */
   async getAccounts(limit = 200): Promise<PythonZaloAccount[]> {
-    const rows = await this.getData(`/web/accounts?limit=${Math.min(limit, 200)}`);
+    const rows = await this.getData(
+      `/web/accounts?limit=${Math.min(limit, 200)}`,
+    );
     return rows.map((r) => ({
       accountId: Number(r.id),
       userId: r.user_id == null ? null : Number(r.user_id),
@@ -65,14 +67,20 @@ export class ZaloPythonApiClient {
     }));
   }
 
-  /** Liên hệ theo tài khoản của một nhân viên, tìm theo tên hoặc mã liên hệ. */
+  /**
+   * Liên hệ theo tài khoản của một nhân viên, tìm theo tên hoặc mã liên hệ.
+   * Python hỗ trợ phân trang (page/limit ≤ 200) — truyền `page` để lấy các
+   * trang sau khi tài khoản có nhiều hơn 200 liên hệ.
+   */
   async getContacts(opts: {
     userId?: number;
     search?: string;
     limit?: number;
+    page?: number;
   }): Promise<PythonZaloContact[]> {
     const params = new URLSearchParams();
     params.set('limit', String(Math.min(opts.limit ?? 50, 200)));
+    if (opts.page && opts.page > 1) params.set('page', String(opts.page));
     if (opts.userId != null) params.set('user_id', String(opts.userId));
     if (opts.search) params.set('search', opts.search);
     const rows = await this.getData(`/web/contacts?${params.toString()}`);
