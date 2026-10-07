@@ -22,7 +22,10 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionGuard } from '../common/guards/permission.guard';
 import { Permission } from '../common/guards/permission.decorator';
 import { CustomerAssignmentsService } from './customer-assignments.service';
-import { ChangeDecisionDto, ImportSessionQueryDto } from './dto/import-session-query.dto';
+import {
+  ChangeDecisionDto,
+  ImportSessionQueryDto,
+} from './dto/import-session-query.dto';
 
 /**
  * Nhóm API nạp danh sách khách hàng từ Excel.
@@ -58,10 +61,7 @@ export class CustomerAssignmentsController {
 
   @Delete('import-sessions/:id')
   @Permission('khach-hang', 'import')
-  cancel(
-    @Param('id', ParseIntPipe) id: number,
-    @Req() req: any,
-  ) {
+  cancel(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
     return this.assignmentsService.cancelSession(id, req.user);
   }
 
@@ -94,7 +94,12 @@ export class CustomerAssignmentsController {
     @Body() dto: ChangeDecisionDto,
     @Req() req: any,
   ) {
-    return this.assignmentsService.setChangeDecision(id, changeId, dto, req.user);
+    return this.assignmentsService.setChangeDecision(
+      id,
+      changeId,
+      dto,
+      req.user,
+    );
   }
 
   @Post('import-sessions/:id/apply')

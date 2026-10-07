@@ -25,7 +25,9 @@ import {
 @Controller('customer-kpi-definitions')
 @UseGuards(JwtAuthGuard, PermissionGuard)
 export class CustomerKpiDefinitionsController {
-  constructor(private readonly definitionsService: CustomerKpiDefinitionsService) {}
+  constructor(
+    private readonly definitionsService: CustomerKpiDefinitionsService,
+  ) {}
 
   @Get()
   @Permission('khach-hang', 'read')

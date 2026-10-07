@@ -1,7 +1,6 @@
 import {
   ForbiddenException,
   Injectable,
-  NotImplementedException,
   ConflictException,
   BadRequestException,
   NotFoundException,
@@ -19,14 +18,24 @@ import { CustomerActivityDaily } from './customer-activity-daily.entity';
 import { CustomerRole } from './customer.entity';
 import { CustomerQueryDto } from './dto/customer-query.dto';
 import { UpdateCustomerDto } from './dto/update-customer.dto';
-import { UpdateZaloLinkDto, CreateZaloLinkDto } from './dto/update-zalo-link.dto';
+import {
+  UpdateZaloLinkDto,
+  CreateZaloLinkDto,
+} from './dto/update-zalo-link.dto';
 import {
   BulkUpdateCustomersDto,
   CreateCustomerDto,
   ZaloContactQueryDto,
 } from './dto/create-customer.dto';
-import { ApprovalRequest, ApprovalRequestType, ApprovalStatus } from './approval-request.entity';
-import { ApprovalRequestCustomerItem, ApprovalCustomerAction } from './approval-request-customer-item.entity';
+import {
+  ApprovalRequest,
+  ApprovalRequestType,
+  ApprovalStatus,
+} from './approval-request.entity';
+import {
+  ApprovalRequestCustomerItem,
+  ApprovalCustomerAction,
+} from './approval-request-customer-item.entity';
 
 /**
  * Quy tắc kiến trúc (Mục 3): backend KHÔNG đọc DB Zalo (zalo_automation) —
@@ -35,7 +44,14 @@ import { ApprovalRequestCustomerItem, ApprovalCustomerAction } from './approval-
  */
 
 /** 6 slug phòng ban cố định của file Excel (Phụ lục A.4). */
-const DEPARTMENT_SLUGS = ['may-in', 'pc', 'linh-kien', 'laptop', 'ptkh1', 'ptkh2'];
+const DEPARTMENT_SLUGS = [
+  'may-in',
+  'pc',
+  'linh-kien',
+  'laptop',
+  'ptkh1',
+  'ptkh2',
+];
 
 /**
  * Phạm vi xem theo vai trò của module (xem scopeUserIds bên dưới).
@@ -105,7 +121,107 @@ export class CustomersService {
         new_data: draft.new_data,
       }),
     );
-    return { proposal: true, requestId: request.id, status: 'pending_approval' };
+    return {
+      proposal: true,
+      requestId: request.id,
+      status: 'pending_approval',
+    };
+  }
+
+  /**
+   * Đổi Key/Non, Chính/Phụ HÀNG LOẠT của nhân viên → MỘT đề xuất chứa từng
+   * thay đổi (mỗi dòng phân công một mục UPDATE) — trưởng phòng duyệt một
+   * lần, phần apply chạy trong approval-requests.service (Mục 2, cv 5-6).
+   */
+  private async createBulkUpdateProposal(
+    dto: BulkUpdateCustomersDto,
+    assignments: CustomerAssignment[],
+    user: any,
+    skipped: Array<{ assignmentId: number; reason: string }>,
+  ) {
+    const seen = new Set<string>();
+    const drafts: Array<{
+      customer_code: string;
+      sap_code: string;
+      customer_name: string | null;
+      department_slug: string;
+      customer_tier: string | null;
+      old_data: any;
+      new_data: any;
+    }> = [];
+
+    for (const assignmentId of dto.assignmentIds) {
+      const assignment = assignments.find((a) => a.id === assignmentId);
+      if (!assignment) {
+        skipped.push({ assignmentId, reason: 'không tồn tại' });
+        continue;
+      }
+      if (assignment.sale_id !== user.id) {
+        skipped.push({
+          assignmentId,
+          reason: 'chỉ được đề xuất sửa danh sách của chính mình',
+        });
+        continue;
+      }
+      if (assignment.customer.status === CustomerStatus.DELETED) {
+        // Không lặng lẽ đề xuất sửa dữ liệu của khách đã bị xoá
+        skipped.push({ assignmentId, reason: 'khách đã bị xoá' });
+        continue;
+      }
+      const key = `${assignment.customer.customer_code}|${assignment.customer.sap_code}|${assignment.department_slug}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      drafts.push({
+        customer_code: assignment.customer.customer_code,
+        sap_code: assignment.customer.sap_code,
+        customer_name: assignment.customer.customer_name,
+        department_slug: assignment.department_slug,
+        customer_tier: dto.customer_tier ?? null,
+        old_data: {
+          customer_tier: assignment.customer_tier,
+          customer_role: assignment.customer.customer_role,
+        },
+        new_data: {
+          ...(dto.customer_tier ? { customer_tier: dto.customer_tier } : {}),
+          ...(dto.customer_role ? { customer_role: dto.customer_role } : {}),
+        },
+      });
+    }
+
+    if (drafts.length === 0) {
+      return { proposal: false, updated: 0, skipped };
+    }
+
+    const request = await this.approvalRequestRepo.save(
+      this.approvalRequestRepo.create({
+        request_type: ApprovalRequestType.CUSTOMER_LIST,
+        requested_by: { id: user.id } as any,
+        target_user_id: user.id,
+        status: ApprovalStatus.PENDING,
+      }),
+    );
+    await this.approvalCustomerItemRepo.save(
+      drafts.map((draft) =>
+        this.approvalCustomerItemRepo.create({
+          request_id: request.id,
+          action: ApprovalCustomerAction.UPDATE,
+          customer_code: draft.customer_code,
+          sap_code: draft.sap_code,
+          customer_name: draft.customer_name,
+          department_slug: draft.department_slug,
+          customer_tier: draft.customer_tier as any,
+          old_data: draft.old_data,
+          new_data: draft.new_data,
+        }),
+      ),
+    );
+    return {
+      proposal: true,
+      requestId: request.id,
+      itemCount: drafts.length,
+      skipped,
+      status: 'pending_approval',
+    };
   }
 
   private lowerRoles(user: any): string[] {
@@ -148,9 +264,10 @@ export class CustomersService {
    * khách hàng không phụ thuộc server Zalo.
    */
   private async scopeUserIds(user: any): Promise<number[] | undefined> {
-    if (!user?.id) throw new ForbiddenException('Không xác định được người dùng');
+    if (!user?.id)
+      throw new ForbiddenException('Không xác định được người dùng');
     const roleNames: string[] = (user.roles || []).map((r: any) =>
-      typeof r === 'string' ? r : (r?.name || ''),
+      typeof r === 'string' ? r : r?.name || '',
     );
     const lower = roleNames.map((r) => r.toLowerCase());
     if (
@@ -220,9 +337,12 @@ export class CustomersService {
       );
     }
     if (query.search) {
-      qb.andWhere('(c.customer_code LIKE :search OR c.customer_name LIKE :search)', {
-        search: `%${query.search}%`,
-      });
+      qb.andWhere(
+        '(c.customer_code LIKE :search OR c.customer_name LIKE :search)',
+        {
+          search: `%${query.search}%`,
+        },
+      );
     }
 
     qb.orderBy('a.department_slug', 'ASC')
@@ -291,7 +411,9 @@ export class CustomersService {
       relations: ['customer'],
     });
     if (!assignment) {
-      throw new ForbiddenException('Không tìm thấy khách hàng hoặc không thuộc phạm vi của bạn');
+      throw new ForbiddenException(
+        'Không tìm thấy khách hàng hoặc không thuộc phạm vi của bạn',
+      );
     }
     if (userIds !== undefined && !userIds.includes(assignment.sale_id)) {
       throw new ForbiddenException('Khách hàng không thuộc phạm vi của bạn');
@@ -392,9 +514,12 @@ export class CustomersService {
       qb.andWhere('a.customer_tier = :tier', { tier: query.tier });
     }
     if (query.search) {
-      qb.andWhere('(c.customer_code LIKE :search OR c.customer_name LIKE :search)', {
-        search: `%${query.search}%`,
-      });
+      qb.andWhere(
+        '(c.customer_code LIKE :search OR c.customer_name LIKE :search)',
+        {
+          search: `%${query.search}%`,
+        },
+      );
     }
 
     qb.orderBy('a.department_slug', 'ASC')
@@ -426,7 +551,9 @@ export class CustomersService {
     };
     const assignmentIds = assignments.map((a) => a.id);
     const scanRows = assignmentIds.length
-      ? await this.scanRepo.find({ where: { assignment_id: In(assignmentIds) } })
+      ? await this.scanRepo.find({
+          where: { assignment_id: In(assignmentIds) },
+        })
       : [];
     const scanMap = new Map(scanRows.map((s) => [s.assignment_id, s]));
 
@@ -436,7 +563,8 @@ export class CustomersService {
       let reason = 'chua_quet';
       if (scan) {
         if (!scan.zalo_account_id) reason = 'sale_chua_ket_noi_zalo';
-        else if (scan.contacts_scanned === 0) reason = 'tai_khoan_chua_co_lien_he';
+        else if (scan.contacts_scanned === 0)
+          reason = 'tai_khoan_chua_co_lien_he';
         else if (scan.code_found) reason = 'ma_khong_xac_dinh_duoc';
         else reason = 'ten_zalo_thieu_ma_khach';
       }
@@ -460,7 +588,12 @@ export class CustomersService {
   }
 
   /** Số liệu phản hồi + hoạt động theo ngày của một khách hàng (Mục 7-6). */
-  async getResponseDaily(assignmentId: number, from: string, to: string, user: any) {
+  async getResponseDaily(
+    assignmentId: number,
+    from: string,
+    to: string,
+    user: any,
+  ) {
     await this.findOne(assignmentId, user); // kiểm tra tồn tại + phạm vi
 
     const [responseDaily, activityDaily] = await Promise.all([
@@ -507,7 +640,8 @@ export class CustomersService {
       limit: 200,
     });
     const hit = rows.find(
-      (r) => r.zaloContactId === zaloContactId && r.accountId === Number(accountId),
+      (r) =>
+        r.zaloContactId === zaloContactId && r.accountId === Number(accountId),
     );
     return hit ? { display_name: hit.displayName } : null;
   }
@@ -533,7 +667,9 @@ export class CustomersService {
    */
   async updateZaloLink(linkId: number, dto: UpdateZaloLinkDto, user: any) {
     if (!this.lowerRoles(user).includes('admin')) {
-      throw new ForbiddenException('Chỉ quản trị viên được sửa tay cặp khớp Zalo');
+      throw new ForbiddenException(
+        'Chỉ quản trị viên được sửa tay cặp khớp Zalo',
+      );
     }
     if (
       !dto.zalo_contact_id &&
@@ -556,7 +692,10 @@ export class CustomersService {
       ? dto.zalo_contact_id.trim()
       : link.zalo_contact_id;
     const targetAccountId = dto.zalo_account_id ?? link.zalo_account_id;
-    if (dto.zalo_contact_id !== undefined || dto.zalo_account_id !== undefined) {
+    if (
+      dto.zalo_contact_id !== undefined ||
+      dto.zalo_account_id !== undefined
+    ) {
       if (dto.zalo_contact_id === '') {
         throw new BadRequestException('zalo_contact_id không được rỗng');
       }
@@ -587,7 +726,8 @@ export class CustomersService {
       }
       link.zalo_contact_id = targetContactId;
       link.zalo_account_id = Number(targetAccountId);
-      link.matched_name = dto.matched_name ?? contact.display_name ?? link.matched_name;
+      link.matched_name =
+        dto.matched_name ?? contact.display_name ?? link.matched_name;
     } else if (dto.matched_name !== undefined) {
       link.matched_name = dto.matched_name;
     }
@@ -605,7 +745,9 @@ export class CustomersService {
    */
   async createZaloLink(dto: CreateZaloLinkDto, user: any) {
     if (!this.lowerRoles(user).includes('admin')) {
-      throw new ForbiddenException('Chỉ quản trị viên được gắn tay cặp khớp Zalo');
+      throw new ForbiddenException(
+        'Chỉ quản trị viên được gắn tay cặp khớp Zalo',
+      );
     }
 
     const assignment = await this.assignmentRepo.findOne({
@@ -625,13 +767,17 @@ export class CustomersService {
           ?.accountId ?? null;
     }
     if (!accountId) {
-      throw new BadRequestException('Sale chưa có tài khoản Zalo để gắn liên hệ');
+      throw new BadRequestException(
+        'Sale chưa có tài khoản Zalo để gắn liên hệ',
+      );
     }
 
     const contactId = dto.zalo_contact_id.trim();
     const contact = await this.fetchZaloContact(Number(accountId), contactId);
     if (!contact) {
-      throw new BadRequestException('Liên hệ không tồn tại trên tài khoản Zalo này');
+      throw new BadRequestException(
+        'Liên hệ không tồn tại trên tài khoản Zalo này',
+      );
     }
 
     let link = await this.zaloRepo.findOne({
@@ -691,24 +837,32 @@ export class CustomersService {
     if (!isManagerOrAdmin) {
       // Nhân viên chỉ được đề xuất thêm khách cho CHÍNH MÌNH
       if (dto.sale_id !== user.id) {
-        throw new ForbiddenException('Chỉ được đề xuất thêm khách cho chính mình');
+        throw new ForbiddenException(
+          'Chỉ được đề xuất thêm khách cho chính mình',
+        );
       }
-      return this.createCustomerProposal(user, dto.sale_id, ApprovalCustomerAction.CREATE, null, {
-        customer_code: dto.customer_code,
-        sap_code: dto.sap_code ?? '',
-        department_slug: dto.department_slug,
-        customer_tier: dto.customer_tier,
-        old_data: null,
-        new_data: {
+      return this.createCustomerProposal(
+        user,
+        dto.sale_id,
+        ApprovalCustomerAction.CREATE,
+        null,
+        {
           customer_code: dto.customer_code,
           sap_code: dto.sap_code ?? '',
-          customer_name: dto.customer_name ?? null,
-          customer_role: dto.customer_role ?? null,
-          debt_limit: dto.debt_limit ?? null,
           department_slug: dto.department_slug,
           customer_tier: dto.customer_tier,
+          old_data: null,
+          new_data: {
+            customer_code: dto.customer_code,
+            sap_code: dto.sap_code ?? '',
+            customer_name: dto.customer_name ?? null,
+            customer_role: dto.customer_role ?? null,
+            debt_limit: dto.debt_limit ?? null,
+            department_slug: dto.department_slug,
+            customer_tier: dto.customer_tier,
+          },
         },
-      });
+      );
     }
     if (!(await this.canManageSale(user, dto.sale_id))) {
       throw new ForbiddenException('Sale không thuộc phạm vi quản lý của bạn');
@@ -786,14 +940,18 @@ export class CustomersService {
       relations: ['customer'],
     });
     if (!assignment) {
-      throw new ForbiddenException('Không tìm thấy khách hàng hoặc không thuộc phạm vi của bạn');
+      throw new ForbiddenException(
+        'Không tìm thấy khách hàng hoặc không thuộc phạm vi của bạn',
+      );
     }
     const roles = this.lowerRoles(user);
     const isManagerOrAdmin =
       roles.includes('admin') || roles.some((r) => r.startsWith('manager-'));
     if (!isManagerOrAdmin) {
       if (assignment.sale_id !== user.id) {
-        throw new ForbiddenException('Chỉ được đề xuất xoá khách của chính mình');
+        throw new ForbiddenException(
+          'Chỉ được đề xuất xoá khách của chính mình',
+        );
       }
       return this.createCustomerProposal(
         user,
@@ -832,11 +990,6 @@ export class CustomersService {
     const roles = this.lowerRoles(user);
     const isManagerOrAdmin =
       roles.includes('admin') || roles.some((r) => r.startsWith('manager-'));
-    if (!isManagerOrAdmin) {
-      throw new NotImplementedException(
-        'Nhân viên đổi hàng loạt sẽ đi qua luồng đề xuất → trưởng phòng duyệt — Mục 2 (cv 5-6)',
-      );
-    }
 
     const assignments = dto.assignmentIds.length
       ? await this.assignmentRepo.find({
@@ -845,6 +998,13 @@ export class CustomersService {
         })
       : [];
     const skipped: Array<{ assignmentId: number; reason: string }> = [];
+
+    if (!isManagerOrAdmin) {
+      // Nhân viên đổi hàng loạt KHÔNG áp thẳng — gom các dòng hợp lệ thành MỘT
+      // đề xuất, trưởng phòng duyệt một lần rồi mới ghi (Mục 2, cv 5-6)
+      return this.createBulkUpdateProposal(dto, assignments, user, skipped);
+    }
+
     let updated = 0;
 
     for (const assignmentId of dto.assignmentIds) {
@@ -884,19 +1044,28 @@ export class CustomersService {
    */
   async zaloContacts(query: ZaloContactQueryDto, user: any) {
     const limit = Math.min(query.limit ?? 50, 200);
+    const page = query.page && query.page > 1 ? query.page : 1;
     const userIds = await this.scopeUserIds(user);
 
     const accounts = await this.pythonApi.getAccounts(200);
     const allowedAccounts =
       userIds === undefined
         ? accounts
-        : accounts.filter((a) => a.userId !== null && userIds.includes(a.userId));
+        : accounts.filter(
+            (a) => a.userId !== null && userIds.includes(a.userId),
+          );
     // Kiểm tra accountId TRƯỚC khi rút gọn — user không có tài khoản nào
     // vẫn phải bị 403 khi đòi tra tài khoản người khác, không được trả rỗng lặng lẽ
-    if (query.accountId && !allowedAccounts.some((a) => a.accountId === query.accountId)) {
-      throw new ForbiddenException('Tài khoản Zalo không thuộc phạm vi của bạn');
+    if (
+      query.accountId &&
+      !allowedAccounts.some((a) => a.accountId === query.accountId)
+    ) {
+      throw new ForbiddenException(
+        'Tài khoản Zalo không thuộc phạm vi của bạn',
+      );
     }
-    if (userIds !== undefined && allowedAccounts.length === 0) return { data: [] };
+    if (userIds !== undefined && allowedAccounts.length === 0)
+      return { data: [] };
 
     let rows;
     if (query.accountId) {
@@ -905,23 +1074,37 @@ export class CustomersService {
         userId: account?.userId ?? undefined,
         search: query.search,
         limit: 200,
+        page,
       });
       rows = rows.filter((r) => r.accountId === query.accountId);
     } else if (userIds !== undefined) {
-      const scopedUserIds = [...new Set(allowedAccounts.map((a) => a.userId as number))];
+      const scopedUserIds = [
+        ...new Set(allowedAccounts.map((a) => a.userId as number)),
+      ];
       if (scopedUserIds.length === 1) {
         rows = await this.pythonApi.getContacts({
           userId: scopedUserIds[0],
           search: query.search,
           limit: 200,
+          page,
         });
       } else {
-        rows = await this.pythonApi.getContacts({ search: query.search, limit: 200 });
+        // Lọc phạm vi SAU khi phân trang: với người có nhiều tài khoản, trang
+        // sau khi lọc có thể ngắn hơn limit — FE lặp đến trang trả về rỗng
+        rows = await this.pythonApi.getContacts({
+          search: query.search,
+          limit: 200,
+          page,
+        });
         const allowedIds = new Set(allowedAccounts.map((a) => a.accountId));
         rows = rows.filter((r) => allowedIds.has(r.accountId));
       }
     } else {
-      rows = await this.pythonApi.getContacts({ search: query.search, limit: 200 });
+      rows = await this.pythonApi.getContacts({
+        search: query.search,
+        limit: 200,
+        page,
+      });
     }
 
     return {
@@ -955,7 +1138,9 @@ export class CustomersService {
       relations: ['customer'],
     });
     if (!assignment) {
-      throw new ForbiddenException('Không tìm thấy khách hàng hoặc không thuộc phạm vi của bạn');
+      throw new ForbiddenException(
+        'Không tìm thấy khách hàng hoặc không thuộc phạm vi của bạn',
+      );
     }
     if (userIds !== undefined && !userIds.includes(assignment.sale_id)) {
       throw new ForbiddenException('Khách hàng không thuộc phạm vi của bạn');
@@ -970,7 +1155,8 @@ export class CustomersService {
     const newData: any = {};
     if (dto.customer_tier) newData.customer_tier = dto.customer_tier;
     if (dto.customer_role) newData.customer_role = dto.customer_role;
-    if (dto.customer_name !== undefined) newData.customer_name = dto.customer_name;
+    if (dto.customer_name !== undefined)
+      newData.customer_name = dto.customer_name;
     if (dto.debt_limit !== undefined) newData.debt_limit = dto.debt_limit;
 
     const roles = this.lowerRoles(user);
@@ -979,7 +1165,9 @@ export class CustomersService {
 
     if (!isManagerOrAdmin) {
       if (assignment.sale_id !== user.id) {
-        throw new ForbiddenException('Chỉ được đề xuất sửa danh sách của chính mình');
+        throw new ForbiddenException(
+          'Chỉ được đề xuất sửa danh sách của chính mình',
+        );
       }
       return this.createCustomerProposal(
         user,
@@ -1006,9 +1194,12 @@ export class CustomersService {
       await this.assignmentRepo.save(assignment);
     }
     const customer = assignment.customer;
-    if (newData.customer_role) customer.customer_role = newData.customer_role as CustomerRole;
-    if (newData.customer_name !== undefined) customer.customer_name = newData.customer_name;
-    if (newData.debt_limit !== undefined) customer.debt_limit = newData.debt_limit;
+    if (newData.customer_role)
+      customer.customer_role = newData.customer_role as CustomerRole;
+    if (newData.customer_name !== undefined)
+      customer.customer_name = newData.customer_name;
+    if (newData.debt_limit !== undefined)
+      customer.debt_limit = newData.debt_limit;
     await this.customerRepo.save(customer);
 
     return {

@@ -100,4 +100,11 @@ export class ZaloContactQueryDto {
   @Min(1)
   @Max(200)
   limit?: number = 50;
+
+  /** Trang, bắt đầu từ 1 — mỗi trang tối đa `limit` dòng (API Python phân trang). */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page?: number = 1;
 }

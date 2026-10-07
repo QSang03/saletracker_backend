@@ -41,7 +41,10 @@ export class CustomerImportChange {
   @Column({ type: 'int' })
   session_id: number;
 
-  @ManyToOne(() => CustomerImportSession, { nullable: false, onDelete: 'CASCADE' })
+  @ManyToOne(() => CustomerImportSession, {
+    nullable: false,
+    onDelete: 'CASCADE',
+  })
   @JoinColumn({ name: 'session_id' })
   session: CustomerImportSession;
 
@@ -74,7 +77,11 @@ export class CustomerImportChange {
   @Column({ type: 'varchar', length: 255, nullable: true })
   error: string | null;
 
-  @Column({ type: 'enum', enum: ImportChangeDecision, default: ImportChangeDecision.PENDING })
+  @Column({
+    type: 'enum',
+    enum: ImportChangeDecision,
+    default: ImportChangeDecision.PENDING,
+  })
   decision: ImportChangeDecision;
 
   @Column({ type: 'int', nullable: true })

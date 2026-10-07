@@ -75,7 +75,8 @@ function cellText(cell: ExcelJS.Cell): string {
     if (Array.isArray(anyV.richText)) {
       return anyV.richText.map((t: any) => t?.text ?? '').join('');
     }
-    if ('result' in anyV) return anyV.result == null ? '' : String(anyV.result).trim();
+    if ('result' in anyV)
+      return anyV.result == null ? '' : String(anyV.result).trim();
     if ('text' in anyV) return String(anyV.text ?? '').trim();
     return '';
   }
@@ -86,7 +87,8 @@ function cellText(cell: ExcelJS.Cell): string {
 function cellNumber(cell: ExcelJS.Cell): number | null {
   const v = cell.value;
   if (v == null) return null;
-  const raw = typeof v === 'object' && 'result' in (v as any) ? (v as any).result : v;
+  const raw =
+    typeof v === 'object' && 'result' in (v as any) ? (v as any).result : v;
   const n = Number(raw);
   return Number.isFinite(n) ? n : null;
 }
@@ -101,7 +103,9 @@ function cellNumber(cell: ExcelJS.Cell): number | null {
  * Gộp trùng: 2 dòng cùng (mã, SAP) → một khách, phòng nào chưa có thì nhận thêm,
  * trùng phòng nhưng khác nhân viên → giữ dòng ĐẦU + ghi cảnh báo.
  */
-export async function parseImportWorkbook(buffer: Buffer): Promise<ParseResult> {
+export async function parseImportWorkbook(
+  buffer: Buffer,
+): Promise<ParseResult> {
   const wb = new ExcelJS.Workbook();
   // exceljs khai báo kiểu Buffer riêng — cast để khớp
   await wb.xlsx.load(buffer as any);
@@ -118,26 +122,35 @@ export async function parseImportWorkbook(buffer: Buffer): Promise<ParseResult> 
     });
   }
   if (criteria.length < 5) {
-    throw new Error('Sheet "TIÊU CHÍ" không đúng mẫu (cần ít nhất 5 dòng tiêu chí)');
+    throw new Error(
+      'Sheet "TIÊU CHÍ" không đúng mẫu (cần ít nhất 5 dòng tiêu chí)',
+    );
   }
 
   // Dò dòng tiêu đề trong 10 dòng đầu — file mẫu nằm ở dòng 1 nhưng không cố định cứng
   let headerRowNum = -1;
   for (let i = 1; i <= Math.min(10, ws.rowCount); i++) {
     const texts: string[] = [];
-    ws.getRow(i).eachCell({ includeEmpty: false }, (c) => texts.push(norm(c.value)));
+    ws.getRow(i).eachCell({ includeEmpty: false }, (c) =>
+      texts.push(norm(c.value)),
+    );
     if (texts.includes('MA KH') && texts.includes('LOAI MA')) {
       headerRowNum = i;
       break;
     }
   }
   if (headerRowNum < 0) {
-    throw new Error('Không tìm thấy dòng tiêu đề (cần cột "MÃ KH" và "LOẠI MÃ")');
+    throw new Error(
+      'Không tìm thấy dòng tiêu đề (cần cột "MÃ KH" và "LOẠI MÃ")',
+    );
   }
 
   // Ghép cột theo header
   const cols: { sap: number; code: number; loai: number; hanMuc: number } = {
-    sap: 0, code: 0, loai: 0, hanMuc: 0,
+    sap: 0,
+    code: 0,
+    loai: 0,
+    hanMuc: 0,
   };
   const tierCols: Array<{ col: number; slug: string }> = [];
   const empCols: Array<{ col: number; slug: string }> = [];
@@ -148,8 +161,10 @@ export async function parseImportWorkbook(buffer: Buffer): Promise<ParseResult> 
     else if (n === 'MA KH') cols.code = col;
     else if (n === 'LOAI MA') cols.loai = col;
     else if (n === 'HAN MUC') cols.hanMuc = col;
-    else if (DEPT_BY_TIER_HEADER[n]) tierCols.push({ col, slug: DEPT_BY_TIER_HEADER[n] });
-    else if (DEPT_BY_EMP_HEADER[n]) empCols.push({ col, slug: DEPT_BY_EMP_HEADER[n] });
+    else if (DEPT_BY_TIER_HEADER[n])
+      tierCols.push({ col, slug: DEPT_BY_TIER_HEADER[n] });
+    else if (DEPT_BY_EMP_HEADER[n])
+      empCols.push({ col, slug: DEPT_BY_EMP_HEADER[n] });
   });
 
   const missing: string[] = [];
@@ -180,7 +195,9 @@ export async function parseImportWorkbook(buffer: Buffer): Promise<ParseResult> 
     else if (roleRaw === 'PHU') customer_role = 'PHU';
     else errors.push('LOẠI MÃ trống hoặc sai giá trị');
 
-    const debt_limit = cols.hanMuc ? cellNumber(row.getCell(cols.hanMuc)) : null;
+    const debt_limit = cols.hanMuc
+      ? cellNumber(row.getCell(cols.hanMuc))
+      : null;
 
     const assignments: ParsedAssignment[] = [];
     for (const { col, slug } of empCols) {
@@ -189,9 +206,13 @@ export async function parseImportWorkbook(buffer: Buffer): Promise<ParseResult> 
       const empCode = raw.split('-')[0].trim().toUpperCase();
       if (!empCode) continue;
       const tierCol = tierCols.find((t) => t.slug === slug);
-      const tierRaw = tierCol ? cellText(row.getCell(tierCol.col)).toLowerCase() : '';
+      const tierRaw = tierCol
+        ? cellText(row.getCell(tierCol.col)).toLowerCase()
+        : '';
       if (tierRaw !== 'key' && tierRaw !== 'non') {
-        errors.push(`Phòng ${slug}: giá trị phân loại "${tierRaw || '(trống)'}" phải là KEY hoặc NON`);
+        errors.push(
+          `Phòng ${slug}: giá trị phân loại "${tierRaw || '(trống)'}" phải là KEY hoặc NON`,
+        );
         continue;
       }
       assignments.push({
@@ -206,10 +227,15 @@ export async function parseImportWorkbook(buffer: Buffer): Promise<ParseResult> 
     const existed = customers.get(key);
     if (existed) {
       for (const a of assignments) {
-        const dup = existed.assignments.find((x) => x.department_slug === a.department_slug);
+        const dup = existed.assignments.find(
+          (x) => x.department_slug === a.department_slug,
+        );
         if (!dup) {
           existed.assignments.push(a);
-        } else if (dup.employee_code !== a.employee_code || dup.tier !== a.tier) {
+        } else if (
+          dup.employee_code !== a.employee_code ||
+          dup.tier !== a.tier
+        ) {
           existed.warnings.push(
             `Dòng ${r}: trùng (mã, SAP) với dòng ${existed.row_num} nhưng phòng ${a.department_slug} khác nhân viên/tier — giữ bản dòng ${existed.row_num}`,
           );

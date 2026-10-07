@@ -338,6 +338,64 @@ const createdTestUserIds = [];
   }
 
   // User test GIỮ ACTIVE (quyết định 10/07) — không xoá, ensureTestUser tự tái sử dụng
+
+  // Nhân viên bulk-update → ĐỀ XUẤT chờ duyệt (bỏ 501 — khớp hợp đồng mục 2.7)
+  try {
+    const empUsername = 'kpi_test_user_khach_hang';
+    const empId = await ensureTestUser(empUsername, [roleIdByName['user-khach-hang']]);
+    const lr = await call('POST', '/auth/login', {
+      body: { username: empUsername, password: DEFAULT_PASSWORD },
+    });
+    const empToken = lr.json?.access_token || lr.json?.token || lr.json?.accessToken;
+    assert(empToken, 'login nhân viên test thất bại');
+
+    let bulkAssignmentId = null;
+    await expect('POST /customers (tạo phân công cho nhân viên test) → 201', 201, async () => {
+      const r = await call('POST', '/customers', { ...H(), body: {
+        customer_code: `TEST_AUTO_BULK_${Date.now()}`,
+        customer_name: 'Khách test bulk đề xuất',
+        department_slug: 'laptop',
+        sale_id: empId,
+        customer_tier: 'KEY',
+      } });
+      bulkAssignmentId = r.json?.assignmentId;
+      assert(bulkAssignmentId, 'thiếu assignmentId');
+      return r.status;
+    });
+
+    let bulkRequestId = null;
+    await expect('[NV] bulk-update → 200 tạo ĐỀ XUẤT (không còn 501)', 200, async () => {
+      const r = await call('POST', '/customers/bulk-update', {
+        token: empToken,
+        body: { assignmentIds: [bulkAssignmentId], customer_tier: 'NON' },
+      });
+      assert(r.json?.proposal === true, `proposal=true expected: ${JSON.stringify(r.json).slice(0, 150)}`);
+      bulkRequestId = r.json?.requestId;
+      assert(bulkRequestId, 'thiếu requestId');
+      return r.status;
+    });
+    await expect('[NV] tier CHƯA đổi khi đề xuất chưa được duyệt', 200, async () => {
+      const r = await call('GET', `/customers/${bulkAssignmentId}`, H());
+      assert(r.json?.customerTier === 'KEY', `tier phải còn KEY: ${r.json?.customerTier}`);
+      return r.status;
+    });
+    await expect('[Admin] duyệt đề xuất bulk → approved', 200, async () => {
+      const r = await call('POST', `/approval-requests/${bulkRequestId}/decide`, {
+        ...H(), body: { action: 'approve' },
+      });
+      assert(r.json?.status === 'approved', `status: ${JSON.stringify(r.json).slice(0, 150)}`);
+      return r.status;
+    });
+    await expect('[Admin] tier đã đổi thành NON sau khi duyệt', 200, async () => {
+      const r = await call('GET', `/customers/${bulkAssignmentId}`, H());
+      assert(r.json?.customerTier === 'NON', `tier phải là NON: ${r.json?.customerTier}`);
+      return r.status;
+    });
+    await expect('[Admin] dọn khách test bulk → 200', 200,
+      async () => (await call('DELETE', `/customers/${bulkAssignmentId}`, H())).status);
+  } catch (e) {
+    bad('Luồng bulk-update nhân viên → đề xuất', e.message);
+  }
 }
 
 // ============ G. THÊM/SỬA/XOÁ BẰNG TAY + BIÊN + TRA CỨU ZALO (admin) ============
@@ -419,6 +477,13 @@ console.log('\n-- G. Thêm/sửa/xoá bằng tay + biên + tra cứu Zalo (admin
   });
   await expect('zalo-contacts tìm ký tự đặc biệt "%" → 200', 200,
     async () => (await call('GET', `/customers/zalo-contacts?search=${encodeURIComponent('%')}&limit=5`, H())).status);
+  await expect('zalo-contacts page=2 → 200 (phân trang truyền xuống Python)', 200, async () => {
+    const r = await call('GET', '/customers/zalo-contacts?limit=5&page=2', H());
+    assert(Array.isArray(r.json?.data), 'data không phải mảng');
+    return r.status;
+  });
+  await expect('zalo-contacts page=0 → 400', 400,
+    async () => (await call('GET', '/customers/zalo-contacts?page=0', H())).status);
   await expect('zalo-contacts limit=0 → 400', 400,
     async () => (await call('GET', '/customers/zalo-contacts?limit=0', H())).status);
   await expect('zalo-contacts limit=201 → 400', 400,

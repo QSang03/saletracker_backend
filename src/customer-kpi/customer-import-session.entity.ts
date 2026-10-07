@@ -59,8 +59,16 @@ export class CustomerImportSession {
   @Column({ type: 'datetime', nullable: true })
   applied_at: Date | null;
 
+  /** Ai bấm Ghi vào hệ thống (users.id) — nhật ký thao tác trên session. */
+  @Column({ type: 'int', nullable: true })
+  applied_by: number | null;
+
   @Column({ type: 'datetime', nullable: true })
   rolled_back_at: Date | null;
+
+  /** Ai bấm Hoàn tác (users.id). */
+  @Column({ type: 'int', nullable: true })
+  rolled_back_by: number | null;
 
   @CreateDateColumn()
   created_at: Date;

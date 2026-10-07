@@ -28,9 +28,13 @@ export enum CustomerTier {
 }
 
 @Entity('customer_assignments')
-@Index('uq_assignment_customer_sale_dept', ['customer_id', 'sale_id', 'department_slug'], {
-  unique: true,
-})
+@Index(
+  'uq_assignment_customer_sale_dept',
+  ['customer_id', 'sale_id', 'department_slug'],
+  {
+    unique: true,
+  },
+)
 @Index('idx_assignment_sale_dept', ['sale_id', 'department_slug'])
 @Index('idx_assignment_zalo_account', ['zalo_account_id'])
 @Index('idx_assignment_dept_tier', ['department_slug', 'customer_tier'])
@@ -59,7 +63,11 @@ export class CustomerAssignment {
    * này trong mọi truy vấn khớp, vì zalo_contact_id chỉ duy nhất trong phạm vi
    * một tài khoản (thiết kế mục 4.2).
    */
-  @Column({ type: 'int', nullable: true, comment: 'zalo_accounts.id (DB zalo_automation)' })
+  @Column({
+    type: 'int',
+    nullable: true,
+    comment: 'zalo_accounts.id (DB zalo_automation)',
+  })
   zalo_account_id: number | null;
 
   @Column({ type: 'varchar', length: 32 })

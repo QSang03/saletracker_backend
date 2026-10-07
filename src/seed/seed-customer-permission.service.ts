@@ -44,7 +44,14 @@ export class SeedCustomerPermissionService {
     {
       name: 'manager-khach-hang',
       display_name: 'Trưởng phòng nhóm Khách hàng',
-      activeActions: ['create', 'read', 'update', 'delete', 'export', 'approve'],
+      activeActions: [
+        'create',
+        'read',
+        'update',
+        'delete',
+        'export',
+        'approve',
+      ],
     },
     {
       name: 'user-khach-hang',
@@ -71,7 +78,9 @@ export class SeedCustomerPermissionService {
     try {
       const permissions = await this.seedPermissions();
       await this.seedRoles(permissions);
-      this.logger.log('✅ [SeedCustomerPermission] Nhóm quyền "khách hàng" đã sẵn sàng');
+      this.logger.log(
+        '✅ [SeedCustomerPermission] Nhóm quyền "khách hàng" đã sẵn sàng',
+      );
     } catch (error) {
       this.logger.error(
         `❌ [SeedCustomerPermission] Lỗi seed nhóm quyền khách hàng: ${error.message}`,
@@ -101,7 +110,9 @@ export class SeedCustomerPermissionService {
       result.push(permission);
 
       // admin được tất cả — theo đúng createPermission của PermissionService
-      const adminRole = await this.roleRepo.findOne({ where: { name: 'admin' } });
+      const adminRole = await this.roleRepo.findOne({
+        where: { name: 'admin' },
+      });
       if (adminRole) {
         await this.ensureRolePermission(adminRole, permission, true);
       }
@@ -119,7 +130,9 @@ export class SeedCustomerPermissionService {
             display_name: roleDef.display_name,
           }),
         );
-        this.logger.log(`✅ [SeedCustomerPermission] Đã tạo role: ${roleDef.name}`);
+        this.logger.log(
+          `✅ [SeedCustomerPermission] Đã tạo role: ${roleDef.name}`,
+        );
       }
       for (const permission of permissions) {
         await this.ensureRolePermission(
@@ -150,10 +163,7 @@ export class SeedCustomerPermissionService {
       await this.rolePermissionRepo.restore({ id: existed.id });
     }
     if (existed.isActive !== isActive) {
-      await this.rolePermissionRepo.update(
-        { id: existed.id },
-        { isActive },
-      );
+      await this.rolePermissionRepo.update({ id: existed.id }, { isActive });
     }
   }
 

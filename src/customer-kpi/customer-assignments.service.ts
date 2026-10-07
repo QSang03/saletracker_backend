@@ -1,8 +1,8 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
-  NotImplementedException,
 } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, Repository } from 'typeorm';
@@ -17,27 +17,43 @@ import {
   ImportChangeAction,
   ImportChangeDecision,
 } from './customer-import-change.entity';
-import { ImportSessionQueryDto, ChangeDecisionDto } from './dto/import-session-query.dto';
-import { parseImportWorkbook, ParsedCustomerRow } from './customer-import-parser';
+import {
+  ImportSessionQueryDto,
+  ChangeDecisionDto,
+} from './dto/import-session-query.dto';
+import {
+  parseImportWorkbook,
+  ParsedCustomerRow,
+} from './customer-import-parser';
 
 /**
  * Quy tắc kiến trúc: KHÔNG tra DB Zalo khi import — zalo_account_id để trống,
  * job Python (customer_zalo_matcher_service) tự gắn trong vòng quét ≤ 5 phút.
  */
 /** 6 slug phòng ban cố định của file Excel (Phụ lục A.4). */
-const DEPARTMENT_SLUGS = ['may-in', 'pc', 'linh-kien', 'laptop', 'ptkh1', 'ptkh2'];
+const DEPARTMENT_SLUGS = [
+  'may-in',
+  'pc',
+  'linh-kien',
+  'laptop',
+  'ptkh1',
+  'ptkh2',
+];
 
 const isAdmin = (user: any) =>
   Array.isArray(user?.roles) &&
-  user.roles.some((r: any) => (typeof r === 'string' ? r : r?.name) === 'admin');
+  user.roles.some(
+    (r: any) => (typeof r === 'string' ? r : r?.name) === 'admin',
+  );
 
 /**
  * Nhóm API nạp danh sách khách hàng từ Excel: upload -> so khớp (diff) ->
  * người dùng chọn Giữ/Bỏ từng thay đổi -> apply (có rollback).
  *
- * ĐÃ LÀM HÔM NAY: đọc lịch sử session, xem preview thay đổi, đặt quyết định.
- * Chưa làm (Mục 2 — công việc con 1, 3, 4, 2): đọc Excel, sinh diff, apply
- * transaction, rollback, sinh file mẫu.
+ * Đầy đủ: đọc Excel (parser riêng), sinh diff, preview, đặt quyết định,
+ * apply 1 transaction (backup từng thay đổi), rollback từ backup, sinh file mẫu.
+ * Import chỉ dành cho admin (@Permission 'import') — apply/rollback/decide/cancel
+ * kiểm tra thêm phiên sở hữu qua assertSessionOwner.
  */
 @Injectable()
 export class CustomerAssignmentsService {
@@ -88,8 +104,13 @@ export class CustomerAssignmentsService {
     return { data: sessions, total, page, pageSize };
   }
 
-  async getPreview(sessionId: number, query: { action?: string; page?: number; pageSize?: number }) {
-    const session = await this.sessionRepo.findOne({ where: { id: sessionId } });
+  async getPreview(
+    sessionId: number,
+    query: { action?: string; page?: number; pageSize?: number },
+  ) {
+    const session = await this.sessionRepo.findOne({
+      where: { id: sessionId },
+    });
     if (!session) throw new NotFoundException('Không tìm thấy session import');
 
     const page = query.page && query.page > 0 ? query.page : 1;
@@ -121,11 +142,22 @@ export class CustomerAssignmentsService {
     };
   }
 
-  async setChangeDecision(sessionId: number, changeId: number, dto: ChangeDecisionDto, user: any) {
-    const session = await this.sessionRepo.findOne({ where: { id: sessionId } });
+  async setChangeDecision(
+    sessionId: number,
+    changeId: number,
+    dto: ChangeDecisionDto,
+    user: any,
+  ) {
+    const session = await this.sessionRepo.findOne({
+      where: { id: sessionId },
+      relations: { uploaded_by: true },
+    });
     if (!session) throw new NotFoundException('Không tìm thấy session import');
+    this.assertSessionOwner(session, user);
     if (session.status !== 'pending_review') {
-      throw new BadRequestException('Session đã xử lý xong, không đổi được quyết định');
+      throw new BadRequestException(
+        'Session đã xử lý xong, không đổi được quyết định',
+      );
     }
 
     const change = await this.changeRepo.findOne({
@@ -141,6 +173,21 @@ export class CustomerAssignmentsService {
     change.decided_at = new Date();
     await this.changeRepo.save(change);
     return change;
+  }
+
+  /**
+   * Chỉ người tạo phiên (hoặc admin) được apply / rollback / đổi quyết định /
+   * huỷ — list session đã lọc theo người dùng, nhưng thao tác theo id thì
+   * không được phép lách qua phiên của người khác.
+   */
+  private assertSessionOwner(session: CustomerImportSession, user: any) {
+    if (isAdmin(user)) return;
+    const ownerId = (session.uploaded_by as any)?.id ?? null;
+    if (ownerId !== user?.id) {
+      throw new ForbiddenException(
+        'Chỉ người tạo phiên import (hoặc admin) mới được thao tác trên phiên này',
+      );
+    }
   }
 
   private isValidAction(value: string): value is ImportChangeAction {
@@ -164,7 +211,11 @@ export class CustomerAssignmentsService {
 
     // 1) Mã nhân viên trong file -> users.id (không tự tạo user)
     const empCodes = [
-      ...new Set(parsed.customers.flatMap((c) => c.assignments.map((a) => a.employee_code))),
+      ...new Set(
+        parsed.customers.flatMap((c) =>
+          c.assignments.map((a) => a.employee_code),
+        ),
+      ),
     ];
     const users = empCodes.length
       ? await this.userRepo.find({
@@ -173,7 +224,7 @@ export class CustomerAssignmentsService {
         })
       : [];
     const userIdByEmp = new Map(
-      users.map((u) => [u.employeeCode as string, u.id as number]),
+      users.map((u) => [u.employeeCode as string, u.id]),
     );
 
     // 2) (đã bỏ) tra tài khoản Zalo của sale — chuyển sang job Python
@@ -215,9 +266,15 @@ export class CustomerAssignmentsService {
       errorRows: 0,
     };
 
-    const changeErrorFor = (p: ParsedCustomerRow, saleId?: number): string | null => {
+    const changeErrorFor = (
+      p: ParsedCustomerRow,
+      saleId?: number,
+    ): string | null => {
       const parts = [...p.errors];
-      if (!saleId) parts.push('Không tìm thấy nhân viên trong hệ thống theo mã trong file');
+      if (!saleId)
+        parts.push(
+          'Không tìm thấy nhân viên trong hệ thống theo mã trong file',
+        );
       if (!parts.length) return null;
       return parts.join('; ').slice(0, 255);
     };
@@ -225,7 +282,9 @@ export class CustomerAssignmentsService {
     for (const p of parsed.customers) {
       const key = `${p.customer_code}|${p.sap_code}`;
       const dbCustomer = dbCustomerByKey.get(key);
-      const parsedDeptSlugs = new Set(p.assignments.map((a) => a.department_slug));
+      const parsedDeptSlugs = new Set(
+        p.assignments.map((a) => a.department_slug),
+      );
       if (p.errors.length) {
         summary.errorRows++;
         rowErrors.push({ row_num: p.row_num, errors: p.errors });
@@ -244,15 +303,22 @@ export class CustomerAssignmentsService {
           oldFields.customer_role = dbCustomer.customer_role;
           newFields.customer_role = p.customer_role;
         }
-        if (p.debt_limit != null && Number(dbCustomer.debt_limit) !== p.debt_limit) {
+        if (
+          p.debt_limit != null &&
+          Number(dbCustomer.debt_limit) !== p.debt_limit
+        ) {
           oldFields.debt_limit = dbCustomer.debt_limit;
           newFields.debt_limit = p.debt_limit;
         }
         if (Object.keys(newFields).length) {
           drafts.push({
-            row_num: p.row_num, customer_code: p.customer_code, sap_code: p.sap_code,
-            department_slug: null, action: ImportChangeAction.UPDATE,
-            old_data: oldFields, new_data: newFields,
+            row_num: p.row_num,
+            customer_code: p.customer_code,
+            sap_code: p.sap_code,
+            department_slug: null,
+            action: ImportChangeAction.UPDATE,
+            old_data: oldFields,
+            new_data: newFields,
             error: p.errors.join('; ').slice(0, 255) || null,
           });
         }
@@ -275,8 +341,11 @@ export class CustomerAssignmentsService {
 
         if (!existing) {
           drafts.push({
-            row_num: p.row_num, customer_code: p.customer_code, sap_code: p.sap_code,
-            department_slug: a.department_slug, action: ImportChangeAction.CREATE,
+            row_num: p.row_num,
+            customer_code: p.customer_code,
+            sap_code: p.sap_code,
+            department_slug: a.department_slug,
+            action: ImportChangeAction.CREATE,
             old_data: null,
             new_data: {
               ...newRow,
@@ -296,8 +365,11 @@ export class CustomerAssignmentsService {
           existing.customer_tier !== newRow.customer_tier
         ) {
           drafts.push({
-            row_num: p.row_num, customer_code: p.customer_code, sap_code: p.sap_code,
-            department_slug: a.department_slug, action: ImportChangeAction.UPDATE,
+            row_num: p.row_num,
+            customer_code: p.customer_code,
+            sap_code: p.sap_code,
+            department_slug: a.department_slug,
+            action: ImportChangeAction.UPDATE,
             old_data: {
               sale_id: existing.sale_id,
               customer_tier: existing.customer_tier,
@@ -321,34 +393,45 @@ export class CustomerAssignmentsService {
             continue;
           }
           drafts.push({
-            row_num: 0, customer_code: p.customer_code, sap_code: p.sap_code,
-            department_slug: existing.department_slug, action: ImportChangeAction.DELETE,
+            row_num: 0,
+            customer_code: p.customer_code,
+            sap_code: p.sap_code,
+            department_slug: existing.department_slug,
+            action: ImportChangeAction.DELETE,
             old_data: {
               sale_id: existing.sale_id,
               customer_tier: existing.customer_tier,
               zalo_account_id: existing.zalo_account_id,
             },
-            new_data: null, error: null,
+            new_data: null,
+            error: null,
           });
         }
       }
     }
 
     // 4d. Khách đang hoạt động trong DB nhưng vắng mặt trong file → xoá toàn bộ
-    const parsedKeys = new Set(parsed.customers.map((p) => `${p.customer_code}|${p.sap_code}`));
+    const parsedKeys = new Set(
+      parsed.customers.map((p) => `${p.customer_code}|${p.sap_code}`),
+    );
     for (const dbCustomer of dbCustomers) {
       if (dbCustomer.status === CustomerStatus.DELETED) continue;
-      if (parsedKeys.has(`${dbCustomer.customer_code}|${dbCustomer.sap_code}`)) continue;
+      if (parsedKeys.has(`${dbCustomer.customer_code}|${dbCustomer.sap_code}`))
+        continue;
       for (const a of assignmentsByCustomer.get(dbCustomer.id) || []) {
         drafts.push({
-          row_num: 0, customer_code: dbCustomer.customer_code, sap_code: dbCustomer.sap_code,
-          department_slug: a.department_slug, action: ImportChangeAction.DELETE,
+          row_num: 0,
+          customer_code: dbCustomer.customer_code,
+          sap_code: dbCustomer.sap_code,
+          department_slug: a.department_slug,
+          action: ImportChangeAction.DELETE,
           old_data: {
             sale_id: a.sale_id,
             customer_tier: a.customer_tier,
             zalo_account_id: a.zalo_account_id,
           },
-          new_data: null, error: 'Khách không có trong file',
+          new_data: null,
+          error: 'Khách không có trong file',
         });
       }
     }
@@ -402,11 +485,16 @@ export class CustomerAssignmentsService {
    *   cả id); nếu khách không còn phân công nào → đặt customers.status='deleted'.
    */
   async applySession(sessionId: number, user: any) {
-    void user;
-    const session = await this.sessionRepo.findOne({ where: { id: sessionId } });
+    const session = await this.sessionRepo.findOne({
+      where: { id: sessionId },
+      relations: { uploaded_by: true },
+    });
     if (!session) throw new NotFoundException('Không tìm thấy session import');
+    this.assertSessionOwner(session, user);
     if (session.status !== 'pending_review') {
-      throw new BadRequestException('Session đã xử lý xong, không apply lại được');
+      throw new BadRequestException(
+        'Session đã xử lý xong, không apply lại được',
+      );
     }
 
     const changes = await this.changeRepo.find({
@@ -427,7 +515,10 @@ export class CustomerAssignmentsService {
         (await em.find(Customer)).map((c) => [c.id, c]),
       );
       const customerByKey = new Map(
-        [...customers.values()].map((c) => [`${c.customer_code}|${c.sap_code}`, c]),
+        [...customers.values()].map((c) => [
+          `${c.customer_code}|${c.sap_code}`,
+          c,
+        ]),
       );
       const assignmentsByCustomer = new Map<number, CustomerAssignment[]>();
       for (const a of await em.find(CustomerAssignment)) {
@@ -471,9 +562,9 @@ export class CustomerAssignmentsService {
               await em.save(customer);
             }
 
-            const duplicated = (assignmentsByCustomer.get(customer.id) || []).some(
-              (x) => x.department_slug === change.department_slug,
-            );
+            const duplicated = (
+              assignmentsByCustomer.get(customer.id) || []
+            ).some((x) => x.department_slug === change.department_slug);
             if (duplicated || !nd.sale_id) {
               conflicts.push({
                 changeId: change.id,
@@ -519,7 +610,10 @@ export class CustomerAssignmentsService {
                 this.customerIdFromChange(change, customerByKey),
               );
               if (!customer) {
-                conflicts.push({ changeId: change.id, reason: 'không tìm thấy khách' });
+                conflicts.push({
+                  changeId: change.id,
+                  reason: 'không tìm thấy khách',
+                });
                 continue;
               }
               await em.save(
@@ -546,10 +640,16 @@ export class CustomerAssignmentsService {
               await em.save(customer);
               applied++;
             } else {
-              const assignment = (assignmentsByCustomer.get(this.customerIdFromChange(change, customerByKey)) || [])
-                .find((x) => x.department_slug === change.department_slug);
+              const assignment = (
+                assignmentsByCustomer.get(
+                  this.customerIdFromChange(change, customerByKey),
+                ) || []
+              ).find((x) => x.department_slug === change.department_slug);
               if (!assignment) {
-                conflicts.push({ changeId: change.id, reason: 'không tìm thấy phân công' });
+                conflicts.push({
+                  changeId: change.id,
+                  reason: 'không tìm thấy phân công',
+                });
                 continue;
               }
               await em.save(
@@ -571,19 +671,24 @@ export class CustomerAssignmentsService {
               );
               const nd = change.new_data || {};
               assignment.sale_id = nd.sale_id ?? assignment.sale_id;
-              assignment.customer_tier = (nd.customer_tier ?? assignment.customer_tier) as CustomerTier;
-              assignment.zalo_account_id = nd.zalo_account_id ?? assignment.zalo_account_id;
+              assignment.customer_tier = (nd.customer_tier ??
+                assignment.customer_tier) as CustomerTier;
+              assignment.zalo_account_id =
+                nd.zalo_account_id ?? assignment.zalo_account_id;
               await em.save(assignment);
               applied++;
             }
           } else if (change.action === ImportChangeAction.DELETE) {
             const od = change.old_data || {};
             const customerId = this.customerIdFromChange(change, customerByKey);
-            const assignment = (assignmentsByCustomer.get(customerId) || []).find(
-              (x) => x.department_slug === change.department_slug,
-            );
+            const assignment = (
+              assignmentsByCustomer.get(customerId) || []
+            ).find((x) => x.department_slug === change.department_slug);
             if (!assignment) {
-              conflicts.push({ changeId: change.id, reason: 'không tìm thấy phân công' });
+              conflicts.push({
+                changeId: change.id,
+                reason: 'không tìm thấy phân công',
+              });
               continue;
             }
             const customer = customers.get(customerId);
@@ -620,30 +725,49 @@ export class CustomerAssignmentsService {
               // khách hàng vẫn ẩn qua status nếu toàn bộ phân công bị xoá
               conflicts.push({
                 changeId: change.id,
-                reason: 'phân công đang có dữ liệu KPI tham chiếu, không xoá được',
+                reason:
+                  'phân công đang có dữ liệu KPI tham chiếu, không xoá được',
               });
               continue;
             }
-            const remaining = (assignmentsByCustomer.get(customerId) || []).filter(
-              (x) => x.department_slug && DEPARTMENT_SLUGS.includes(x.department_slug),
+            const remaining = (
+              assignmentsByCustomer.get(customerId) || []
+            ).filter(
+              (x) =>
+                x.department_slug &&
+                DEPARTMENT_SLUGS.includes(x.department_slug),
             );
-            if (customer && remaining.length === 0 && customer.status !== CustomerStatus.DELETED) {
+            if (
+              customer &&
+              remaining.length === 0 &&
+              customer.status !== CustomerStatus.DELETED
+            ) {
               customer.status = CustomerStatus.DELETED;
               await em.save(customer);
             }
             applied++;
           }
         } catch (e) {
-          conflicts.push({ changeId: change.id, reason: (e as Error).message?.slice(0, 200) });
+          conflicts.push({
+            changeId: change.id,
+            reason: (e as Error).message?.slice(0, 200),
+          });
         }
       }
     });
 
     session.status = 'applied' as any;
     session.applied_at = new Date();
+    session.applied_by = user?.id ?? null;
     await this.sessionRepo.save(session);
 
-    return { sessionId, applied, skippedErrors, conflicts, status: session.status };
+    return {
+      sessionId,
+      applied,
+      skippedErrors,
+      conflicts,
+      status: session.status,
+    };
   }
 
   /** Khách của một change: tra theo key (mã|SAP) trong bộ đệm của lượt apply.
@@ -663,9 +787,12 @@ export class CustomerAssignmentsService {
    * DELETE → dựng lại phân công (giữ nguyên id để dữ liệu KPI nối lại được).
    */
   async rollbackSession(sessionId: number, user: any) {
-    void user;
-    const session = await this.sessionRepo.findOne({ where: { id: sessionId } });
+    const session = await this.sessionRepo.findOne({
+      where: { id: sessionId },
+      relations: { uploaded_by: true },
+    });
     if (!session) throw new NotFoundException('Không tìm thấy session import');
+    this.assertSessionOwner(session, user);
     if (session.status !== 'applied') {
       throw new BadRequestException('Chỉ hoàn tác được session đã apply');
     }
@@ -688,7 +815,10 @@ export class CustomerAssignmentsService {
               where: { id: backup.assignment_id },
             });
             if (!assignment) {
-              skipped.push({ assignmentId: backup.assignment_id, reason: 'phân công không còn' });
+              skipped.push({
+                assignmentId: backup.assignment_id,
+                reason: 'phân công không còn',
+              });
               continue;
             }
             await em.delete(CustomerAssignment, assignment.id);
@@ -721,7 +851,10 @@ export class CustomerAssignmentsService {
                 where: { id: od.assignment.id },
               });
               if (!assignment) {
-                skipped.push({ assignmentId: od.assignment.id, reason: 'phân công không còn' });
+                skipped.push({
+                  assignmentId: od.assignment.id,
+                  reason: 'phân công không còn',
+                });
                 continue;
               }
               assignment.sale_id = od.assignment.sale_id;
@@ -736,7 +869,10 @@ export class CustomerAssignmentsService {
               where: { id: backup.assignment_id },
             });
             if (existed) {
-              skipped.push({ assignmentId: backup.assignment_id, reason: 'phân công vẫn còn, không cần dựng lại' });
+              skipped.push({
+                assignmentId: backup.assignment_id,
+                reason: 'phân công vẫn còn, không cần dựng lại',
+              });
               continue;
             }
             await em.save(
@@ -749,7 +885,10 @@ export class CustomerAssignmentsService {
                 zalo_account_id: odA.zalo_account_id ?? null,
               }),
             );
-            if (od.customer_status_before === CustomerStatus.ACTIVE && odA.customer_id) {
+            if (
+              od.customer_status_before === CustomerStatus.ACTIVE &&
+              odA.customer_id
+            ) {
               const customer = await em.findOne(Customer, {
                 where: { id: odA.customer_id },
               });
@@ -761,7 +900,10 @@ export class CustomerAssignmentsService {
             restored++;
           }
         } catch (e) {
-          skipped.push({ assignmentId: backup.assignment_id, reason: (e as Error).message?.slice(0, 200) });
+          skipped.push({
+            assignmentId: backup.assignment_id,
+            reason: (e as Error).message?.slice(0, 200),
+          });
         }
       }
       // Backup đã hoàn thành sứ mệnh sau rollback — dọn để không phình dữ liệu
@@ -770,6 +912,7 @@ export class CustomerAssignmentsService {
 
     session.status = 'rolled_back' as any;
     session.rolled_back_at = new Date();
+    session.rolled_back_by = user?.id ?? null;
     await this.sessionRepo.save(session);
 
     return { sessionId, restored, skipped, status: session.status };
@@ -793,33 +936,93 @@ export class CustomerAssignmentsService {
 
     const ws = wb.addWorksheet('File Chi Tiết');
     const headers = [
-      'STT', 'MÃ ĐỐI TÁC SAP', 'MÃ KH', 'S1-MÁY IN, MỰC IN', 'S1-PC, LCD',
-      'S1-PTTT', 'S1-LAPTOP', 'S1-PTKH1', 'S1-PTKH2', 'LOẠI MÃ',
-      'LAPTOP', 'LINH KIỆN', 'MÁY IN', 'PC - SERVER', 'PTKH1', 'PTKH2',
-      'hạn mức', 'T04', 'T05', 'T06', 'T07', 'T08', 'T09', 'ĐIẾM', 'tổng ds',
+      'STT',
+      'MÃ ĐỐI TÁC SAP',
+      'MÃ KH',
+      'S1-MÁY IN, MỰC IN',
+      'S1-PC, LCD',
+      'S1-PTTT',
+      'S1-LAPTOP',
+      'S1-PTKH1',
+      'S1-PTKH2',
+      'LOẠI MÃ',
+      'LAPTOP',
+      'LINH KIỆN',
+      'MÁY IN',
+      'PC - SERVER',
+      'PTKH1',
+      'PTKH2',
+      'hạn mức',
+      'T04',
+      'T05',
+      'T06',
+      'T07',
+      'T08',
+      'T09',
+      'ĐIẾM',
+      'tổng ds',
     ];
     ws.addRow(headers);
     // 2 dòng ví dụ — người nhập xoá đi rồi điền theo
     ws.addRow([
-      1, 'C29962', 'MBA_HNO_TH_THAKRALONE', '', '', '', 'NKDS36-ĐỖ MINH HÙNG', '', '',
-      'CHÍNH', 'Key', '', '', '', '', '', 50000000,
+      1,
+      'C29962',
+      'MBA_HNO_TH_THAKRALONE',
+      '',
+      '',
+      '',
+      'NKDS36-ĐỖ MINH HÙNG',
+      '',
+      '',
+      'CHÍNH',
+      'Key',
+      '',
+      '',
+      '',
+      '',
+      '',
+      50000000,
     ]);
     ws.addRow([
-      2, 'C00375', 'HQS_Q03_SR_PHUCHAI', '', 'NKDS20-NGUYỄN THỊ THANH HẰNG', '', '', '', '',
-      'CHÍNH', '', 'NON', '', '', '', '', 0,
+      2,
+      'C00375',
+      'HQS_Q03_SR_PHUCHAI',
+      '',
+      'NKDS20-NGUYỄN THỊ THANH HẰNG',
+      '',
+      '',
+      '',
+      '',
+      'CHÍNH',
+      '',
+      'NON',
+      '',
+      '',
+      '',
+      '',
+      0,
     ]);
     ws.columns.forEach((c) => (c.width = 22));
 
     const buf = await wb.xlsx.writeBuffer();
-    return { buffer: Buffer.from(buf as ArrayBuffer), fileName: 'mau-nap-khach-hang.xlsx' };
+    return {
+      buffer: Buffer.from(buf as ArrayBuffer),
+      fileName: 'mau-nap-khach-hang.xlsx',
+    };
   }
 
   /** Huỷ session: chờ duyệt (xoá changes) hoặc đã hoàn tác (xoá changes + backup). */
   async cancelSession(sessionId: number, user: any) {
-    void user;
-    const session = await this.sessionRepo.findOne({ where: { id: sessionId } });
+    const session = await this.sessionRepo.findOne({
+      where: { id: sessionId },
+      relations: { uploaded_by: true },
+    });
     if (!session) throw new NotFoundException('Không tìm thấy session import');
-    if (session.status !== 'pending_review' && session.status !== 'rolled_back') {
+    this.assertSessionOwner(session, user);
+    if (
+      session.status !== 'pending_review' &&
+      session.status !== 'rolled_back'
+    ) {
       throw new BadRequestException(
         'Chỉ huỷ được session đang chờ duyệt hoặc đã hoàn tác (session đã apply cần rollback trước)',
       );
