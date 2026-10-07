@@ -5,6 +5,7 @@ import {
   ParseIntPipe,
   Query,
   Req,
+  Res,
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -92,18 +93,25 @@ export class CustomerKpiReportsController {
 
   @Get('export')
   @Permission('khach-hang', 'export')
-  export(
+  async export(
     @Query('saleId') saleId: string | undefined,
     @Query('from') from: string | undefined,
     @Query('to') to: string | undefined,
     @Req() req: any,
+    @Res() res: any,
   ) {
     const range = this.normalizeRange(from, to);
-    return this.reportsService.exportReport(
+    const { buffer, fileName } = await this.reportsService.exportReport(
       saleId ? Number(saleId) : undefined,
       range.from,
       range.to,
       req.user,
     );
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    res.send(buffer);
   }
 }

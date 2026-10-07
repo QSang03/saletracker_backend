@@ -27,6 +27,21 @@ const ADMIN_PASS = process.argv[4] || process.env.ADMIN_PASS || 'admin';
 const TEST_USER = process.env.TEST_USER;
 const TEST_PASS = process.env.TEST_PASS;
 
+// ===== ĐỒNG HỒ: in thời gian mỗi nhóm (kỹ thuật: bọc console.log, mỗi lần
+// gặp tiêu đề nhóm "-- X. ..." thì in khoảng cách từ tiêu đề trước) =====
+const T0 = Date.now();
+let _prevMark = T0;
+const _log = console.log.bind(console);
+console.log = (...args) => {
+  const msg = String(args[0] ?? '');
+  if (msg.startsWith('--')) {
+    const now = Date.now();
+    _log(`   ⏱ nhóm trước: ${((now - _prevMark) / 1000).toFixed(1)}s (tổng ${((now - T0) / 1000).toFixed(1)}s)`);
+    _prevMark = now;
+  }
+  _log(...args);
+};
+
 // Mật khẩu mặc định khi tạo user mới qua API = PASSWORD_DEFAULT trong .env
 let DEFAULT_PASSWORD = 'default_password';
 try {
@@ -172,25 +187,22 @@ await expect('GET import-sessions/99999999/preview → 404', 404,
 await expect('GET /approval-requests/99999999 → 404', 404,
   async () => (await call('GET', '/approval-requests/99999999', H())).status);
 
-// ============ D. HOP DONG 501 (phan cho Muc 3-4) ============
-console.log('\n-- D. Hợp đồng 501 (chờ Mục 3-4) --');
+// ============ D. HOP DONG BIEN (tung la 501 — Muc 3-4 da hien thuc het) ============
+console.log('\n-- D. Hợp đồng biên (Mục 3-4 đã hiện thực — hết endpoint 501) --');
 // Mục 3 đã hiện thực PATCH zalo-links — id không tồn tại giờ trả 404 (nhóm K test hành vi thật)
 await expect('PATCH /customers/zalo-links/99999999 (id ảo) → 404', 404,
   async () => (await call('PATCH', '/customers/zalo-links/99999999', { ...H(), body: { is_active: false } })).status);
 await expect('POST /customer-assignments/import thiếu file → 400', 400,
   async () => (await call('POST', '/customer-assignments/import', H())).status);
-  // duyệt (decide) đã hiện thực cho customer_list — nhóm H test hành vi thật
-  await expect('GET /customer-kpi-reports/overview → 501', 501,
+// Mục 4 đã hiện thực engine chấm điểm — các endpoint trả dữ liệu thật (nhóm M test nội dung)
+await expect('GET /customer-kpi-reports/overview → 200 (hết 501)', 200,
   async () => (await call('GET', '/customer-kpi-reports/overview?from=2026-10-01&to=2026-10-05', H())).status);
-await expect('GET /customer-kpi-reports/by-sale → 501', 501,
+await expect('GET /customer-kpi-reports/by-sale → 200 (hết 501)', 200,
   async () => (await call('GET', '/customer-kpi-reports/by-sale?from=2026-10-01&to=2026-10-05', H())).status);
-await expect('GET /customer-kpi-reports/suggestions → 501', 501,
+await expect('GET /customer-kpi-reports/suggestions → 200 (hết 501)', 200,
   async () => (await call('GET', '/customer-kpi-reports/suggestions', H())).status);
-await expect('POST /customer-kpi-targets (gán chỉ tiêu) → 501', 501,
-  async () => (await call('POST', '/customer-kpi-targets', {
-    ...H(),
-    body: { criterion_key: 'doanh_so_key', period_month: '2026-10', scope: 'sale', sale_ids: [1], target_value: 1000000 },
-  })).status);
+await expect('POST /customer-kpi-targets thiếu trường → 400 (hết 501)', 400,
+  async () => (await call('POST', '/customer-kpi-targets', { ...H(), body: {} })).status);
 
 // ============ E. PHAN QUYEN (tuy chon) ============
 if (TEST_USER && TEST_PASS) {
@@ -448,8 +460,17 @@ console.log('\n-- G. Thêm/sửa/xoá bằng tay + biên + tra cứu Zalo (admin
     assert((r.json?.total ?? 1) === 0, `vẫn còn ${r.json?.total} dòng`);
     return r.status;
   });
-  await expect('GET /customer-kpi-reports/export → 501', 501,
-    async () => (await call('GET', '/customer-kpi-reports/export?from=2026-10-01&to=2026-10-05', H())).status);
+  // Export đã hiện thực (Mục 4, cv 6) — nhóm M test nội dung file với sale thu hẹp;
+  // ở đây smoke-test khoảng cũ KHÔNG có dữ liệu (load nhanh) để xác nhận hết 501
+  {
+    const res = await fetch(`${BASE}/customer-kpi-reports/export?from=2020-01-01&to=2020-01-02`, {
+      headers: { Authorization: `Bearer ${adminToken}` },
+      signal: AbortSignal.timeout(60000),
+    });
+    const ct = res.headers.get('content-type') || '';
+    if (res.status === 200 && ct.includes('spreadsheetml')) ok('GET /customer-kpi-reports/export → 200 xlsx (hết 501)');
+    else bad('GET /customer-kpi-reports/export', `HTTP ${res.status}, content-type=${ct}`);
+  }
 
   // Nhóm tiêu chí khác kinh-doanh — luồng group riêng
   await expect('POST tiêu chí nhóm cong-no → 201', 201, async () => {
@@ -690,8 +711,16 @@ console.log('\n-- I. Import Excel thật (test-fixtures) --');
       else bad('Số khách sau gộp', `nhận ${s.customersParsed}, kỳ vọng 4740..4750`);
       if (s.errorRows >= 14 && s.errorRows <= 18) ok(`Dòng lỗi dữ liệu bẩn trong khoảng 14..18 (${s.errorRows})`);
       else bad('Dòng lỗi dữ liệu bẩn', `nhận ${s.errorRows}, kỳ vọng 14..18`);
-      if (s.create >= 9000) ok(`Số thay đổi tạo mới hợp lý (${s.create})`);
-      else bad('Số thay đổi tạo mới', `nhận ${s.create}, kỳ vọng ≥9000 (mỗi khách tối đa 6 phòng)`);
+      // Số "create" phụ thuộc DB đã có dữ liệu demo chưa: DB trống → ~9.000
+      // (mỗi khách tối đa 6 phòng); DB đã seed demo → chỉ còn các dòng BẠN của
+      // file (không bao giờ apply được) → create = errorRows - 2 × cặp trùng.
+      // Chặn cận dưới chung cho cả hai thế giới.
+      const minCreate = (s.errorRows ?? 0) - 2 * (s.duplicatePairs ?? 0);
+      if (s.create >= minCreate && s.create <= s.customersParsed) {
+        ok(`Số thay đổi tạo mới hợp lý (${s.create} ≥ ${minCreate} — DB trống thì ~9.000, DB đã seed thì chỉ còn dòng bẩn)`);
+      } else {
+        bad('Số thay đổi tạo mới', `nhận ${s.create}, kỳ vọng ${minCreate}..${s.customersParsed}`);
+      }
 
       // 2) Preview session
       const pv = await call('GET', `/customer-assignments/import-sessions/${sessionId}/preview?pageSize=5`, H());
@@ -766,9 +795,11 @@ console.log('\n-- I. Import Excel thật (test-fixtures) --');
 }
 
 // ============ J. APPLY + ROLLBACK (file demo thật + nhân viên test) ============
-// DB dev không có user bán hàng theo mã NKDS → nhóm này tự tạo user với đúng
-// mã NV trích từ file demo, rồi apply/rollback trên quy mô thật. Dọn sạch sau.
-console.log('\n-- J. Apply + Rollback (file demo thật + nhân viên test) --');
+// DB dev có thể ĐÃ seed sẵn toàn bộ khách demo (seed-customer-kpi-dev.mjs) nên
+// import nguyên file không còn gì để apply. Cách chắc chắn cho CẢ HAI thế giới:
+// đọc file demo, NHÚNG thêm 2 khách có tag riêng từng lần chạy vào workbook
+// (trong bộ nhớ, không đụng file gốc) → apply/rollback đúng 2 khách đó.
+console.log('\n-- J. Apply + Rollback (file demo + 2 khách tag nhúng vào workbook) --');
 {
   let sessionId = null;
   const createdEmpIds = [];
@@ -822,10 +853,44 @@ console.log('\n-- J. Apply + Rollback (file demo thật + nhân viên test) --')
     }
     ok(`Chuẩn bị ${createdEmpIds.length} nhân viên test theo mã NKDS trong file`);
 
-    // 3. Upload file demo (session riêng cho nhóm J)
-    const buf = readFileSync(fixturePath);
+    // 3. Nhúng 2 khách tag vào workbook demo (in-memory) rồi upload
+    const tag = Date.now().toString(36).slice(-6);
+    const tagNum = Date.now() % 100000;
+    const wsHeader = ws.getRow(1);
+    const colOf = {};
+    wsHeader.eachCell({ includeEmpty: false }, (cell, col) => {
+      const n = String(cell.value ?? '')
+        .replace(/Đ/g, 'D').replace(/đ/g, 'd')
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        .replace(/\s+/g, ' ').trim().toUpperCase();
+      colOf[n] = col;
+    });
+    const colSap = colOf['MA DOI TAC SAP'];
+    const colCode = colOf['MA KH'];
+    const colLoai = colOf['LOAI MA'];
+    const colEmp = colOf['S1-LAPTOP'];
+    const colTier = colOf['LAPTOP'];
+    assert(colSap && colCode && colLoai && colEmp && colTier,
+      `không tìm thấy đủ cột trong file demo: ${JSON.stringify(colOf)}`);
+
+    const J_CODES = { a: `KPI_J_${tag}A`, b: `KPI_J_${tag}B` };
+    // addRow dạng OBJECT với key số KHÔNG hoạt động (exceljs map theo ws.columns
+    // → ra dòng rỗng) — bắt buộc dùng mảng 1-based: arr[1] = cột A
+    const mkRow = (sap, code, loai, emp, tier) => {
+      const arr = [];
+      arr[colSap] = sap;
+      arr[colCode] = code;
+      arr[colLoai] = loai;
+      arr[colEmp] = emp;
+      arr[colTier] = tier;
+      return arr;
+    };
+    ws.addRow(mkRow(`C9${tagNum}1`, J_CODES.a, 'CHÍNH', 'NKDS03-NV Test J', 'Key'));
+    ws.addRow(mkRow(`C9${tagNum}2`, J_CODES.b, 'PHỤ', 'NKDS03-NV Test J', 'Non'));
+    const tagBuf = Buffer.from(await wb.xlsx.writeBuffer());
+
     const fd = new FormData();
-    fd.append('file', new Blob([buf]), 'DSKH apply-rollback.xlsx');
+    fd.append('file', new Blob([tagBuf]), 'DSKH apply-rollback.xlsx');
     const up = await fetch(`${BASE}/customer-assignments/import`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${adminToken}` },
@@ -836,18 +901,19 @@ console.log('\n-- J. Apply + Rollback (file demo thật + nhân viên test) --')
     sessionId = upJson?.sessionId;
     assert(up.status === 201 && sessionId, `upload HTTP ${up.status}`);
     const s = upJson.summary || {};
+    assert((s.create ?? 0) >= 2, `create=${s.create} — 2 khách tag phải là create (DB trống thì nhiều hơn)`);
 
     // 4. Tổng khách trước khi apply
     const before = await call('GET', '/customers?pageSize=1', H());
 
-    // 5. Apply — ~9.8k thay đổi, mất chục giây
+    // 5. Apply — DB trống: ~9.8k thay đổi (chục giây); DB đã seed: đúng 2 khách tag
     const ap = await fetch(`${BASE}/customer-assignments/import-sessions/${sessionId}/apply`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${adminToken}` },
       signal: AbortSignal.timeout(600000),
     });
     const apJson = await ap.json();
-    if (ap.status === 200 && (apJson?.applied ?? 0) >= 9000) {
+    if (ap.status === 200 && (apJson?.applied ?? 0) >= 2) {
       ok(`Apply → 200 (applied ${apJson.applied}, bỏ qua ${apJson.skippedErrors} dòng lỗi, conflict ${apJson.conflicts?.length})`);
     } else {
       bad('Apply', `HTTP ${ap.status}, body=${JSON.stringify(apJson).slice(0, 250)}`);
@@ -862,6 +928,11 @@ console.log('\n-- J. Apply + Rollback (file demo thật + nhân viên test) --')
     }
 
     // 6. Khách xuất hiện — 2 khách (2 SAP) × 4 phòng = 8 dòng phân công
+    await expect('[J] Sau apply: khách tag A xuất hiện (≥1 dòng phân công)', 200, async () => {
+      const r = await call('GET', `/customers?search=${encodeURIComponent(J_CODES.a)}&pageSize=10`, H());
+      assert((r.json?.total ?? 0) >= 1, `total=${r.json?.total} — khách tag phải được apply tạo`);
+      return r.status;
+    });
     await expect('[J] Sau apply: CONGNGHE247 = 2 khách × 4 phòng → 8 dòng phân công, 2 SAP', 200, async () => {
       const r = await call('GET', '/customers?search=HQS_Q03_SM_CONGNGHE247&pageSize=20', H());
       assert(r.json?.total === 8, `total=${r.json?.total}`);
@@ -884,16 +955,19 @@ console.log('\n-- J. Apply + Rollback (file demo thật + nhân viên test) --')
       signal: AbortSignal.timeout(600000),
     });
     const rbJson = await rb.json();
-    if (rb.status === 200 && (rbJson?.restored ?? 0) >= 9000) {
+    if (rb.status === 200 && (rbJson?.restored ?? 0) >= 2) {
       ok(`Rollback → 200 (restored ${rbJson.restored}, skip ${rbJson.skipped?.length})`);
     } else {
       bad('Rollback', `HTTP ${rb.status}, body=${JSON.stringify(rbJson).slice(0, 250)}`);
     }
 
-    // 8. Dữ liệu trở về đúng trạng thái ban đầu
-    await expect('[J] Sau rollback: khách demo biến mất → total 0', 200, async () => {
-      const r = await call('GET', '/customers?search=HQS_Q03_SM_CONGNGHE247&pageSize=10', H());
+    // 8. Dữ liệu trở về đúng trạng thái ban đầu: khách tag biến mất hoàn toàn
+    //    (DB đã seed thì CONGNGHE247 vẫn còn 8 dòng từ seed — không thuộc session này)
+    await expect('[J] Sau rollback: khách tag biến mất → total 0', 200, async () => {
+      const r = await call('GET', `/customers?search=${encodeURIComponent(J_CODES.a)}&pageSize=10`, H());
       assert(r.json?.total === 0, `total=${r.json?.total}`);
+      const r2 = await call('GET', `/customers?search=${encodeURIComponent(J_CODES.b)}&pageSize=10`, H());
+      assert(r2.json?.total === 0, `total=${r2.json?.total}`);
       return r.status;
     });
     await expect('[J] Sau rollback: tổng khách về đúng số trước apply', 200, async () => {
@@ -1315,6 +1389,482 @@ console.log('\n-- L. Job tự khớp Python end-to-end (Mục 3 cv 1) --');
   }
 }
 
+// ============ M. MỤC 4 — ROLLUP ĐÊM + ENGINE CHẤM ĐIỂM + CHỈ TIÊU + GỢI Ý + EXPORT ============
+console.log('\n-- M. Mục 4: rollup Python → engine KPI → chỉ tiêu → gợi ý → export --');
+{
+  const require2 = createRequire(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'package.json'));
+  const backendRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const pythonRepo = path.resolve(backendRoot, '..', 'core-python-backend');
+  const parseEnvFile = (file) => {
+    const env = {};
+    try {
+      for (const line of readFileSync(file, 'utf8').split(/\r?\n/)) {
+        const i = line.indexOf('=');
+        if (i > 0) env[line.slice(0, i).trim()] = line.slice(i + 1).trim();
+      }
+    } catch {}
+    return env;
+  };
+
+  let mysql = null;
+  try { mysql = require2('mysql2/promise'); } catch {}
+  const rollupFile = path.join(pythonRepo, 'src', 'services', 'common', 'customer_kpi_rollup_service.py');
+  if (!mysql || !existsSync(rollupFile)) {
+    console.log('  ⏭️ Bỏ qua nhóm M (thiếu mysql2 hoặc không tìm thấy core-python-backend)');
+  } else {
+    const backendEnv = parseEnvFile(path.join(backendRoot, '.env'));
+    const pyEnv = parseEnvFile(path.join(pythonRepo, '.env'));
+    const tag = `m${Date.now().toString(36).slice(-6)}`;
+
+    const runRollup = () => {
+      const args = ['-m', 'src.services.common.customer_kpi_rollup_service'];
+      let r = spawnSync(process.platform === 'win32' ? 'py' : 'python3', args, {
+        cwd: pythonRepo, encoding: 'utf8', timeout: 300000,
+      });
+      if (r.error) {
+        r = spawnSync('python', args, { cwd: pythonRepo, encoding: 'utf8', timeout: 300000 });
+      }
+      const m = (r.stdout || '').match(/summary: (\{.*\})/);
+      if (!m) return null;
+      try {
+        return JSON.parse(m[1]);
+      } catch {
+        return JSON.parse(m[1].replace(/'/g, '"'));
+      }
+    };
+
+    const dayStr = (offset) => {
+      const d = new Date();
+      d.setDate(d.getDate() + offset);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    };
+    const TODAY = dayStr(0);
+    const YESTERDAY = dayStr(-1);
+    const MONTH = TODAY.slice(0, 7);
+
+    let mainConn = null;
+    let zaloConn = null;
+    let saleUserId = null;
+    let accountId = null;
+    let oldZaloStatus = null;
+    let userRid = null;
+    let lowUserId = null;
+    const asgIds = {};
+    const customerIds = {};
+    const convIds = {};
+    const orderIds = [];
+    const requestIds = [];
+    const CONTACTS = { key: `kpi_r_${tag}_k`, non: `kpi_r_${tag}_n` };
+    const CODES = { key: `KPI_RLP_${tag}K`, non: `KPI_RLP_${tag}N` };
+
+    const cleanup = async () => {
+      const ids = Object.values(asgIds);
+      try {
+        if (zaloConn && accountId) {
+          await zaloConn.query('DELETE FROM zalo_messages WHERE conversation_id IN (?)', [Object.values(convIds)]);
+          await zaloConn.query('DELETE FROM zalo_conversations WHERE zalo_account_id = ?', [accountId]);
+          await zaloConn.query('DELETE FROM zalo_contacts WHERE zalo_account_id = ?', [accountId]);
+          await zaloConn.query('DELETE FROM zalo_accounts WHERE id = ?', [accountId]);
+        }
+      } catch {}
+      try {
+        if (mainConn) {
+          if (orderIds.length) {
+            await mainConn.query('DELETE FROM order_details WHERE order_id IN (?)', [orderIds]);
+            await mainConn.query('DELETE FROM orders WHERE id IN (?)', [orderIds]);
+          }
+          if (saleUserId) await mainConn.query('DELETE FROM sale_response_intervals WHERE user_id = ?', [saleUserId]);
+          if (ids.length) {
+            await mainConn.query('DELETE FROM customer_activity_daily WHERE assignment_id IN (?)', [ids]);
+            await mainConn.query('DELETE FROM customer_response_daily WHERE assignment_id IN (?)', [ids]);
+            await mainConn.query('DELETE FROM customer_zalo WHERE assignment_id IN (?)', [ids]);
+            await mainConn.query('DELETE FROM customer_zalo_scan_results WHERE assignment_id IN (?)', [ids]);
+          }
+          if (saleUserId) await mainConn.query('DELETE FROM kpi_targets WHERE sale_id = ?', [saleUserId]);
+          if (requestIds.length) {
+            await mainConn.query('DELETE FROM approval_request_target_items WHERE request_id IN (?)', [requestIds]);
+            await mainConn.query('DELETE FROM approval_requests WHERE id IN (?)', [requestIds]);
+          }
+          if (saleUserId && oldZaloStatus !== null) {
+            await mainConn.query('UPDATE users SET zalo_link_status = ? WHERE id = ?', [oldZaloStatus, saleUserId]);
+          }
+        }
+      } catch {}
+      for (const id of ids) { try { await call('DELETE', `/customers/${id}`, H()); } catch {} }
+      for (const c of [mainConn, zaloConn]) { try { if (c) await c.end(); } catch {} }
+    };
+
+    try {
+      // 1. Sale test + tài khoản Zalo thật (SQL trực tiếp DB Zalo như nhóm L)
+      saleUserId = await ensureTestUser('kpi_kpi_sale_t', []);
+      mainConn = await mysql.createConnection({
+        host: backendEnv.DB_HOST, port: +(backendEnv.DB_PORT || 3306),
+        user: backendEnv.DB_USERNAME, password: backendEnv.DB_PASSWORD, database: backendEnv.DB_NAME,
+      });
+      zaloConn = await mysql.createConnection({
+        host: pyEnv.ZALO_DB_HOST || pyEnv.DB_HOST,
+        user: pyEnv.ZALO_DB_USER || pyEnv.DB_USER,
+        password: pyEnv.ZALO_DB_PASS || pyEnv.DB_PASS,
+        database: pyEnv.ZALO_DB_NAME || 'zalo_automation',
+      });
+      const [oldAccs] = await zaloConn.query('SELECT id FROM zalo_accounts WHERE user_id = ?', [saleUserId]);
+      if (oldAccs.length) {
+        const oldIds = oldAccs.map((a) => a.id);
+        await mainConn.query('DELETE FROM customer_zalo WHERE zalo_account_id IN (?)', [oldIds]);
+        await mainConn.query('DELETE FROM customer_zalo_scan_results WHERE zalo_account_id IN (?)', [oldIds]);
+        for (const oid of oldIds) {
+          await zaloConn.query('DELETE FROM zalo_messages WHERE conversation_id IN (SELECT id FROM zalo_conversations WHERE zalo_account_id = ?)', [oid]);
+          await zaloConn.query('DELETE FROM zalo_conversations WHERE zalo_account_id = ?', [oid]);
+          await zaloConn.query('DELETE FROM zalo_contacts WHERE zalo_account_id = ?', [oid]);
+          await zaloConn.query('DELETE FROM zalo_accounts WHERE id = ?', [oid]);
+        }
+      }
+      await zaloConn.query(
+        'INSERT INTO users (id, username, full_name) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE id = id',
+        [saleUserId, `kpi_kpi_sale_${saleUserId}`, 'Sale Test KPI'],
+      );
+      const [ins] = await zaloConn.query(
+        'INSERT INTO zalo_accounts (zalo_username, zalo_id, display_name, is_active, user_id, created_at, updated_at) VALUES (?, ?, ?, 1, ?, NOW(), NOW())',
+        [`kpi_kpi_sale_${tag}`, `kpi_kpi_zalo_${tag}`, 'Sale Test KPI', saleUserId],
+      );
+      accountId = Number(ins.insertId);
+      // sale phải "đang online Zalo" để rollup ghi zalo_linked = 1
+      const [urows] = await mainConn.query('SELECT zalo_link_status FROM users WHERE id = ?', [saleUserId]);
+      oldZaloStatus = Number(urows[0]?.zalo_link_status ?? 0);
+      await mainConn.query('UPDATE users SET zalo_link_status = 1 WHERE id = ?', [saleUserId]);
+      ok(`Chuẩn bị sale test #${saleUserId} + tài khoản Zalo #${accountId} (zalo_link_status=1)`);
+
+      // 2. 2 khách test: KEY (có hội thoại) + NON (khách nhắn chưa được phản hồi)
+      for (const [key, code] of Object.entries(CODES)) {
+        const r = await call('POST', '/customers', {
+          ...H(),
+          body: {
+            customer_code: code, sap_code: `L${tag}${key}`,
+            customer_name: `Khách test M ${key}`, department_slug: 'laptop',
+            customer_tier: key === 'key' ? 'KEY' : 'NON', sale_id: saleUserId,
+          },
+        });
+        assert(r.status === 201 && r.json?.assignmentId, `POST /customers ${code} HTTP ${r.status}`);
+        asgIds[key] = r.json.assignmentId;
+      }
+      const [asgRows] = await mainConn.query('SELECT id, customer_id FROM customer_assignments WHERE id IN (?)', [Object.values(asgIds)]);
+      for (const row of asgRows) {
+        const key = Number(row.id) === asgIds.key ? 'key' : 'non';
+        customerIds[key] = Number(row.customer_id);
+      }
+      ok('Tạo 2 khách test (KEY + NON) qua API');
+
+      // 3. Liên hệ + hội thoại + tin nhắn + đơn + khoảng chờ (data nguồn thật trong DB)
+      const contactRowIds = {};
+      for (const [key, cid] of Object.entries(CONTACTS)) {
+        const [cins] = await zaloConn.query(
+          'INSERT INTO zalo_contacts (zalo_account_id, display_name, zalo_contact_id, is_active, is_blocked, is_favorite, created_at, updated_at) VALUES (?, ?, ?, 1, 0, 0, NOW(), NOW())',
+          [accountId, `Khách test M ${key} (${cid})`, cid],
+        );
+        contactRowIds[key] = Number(cins.insertId);
+      }
+      // sender_id có FK thật sang zalo_contacts.id (mục 4.5) — phải là số int của dòng liên hệ
+      const convSrc = {
+        key: {
+          contactKey: 'key',
+          messages: [
+            // hôm nay: khách nhắn 2, sale nhắn 3 (two-way) — support + phản hồi đạt
+            [0, `${TODAY} 09:01:00`, 'Khách hỏi giá'],
+            [0, `${TODAY} 09:02:00`, 'Khách hỏi bảo hành'],
+            [1, `${TODAY} 09:05:00`, 'Sale trả lời'],
+            [1, `${TODAY} 09:06:00`, 'Sale gửi bảng giá'],
+            [1, `${TODAY} 09:07:00`, 'Sale chào khách'],
+          ],
+        },
+        non: {
+          contactKey: 'non',
+          messages: [
+            // hôm qua: khách nhắn 2, sale CHƯA trả lời → gợi ý "chưa phản hồi"
+            [0, `${YESTERDAY} 15:01:00`, 'Khách nhắn chưa được trả lời 1'],
+            [0, `${YESTERDAY} 15:02:00`, 'Khách nhắn chưa được trả lời 2'],
+          ],
+        },
+      };
+      for (const [key, spec] of Object.entries(convSrc)) {
+        const cid = CONTACTS[spec.contactKey];
+        const [cins] = await zaloConn.query(
+          "INSERT INTO zalo_conversations (zalo_conversation_id, conversation_type, zalo_account_id, conversation_name, created_at, updated_at) VALUES (?, 'private', ?, ?, NOW(), NOW())",
+          [cid, accountId, `Hội thoại test ${cid}`],
+        );
+        convIds[cid] = Number(cins.insertId);
+        for (const [outgoing, ts, content] of spec.messages) {
+          await zaloConn.query(
+            'INSERT INTO zalo_messages (conversation_id, sender_id, content, is_outgoing, timestamp, created_at, updated_at) VALUES (?, ?, ?, ?, ?, NOW(), NOW())',
+            // sender_id có FK thật → zalo_contacts.id — dùng id dòng liên hệ cho cả 2 chiều
+            [convIds[cid], contactRowIds[spec.contactKey], content, outgoing, ts],
+          );
+        }
+      }
+      // đơn hàng gắn với khách KEY hôm nay (revenue = completed × unit_price × quantity)
+      const [oinst] = await mainConn.query(
+        'INSERT INTO orders (conversation_id, sale_by, created_at, updated_at) VALUES (?, ?, ?, NOW())',
+        [convIds[CONTACTS.key], saleUserId, `${TODAY} 11:00:00`],
+      );
+      orderIds.push(Number(oinst.insertId));
+      await mainConn.query(
+        "INSERT INTO order_details (order_id, metadata, unit_price, quantity, status, created_at, updated_at) VALUES (?, ?, 100000, 2, 'completed', ?, NOW())",
+        [orderIds[0], JSON.stringify({ customer_id: CONTACTS.key, conversation_info: { is_group: 'false' } }), `${TODAY} 11:00:00`],
+      );
+      // khoảng chờ phản hồi: 2 responded (60s, 180s) hôm nay + 1 no_reply hôm qua
+      const msgBase = 9100000000 + (Date.now() % 100000000);
+      await mainConn.query(
+        `INSERT INTO sale_response_intervals
+         (conversation_id, zalo_account_id, user_id, zalo_contact_id, first_inbound_message_id, inbound_message_count, started_at, ended_at, duration_seconds, wall_duration_seconds, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 1, ?, ?, 60, 65, 'responded', NOW(), NOW()),
+                (?, ?, ?, ?, ?, 1, ?, ?, 180, 200, 'responded', NOW(), NOW()),
+                (?, ?, ?, ?, ?, 1, ?, NULL, NULL, 3000, 'no_reply', NOW(), NOW())`,
+        [
+          convIds[CONTACTS.key], accountId, saleUserId, CONTACTS.key, msgBase, `${TODAY} 09:01:00`, `${TODAY} 09:02:00`,
+          convIds[CONTACTS.key], accountId, saleUserId, CONTACTS.key, msgBase + 1, `${TODAY} 09:02:30`, `${TODAY} 09:05:30`,
+          convIds[CONTACTS.key], accountId, saleUserId, CONTACTS.key, msgBase + 2, `${YESTERDAY} 09:00:00`,
+        ],
+      );
+      // lịch sử "bị bỏ bê" trước cửa sổ 7 ngày của rollup: 1 dòng zalo_linked
+      // đủ để chấm goi_y_thuc_hien cho HÔM NAY (cần 7 ngày không có tin đi)
+      await mainConn.query(
+        'INSERT INTO customer_activity_daily (assignment_id, stat_date, inbound_count, outbound_count, order_count, revenue, zalo_linked, created_at, updated_at) VALUES (?, ?, 0, 0, 0, 0, 1, NOW(), NOW())',
+        [asgIds.key, dayStr(-7)],
+      );
+      ok('Tạo liên hệ, hội thoại, tin nhắn, đơn hàng, khoảng chờ (data nguồn)');
+
+      // 4. customer_zalo khớp sẵn (match_method = manual để matcher nền không đụng)
+      await mainConn.query(
+        `INSERT INTO customer_zalo (assignment_id, zalo_account_id, zalo_contact_id, matched_name, matched_position, match_method, is_active, last_verified_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, 'only', 'manual', 1, NOW(), NOW(), NOW()), (?, ?, ?, ?, 'only', 'manual', 1, NOW(), NOW(), NOW())`,
+        [asgIds.key, accountId, CONTACTS.key, `Khách test M key (${CONTACTS.key})`,
+         asgIds.non, accountId, CONTACTS.non, `Khách test M non (${CONTACTS.non})`],
+      );
+      const s1 = runRollup();
+      assert(s1, 'rollup không in được summary — chạy tay: py -m src.services.common.customer_kpi_rollup_service');
+      ok(`Rollup 1: ${JSON.stringify(s1)}`);
+      assert(s1.linked_assignments >= 2, `linked_assignments=${s1.linked_assignments} (kỳ vọng ≥2)`);
+      assert(s1.activity_rows >= 14, `activity_rows=${s1.activity_rows} (kỳ vọng ≥14: 2 phân công × 7 ngày)`);
+      assert(s1.response_rows >= 2, `response_rows=${s1.response_rows} (kỳ vọng ≥2: hôm nay + hôm qua)`);
+      assert(s1.conversations >= 2, `conversations=${s1.conversations} (kỳ vọng ≥2)`);
+
+      // 5. Đối chiếu DB: đếm đúng 2 chiều + đơn + zalo_linked
+      await expect('[M] Activity khách KEY hôm nay: 2 vào/3 ra + 1 đơn 200000 + linked', 200, async () => {
+        const [rows] = await mainConn.query(
+          'SELECT inbound_count, outbound_count, order_count, revenue, zalo_linked FROM customer_activity_daily WHERE assignment_id = ? AND stat_date = ?',
+          [asgIds.key, TODAY],
+        );
+        assert(rows.length === 1, `rows=${rows.length}`);
+        const r = rows[0];
+        assert(Number(r.inbound_count) === 2 && Number(r.outbound_count) === 3, JSON.stringify(r));
+        assert(Number(r.order_count) === 1 && Number(r.revenue) === 200000, `đơn/doanh thu sai: ${r.order_count}/${r.revenue}`);
+        assert(Number(r.zalo_linked) === 1, 'zalo_linked phải = 1');
+        return 200;
+      });
+      await expect('[M] Activity khách NON hôm qua: 2 vào/0 ra (sale chưa trả lời)', 200, async () => {
+        const [rows] = await mainConn.query(
+          'SELECT inbound_count, outbound_count FROM customer_activity_daily WHERE assignment_id = ? AND stat_date = ?',
+          [asgIds.non, YESTERDAY],
+        );
+        assert(rows.length === 1 && Number(rows[0].inbound_count) === 2 && Number(rows[0].outbound_count) === 0, JSON.stringify(rows));
+        return 200;
+      });
+      await expect('[M] Response daily: hôm nay 2 responded avg 120 + hôm qua 1 no_reply', 200, async () => {
+        const [rows] = await mainConn.query(
+          'SELECT stat_date, total_intervals, responded_count, no_reply_count, avg_seconds FROM customer_response_daily WHERE assignment_id = ?',
+          [asgIds.key],
+        );
+        assert(rows.length === 2, `rows=${rows.length}`);
+        // mysql2 trả DATE là Date local-midnight — lấy ngày theo getFullYear/getMonth/getDate
+        const localDate = (v) => {
+          const d = v instanceof Date ? v : new Date(v);
+          const p = (n) => String(n).padStart(2, '0');
+          return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+        };
+        const byDate = new Map(rows.map((r) => [localDate(r.stat_date), r]));
+        const today = byDate.get(TODAY);
+        assert(today && Number(today.total_intervals) === 2 && Number(today.responded_count) === 2 && Number(today.avg_seconds) === 120, JSON.stringify(rows));
+        const yest = byDate.get(YESTERDAY);
+        assert(yest && Number(yest.no_reply_count) === 1, JSON.stringify(rows));
+        return 200;
+      });
+
+      // 6. Engine chấm điểm lúc đọc — overview
+      await expect('[M] Overview: support 50% (1/2), two-way 50%, gợi ý pass, doanh số no_data', 200, async () => {
+        const r = await call('GET', `/customer-kpi-reports/overview?saleId=${saleUserId}&from=${TODAY}&to=${TODAY}`, H());
+        assert(r.status === 200, `HTTP ${r.status}: ${r.text?.slice(0, 200)}`);
+        const sale = (r.json?.sales || []).find((x) => x.saleId === saleUserId);
+        assert(sale, 'không thấy sale test trong overview');
+        const byKey = new Map(sale.criteria.map((c) => [c.key, c]));
+        const support = byKey.get('support_khach');
+        assert(support && support.status === 'ratio' && support.actualValue === 50, JSON.stringify(support));
+        assert(support.numerator === 1 && support.denominatorValue === 2 && support.totalCriteria === 2, JSON.stringify(support));
+        const reply = byKey.get('lien_lac_phan_hoi');
+        assert(reply && reply.status === 'ratio' && reply.actualValue === 50, JSON.stringify(reply));
+        const ack = byKey.get('goi_y_thuc_hien');
+        assert(ack && ack.status === 'pass' && ack.passedCriteria === 1 && ack.totalCriteria === 2, JSON.stringify(ack));
+        const rev = byKey.get('doanh_so_key');
+        assert(rev && rev.status === 'no_data' && (rev.reason || '').includes('doanh thu'), JSON.stringify(rev));
+        return r.status;
+      });
+
+      // 7. bySale — từng khách một hàng
+      await expect('[M] bySale: 2 khách, đúng totals + trạng thái từng khách', 200, async () => {
+        const r = await call('GET', `/customer-kpi-reports/by-sale?saleId=${saleUserId}&from=${TODAY}&to=${TODAY}`, H());
+        assert(r.status === 200, `HTTP ${r.status}: ${r.text?.slice(0, 200)}`);
+        const sale = (r.json?.sales || []).find((x) => x.saleId === saleUserId);
+        assert(sale && sale.customers.length === 2, `customers=${sale?.customers?.length}`);
+        const key = sale.customers.find((c) => c.customerCode === CODES.key);
+        assert(key, 'không thấy khách KEY');
+        assert(key.totals.inbound === 2 && key.totals.outbound === 3 && key.totals.orders === 1 && key.totals.revenue === 200000, JSON.stringify(key.totals));
+        assert(key.zaloLinked === true, 'khách KEY phải zaloLinked');
+        const ackKey = key.criteria.find((c) => c.key === 'goi_y_thuc_hien');
+        assert(ackKey && ackKey.status === 'pass', JSON.stringify(ackKey));
+        return r.status;
+      });
+
+      // 8. Gợi ý thực hiện — khách NON nhắn chưa được trả lời phải nằm trong danh sách
+      await expect('[M] Gợi ý: NON chua_phan_hoi có trong danh sách, KEY không bị gợi ý', 200, async () => {
+        const r = await call('GET', `/customer-kpi-reports/suggestions?saleId=${saleUserId}`, H());
+        assert(r.status === 200, `HTTP ${r.status}: ${r.text?.slice(0, 200)}`);
+        const sale = (r.json?.sales || []).find((x) => x.saleId === saleUserId);
+        assert(sale, 'không thấy sale test trong gợi ý');
+        const non = sale.suggestions.find((s) => s.customerCode === CODES.non);
+        assert(non && non.reason === 'chua_phan_hoi', JSON.stringify(sale.suggestions));
+        assert(!sale.suggestions.some((s) => s.customerCode === CODES.key), 'khách KEY vừa liên lạc không được gợi ý');
+        return r.status;
+      });
+
+      // 9. Giao chỉ tiêu: admin gán theo sale + theo khách, gán lại là cập nhật
+      await expect('[M] POST targets scope=sale (admin) → applied 1', [200, 201], async () => {
+        const r = await call('POST', '/customer-kpi-targets', {
+          ...H(),
+          body: { criterion_key: 'support_khach', period_month: MONTH, scope: 'sale', sale_ids: [saleUserId], target_value: 80 },
+        });
+        assert(r.status === 200 || r.status === 201, `HTTP ${r.status}: ${r.text?.slice(0, 200)}`);
+        assert(r.json?.applied === 1, JSON.stringify(r.json));
+        return r.status;
+      });
+      await expect('[M] Gán lại cùng tháng → upsert (vẫn 1 dòng, giá mới 90)', 200, async () => {
+        const r2 = await call('POST', '/customer-kpi-targets', {
+          ...H(),
+          body: { criterion_key: 'support_khach', period_month: MONTH, scope: 'sale', sale_ids: [saleUserId], target_value: 90 },
+        });
+        assert(r2.status === 200 || r2.status === 201, `HTTP ${r2.status}`);
+        const list = await call('GET', `/customer-kpi-targets?criterion_key=support_khach&saleId=${saleUserId}&period_month=${MONTH}`, H());
+        assert(list.json?.total === 1, `total=${list.json?.total} — upsert bị nhân bản`);
+        assert(Number(list.json.data[0].targetValue) === 90, JSON.stringify(list.json.data));
+        return list.status;
+      });
+      await expect('[M] POST targets scope=customer → chỉ tiêu riêng cho khách KEY', [200, 201], async () => {
+        const r = await call('POST', '/customer-kpi-targets', {
+          ...H(),
+          body: { criterion_key: 'support_khach', period_month: MONTH, scope: 'customer', sale_id: saleUserId, items: [{ customer_id: customerIds.key, target_value: 60 }] },
+        });
+        assert(r.status === 200 || r.status === 201, `HTTP ${r.status}: ${r.text?.slice(0, 200)}`);
+        const list = await call('GET', `/customer-kpi-targets?criterion_key=support_khach&saleId=${saleUserId}&period_month=${MONTH}`, H());
+        const perCustomer = list.json.data.find((x) => x.customerId === customerIds.key);
+        assert(perCustomer && Number(perCustomer.targetValue) === 60, JSON.stringify(list.json.data));
+        return r.status;
+      });
+      await expect('[M] POST targets cho tiêu chí binary → 400', 400, async () => {
+        const r = await call('POST', '/customer-kpi-targets', {
+          ...H(),
+          body: { criterion_key: 'goi_y_thuc_hien', period_month: MONTH, scope: 'sale', sale_ids: [saleUserId], target_value: 1 },
+        });
+        return r.status;
+      });
+      await expect('[M] POST targets scope=department phòng không có người → 404', 404, async () => {
+        const r = await call('POST', '/customer-kpi-targets', {
+          ...H(),
+          body: { criterion_key: 'support_khach', period_month: MONTH, scope: 'department', department_slug: `khong-ton-tai-${tag}`, target_value: 10 },
+        });
+        return r.status;
+      });
+
+      // 10. Luồng duyệt chỉ tiêu: chờ duyệt → admin duyệt → ghi kpi_targets
+      await expect('[M] Đề xuất chỉ tiêu → admin duyệt → ghi 55 vào kpi_targets', [200, 201], async () => {
+        const [reqIns] = await mainConn.query(
+          "INSERT INTO approval_requests (request_type, requested_by, target_user_id, status, note, created_at, updated_at) VALUES ('kpi_target', ?, ?, 'pending', 'test', NOW(), NOW())",
+          [saleUserId, saleUserId],
+        );
+        requestIds.push(Number(reqIns.insertId));
+        await mainConn.query(
+          'INSERT INTO approval_request_target_items (request_id, criterion_key, period_month, sale_id, customer_id, old_target_value, new_target_value, created_at) VALUES (?, ?, ?, ?, NULL, 90, 55, NOW())',
+          [reqIns.insertId, 'support_khach', MONTH, saleUserId],
+        );
+        const r = await call('POST', `/approval-requests/${reqIns.insertId}/decide`, { ...H(), body: { action: 'approve' } });
+        assert(r.status === 200 || r.status === 201, `HTTP ${r.status}: ${r.text?.slice(0, 200)}`);
+        const [trows] = await mainConn.query(
+          'SELECT target_value FROM kpi_targets WHERE criterion_key = ? AND period_month = ? AND sale_id = ? AND customer_id = 0',
+          ['support_khach', MONTH, saleUserId],
+        );
+        assert(trows.length === 1 && Number(trows[0].target_value) === 55, JSON.stringify(trows));
+        return r.status;
+      });
+      await expect('[M] Từ chối không kèm lý do → 400', 400, async () => {
+        const [reqIns] = await mainConn.query(
+          "INSERT INTO approval_requests (request_type, requested_by, target_user_id, status, note, created_at, updated_at) VALUES ('kpi_target', ?, ?, 'pending', 'test', NOW(), NOW())",
+          [saleUserId, saleUserId],
+        );
+        requestIds.push(Number(reqIns.insertId));
+        const r = await call('POST', `/approval-requests/${reqIns.insertId}/decide`, { ...H(), body: { action: 'reject' } });
+        return r.status;
+      });
+      await expect('[M] Từ chối kèm lý do → rejected, kpi_targets giữ nguyên', [200, 201], async () => {
+        const [reqIns] = await mainConn.query(
+          "INSERT INTO approval_requests (request_type, requested_by, target_user_id, status, note, created_at, updated_at) VALUES ('kpi_target', ?, ?, 'pending', 'test', NOW(), NOW())",
+          [saleUserId, saleUserId],
+        );
+        requestIds.push(Number(reqIns.insertId));
+        const r = await call('POST', `/approval-requests/${reqIns.insertId}/decide`, { ...H(), body: { action: 'reject', reject_reason: 'chưa hợp lý' } });
+        assert(r.status === 200 || r.status === 201, `HTTP ${r.status}`);
+        const [rrows] = await mainConn.query('SELECT status, reject_reason FROM approval_requests WHERE id = ?', [reqIns.insertId]);
+        assert(rrows[0].status === 'rejected' && rrows[0].reject_reason === 'chưa hợp lý', JSON.stringify(rrows));
+        return r.status;
+      });
+
+      // 11. Nhân viên thường không được gán chỉ tiêu
+      userRid = await findRoleId('user');
+      if (userRid) {
+        lowUserId = await ensureTestUser('kpi_kpi_usr_t', [userRid]);
+        const lowLogin = await call('POST', '/auth/login', { body: { username: 'kpi_kpi_usr_t', password: DEFAULT_PASSWORD } });
+        const lowToken = lowLogin.json?.access_token || lowLogin.json?.token || lowLogin.json?.accessToken;
+        await expect('[M] user thường gán chỉ tiêu → 403', 403, async () => {
+          const r = await call('POST', '/customer-kpi-targets', {
+            token: lowToken,
+            body: { criterion_key: 'support_khach', period_month: MONTH, scope: 'sale', sale_ids: [saleUserId], target_value: 10 },
+          });
+          return r.status;
+        });
+      }
+
+      // 12. Export Excel
+      await expect('[M] Export → file xlsx có nội dung', 200, async () => {
+        const res = await fetch(`${BASE}/customer-kpi-reports/export?saleId=${saleUserId}&from=${TODAY}&to=${TODAY}`, {
+          headers: { Authorization: `Bearer ${adminToken}` },
+          signal: AbortSignal.timeout(30000),
+        });
+        assert(res.status === 200, `HTTP ${res.status}`);
+        const ctype = res.headers.get('content-type') || '';
+        assert(ctype.includes('spreadsheetml'), `content-type=${ctype}`);
+        const buf = Buffer.from(await res.arrayBuffer());
+        assert(buf.length > 1000, `file quá nhỏ: ${buf.length} bytes`);
+        return 200;
+      });
+
+      // 13. Rollup chạy lại → idempotent (upsert theo UNIQUE(assignment, date))
+      const s2 = runRollup();
+      assert(s2, 'rollup lần 2 không in được summary');
+      assert(s2.activity_rows === s1.activity_rows && s2.response_rows === s1.response_rows,
+        `lần 2 phải cùng số dòng: ${s2.activity_rows}/${s2.response_rows} vs ${s1.activity_rows}/${s1.response_rows}`);
+      ok('Rollup 2: idempotent (cùng số dòng ghi — không nhân bản)');
+    } catch (e) {
+      bad('[M] Chuẩn bị/chạy rollup + engine', e.message);
+    }
+    await cleanup();
+  }
+}
+
 // ============ DỌN DẸP AN TOÀN ============
 if (createdId) {
   try { await call('DELETE', `/customer-kpi-definitions/${createdId}`, H()); } catch {}
@@ -1322,6 +1872,7 @@ if (createdId) {
 
 // ============ TONG KET ============
 console.log(`\n== KẾT QUẢ: ${pass} đạt / ${fail} lỗi ==`);
+console.log(`⏱ Tổng thời gian: ${((Date.now() - T0) / 1000).toFixed(1)}s`);
 if (failures.length) {
   console.log('Chi tiết lỗi:');
   for (const f of failures) console.log(`  - ${f.name}: ${f.detail}`);

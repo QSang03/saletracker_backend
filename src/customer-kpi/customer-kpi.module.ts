@@ -24,6 +24,7 @@ import { CustomerKpiTargetsController } from './customer-kpi-targets.controller'
 import { ApprovalRequestsController } from './approval-requests.controller';
 import { CustomersService } from './customers.service';
 import { CustomerAssignmentsService } from './customer-assignments.service';
+import { CustomerKpiScoringService } from './customer-kpi-scoring.service';
 import { CustomerKpiReportsService } from './customer-kpi-reports.service';
 import { CustomerKpiDefinitionsService } from './customer-kpi-definitions.service';
 import { CustomerKpiTargetsService } from './customer-kpi-targets.service';
@@ -71,6 +72,7 @@ import { ApprovalRequestsService } from './approval-requests.service';
     ZaloPythonApiClient,
     CustomersService,
     CustomerAssignmentsService,
+    CustomerKpiScoringService,
     CustomerKpiReportsService,
     CustomerKpiDefinitionsService,
     CustomerKpiTargetsService,

@@ -3,13 +3,13 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
-  NotImplementedException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { User } from '../users/user.entity';
 import { Customer, CustomerStatus } from './customer.entity';
 import { CustomerAssignment, CustomerTier } from './customer-assignment.entity';
+import { KpiTarget } from './kpi-target.entity';
 import {
   ApprovalRequest,
   ApprovalRequestType,
@@ -46,6 +46,8 @@ export class ApprovalRequestsService {
     private readonly customerRepo: Repository<Customer>,
     @InjectRepository(CustomerAssignment)
     private readonly assignmentRepo: Repository<CustomerAssignment>,
+    @InjectRepository(KpiTarget)
+    private readonly kpiTargetRepo: Repository<KpiTarget>,
   ) {}
 
   /**
@@ -217,10 +219,11 @@ export class ApprovalRequestsService {
   }
 
   /**
-   * Duyệt / từ chối (Mục 2, cv 6):
+   * Duyệt / từ chối (Mục 2, cv 6 + Mục 4, cv 4):
    * - customer_list: admin HOẶC trưởng phòng CÙNG PHÒNG với sale bị tác động.
    *   Duyệt → áp các mục vào dữ liệu thật; từ chối → chỉ ghi lý do.
-   * - kpi_target: hiện thực cùng Mục 4 (giao chỉ tiêu).
+   * - kpi_target: trưởng phòng đề xuất → QUẢN TRỊ VIÊN duyệt (thiết kế 5.2).
+   *   Duyệt → ghi các mục vào kpi_targets; từ chối → chỉ ghi lý do.
    */
   async decide(id: number, dto: DecideApprovalDto, user: any) {
     const request = await this.requestRepo.findOne({
@@ -235,14 +238,51 @@ export class ApprovalRequestsService {
       throw new BadRequestException('Từ chối đề xuất phải kèm lý do');
     }
 
-    if (request.request_type === ApprovalRequestType.KPI_TARGET) {
-      throw new NotImplementedException('Duyệt chỉ tiêu sẽ hiện thực cùng Mục 4 (giao chỉ tiêu)');
-    }
-
     const roles = (user?.roles || []).map((r: any) =>
       (typeof r === 'string' ? r : r?.name || '').toLowerCase(),
     );
     const isAdmin = roles.includes('admin');
+
+    if (request.request_type === ApprovalRequestType.KPI_TARGET) {
+      if (!isAdmin) {
+        throw new ForbiddenException('Chỉ quản trị viên mới được duyệt chỉ tiêu');
+      }
+      if (dto.action === 'reject') {
+        request.status = ApprovalStatus.REJECTED;
+        request.decided_by = user.id;
+        request.decided_at = new Date();
+        request.reject_reason = dto.reject_reason ?? null;
+        await this.requestRepo.save(request);
+        return { decided: true, status: 'rejected' };
+      }
+      // Duyệt → ghi từng mục vào kpi_targets (customer_id null quy về 0 =
+      // chỉ tiêu cả danh sách — cùng quy ước UNIQUE key với gán thẳng)
+      const targetItems = await this.targetItemRepo.find({
+        where: { request_id: id },
+      });
+      for (const item of targetItems) {
+        await this.kpiTargetRepo.manager
+          .createQueryBuilder()
+          .insert()
+          .into(KpiTarget)
+          .values({
+            criterion_key: item.criterion_key,
+            period_month: item.period_month,
+            sale_id: item.sale_id,
+            customer_id: item.customer_id ?? 0,
+            target_value: Number(item.new_target_value ?? 0),
+            created_by: user.id,
+          })
+          .orUpdate({ overwrite: ['target_value', 'created_by'] })
+          .execute();
+      }
+      request.status = ApprovalStatus.APPROVED;
+      request.decided_by = user.id;
+      request.decided_at = new Date();
+      await this.requestRepo.save(request);
+      return { decided: true, status: 'approved', applied: targetItems.length };
+    }
+
     if (!isAdmin) {
       const isDeptManager =
         roles.some((r) => r.startsWith('manager-')) &&
