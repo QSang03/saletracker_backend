@@ -1,7 +1,9 @@
 {
   "compilerOptions": {
-    "module": "node16",
-    "moduleResolution": "node16",
+    // nodenext (khong phai node16) de TypeScript cho phep require(esm):
+    // Nest 12 ship ESM-thuan, app CJS nay require chung qua require(esm) cua Node >=22.12
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
     "declaration": true,
     "removeComments": true,
     "emitDecoratorMetadata": true,
