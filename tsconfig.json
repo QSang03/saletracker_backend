@@ -1,7 +1,7 @@
 {
   "compilerOptions": {
-    "module": "commonjs",
-  "moduleResolution": "node",
+    "module": "node16",
+    "moduleResolution": "node16",
     "declaration": true,
     "removeComments": true,
     "emitDecoratorMetadata": true,
@@ -11,10 +11,7 @@
     "sourceMap": true,
     "outDir": "./dist",
     "rootDir": "./src",
-    "baseUrl": "./",
-    // TS 6.0 deprecates baseUrl + moduleResolution=node10; "6.0" keeps them
-    // working. Must drop before TypeScript 7, which removes them for real.
-    "ignoreDeprecations": "6.0",
+    "paths": { "src/*": ["./src/*"] },
     "incremental": true,
     "skipLibCheck": true,
     "strictNullChecks": true,

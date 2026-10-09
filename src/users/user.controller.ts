@@ -491,7 +491,7 @@ export class UserController {
   async getZaloLinkMonitorStatus() {
     // Import ZaloLinkMonitorCronjob để lấy status
     const { ZaloLinkMonitorCronjob } =
-      await import('../cronjobs/zalo-link-monitor.cronjob');
+      await import('../cronjobs/zalo-link-monitor.cronjob.js');
     return {
       message: 'Zalo Link Monitor đang chạy mỗi 30 giây',
       processedUsers: [], // Sẽ được implement sau
