@@ -1,5 +1,5 @@
 import * as winston from 'winston';
-import * as DailyRotateFile from 'winston-daily-rotate-file';
+import DailyRotateFile = require('winston-daily-rotate-file');
 
 // Cache for logger instances to avoid creating multiple loggers for the same service
 const loggerCache = new Map<string, winston.Logger>();
