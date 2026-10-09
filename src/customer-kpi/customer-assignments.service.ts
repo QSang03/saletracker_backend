@@ -10,7 +10,10 @@ import * as fs from 'fs';
 import { User } from '../users/user.entity';
 import { Customer, CustomerStatus } from './customer.entity';
 import { CustomerAssignment, CustomerTier } from './customer-assignment.entity';
-import { CustomerImportSession } from './customer-import-session.entity';
+import {
+  CustomerImportSession,
+  ImportSessionStatus,
+} from './customer-import-session.entity';
 import { CustomerImportBackup } from './customer-import-backup.entity';
 import {
   CustomerImportChange,
@@ -91,9 +94,19 @@ export class CustomerAssignmentsService {
       qb.andWhere('s.status = :status', { status: query.status });
     }
     if (query.saleId) {
-      // session không gắn sale trực tiếp — lọc qua mã khách trong changes là
-      // việc của Mục 2; hiện chỉ hỗ trợ lọc status
-      void query.saleId;
+      // Session không gắn sale trực tiếp — lọc qua các dòng thay đổi có đụng
+      // tới sale đó (new_data cho create/update, old_data cho delete).
+      qb.andWhere(
+        `EXISTS (
+           SELECT 1 FROM customer_import_changes ch
+           WHERE ch.session_id = s.id
+             AND (
+               CAST(JSON_UNQUOTE(JSON_EXTRACT(ch.new_data, '$.sale_id')) AS UNSIGNED) = :saleId
+               OR CAST(JSON_UNQUOTE(JSON_EXTRACT(ch.old_data, '$.sale_id')) AS UNSIGNED) = :saleId
+             )
+         )`,
+        { saleId: query.saleId },
+      );
     }
 
     qb.orderBy('s.created_at', 'DESC')
@@ -134,6 +147,7 @@ export class CustomerAssignmentsService {
         create: session.create_count,
         update: session.update_count,
         delete: session.delete_count,
+        unchanged: session.unchanged_count,
       },
       data: changes,
       total,
@@ -255,6 +269,7 @@ export class CustomerAssignmentsService {
     }
     const drafts: ChangeDraft[] = [];
     const rowErrors: Array<{ row_num: number; errors: string[] }> = [];
+    const warnings: string[] = [];
     const summary = {
       rowsParsed: parsed.rowCount,
       customersParsed: parsed.customers.length,
@@ -289,6 +304,7 @@ export class CustomerAssignmentsService {
         summary.errorRows++;
         rowErrors.push({ row_num: p.row_num, errors: p.errors });
       }
+      for (const w of p.warnings) warnings.push(w);
 
       // 4a. Thông tin khách đổi (hoặc khách đã xoá được kích hoạt lại).
       // File không có cột tên khách — không so sánh customer_name.
@@ -380,16 +396,41 @@ export class CustomerAssignmentsService {
           });
         } else {
           summary.unchanged++;
+          // Dòng "không đổi" vẫn được lưu để màn hình so khớp đế đủ 4 trạng thái
+          // (create/update/delete/unchanged) — apply bỏ qua, không phải thay đổi.
+          drafts.push({
+            row_num: p.row_num,
+            customer_code: p.customer_code,
+            sap_code: p.sap_code,
+            department_slug: a.department_slug,
+            action: ImportChangeAction.UNCHANGED,
+            old_data: {
+              sale_id: existing.sale_id,
+              customer_tier: existing.customer_tier,
+              zalo_account_id: existing.zalo_account_id,
+            },
+            new_data: null,
+            error: null,
+          });
         }
       }
 
       // 4c. Phòng có phân công trong DB nhưng trống trong file → xoá dòng phân công
       if (dbCustomer) {
+        const invalidDepts = new Set(p.invalid_depts ?? []);
         for (const existing of assignmentsByCustomer.get(dbCustomer.id) || []) {
           if (
             parsedDeptSlugs.has(existing.department_slug) ||
             !DEPARTMENT_SLUGS.includes(existing.department_slug)
           ) {
+            continue;
+          }
+          // Phòng có ô phân loại sai trong file: KHÔNG kết luận là "bị bỏ" rồi
+          // xoá — phân công đang có được giữ nguyên, chỉ cảnh báo để sửa file.
+          if (invalidDepts.has(existing.department_slug)) {
+            warnings.push(
+              `Dòng ${p.row_num}: phòng ${existing.department_slug} có phân loại KEY/NON sai trong file nên giữ nguyên phân công hiện có (không xoá)`,
+            );
             continue;
           }
           drafts.push({
@@ -431,7 +472,9 @@ export class CustomerAssignmentsService {
             zalo_account_id: a.zalo_account_id,
           },
           new_data: null,
-          error: 'Khách không có trong file',
+          // Khách chỉ vắng mặt trong file (không có dòng bẩn) — đây là thay đổi
+          // hợp lệ, apply phải ghi được. Trước đây gắn cờ error nên bị bỏ qua âm thầm.
+          error: null,
         });
       }
     }
@@ -452,6 +495,7 @@ export class CustomerAssignmentsService {
           create_count: summary.create,
           update_count: summary.update,
           delete_count: summary.delete,
+          unchanged_count: summary.unchanged,
         }),
       );
       for (let i = 0; i < drafts.length; i += 500) {
@@ -473,6 +517,7 @@ export class CustomerAssignmentsService {
       summary,
       criteria: parsed.criteria,
       errors: rowErrors.slice(0, 50),
+      warnings: warnings.slice(0, 50),
     };
   }
 
@@ -528,6 +573,9 @@ export class CustomerAssignmentsService {
       }
 
       for (const change of changes) {
+        if (change.action === ImportChangeAction.UNCHANGED) {
+          continue; // dòng "không đổi" — hiển thị cho người duyệt, không ghi
+        }
         if (change.error) {
           skippedErrors++;
           continue;
@@ -754,12 +802,14 @@ export class CustomerAssignmentsService {
           });
         }
       }
-    });
 
-    session.status = 'applied' as any;
-    session.applied_at = new Date();
-    session.applied_by = user?.id ?? null;
-    await this.sessionRepo.save(session);
+      // Trạng thái session ghi TRONG transaction — nếu lỗi giữa chừng thì
+      // rollback luôn cả session, tránh session đã apply mà dữ liệu chưa ghi.
+      session.status = ImportSessionStatus.APPLIED as any;
+      session.applied_at = new Date();
+      session.applied_by = user?.id ?? null;
+      await em.save(session);
+    });
 
     return {
       sessionId,
@@ -908,12 +958,13 @@ export class CustomerAssignmentsService {
       }
       // Backup đã hoàn thành sứ mệnh sau rollback — dọn để không phình dữ liệu
       await em.delete(CustomerImportBackup, { session_id: sessionId } as any);
-    });
 
-    session.status = 'rolled_back' as any;
-    session.rolled_back_at = new Date();
-    session.rolled_back_by = user?.id ?? null;
-    await this.sessionRepo.save(session);
+      // Trạng thái session ghi TRONG transaction (xem applySession)
+      session.status = ImportSessionStatus.ROLLED_BACK as any;
+      session.rolled_back_at = new Date();
+      session.rolled_back_by = user?.id ?? null;
+      await em.save(session);
+    });
 
     return { sessionId, restored, skipped, status: session.status };
   }
@@ -988,15 +1039,16 @@ export class CustomerAssignmentsService {
       'C00375',
       'HQS_Q03_SR_PHUCHAI',
       '',
-      'NKDS20-NGUYỄN THỊ THANH HẰNG',
+      'NKDS20-NGUYỄN THỊ THANH HẰNG', // S1-PC, LCD → phòng pc
       '',
       '',
       '',
       '',
       'CHÍNH',
       '',
-      'NON',
       '',
+      '',
+      'NON', // PC - SERVER → phân loại của đúng phòng pc
       '',
       '',
       '',

@@ -1961,6 +1961,235 @@ console.log('\n-- M. Mục 4: rollup Python → engine KPI → chỉ tiêu → g
   }
 }
 
+// ============ N. HỒI QUY SO KHỚP (2 lỗi đã phát hiện) ============
+// Lỗi 1: khách vắng mặt trong file bị gắn cờ error → apply bỏ qua → "xoá" không bao giờ xảy ra.
+// Lỗi 2: ô phân loại sai → phân công DB đang tốt bị sinh lệnh XOÁ không cảnh báo.
+// Lỗi 3: dòng ví dụ 2 của template lệch cột (tier nằm sai phòng) → nạp file mẫu báo lỗi rỗng.
+console.log('\n-- N. Hồi quy so khớp: vắng mặt / tier sai / template --');
+{
+  const tag = Date.now().toString(36).slice(-6).toUpperCase();
+  const CODE = `KPIN_${tag}`;
+  const sessionIds = [];
+  let conn = null;
+
+  try {
+    const require2 = createRequire(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'package.json'),
+    );
+    const parseEnv = (file) => {
+      const out = {};
+      try {
+        for (const line of readFileSync(file, 'utf8').split(/\r?\n/)) {
+          const i = line.indexOf('=');
+          if (i > 0) out[line.slice(0, i).trim()] = line.slice(i + 1).trim();
+        }
+      } catch {}
+      return out;
+    };
+    const backendEnv = parseEnv(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.env'));
+    let mysql = null;
+    try { mysql = require2('mysql2/promise'); } catch {}
+    const ExcelJS = require2('exceljs');
+
+    const HEADERS = [
+      'STT', 'MA DOI TAC SAP', 'MA KH', 'S1-MAY IN, MUC IN', 'S1-PC, LCD', 'S1-PTTT',
+      'S1-LAPTOP', 'S1-PTKH1', 'S1-PTKH2', 'LOAI MA', 'LAPTOP', 'LINH KIEN', 'MAY IN',
+      'PC - SERVER', 'PTKH1', 'PTKH2', 'han muc', 'T04', 'T05', 'T06', 'T07', 'T08', 'T09',
+      'DIEM', 'tong ds',
+    ];
+    // Workbook tối thiểu đủ điều kiện parse: sheet TIEU CHI (5 dòng) + đủ 12 cột bắt buộc
+    const makeWorkbook = (rows) => {
+      const wb = new ExcelJS.Workbook();
+      const tc = wb.addWorksheet('TIÊU CHÍ');
+      for (const line of ['Tiêu  Chí', '1/ a', '2/ b', '3/ c', '4/ d', '5/ e']) tc.addRow([line]);
+      const ws = wb.addWorksheet('File Chi Tiết');
+      ws.addRow(HEADERS);
+      for (const row of rows) ws.addRow(row);
+      ws.columns.forEach((c) => (c.width = 20));
+      return wb;
+    };
+    const upload = async (rows) => {
+      const fd = new FormData();
+      fd.append('file', new Blob([await makeWorkbook(rows).xlsx.writeBuffer()]), 'DSKH hồi-quy.xlsx');
+      const res = await fetch(`${BASE}/customer-assignments/import`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${adminToken}` },
+        body: fd,
+        signal: AbortSignal.timeout(180000),
+      });
+      return { status: res.status, json: await res.json().catch(() => null) };
+    };
+    // Đọc thẳng dòng thay đổi của MỘT khách — nếu dùng preview (phân trang) thì
+    // khách test chìm trong ~10k dòng xoá của cả DB nên không kiểm được.
+    const changesOf = async (sessionId, code) => {
+      if (!conn) return [];
+      const [rows] = await conn.query(
+        'SELECT customer_code, department_slug, action, error FROM customer_import_changes WHERE session_id = ? AND customer_code = ?',
+        [sessionId, code],
+      );
+      return rows;
+    };
+
+    if (mysql) {
+      conn = await mysql.createConnection({
+        host: backendEnv.DB_HOST, port: +(backendEnv.DB_PORT || 3306),
+        user: backendEnv.DB_USERNAME, password: backendEnv.DB_PASSWORD, database: backendEnv.DB_NAME,
+      });
+    }
+
+    // Khách mẫu: 2 phân công (may-in KEY, pc NON) — dùng cho cả hai lỗi.
+    // Sale test tạo kèm employeeCode để file có dòng khớp thật → sinh được dòng "không đổi".
+    const EMP = `KRG${tag}`;
+    const userRoleId = await findRoleId('user');
+    const newUser = await call('POST', '/users', {
+      ...H(),
+      body: { username: `kpi_regress_${tag}`, fullName: 'NV hồi quy', employeeCode: EMP },
+    });
+    let saleId = newUser.json?.id;
+    if (!saleId && newUser.status === 409) {
+      // user còn tồn tại từ lần chạy trước bị gãy — gặp lại mã NV cho nó
+      const s = await call('GET', `/users?search=${encodeURIComponent(`kpi_regress_${tag}`)}&limit=5`, H());
+      saleId = (s.json?.data || []).find((u) => u.username === `kpi_regress_${tag}`)?.id;
+    }
+    assert(saleId, `không chuẩn bị được sale test: HTTP ${newUser.status} ${JSON.stringify(newUser.json).slice(0, 200)}`);
+    if (userRoleId) await call('POST', `/users/${saleId}/roles`, { ...H(), body: [userRoleId] });
+    // Cặp test: A gắn may-in, B gắn pc. `customerCode`/`sapCode` gửi API,
+    // `code`/`sap` dùng cho workbook (tên field của file).
+    const A = { code: CODE, customerCode: CODE, sap: `S${tag}A`, sapCode: `S${tag}A`, department_slug: 'may-in', customer_tier: 'KEY' };
+    const B = { code: `${CODE}B`, customerCode: `${CODE}B`, sap: `S${tag}B`, sapCode: `S${tag}B`, department_slug: 'pc', customer_tier: 'NON' };
+    for (const c of [A, B]) {
+      const r = await call('POST', '/customers', {
+        ...H(),
+        body: {
+          customer_code: c.customerCode,
+          sap_code: c.sapCode,
+          department_slug: c.department_slug,
+          sale_id: saleId,
+          customer_tier: c.customer_tier,
+          customer_name: 'KH hồi quy',
+        },
+      });
+      assert(r.status === 201, `POST /customers → HTTP ${r.status}: ${r.text?.slice(0, 200)}`);
+    }
+
+    // --- Lỗi 2: tier sai ở đúng phòng may-in → KHÔNG được sinh lệnh xoá ---
+    const upTier = await upload([
+      [1, A.sap, A.code, `NKX99-NHAN VIEN TAM`, '', '', '', '', '', 'CHINH', '', 'KEYY', '', '', '', '', 0],
+    ]);
+    assert(upTier.status === 201, `upload tier sai → HTTP ${upTier.status}: ${JSON.stringify(upTier.json).slice(0, 200)}`);
+    sessionIds.push(upTier.json?.sessionId);
+    assert(
+      (upTier.json?.errors || []).some((e) => (e.errors || []).some((m) => m.includes('phải là KEY hoặc NON'))),
+      `dòng tier sai không báo lỗi phân loại: ${JSON.stringify(upTier.json?.errors)}`,
+    );
+    ok('Tier sai vẫn báo lỗi đúng dòng');
+
+    assert(
+      (upTier.json?.warnings || []).some((w) => w.includes('giữ nguyên phân công hiện có')),
+      `thiếu cảnh báo giữ nguyên phân công: ${JSON.stringify(upTier.json?.warnings)}`,
+    );
+    ok('Tier sai → có cảnh báo giữ nguyên phân công');
+
+    const tierDeletes = await changesOf(upTier.json?.sessionId, A.code);
+    assert(
+      tierDeletes.filter((c) => c.action === 'delete' && c.department_slug === 'may-in').length === 0,
+      `tier sai ở may-in nhưng vẫn sinh lệnh XOÁ phân công: ${JSON.stringify(tierDeletes)}`,
+    );
+    ok('Tier sai → KHÔNG xoá phân công đang có');
+
+    // Phòng để trống THẬT (pc không có trong file) → vẫn xoá, không chặn nhầm
+    const bDeletes = await changesOf(upTier.json?.sessionId, B.code);
+    const pcDelete = bDeletes.find((c) => c.action === 'delete' && c.department_slug === 'pc');
+    assert(pcDelete, `phòng để trống thật phải sinh lệnh xoá: ${JSON.stringify(bDeletes)}`);
+    assert(pcDelete.error == null, `lệnh xoá phòng trống phải không lỗi: ${JSON.stringify(pcDelete)}`);
+    ok('Phòng để trống thật → vẫn sinh lệnh xoá không lỗi');
+
+    // --- Lỗi 1: khách vắng mặt hoàn toàn trong file → delete phải ghi được ---
+    const upEmpty = await upload([]); // file không có dòng khách nào
+    assert(upEmpty.status === 201, `upload rỗng → HTTP ${upEmpty.status}`);
+    sessionIds.push(upEmpty.json?.sessionId);
+    const vangMat = (await changesOf(upEmpty.json?.sessionId, A.code))
+      .find((c) => c.action === 'delete' && c.department_slug === 'may-in');
+    assert(vangMat, 'khách vắng mặt trong file không sinh lệnh xoá');
+    assert(
+      vangMat.error == null,
+      `lệnh xoá khách vắng mặt bị gắn error → apply sẽ bỏ qua âm thầm: ${JSON.stringify(vangMat)}`,
+    );
+    ok('Khách vắng mặt trong file → lệnh xoá KHÔNG lỗi (apply ghi được)');
+
+    // Dòng "không đổi" phải được lưu để màn hình so khớp đếm đủ 4 trạng thái
+    // (file có dòng khớp nguyên DB: cùng phòng, cùng sale, cùng tier)
+    const upSame = await upload([
+      [1, A.sap, A.code, `${EMP}-NV TEST`, '', '', '', '', '', 'CHÍNH', '', '', 'KEY', '', '', '', '', 0],
+    ]);
+    assert(upSame.status === 201, `upload dòng khớp → HTTP ${upSame.status}`);
+    sessionIds.push(upSame.json?.sessionId);
+    assert(
+      (upSame.json?.summary?.unchanged ?? 0) >= 1,
+      `file có dòng khớp nguyên phải sinh dòng "không đổi": ${JSON.stringify(upSame.json?.summary)}`,
+    );
+    const sameRows = await changesOf(upSame.json?.sessionId, A.code);
+    assert(
+      sameRows.some((c) => c.action === 'unchanged' && c.department_slug === 'may-in'),
+      `dòng "không đổi" phải được lưu: ${JSON.stringify(sameRows)}`,
+    );
+    ok('Dòng không đổi được lưu (diff đủ 4 trạng thái)');
+
+    // --- Lỗi 3: template hệ thống tự tạo phải parse được, không lỗi phân loại ---
+    const tplRes = await fetch(`${BASE}/customer-assignments/template`, {
+      headers: { Authorization: `Bearer ${adminToken}` },
+      signal: AbortSignal.timeout(30000),
+    });
+    assert(tplRes.status === 200, `GET template → HTTP ${tplRes.status}`);
+    const tplBuf = Buffer.from(await tplRes.arrayBuffer());
+    const tplWb = new ExcelJS.Workbook();
+    await tplWb.xlsx.load(tplBuf);
+    assert(tplWb.getWorksheet('TIÊU CHÍ'), 'template thiếu sheet TIÊU CHÍ');
+    assert(tplWb.getWorksheet('File Chi Tiết'), 'template thiếu sheet File Chi Tiết');
+
+    const tplFd = new FormData();
+    tplFd.append('file', new Blob([tplBuf]), 'mau-nap-khach-hang.xlsx');
+    const tplUp = await fetch(`${BASE}/customer-assignments/import`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${adminToken}` },
+      body: tplFd,
+      signal: AbortSignal.timeout(120000),
+    });
+    const tplJson = await tplUp.json().catch(() => null);
+    assert(tplUp.status === 201, `nạp template → HTTP ${tplUp.status}: ${JSON.stringify(tplJson).slice(0, 200)}`);
+    sessionIds.push(tplJson?.sessionId);
+    assert(
+      (tplJson?.summary?.customersParsed ?? 0) === 2,
+      `template phải parse đúng 2 khách: ${JSON.stringify(tplJson?.summary)}`,
+    );
+    const tplErrText = JSON.stringify(tplJson?.errors || []);
+    assert(
+      !tplErrText.includes('phải là KEY hoặc NON'),
+      `template sinh lỗi phân loại (lệch cột): ${tplErrText.slice(0, 300)}`,
+    );
+    ok('Template 2 dòng ví dụ nạp vào được, không lỗi phân loại');
+  } catch (e) {
+    bad('[N] Hồi quy so khớp', e.message);
+  } finally {
+    // Khách hồi quy xoá qua đúng luồng hệ thống (mềm) — không đụng DB trực tiếp
+    if (conn) {
+      try {
+        for (const code of [CODE, `${CODE}B`]) {
+          const [rows] = await conn.query(
+            'SELECT a.id FROM customer_assignments a JOIN customers c ON c.id = a.customer_id WHERE c.customer_code = ?',
+            [code],
+          );
+          for (const r of rows) { try { await call('DELETE', `/customers/${r.id}`, H()); } catch {} }
+        }
+      } catch {}
+      try { await conn.end(); } catch {}
+    }
+    for (const sid of sessionIds) {
+      try { await call('DELETE', `/customer-assignments/import-sessions/${sid}`, H()); } catch {}
+    }
+  }
+}
+
 // ============ DỌN DẸP AN TOÀN ============
 if (createdId) {
   try { await call('DELETE', `/customer-kpi-definitions/${createdId}`, H()); } catch {}

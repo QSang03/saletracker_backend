@@ -56,6 +56,13 @@ export class CustomerImportSession {
   @Column({ type: 'int', default: 0 })
   delete_count: number;
 
+  /**
+   * Số phân công file trùng khớp dữ liệu hiện có — lưu thành dòng change
+   * `unchanged` để màn hình so khớp hiện đủ 4 trạng thái; apply bỏ qua.
+   */
+  @Column({ type: 'int', default: 0 })
+  unchanged_count: number;
+
   @Column({ type: 'datetime', nullable: true })
   applied_at: Date | null;
 

@@ -182,7 +182,7 @@ export class CustomerKpiDefinitionsService implements OnModuleInit {
       where: { criterion_key: definition.key },
     });
     if (targetCount > 0) {
-      throw new BadRequestException(
+      throw new ConflictException(
         `Tiêu chí "${definition.key}" đang có ${targetCount} dòng chỉ tiêu gán. Hãy tắt (is_active = false) thay vì xoá.`,
       );
     }

@@ -18,7 +18,7 @@ import {
  * Quy tắc ghi (theo thiết kế vai trò):
  * - admin        : tạo cho sale bất kỳ
  * - manager-<phòng>: tạo cho sale trong phòng ban của mình
- * - nhân viên    : chờ luồng đề xuất → trưởng phòng duyệt (Mục 2, trả 501)
+ * - nhân viên    : tạo đề xuất → trưởng phòng duyệt (Mục 2)
  */
 export class CreateCustomerDto {
   /** Mã khách hàng, ví dụ MBA_HNO_TH_THAKRALONE — trùng mã → 409. */

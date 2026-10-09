@@ -20,6 +20,12 @@ export interface ParsedCustomerRow {
   assignments: ParsedAssignment[];
   /** Lỗi dòng — apply sẽ bỏ qua các change mang lỗi này, người nhập sửa file rồi nạp lại. */
   errors: string[];
+  /**
+   * Phòng CÓ ô phân loại nhưng sai giá trị (không phải KEY/NON). Khác với
+   * "phòng để trống": ở đây file có ý định gán phòng đó nhưng không đọc được —
+   * bước so khớp không được kết luận phòng ấy bị bỏ rồi xoá phân công đang có.
+   */
+  invalid_depts: string[];
   /** Cảnh báo gộp trùng — chỉ hiển thị, không chặn. */
   warnings: string[];
 }
@@ -200,10 +206,11 @@ export async function parseImportWorkbook(
       : null;
 
     const assignments: ParsedAssignment[] = [];
+    const invalidDepts: string[] = [];
     for (const { col, slug } of empCols) {
       const raw = cellText(row.getCell(col));
       if (!raw) continue; // phòng không có nhân viên trong dòng này
-      const empCode = raw.split('-')[0].trim().toUpperCase();
+      const empCode = norm(raw.split('-')[0]);
       if (!empCode) continue;
       const tierCol = tierCols.find((t) => t.slug === slug);
       const tierRaw = tierCol
@@ -213,6 +220,8 @@ export async function parseImportWorkbook(
         errors.push(
           `Phòng ${slug}: giá trị phân loại "${tierRaw || '(trống)'}" phải là KEY hoặc NON`,
         );
+        // Nhớ lại phòng có ô nhưng sai — không suy ra được là "file bỏ phòng này"
+        if (!invalidDepts.includes(slug)) invalidDepts.push(slug);
         continue;
       }
       assignments.push({
@@ -241,6 +250,11 @@ export async function parseImportWorkbook(
           );
         }
       }
+      for (const slug of invalidDepts) {
+        if (!existed.invalid_depts.includes(slug)) {
+          existed.invalid_depts.push(slug);
+        }
+      }
       continue;
     }
 
@@ -252,6 +266,7 @@ export async function parseImportWorkbook(
       debt_limit,
       assignments,
       errors,
+      invalid_depts: invalidDepts,
       warnings: [],
     });
   }

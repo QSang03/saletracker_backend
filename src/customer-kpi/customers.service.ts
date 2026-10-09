@@ -233,7 +233,7 @@ export class CustomersService {
   /**
    * Caller có được ghi trực tiếp vào danh sách của saleId không?
    * admin: bất kỳ; manager-<phòng>: sale thuộc phòng ban của caller.
-   * (nhân viên -> false, route sẽ trả 501 chờ luồng duyệt Mục 2)
+   * (nhân viên -> false; lần ghi đó được chuyển thành đề xuất chờ duyệt)
    */
   private async canManageSale(user: any, saleId: number): Promise<boolean> {
     const roles = this.lowerRoles(user);

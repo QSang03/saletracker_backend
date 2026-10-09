@@ -416,6 +416,31 @@ export class SeedService implements OnModuleInit {
           section: 'zalo_chat',
           status: 1,
         },
+        // Khách hàng & KPI (core-python-backend đọc các key này)
+        {
+          name: 'customer_zalo_matcher_rest_time',
+          display_name: 'Thời gian nghỉ giữa các lần tự khớp khách-Zalo (giây)',
+          value: '300',
+          type: 'number',
+          section: 'system',
+          status: 1,
+        },
+        {
+          name: 'customer_kpi_rollup_rest_time',
+          display_name: 'Thời gian nghỉ giữa các lần tổng hợp số liệu KPI (giây)',
+          value: '21600',
+          type: 'number',
+          section: 'system',
+          status: 1,
+        },
+        {
+          name: 'customer_kpi_rollup_days',
+          display_name: 'Số ngày gần nhất job tổng hợp KPI tính lại mỗi lần chạy',
+          value: '7',
+          type: 'number',
+          section: 'system',
+          status: 1,
+        },
       ];
       for (const config of configs) {
         await this.systemConfigRepo.save(this.systemConfigRepo.create(config));
@@ -446,6 +471,14 @@ export class SeedService implements OnModuleInit {
           name: 'customer_kpi_rollup_rest_time',
           display_name: 'Thời gian nghỉ giữa các lần tổng hợp số liệu KPI (giây)',
           value: '21600',
+          type: 'number',
+          section: 'system',
+          status: 1,
+        },
+        {
+          name: 'customer_kpi_rollup_days',
+          display_name: 'Số ngày gần nhất job tổng hợp KPI tính lại mỗi lần chạy',
+          value: '7',
           type: 'number',
           section: 'system',
           status: 1,
