@@ -15,6 +15,7 @@
     "kill:dev": "node scripts/kill-backend.js",
     "test:customer-kpi": "node scripts/test-customer-kpi.mjs",
     "test:customer-kpi-scoring": "node scripts/test-customer-kpi-scoring.mjs",
+    "test:kpi-report-filter": "ts-node --transpile-only -r tsconfig-paths/register scripts/test-kpi-report-filter.ts",
     "seed:customer-kpi-dev": "node scripts/seed-customer-kpi-dev.mjs",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix"
   },

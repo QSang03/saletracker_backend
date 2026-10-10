@@ -7,7 +7,7 @@ import { Debt, DebtStatus } from '../debts/debt.entity';
 import { Customer } from './customer.entity';
 import { CustomerAssignment } from './customer-assignment.entity';
 import { CustomerActivityDaily } from './customer-activity-daily.entity';
-import { KpiDefinition } from './kpi-definition.entity';
+import { KpiDefinition, ScoringMode } from './kpi-definition.entity';
 import { KpiTarget } from './kpi-target.entity';
 import { CustomersService } from './customers.service';
 import { diffDateStr, shiftDateStr, vnToday } from './vn-date';
@@ -18,6 +18,16 @@ import {
   SaleCriterion,
   SUGGESTION_GAP_DAYS,
 } from './customer-kpi-scoring.service';
+import {
+  KpiCustomerFilters,
+  KpiCriterionStatus,
+  KpiSaleFilters,
+  KPI_SORT_KEYS,
+  filterKpiCustomers,
+  filterKpiSales,
+  sortKpiCustomers,
+  summarizeKpiSales,
+} from './kpi-report-filter';
 
 /** Nhóm gợi ý thực hiện (mục 5.4) — thứ tự = mức độ khẩn cấp. */
 const SUGGESTION_REASONS: Record<string, string> = {
@@ -46,6 +56,8 @@ interface AssignmentRow {
   customerCode: string;
   customerName: string;
   customerTier: string | null;
+  customerRole: string | null;
+  departmentSlug: string;
   sapCode: string;
 }
 
@@ -144,6 +156,8 @@ export class CustomerKpiReportsService {
       customerName: row.customer?.customer_name ?? '',
       // Key/Non theo TỪNG PHÒNG BAN nên nằm trên dòng phân công, không phải khách
       customerTier: row.customer_tier ?? null,
+      customerRole: row.customer?.customer_role ?? null,
+      departmentSlug: row.department_slug ?? '',
       sapCode: row.customer?.sap_code ?? '',
     }));
   }
@@ -471,23 +485,34 @@ export class CustomerKpiReportsService {
    * Pipeline dùng chung cho overview / by-sale / export: nạp phân công +
    * hoạt động (kèm lookback cho bài toán gợi ý) + chỉ tiêu rồi chấm điểm.
    * Map rỗng = người dùng không thấy sale nào trong phạm vi.
+   *
+   * `loadDebt` = buộc nạp công nợ dù không có tiêu chí `debt_balance` (khi
+   * người dùng lọc/sắp xếp theo công nợ). Trả luôn công nợ đã nạp + ngày có
+   * tin đi gần nhất để by-sale dựng bộ lọc mà không cần query lại, và trả
+   * `definitions` để overview kiểm tra mã tiêu chí truyền vào.
    */
   private async buildScoredFor(
     saleId: number | undefined,
     from: string,
     to: string,
     user: any,
+    options: { loadDebt?: boolean } = {},
   ) {
     const userIds = await this.scopeUserIds(user);
+    const definitions = await this.loadDefinitions();
     if (userIds !== undefined && userIds.length === 0) {
-      return new Map();
+      return {
+        scored: new Map(),
+        definitions,
+        debtBalances: new Map<number, number | null>(),
+        lastOutboundByAssignment: new Map<number, string | null>(),
+      };
     }
     if (saleId !== undefined) {
       this.assertSaleInScope(saleId, userIds);
     }
     const lookbackFrom = this.shiftDate(from, -SUGGESTION_GAP_DAYS);
     const assignments = await this.loadAssignments(userIds, saleId);
-    const definitions = await this.loadDefinitions();
     const activity = await this.loadActivity(
       assignments.map((row) => row.assignmentId),
       lookbackFrom,
@@ -501,27 +526,46 @@ export class CustomerKpiReportsService {
     const saleInfos = await this.loadSaleInfos([
       ...new Set(assignments.map((row) => row.saleId)),
     ]);
-    // Chỉ nạp công nợ khi có tiêu chí dùng metric debt_balance — tránh 1 query
-    // thừa cho mọi lần tải báo cáo
-    const debtBalances = definitions.some(
-      (definition) => definition.metric === 'debt_balance',
-    )
-      ? await this.loadDebtBalances(assignments)
-      : new Map<number, number | null>();
-    return this.buildScoredData(
-      assignments,
-      activity,
-      targets,
+    // Chỉ nạp công nợ khi có tiêu chí dùng metric debt_balance hoặc khi người
+    // dùng lọc/sắp xếp theo công nợ — tránh 1 query thừa cho mọi lần tải
+    const debtBalances =
+      options.loadDebt ||
+      definitions.some((definition) => definition.metric === 'debt_balance')
+        ? await this.loadDebtBalances(assignments)
+        : new Map<number, number | null>();
+    return {
+      scored: this.buildScoredData(
+        assignments,
+        activity,
+        targets,
+        definitions,
+        saleInfos,
+        from,
+        this.monthsInRange(from, to),
+        debtBalances,
+      ),
       definitions,
-      saleInfos,
-      from,
-      this.monthsInRange(from, to),
       debtBalances,
-    );
+      lastOutboundByAssignment: this.lastOutboundByAssignment(activity),
+    };
+  }
+
+  /** Ngày gần nhất có tin SALE gửi đi, theo assignmentId (`null` = chưa có). */
+  private lastOutboundByAssignment(
+    activity: Map<number, ActivityDayRow[]>,
+  ): Map<number, string | null> {
+    const result = new Map<number, string | null>();
+    for (const [assignmentId, days] of activity) {
+      result.set(
+        assignmentId,
+        this.lastDayWhere(days, (day) => day.outbound_count > 0),
+      );
+    }
+    return result;
   }
 
   async overview(query: any, user: any) {
-    const scored = await this.buildScoredFor(
+    const { scored, definitions } = await this.buildScoredFor(
       query.saleId,
       query.from,
       query.to,
@@ -533,8 +577,11 @@ export class CustomerKpiReportsService {
     const search = String(query.search ?? '')
       .trim()
       .toLowerCase();
+    const filters = this.parseOverviewFilters(query);
 
-    const sales = [...scored.entries()]
+    // Tập sale đang xem = trong phạm vi (hoặc đúng `saleId`) và khớp `search`.
+    // Cả `summary` lẫn `sales` đều tính trên tập này.
+    const inView = [...scored.entries()]
       .sort((a, b) => a[0] - b[0])
       .filter(
         ([, data]) => !search || data.saleName.toLowerCase().includes(search),
@@ -545,7 +592,20 @@ export class CustomerKpiReportsService {
         zaloLinked: data.zaloLinked,
         criteria: data.criteria,
       }));
-    return { from: query.from, to: query.to, sales };
+
+    this.assertOverviewFilters(filters, definitions);
+
+    // summary tính TRƯỚC bộ lọc tiêu chí: "tiêu chí này bao nhiêu sale đạt /
+    // không đạt" không nhảy số khi bật lọc — cùng nguyên tắc đầu bảng
+    // `criteria` của by-sale (tổng hợp luôn trên tập đầy đủ)
+    const summary = summarizeKpiSales(inView.map((sale) => sale.criteria));
+
+    return {
+      from: query.from,
+      to: query.to,
+      summary,
+      sales: filterKpiSales(inView, filters),
+    };
   }
 
   async bySale(query: any, user: any) {
@@ -556,14 +616,25 @@ export class CustomerKpiReportsService {
         'by-sale bắt buộc truyền saleId (bảng khách hàng của một sale)',
       );
     }
+    // `met` là bộ lọc cấp SALE của overview — im lặng bỏ qua sẽ khiến FE
+    // tưởng đã lọc
+    if (query.met !== undefined) {
+      throw new BadRequestException(
+        'by-sale không lọc theo met (đạt/không đạt) — dùng status hoặc minRatio',
+      );
+    }
     const page = Math.max(1, Number(query.page) || 1);
     const pageSize = Math.min(200, Math.max(1, Number(query.pageSize) || 100));
-    const scored = await this.buildScoredFor(
-      query.saleId,
-      query.from,
-      query.to,
-      user,
-    );
+    const filters = this.parseCustomerFilters(query);
+    // Công nợ chỉ nạp khi bộ lọc/sắp xếp cần — chấm điểm tự lo phần còn lại
+    const needsDebt =
+      filters.minDebt !== undefined ||
+      filters.hasDebt !== undefined ||
+      filters.sortBy === 'debtBalance';
+    const { scored, debtBalances, lastOutboundByAssignment } =
+      await this.buildScoredFor(query.saleId, query.from, query.to, user, {
+        loadDebt: needsDebt,
+      });
 
     const entry = scored.get(query.saleId);
     if (!entry) {
@@ -577,20 +648,38 @@ export class CustomerKpiReportsService {
       };
     }
 
-    // search = lọc khách theo mã hoặc tên (chấm điểm vẫn tính trên TOÀN BỘ
-    // khách của sale — lọc chỉ tác động tới danh sách hiển thị)
-    const search = String(query.search ?? '')
-      .trim()
-      .toLowerCase();
-    const customers = search
-      ? entry.customers.filter(
-        (customer) =>
-          customer.row.customerCode.toLowerCase().includes(search) ||
-          (customer.row.customerName ?? '').toLowerCase().includes(search),
-      )
-      : entry.customers;
-    const total = customers.length;
-    const paged = customers
+    // Bộ lọc/sắp xếp theo tiêu chí phải trúng tiêu chí ĐANG BẶT — mã sai hoặc
+    // khoanh một tiêu chí mà không kèm điều kiện thì báo lỗi ngay thay vì im
+    // lặng trả bảng rỗng.
+    const criterionKeys = entry.criteria.map((criterion) => criterion.key);
+    this.assertCriterionFilters(filters, criterionKeys);
+    this.assertSortKey(filters.sortBy, criterionKeys);
+
+    // Không có tin đi trong toàn bộ cửa sổ → coi như ít nhất bằng độ dài cửa
+    // sổ; cần số (không dùng null) để sắp xếp không phải đoán "thiếu dữ liệu".
+    const daysSinceContact = new Map<number, number>();
+    for (const [assignmentId, lastOutbound] of lastOutboundByAssignment) {
+      daysSinceContact.set(
+        assignmentId,
+        lastOutbound
+          ? this.diffDays(lastOutbound, query.to)
+          : Number.MAX_SAFE_INTEGER,
+      );
+    }
+
+    // Chấm điểm vẫn tính trên TOÀN BỘ khách của sale — lọc/sắp xếp chỉ tác
+    // động tới danh sách hiển thị, đầu bảng `criteria` giữ nguyên số liệu đầy đủ
+    const matched = sortKpiCustomers(
+      filterKpiCustomers(entry.customers, filters, {
+        daysSinceContact,
+        debtBalances,
+      }),
+      filters.sortBy,
+      filters.sortOrder,
+      { daysSinceContact, debtBalances },
+    );
+    const total = matched.length;
+    const paged = matched
       .slice((page - 1) * pageSize, page * pageSize)
       .map((customer) => ({
         assignmentId: customer.row.assignmentId,
@@ -598,6 +687,7 @@ export class CustomerKpiReportsService {
         customerCode: customer.row.customerCode,
         customerName: customer.row.customerName,
         customerTier: customer.row.customerTier,
+        customerRole: customer.row.customerRole,
         zaloLinked: customer.zaloLinked,
         totals: customer.totals,
         criteria: customer.criteria,
@@ -619,6 +709,155 @@ export class CustomerKpiReportsService {
         },
       ],
     };
+  }
+
+  /**
+   * Chuẩn hoá query thành bộ lọc. Kiểu dữ liệu + enum đã do `KpiBySaleQueryDto`
+   * kiểm tra trước khi tới đây, nên ở đây chỉ gạt chuỗi rỗng và ép kiểu; giá
+   * trị lạ bị ValidationPipe chặn từ nhánh controller.
+   */
+  private parseCustomerFilters(query: any): KpiCustomerFilters {
+    const text = this.queryText;
+    const numeric = this.queryNumber;
+    const boolean = this.queryBoolean;
+    const order = query.sortOrder;
+    return {
+      tier: text(query.tier),
+      role: text(query.role),
+      department: text(query.department),
+      zaloStatus: text(query.zaloStatus) as KpiCustomerFilters['zaloStatus'],
+      sapCode: text(query.sapCode),
+      search: text(query.search),
+      criterionKey: text(query.criterionKey),
+      status: text(query.status) as KpiCriterionStatus | undefined,
+      minRatio: numeric(query.minRatio),
+      hasOrders: boolean(query.hasOrders),
+      minOrders: numeric(query.minOrders),
+      minRevenue: numeric(query.minRevenue),
+      minInbound: numeric(query.minInbound),
+      minOutbound: numeric(query.minOutbound),
+      daysSinceContact: numeric(query.daysSinceContact),
+      minDebt: numeric(query.minDebt),
+      hasDebt: boolean(query.hasDebt),
+      sortBy: text(query.sortBy),
+      sortOrder: order === 'asc' || order === 'desc' ? order : undefined,
+    };
+  }
+
+  /** Chuẩn hoá query của overview — chỉ có nhóm lọc theo tiêu chí. */
+  private parseOverviewFilters(query: any): KpiSaleFilters {
+    const text = this.queryText;
+    const numeric = this.queryNumber;
+    const boolean = this.queryBoolean;
+    return {
+      criterionKey: text(query.criterionKey),
+      met: boolean(query.met),
+      minRatio: numeric(query.minRatio),
+      status: text(query.status) as KpiSaleFilters['status'],
+    };
+  }
+
+  private queryText(value: unknown): string | undefined {
+    return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+  }
+
+  private queryNumber(value: unknown): number | undefined {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+
+  private queryBoolean(value: unknown): boolean | undefined {
+    return value === 'true' ? true : value === 'false' ? false : undefined;
+  }
+
+  /**
+   * Kiểm tra bộ lọc theo tiêu chí ở CẤP SALE trước khi chạy: mã tiêu chí sai,
+   * khoanh tiêu chí mà không kèm điều kiện, hoặc xin pass/fail của tiêu chí
+   * ratio đều báo lỗi ngay thay vì trả danh sách rỗng im lặng.
+   */
+  private assertOverviewFilters(
+    filters: KpiSaleFilters,
+    definitions: KpiDefinition[],
+  ) {
+    const activeKeys = definitions.map((definition) => definition.key);
+    if (filters.criterionKey && !activeKeys.includes(filters.criterionKey)) {
+      throw new BadRequestException(
+        `Không có tiêu chí "${filters.criterionKey}". Tiêu chí đang bật: ${activeKeys.join(', ') || '(chưa có)'}`,
+      );
+    }
+    if (
+      filters.criterionKey &&
+      filters.status === undefined &&
+      filters.minRatio === undefined &&
+      filters.met === undefined
+    ) {
+      throw new BadRequestException(
+        'criterionKey cần kèm met, minRatio hoặc status — một mình nó không lọc gì',
+      );
+    }
+    if (filters.met !== undefined && !filters.criterionKey) {
+      throw new BadRequestException(
+        'met cần kèm criterionKey — đạt/không đạt luôn gắn với một tiêu chí cụ thể',
+      );
+    }
+    if (filters.status === 'ratio') {
+      // Tiêu chí ratio ở cấp sale luôn trả status 'ratio' nên lọc theo nó
+      // không bỏ được sale nào — dùng minRatio hoặc met mới nói lên được mức độ
+      throw new BadRequestException(
+        'status=ratio không lọc được gì ở cấp sale — dùng minRatio hoặc met',
+      );
+    }
+    if (filters.status === 'pass' || filters.status === 'fail') {
+      const definition = filters.criterionKey
+        ? definitions.find((d) => d.key === filters.criterionKey)
+        : undefined;
+      if (definition) {
+        if (definition.scoring_mode === ScoringMode.RATIO) {
+          throw new BadRequestException(
+            `Tiêu chí "${filters.criterionKey}" là ratio — ở cấp sale không có pass/fail. Dùng met hoặc minRatio`,
+          );
+        }
+      } else if (!definitions.some((d) => d.scoring_mode === ScoringMode.BINARY)) {
+        throw new BadRequestException(
+          'status=pass/fail cần tiêu chí binary — hiện chỉ có tiêu chí ratio. Dùng minRatio hoặc met',
+        );
+      }
+    }
+  }
+
+  private assertCriterionFilters(
+    filters: KpiCustomerFilters,
+    criterionKeys: string[],
+  ) {
+    if (
+      filters.criterionKey &&
+      !criterionKeys.includes(filters.criterionKey)
+    ) {
+      throw new BadRequestException(
+        `Không có tiêu chí "${filters.criterionKey}". Tiêu chí đang bật: ${criterionKeys.join(', ') || '(chưa có)'}`,
+      );
+    }
+    if (
+      filters.criterionKey &&
+      filters.status === undefined &&
+      filters.minRatio === undefined
+    ) {
+      throw new BadRequestException(
+        'criterionKey cần kèm status hoặc minRatio — một mình nó không lọc gì',
+      );
+    }
+  }
+
+  private assertSortKey(sortBy: string | undefined, criterionKeys: string[]) {
+    if (!sortBy) return;
+    if (
+      !(KPI_SORT_KEYS as readonly string[]).includes(sortBy) &&
+      !criterionKeys.includes(sortBy)
+    ) {
+      throw new BadRequestException(
+        `sortBy không hợp lệ: "${sortBy}". Cột cố định: ${KPI_SORT_KEYS.join(', ')} — hoặc mã tiêu chí đang bật (${criterionKeys.join(', ') || 'chưa có'})`,
+      );
+    }
   }
 
   /**
@@ -794,7 +1033,7 @@ export class CustomerKpiReportsService {
     // Dùng pipeline chung một lần duy nhất — export KHÔNG truyền saleId vẫn
     // được (toàn công ty) vì sheet CHI TIET được dựng từ dữ liệu đã chấm,
     // không đi qua by-sale (nơi bắt buộc saleId để giới hạn payload)
-    const scored = await this.buildScoredFor(saleId, from, to, user);
+    const { scored } = await this.buildScoredFor(saleId, from, to, user);
     const saleRows = [...scored.entries()].sort((a, b) => a[0] - b[0]);
 
     const wb = new ExcelJS.Workbook();

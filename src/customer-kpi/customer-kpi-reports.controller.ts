@@ -12,6 +12,10 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionGuard } from '../common/guards/permission.guard';
 import { Permission } from '../common/guards/permission.decorator';
 import { CustomerKpiReportsService } from './customer-kpi-reports.service';
+import {
+  KpiBySaleQueryDto,
+  KpiOverviewQueryDto,
+} from './dto/kpi-report-query.dto';
 import { shiftDateStr, vnToday } from './vn-date';
 
 /**
@@ -40,18 +44,13 @@ export class CustomerKpiReportsController {
 
   @Get('overview')
   @Permission('khach-hang', 'read')
-  overview(
-    @Query('saleId') saleId: string | undefined,
-    @Query('from') from: string | undefined,
-    @Query('to') to: string | undefined,
-    @Query('search') search: string | undefined,
-    @Req() req: any,
-  ) {
-    const range = this.normalizeRange(from, to);
+  overview(@Query() query: KpiOverviewQueryDto, @Req() req: any) {
+    const range = this.normalizeRange(query.from, query.to);
     return this.reportsService.overview(
       {
-        saleId: saleId ? Number(saleId) : undefined,
-        search,
+        // giữ nguyên full query để các filter mới (criterionKey/met/minRatio/
+        // status) tới được service; from/to chuẩn hoá đè lên cuối
+        ...query,
         ...range,
       },
       req.user,
@@ -60,22 +59,13 @@ export class CustomerKpiReportsController {
 
   @Get('by-sale')
   @Permission('khach-hang', 'read')
-  bySale(
-    @Query('saleId') saleId: string | undefined,
-    @Query('from') from: string | undefined,
-    @Query('to') to: string | undefined,
-    @Query('search') search: string | undefined,
-    @Query('page') page: string | undefined,
-    @Query('pageSize') pageSize: string | undefined,
-    @Req() req: any,
-  ) {
-    const range = this.normalizeRange(from, to);
+  bySale(@Query() query: KpiBySaleQueryDto, @Req() req: any) {
+    const range = this.normalizeRange(query.from, query.to);
     return this.reportsService.bySale(
       {
-        saleId: saleId ? Number(saleId) : undefined,
-        search,
-        page,
-        pageSize,
+        ...query,
+        saleId: query.saleId,
+        search: query.search,
         ...range,
       },
       req.user,
