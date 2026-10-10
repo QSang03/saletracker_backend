@@ -47,6 +47,14 @@ function convertDates(obj: any, seen = new WeakSet<any>()): any {
     return obj === undefined ? {} : null;
   }
 
+  // Date KHÔNG nằm trong whitelist FIELDS (ví dụ lastVerifiedAt, decidedAt)
+  // từng rơi vào nhánh object bên dưới: Object.keys(date) rỗng → Date bị biến
+  // thành {} → FE new Date({}) → "Invalid Date". Field nào không cần đổi
+  // timezone thì giữ nguyên Date, để JSON.stringify ra ISO string chuẩn.
+  if (obj instanceof Date) {
+    return obj;
+  }
+
   // Skip Buffer/ArrayBuffer/Uint8Array/Streams to avoid corrupting binary responses
   if (
     (typeof Buffer !== 'undefined' && Buffer.isBuffer(obj)) ||

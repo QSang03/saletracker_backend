@@ -10,6 +10,7 @@
  *   --days=30              số ngày dữ liệu hoạt động, tính lùi từ hôm nay (mặc định 30)
  *   --skip-import          bỏ qua nạp file demo (chỉ sinh lại dữ liệu hoạt động)
  *   --skip-zalo-links      không sinh cặp khớp customer_zalo
+ *   --skip-zalo-contacts   không sinh liên hệ mẫu trong DB zalo_automation cho khách chưa khớp
  *   --skip-targets         không sinh chỉ tiêu tháng hiện tại
  *   --zalo-links-ratio=0.75 tỉ lệ phân công được gắn cặp khớp (mặc định 0.75)
  *   --reset-activity       XOÁ dữ liệu activity/response của các sale kpi_emp trước khi sinh lại
@@ -55,6 +56,7 @@ const ZALO_LINKS_RATIO = flags['zalo-links-ratio'] != null
   : 0.75;
 const SKIP_IMPORT = !!flags['skip-import'];
 const SKIP_ZALO = !!flags['skip-zalo-links'];
+const SKIP_ZALO_CONTACTS = !!flags['skip-zalo-contacts'];
 const SKIP_TARGETS = !!flags['skip-targets'];
 const RESET_ACTIVITY = !!flags['reset-activity'];
 
@@ -375,6 +377,7 @@ const [assignments] = await conn.query(
 );
 const asgList = assignments.map((r) => ({
   id: Number(r.id),
+  saleId: Number(r.sale_id),
   tier: r.customer_tier,
   code: r.customer_code,
   name: r.customer_name,
@@ -512,6 +515,75 @@ if (!SKIP_ZALO) {
   console.log('  ⏭️ Bỏ qua customer_zalo (--skip-zalo-links)');
 }
 
+// 5f. Liên hệ MẪU trong DB zalo_automation cho khách CHƯA KHỚP — không có
+//     liên hệ nào tên chứa mã khách thì đường "ghép tay" trên màn hình chưa
+//     khớp không thử được (tra danh bạ theo mã khách luôn ra rỗng). Sinh tối
+//     đa 10 cặp, mỗi sale 1 cặp, đúng điều kiện POST /customers/zalo-links
+//     cần: tài khoản Zalo ACTIVE của sale + liên hệ thuộc account đó.
+if (!SKIP_ZALO_CONTACTS) {
+  const zaloEnv = {
+    ...parseEnvFile(path.join(backendRoot, '.env')),
+    ...parseEnvFile(path.resolve(backendRoot, '..', 'core-python-backend', '.env')),
+  };
+  let zconn = null;
+  try {
+    zconn = await mysql.createConnection({
+      host: zaloEnv.ZALO_DB_HOST || zaloEnv.DB_HOST,
+      port: +(zaloEnv.ZALO_DB_PORT || zaloEnv.DB_PORT || 3306),
+      user: zaloEnv.ZALO_DB_USER || zaloEnv.DB_USER,
+      password: zaloEnv.ZALO_DB_PASS || zaloEnv.DB_PASS,
+      database: zaloEnv.ZALO_DB_NAME || 'zalo_automation',
+    });
+  } catch (e) {
+    console.log(`  ⚠️ Bỏ qua liên hệ mẫu — không kết nối được DB zalo_automation: ${e.message}`);
+  }
+  if (zconn) {
+    try {
+      const [linkedRows] = await conn.query('SELECT DISTINCT assignment_id FROM customer_zalo');
+      const hasLink = new Set(linkedRows.map((r) => Number(r.assignment_id)));
+      // chọn tối đa 10 phân công chưa khớp, mỗi sale 1 cặp
+      const picked = [];
+      const seenSales = new Set();
+      for (const asg of asgList) {
+        if (hasLink.has(asg.id)) continue;
+        if (seenSales.has(asg.saleId)) continue;
+        seenSales.add(asg.saleId);
+        picked.push(asg);
+        if (picked.length >= 10) break;
+      }
+      let seeded = 0;
+      for (const asg of picked) {
+        // zalo_accounts.user_id vừa UNIQUE vừa FK về users MIRROR của DB zalo
+        // — phải đảm bảo cả hai dòng tồn tại trước khi gắn liên hệ
+        await zconn.query(
+          'INSERT INTO users (id, username, full_name) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE id = id',
+          [asg.saleId, `kpi_emp_zalo_${asg.saleId}`, `NV Zalo seed ${asg.saleId}`],
+        );
+        await zconn.query(
+          'INSERT INTO zalo_accounts (zalo_username, zalo_id, display_name, is_active, user_id) VALUES (?, ?, ?, 1, ?) ON DUPLICATE KEY UPDATE is_active = 1',
+          [`seed_acc_${asg.saleId}`, `seed_zalo_id_${asg.saleId}`, `Zalo seed ${asg.saleId}`, asg.saleId],
+        );
+        const [[accRow]] = await zconn.query(
+          'SELECT id FROM zalo_accounts WHERE user_id = ?',
+          [asg.saleId],
+        );
+        // tên liên hệ chứa MÃ KHÁCH như khớp tự động bình thường để tra danh bạ thấy
+        const displayName = `${asg.code} - ${asg.name || 'Khách seed ghép tay'}`;
+        const [ins] = await zconn.query(
+          'INSERT IGNORE INTO zalo_contacts (zalo_account_id, display_name, zalo_contact_id, is_active, is_blocked, is_favorite) VALUES (?, ?, ?, 1, 0, 0)',
+          [accRow.id, displayName, `seedcontact_${asg.id}`],
+        );
+        if (ins.affectedRows > 0) seeded++;
+      }
+      ok(`zalo_contacts: ${seeded} liên hệ mẫu cho khách chưa khớp (tên chứa mã khách — dùng thử ghép tay)`);
+    } finally {
+      await zconn.end();
+    }
+  }
+} else {
+  console.log('  ⏭️ Bỏ qua liên hệ mẫu zalo_contacts (--skip-zalo-contacts)');
+}
+
 // 5e. Chỉ tiêu tháng hiện tại cho 2 tiêu chí doanh số — gán cấp nhân viên
 //     (customer_id = 0) cho từng sale kpi_emp. INSERT IGNORE để giữ số đã sửa tay.
 if (!SKIP_TARGETS) {
@@ -553,6 +625,7 @@ await conn.end();
 console.log(`\n== SEED XONG: ${pass} bước đạt ==`);
 console.log(`   Mẫu xem nhanh:
    - GET /customers?saleId=<id sale kpi_emp_*>  — danh sách + lọc zaloStatus
-   - GET /customer-kpi-reports/customers/<assignmentId>?from=<${dates[0].key}>&to=${dates[dates.length - 1].key}
+   - GET /customer-kpi-reports/customers/<assignmentId>?from=<${dates[0].key}>&to=<${dates[dates.length - 1].key}>
    - GET /customers/unmatched  — phần khách chưa gắn Zalo (${Math.round((1 - ZALO_LINKS_RATIO) * 100)}%)
+   - Ghép tay: /customers/unmatched → tra danh bạ theo MÃ KHÁCH → liên hệ "seedcontact_*" (tên chứa mã khách) để gắn thử
    Báo cáo tổng quan/by-sale/suggestions là 501 cho đến khi xong Mục 4.`);

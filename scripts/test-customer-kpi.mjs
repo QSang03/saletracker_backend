@@ -1350,6 +1350,12 @@ console.log('\n-- K. Liên kết Zalo: sửa tay + danh sách chưa khớp (Mụ
       const z = (r.json?.zaloAccounts || []).find((x) => x.id === linkId);
       assert(z, 'không thấy link trong zaloAccounts');
       assert(z.matchMethod === 'manual' && z.isActive === true, `z=${JSON.stringify(z)}`);
+      // lỗi P3: interceptor từng biến Date ngoài whitelist thành {} → FE
+      // "Kiểm tra: Invalid Date". lastVerifiedAt phải là chuỗi ngày parse được.
+      assert(
+        z.lastVerifiedAt == null || !isNaN(new Date(z.lastVerifiedAt).getTime()),
+        `lastVerifiedAt=${JSON.stringify(z.lastVerifiedAt)} — không phải ngày hợp lệ`,
+      );
       return r.status;
     });
     await expect('[K] GET zalo-links/:id → 200 đúng cặp', 200, async () => {
