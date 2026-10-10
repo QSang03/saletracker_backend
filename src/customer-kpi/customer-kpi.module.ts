@@ -2,6 +2,8 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { User } from '../users/user.entity';
 import { Notification } from '../notifications/notification.entity';
+import { Department } from '../departments/department.entity';
+import { Debt } from '../debts/debt.entity';
 import { CustomerSuggestionsCronjob } from './customer-kpi-suggestions.cronjob';
 import { Customer } from './customer.entity';
 import { CustomerAssignment } from './customer-assignment.entity';
@@ -60,6 +62,8 @@ import { ApprovalRequestsService } from './approval-requests.service';
       ApprovalRequestCustomerItem,
       ApprovalRequestTargetItem,
       User,
+      Department,
+      Debt,
       Notification,
     ]),
   ],

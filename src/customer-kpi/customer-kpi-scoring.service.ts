@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import {
+  KpiComparison,
   KpiDefinition,
   KpiDenominator,
   ScoringMode,
@@ -22,11 +23,17 @@ import {
  *   liên lạc bằng tin đi trong SUGGESTION_GAP_DAYS ngày trước đó (bị bỏ bê);
  *   "đã xử lý" = ngày D sale nhắn lại ≥1 tin → tự nhận từ tin nhắn, không cần
  *   bảng gợi ý hay nút bấm (đúng chữ "Tổng hợp từ hoạt động" của thiết kế).
+ * - order_count / debt_balance: metric kiểu NGƯỠNG (giá trị tuyệt đối) — chấm
+ *   binary so ngưỡng hoặc ratio so chỉ tiêu (chỉ mẫu số target_value; mẫu số
+ *   đếm khách không có nghĩa với giá trị tuyệt đối).
+ * - revenue_key / revenue_non: luôn no_data — chờ API doanh thu (quyết định
+ *   mục 4.4: cố ý không đọc 2 sheet ẩn BCBH/CNO của file Excel).
  * - Cấp khách hàng: chỉ tiêu ratio trả % ngày đạt trong khoảng xem (FE ẩn nếu
  *   không cần — mục 5.1.6); binary trả pass/fail.
- * - Cấp Sale: ratio = "x/y khách đạt" (mẫu số là khách CÓ THỂ ĐO — zalo_linked,
- *   ngày sale offline không kéo tỉ lệ xuống, mục 5.1.5); binary = "x/y khách
- *   đạt" trong khoảng xem.
+ * - Cấp Sale: ratio = "x/y khách đạt" (mẫu số mặc định là khách CÓ THỂ ĐO —
+ *   zalo_linked, ngày sale offline không kéo tỉ lệ xuống, mục 5.1.5; cấu hình
+ *   denominator = all_customers thì mẫu số là TOÀN BỘ khách trong danh sách);
+ *   binary = "x/y khách đạt" trong khoảng xem.
  */
 
 /** Số ngày không được liên lạc thì khách rơi vào danh sách gợi ý (mục 5.4). */
@@ -40,6 +47,34 @@ export const REASON_SALE_OFFLINE =
   'Sale chưa đăng nhập Zalo. Dữ liệu sẽ tự cập nhật khi Sale đăng nhập lại.';
 export const REASON_NO_ZALO_LINK =
   'Chưa có khách hàng nào khớp được tài khoản Zalo.';
+export const REASON_NO_CUSTOMERS = 'Sale chưa có khách hàng nào trong danh sách.';
+
+/**
+ * Metric kiểu NGƯỠNG — chấm trên giá trị tuyệt đối (số đơn, số dư công nợ)
+ * thay vì trên tỉ lệ khách đạt. Nguồn:
+ * - order_count  : cột `order_count` của customer_activity_daily (rollup ghi).
+ * - debt_balance : tổng `remaining` của bảng `debts` (module công nợ), khớp
+ *   theo `customer_raw_code` = mã đối tác SAP của khách; điểm theo thời điểm
+ *   hiện tại (không theo ngày).
+ */
+export const THRESHOLD_METRICS = ['order_count', 'debt_balance'];
+
+const thresholdValueOf = (
+  metric: string,
+  windowed: ActivityDayRow[],
+  debtBalance?: number | null,
+): number | null => {
+  if (metric === 'order_count') {
+    return windowed.reduce(
+      (acc, row) => acc + (Number(row.order_count) || 0),
+      0,
+    );
+  }
+  if (metric === 'debt_balance') {
+    return debtBalance == null ? null : Number(debtBalance) || 0;
+  }
+  return null;
+};
 
 export interface ActivityDayRow {
   stat_date: string;
@@ -97,12 +132,15 @@ export class CustomerKpiScoringService {
    * `days`: hoạt động theo ngày, PHẢI bao gồm cả SUGGESTION_LOOKBACK_DAYS
    * ngày trước `fromDate` để chấm gợi ý ở đầu khoảng (nhìn lại khoảng trống
    * liên lạc). Chỉ những ngày >= fromDate mới được tính vào kết quả.
+   * `debtBalance`: chỉ cần cho metric `debt_balance` — số dư công nợ hiện tại
+   * của khách (báo cáo nạp sẵn từ bảng `debts`).
    */
   scoreCustomer(
     definition: KpiDefinition,
     days: ActivityDayRow[],
     targetValue: number | null,
     fromDate: string,
+    debtBalance?: number | null,
   ): CustomerCriterion {
     const base: CustomerCriterion = {
       key: definition.key,
@@ -123,6 +161,14 @@ export class CustomerKpiScoringService {
     const windowed = linked.filter((row) => row.stat_date >= fromDate);
     if (windowed.length === 0) {
       return { ...base, reason: REASON_NO_ZALO_LINK };
+    }
+
+    if (THRESHOLD_METRICS.includes(definition.metric)) {
+      return this.scoreThresholdCustomer(
+        definition,
+        thresholdValueOf(definition.metric, windowed, debtBalance),
+        targetValue,
+      );
     }
 
     if (definition.metric === 'contacted_customers') {
@@ -184,13 +230,72 @@ export class CustomerKpiScoringService {
   }
 
   /**
+   * Chấm metric kiểu NGƯỢNG cho MỘT khách: so giá trị với ngưỡng (binary) hoặc
+   * tính % so chỉ tiêu (ratio). Mẫu số chỉ hợp lệ với `target_value` — các mẫu
+   * số đếm khách (`all_customers`, `reachable_customers`) không có nghĩa với
+   * một giá trị tuyệt đối, cấu hình sai sẽ trả no_data kèm lý do rõ ràng.
+   */
+  private scoreThresholdCustomer(
+    definition: KpiDefinition,
+    value: number | null,
+    targetValue: number | null,
+  ): CustomerCriterion {
+    const base: CustomerCriterion = {
+      key: definition.key,
+      scoringMode: definition.scoring_mode,
+      status: 'no_data',
+      actualValue: null,
+      targetValue,
+    };
+    if (value == null) {
+      return { ...base, reason: 'Chưa có dữ liệu công nợ cho khách hàng này.' };
+    }
+    if (definition.scoring_mode === ScoringMode.BINARY) {
+      if (targetValue == null) {
+        return { ...base, reason: 'Chưa cấu hình ngưỡng cho tiêu chí.' };
+      }
+      return {
+        ...base,
+        status: this.compareValue(value, targetValue, definition.comparison)
+          ? 'pass'
+          : 'fail',
+        actualValue: value,
+      };
+    }
+    if (definition.denominator !== KpiDenominator.TARGET_VALUE) {
+      return {
+        ...base,
+        reason: `Mẫu số "${definition.denominator}" không áp dụng cho metric "${definition.metric}" — dùng target_value.`,
+      };
+    }
+    if (targetValue == null) {
+      return { ...base, reason: 'Chưa có chỉ tiêu cho tiêu chí này.' };
+    }
+    return { ...base, status: 'ratio', actualValue: pct(value, targetValue) };
+  }
+
+  /** `gte` (mặc định): đạt khi value >= target. `lte`: đạt khi value <= target. */
+  private compareValue(
+    value: number,
+    target: number,
+    comparison: KpiComparison | null,
+  ): boolean {
+    if (comparison === KpiComparison.LTE) return value <= target;
+    return value >= target;
+  }
+
+  /**
    * Chấm MỘT tiêu chí cho MỘT sale trên khoảng ngày, từ dữ liệu thô từng
    * khách. `customers`: mỗi phần tử là hoạt động của một khách + chỉ tiêu
    * riêng (nếu có) — đã lọc khách thuộc sale.
    */
   scoreSale(
     definition: KpiDefinition,
-    customers: { days: ActivityDayRow[] }[],
+    customers: {
+      days: ActivityDayRow[];
+      targetValue?: number | null;
+      debtBalance?: number | null;
+    }[],
     saleTargetValue: number | null,
     saleOnline: boolean,
     fromDate: string,
@@ -219,53 +324,120 @@ export class CustomerKpiScoringService {
     // Chỉ những ngày >= fromDate được tính vào kết quả — ngày lookback (trước
     // khoảng xem) chỉ phục vụ chấm gợi ý, KHÔNG được đếm vào support/phản hồi
     const windowedCustomers = customers.map((c) => ({
+      ...c,
       days: c.days.filter((row) => row.stat_date >= fromDate),
     }));
 
-    if (definition.metric === 'contacted_customers') {
-      const reachable = windowedCustomers.filter((c) =>
-        c.days.some((row) => row.zalo_linked),
-      );
-      const passed = reachable.filter((c) =>
-        c.days.some((row) => row.zalo_linked && isOutbound(row)),
-      );
-      if (reachable.length === 0) {
+    // Mẫu số: mặc định chỉ khách CÓ THỂ ĐO (zalo_linked — ngày sale offline
+    // không kéo tỉ lệ xuống); cấu hình all_customers thì lấy TOÀN BỘ khách
+    // trong danh sách (thiết kế mục 5.1.5).
+    const countAllCustomers =
+      definition.denominator === KpiDenominator.ALL_CUSTOMERS;
+    const reachable = (
+      list: typeof windowedCustomers,
+    ): typeof windowedCustomers =>
+      countAllCustomers
+        ? list
+        : list.filter((c) => c.days.some((row) => row.zalo_linked));
+    const emptyPoolReason = countAllCustomers
+      ? REASON_NO_CUSTOMERS
+      : saleOnline
+        ? REASON_NO_ZALO_LINK
+        : REASON_SALE_OFFLINE;
+
+    if (THRESHOLD_METRICS.includes(definition.metric)) {
+      const pool = reachable(windowedCustomers);
+      if (pool.length === 0) {
+        return { ...base, reason: emptyPoolReason };
+      }
+      const perCustomer = pool.map((c) => ({
+        value: thresholdValueOf(definition.metric, c.days, c.debtBalance),
+        target: c.targetValue ?? saleTargetValue,
+      }));
+
+      if (definition.scoring_mode === ScoringMode.BINARY) {
+        // Không ai có ngưỡng/chi tiêu → chưa cấu hình xong, không kết luật fail
+        if (perCustomer.every((pc) => pc.target == null)) {
+          return { ...base, reason: 'Chưa cấu hình ngưỡng cho tiêu chí.' };
+        }
+        const passed = perCustomer.filter(
+          (pc) =>
+            pc.value != null &&
+            pc.target != null &&
+            this.compareValue(pc.value, pc.target, definition.comparison),
+        );
         return {
           ...base,
-          reason: saleOnline ? REASON_NO_ZALO_LINK : REASON_SALE_OFFLINE,
+          status: passed.length > 0 ? 'pass' : 'fail',
+          actualValue: passed.length > 0 ? 1 : 0,
+          totalCriteria: pool.length,
+          passedCriteria: passed.length,
+          numerator: passed.length,
+          denominatorValue: pool.length,
+        };
+      }
+      if (definition.denominator !== KpiDenominator.TARGET_VALUE) {
+        return {
+          ...base,
+          reason: `Mẫu số "${definition.denominator}" không áp dụng cho metric "${definition.metric}" — dùng target_value.`,
+        };
+      }
+      if (saleTargetValue == null) {
+        return { ...base, reason: 'Chưa có chỉ tiêu cho tiêu chí này.' };
+      }
+      const total = perCustomer.reduce(
+        (acc, pc) => acc + (pc.value ?? 0),
+        0,
+      );
+      return {
+        ...base,
+        status: 'ratio',
+        actualValue: pct(total, saleTargetValue),
+        numerator: total,
+        denominatorValue: saleTargetValue,
+      };
+    }
+
+    if (definition.metric === 'contacted_customers') {
+      const pool = reachable(windowedCustomers);
+      const passed = pool.filter((c) =>
+        c.days.some((row) => row.zalo_linked && isOutbound(row)),
+      );
+      if (pool.length === 0) {
+        return {
+          ...base,
+          reason: emptyPoolReason,
         };
       }
       return {
         ...base,
         status: 'ratio',
-        actualValue: pct(passed.length, reachable.length),
+        actualValue: pct(passed.length, pool.length),
         numerator: passed.length,
-        denominatorValue: reachable.length,
-        totalCriteria: reachable.length,
+        denominatorValue: pool.length,
+        totalCriteria: pool.length,
         passedCriteria: passed.length,
       };
     }
 
     if (definition.metric === 'responded_customers') {
-      const reachable = windowedCustomers.filter((c) =>
-        c.days.some((row) => row.zalo_linked),
-      );
-      const passed = reachable.filter((c) =>
+      const pool = reachable(windowedCustomers);
+      const passed = pool.filter((c) =>
         c.days.some((row) => row.zalo_linked && isTwoWay(row)),
       );
-      if (reachable.length === 0) {
+      if (pool.length === 0) {
         return {
           ...base,
-          reason: saleOnline ? REASON_NO_ZALO_LINK : REASON_SALE_OFFLINE,
+          reason: emptyPoolReason,
         };
       }
       return {
         ...base,
         status: 'ratio',
-        actualValue: pct(passed.length, reachable.length),
+        actualValue: pct(passed.length, pool.length),
         numerator: passed.length,
-        denominatorValue: reachable.length,
-        totalCriteria: reachable.length,
+        denominatorValue: pool.length,
+        totalCriteria: pool.length,
         passedCriteria: passed.length,
       };
     }

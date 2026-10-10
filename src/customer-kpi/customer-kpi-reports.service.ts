@@ -1,12 +1,9 @@
-import {
-  BadRequestException,
-  ForbiddenException,
-  Injectable,
-} from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import * as ExcelJS from 'exceljs';
 import { User } from '../users/user.entity';
+import { Debt, DebtStatus } from '../debts/debt.entity';
 import { Customer } from './customer.entity';
 import { CustomerAssignment } from './customer-assignment.entity';
 import { CustomerActivityDaily } from './customer-activity-daily.entity';
@@ -49,6 +46,7 @@ interface AssignmentRow {
   customerCode: string;
   customerName: string;
   customerTier: string | null;
+  sapCode: string;
 }
 
 /**
@@ -73,6 +71,8 @@ export class CustomerKpiReportsService {
     private readonly customerRepo: Repository<Customer>,
     @InjectRepository(User)
     private readonly userRepo: Repository<User>,
+    @InjectRepository(Debt)
+    private readonly debtRepo: Repository<Debt>,
     private readonly customersService: CustomersService,
   ) { }
 
@@ -144,6 +144,7 @@ export class CustomerKpiReportsService {
       customerName: row.customer?.customer_name ?? '',
       // Key/Non theo TỪNG PHÒNG BAN nên nằm trên dòng phân công, không phải khách
       customerTier: row.customer_tier ?? null,
+      sapCode: row.customer?.sap_code ?? '',
     }));
   }
 
@@ -259,6 +260,61 @@ export class CustomerKpiReportsService {
     return result;
   }
 
+  /**
+   * Số dư công nợ hiện tại của từng khách — nguồn cho metric `debt_balance`
+   * (adapter Debt đọc thẳng module công nợ, thiết kế mục 5.1.6).
+   *
+   * Khớp theo `debts.customer_raw_code` (file công nợ ghi cột "Mã đối tác" =
+   * mã SAP) trước, không có SAP thì thử mã khách; chỉ tính khoản CHƯA THANH
+   * TOÁN (`status <> 'paid'`, `deleted_at IS NULL` mặc dù TypeORM không tự lọc
+   * khi dùng QueryBuilder). Khách không định danh được (không có mã nào) →
+   * `null` → chấm điểm trả no_data; khớp được nhưng không có khoản nợ → 0.
+   *
+   * Đây là giá trị ĐIỂM THEO THỜI GIAN (hạn mức/tồn công nợ không chia ngày),
+   * không phụ thuộc khoảng `from`–`to` của báo cáo.
+   */
+  private async loadDebtBalances(
+    rows: AssignmentRow[],
+  ): Promise<Map<number, number | null>> {
+    const result = new Map<number, number | null>();
+    if (rows.length === 0) return result;
+
+    const codes = [
+      ...new Set(
+        rows.flatMap((r) => [r.sapCode, r.customerCode]).filter(Boolean),
+      ),
+    ];
+    const byCode = new Map<string, number>();
+    for (let i = 0; i < codes.length; i += 500) {
+      const chunk = codes.slice(i, i + 500);
+      const raw = await this.debtRepo
+        .createQueryBuilder('d')
+        .select('d.customer_raw_code', 'code')
+        .addSelect('SUM(d.remaining)', 'total')
+        .where('d.deleted_at IS NULL')
+        .andWhere('d.status <> :paid', { paid: DebtStatus.PAID })
+        .andWhere('d.customer_raw_code IN (:...codes)', { codes: chunk })
+        .groupBy('d.customer_raw_code')
+        .getRawMany();
+      for (const row of raw) {
+        byCode.set(String(row.code), Number(row.total || 0));
+      }
+    }
+
+    for (const row of rows) {
+      if (row.sapCode && byCode.has(row.sapCode)) {
+        result.set(row.customerId, byCode.get(row.sapCode) as number);
+      } else if (row.customerCode && byCode.has(row.customerCode)) {
+        result.set(row.customerId, byCode.get(row.customerCode) as number);
+      } else if (!row.sapCode && !row.customerCode) {
+        result.set(row.customerId, null);
+      } else {
+        result.set(row.customerId, 0);
+      }
+    }
+    return result;
+  }
+
   // ------------------------------------------------------- dữ liệu chấm
 
   private buildScoredData(
@@ -269,6 +325,7 @@ export class CustomerKpiReportsService {
     saleInfos: Map<number, { fullName: string; zaloLinked: boolean }>,
     fromDate: string,
     months: string[],
+    debtBalances: Map<number, number | null>,
   ) {
     const customersBySale = new Map<number, AssignmentRow[]>();
     for (const row of assignments) {
@@ -324,11 +381,14 @@ export class CustomerKpiReportsService {
           return {
             row,
             days,
+            targetValue: customerTarget,
+            debtBalance: debtBalances.get(row.customerId) ?? null,
             criterion: this.scoring.scoreCustomer(
               definition,
               days,
               customerTarget,
               fromDate,
+              debtBalances.get(row.customerId) ?? null,
             ),
           };
         });
@@ -348,7 +408,11 @@ export class CustomerKpiReportsService {
         saleCriteria.push(
           this.scoring.scoreSale(
             definition,
-            perCustomer.map((c) => ({ days: c.days })),
+            perCustomer.map((c) => ({
+              days: c.days,
+              targetValue: c.targetValue,
+              debtBalance: c.debtBalance,
+            })),
             saleTarget,
             saleInfo?.zaloLinked ?? false,
             fromDate,
@@ -370,6 +434,7 @@ export class CustomerKpiReportsService {
             days,
             customerTarget,
             fromDate,
+            debtBalances.get(row.customerId) ?? null,
           );
         });
         const latest = days[days.length - 1];
@@ -436,6 +501,13 @@ export class CustomerKpiReportsService {
     const saleInfos = await this.loadSaleInfos([
       ...new Set(assignments.map((row) => row.saleId)),
     ]);
+    // Chỉ nạp công nợ khi có tiêu chí dùng metric debt_balance — tránh 1 query
+    // thừa cho mọi lần tải báo cáo
+    const debtBalances = definitions.some(
+      (definition) => definition.metric === 'debt_balance',
+    )
+      ? await this.loadDebtBalances(assignments)
+      : new Map<number, number | null>();
     return this.buildScoredData(
       assignments,
       activity,
@@ -444,6 +516,7 @@ export class CustomerKpiReportsService {
       saleInfos,
       from,
       this.monthsInRange(from, to),
+      debtBalances,
     );
   }
 

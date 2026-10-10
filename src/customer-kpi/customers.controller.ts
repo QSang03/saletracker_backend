@@ -59,6 +59,27 @@ export class CustomersController {
     return this.customersService.zaloContacts(query, req.user);
   }
 
+  /**
+   * Nguồn dữ liệu dropdown "Phòng ban" / "chọn Sale" cho các màn hình module
+   * khách hàng — phân phạm vi đúng vai trò khach-hang, không phụ thuộc endpoint
+   * dùng chung của module phòng ban/chiến dịch (mục C — lỗi tích hợp đã sửa).
+   */
+  @Get('filter-departments')
+  @Permission('khach-hang', 'read')
+  filterDepartments(@Req() req: any) {
+    return this.customersService.filterDepartments(req.user);
+  }
+
+  @Get('filter-sales')
+  @Permission('khach-hang', 'read')
+  filterSales(
+    @Query('department') department: string | undefined,
+    @Query('search') search: string | undefined,
+    @Req() req: any,
+  ) {
+    return this.customersService.filterSales({ department, search }, req.user);
+  }
+
   @Post()
   @Permission('khach-hang', 'create')
   create(@Body() dto: CreateCustomerDto, @Req() req: any) {

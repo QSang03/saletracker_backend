@@ -8,6 +8,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { User } from '../users/user.entity';
+import { Department } from '../departments/department.entity';
 import { Customer, CustomerStatus } from './customer.entity';
 import { CustomerAssignment, CustomerTier } from './customer-assignment.entity';
 import { CustomerZalo, MatchMethod } from './customer-zalo.entity';
@@ -76,6 +77,8 @@ export class CustomersService {
     private readonly activityRepo: Repository<CustomerActivityDaily>,
     @InjectRepository(User)
     private readonly userRepo: Repository<User>,
+    @InjectRepository(Department)
+    private readonly departmentRepo: Repository<Department>,
     @InjectRepository(ApprovalRequest)
     private readonly approvalRequestRepo: Repository<ApprovalRequest>,
     @InjectRepository(ApprovalRequestCustomerItem)
@@ -513,6 +516,14 @@ export class CustomersService {
     if (query.tier) {
       qb.andWhere('a.customer_tier = :tier', { tier: query.tier });
     }
+    // Hợp đồng mục 2.2: "cùng bộ lọc như 2.1 (trừ zaloStatus)" — lọc đúng theo
+    // 1 sale (admin phân công ai xem người đó) và theo vai trò CHÍNH/PHỤ
+    if (query.saleId) {
+      qb.andWhere('a.sale_id = :saleId', { saleId: query.saleId });
+    }
+    if (query.role) {
+      qb.andWhere('c.customer_role = :role', { role: query.role });
+    }
     if (query.search) {
       qb.andWhere(
         '(c.customer_code LIKE :search OR c.customer_name LIKE :search)',
@@ -585,6 +596,101 @@ export class CustomersService {
     });
 
     return { data, total, page, pageSize };
+  }
+
+  /**
+   * Nguồn dữ liệu cho dropdown "Phòng ban" trên các màn hình module khách hàng
+   * (danh sách khách, giao chỉ tiêu, khớp Zalo).
+   *
+   * Lý do tồn tại: trước đây FE lấy từ `GET /departments` — endpoint dùng chung
+   * của module phòng ban chỉ cho qua vai `view`/`admin`/`manager` chính xác
+   * (department.service.ts), nên vai `manager-khach-hang` / `user-khach-hang`
+   * bị 401 và dropdown rỗng (mục C — lỗi tích hợp). Endpoint này nằm trong
+   * namespace quyền `khach-hang`, phân phạm vi đúng luật của module.
+   *
+   * Phạm vi: admin/PM/view toàn công ty; manager/user theo phòng ban của mình.
+   */
+  async filterDepartments(user: any) {
+    const roles = this.lowerRoles(user);
+    const isCompanyWide =
+      roles.includes('admin') ||
+      roles.includes('pm') ||
+      roles.includes('view') ||
+      roles.some((r) => r.startsWith('pm-'));
+
+    const qb = this.departmentRepo
+      .createQueryBuilder('d')
+      .where('d.deleted_at IS NULL')
+      .orderBy('d.name', 'ASC');
+
+    if (!isCompanyWide) {
+      const departmentIds = (user.departments || [])
+        .map((d: any) => d?.id)
+        .filter(Boolean);
+      if (departmentIds.length === 0) return { data: [] };
+      qb.andWhere('d.id IN (:...departmentIds)', { departmentIds });
+    }
+
+    const rows = await qb.getMany();
+    return {
+      data: rows.map((d) => ({ id: d.id, name: d.name, slug: d.slug })),
+    };
+  }
+
+  /**
+   * Nguồn dữ liệu cho dropdown "chọn Sale" (báo cáo KPI, giao chỉ tiêu).
+   * Phân biệt `undefined` (không lọc — toàn công ty) với `[]` (không thấy ai)
+   * theo đúng luật scopeUserIds của module; client truyền `saleId` chỉ là gợi ý.
+   *
+   * `department` lọc theo slug phòng ban của sale (6 slug của file phân bổ).
+   */
+  async filterSales(query: { department?: string; search?: string }, user: any) {
+    const userIds = await this.scopeUserIds(user);
+    if (userIds !== undefined && userIds.length === 0) return { data: [] };
+
+    const qb = this.userRepo
+      .createQueryBuilder('u')
+      .leftJoinAndSelect('u.departments', 'd')
+      .where('u.deleted_at IS NULL');
+
+    if (userIds !== undefined) {
+      qb.andWhere('u.id IN (:...userIds)', { userIds });
+    }
+    if (query.department) {
+      // Phòng ban của user là quan hệ nhiều-nhiều qua users_departments —
+      // raw SQL phải dùng tên bảng/cột thật (không phải property TypeORM)
+      qb.andWhere(
+        `EXISTS (
+           SELECT 1 FROM users_departments ud
+           INNER JOIN departments d2 ON d2.id = ud.department_id
+           WHERE ud.user_id = u.id AND d2.slug = :slug AND d2.deleted_at IS NULL
+         )`,
+        { slug: query.department },
+      );
+    }
+    const search = String(query.search ?? '').trim();
+    if (search) {
+      qb.andWhere(
+        '(LOWER(u.full_name) LIKE :s OR LOWER(u.employee_code) LIKE :s OR LOWER(u.username) LIKE :s)',
+        { s: `%${search.toLowerCase()}%` },
+      );
+    }
+
+    qb.orderBy('u.full_name', 'ASC');
+    const rows = await qb.getMany();
+
+    return {
+      data: rows.map((u) => ({
+        id: u.id,
+        fullName: u.fullName,
+        employeeCode: u.employeeCode,
+        departments: (u.departments || []).map((d) => ({
+          id: d.id,
+          name: d.name,
+          slug: d.slug,
+        })),
+      })),
+    };
   }
 
   /** Số liệu phản hồi + hoạt động theo ngày của một khách hàng (Mục 7-6). */
