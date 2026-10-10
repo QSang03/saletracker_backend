@@ -1053,6 +1053,190 @@ console.log('\n-- J. Apply + Rollback (file demo + 2 khách tag nhúng vào work
   // 40 nhân viên test GIỮ ACTIVE (quyết định 10/07) — lần sau restore lại role/phân công
 }
 
+// ============ J2. XOÁ PHÂN CÔNG BỊ FK CHẶN (CÒN DỮ LIỆU KPI) + TÊN FILE TIẾNG VIỆT Ở LỊCH SỬ NẠP ============
+// Tái hiện đúng lỗi thật: khách có phân công đang bị customer_zalo /
+// customer_activity_daily / customer_response_daily tham chiếu → xoá cứng bị
+// FK chặn. Hệ thống phải: giữ nguyên dòng phân công (không mất KPI), ẩn khách
+// (status=deleted) khi hết phân công, báo conflict RÕ RÀNG (không bỏ qua im
+// lặng), và rollback trả lại status cho khách. File nạp tên tiếng Việt đồng
+// thời kiểm tra tên lưu ở tab Lịch sử nạp không bị lỗi dấu (mojibake).
+console.log('\n-- J2. Xoá phân công bị FK chặn (KPI) + tên file tiếng Việt ở Lịch sử nạp --');
+{
+  const FK_DB = '2026-10-09';
+  const tag = Date.now().toString(36).slice(-6);
+  const tagNum = Date.now() % 100000;
+  const FK_CODE = `KPI_FK_${tag}`;
+  const FK_SAP = `CFK${tagNum}`;
+  const FILE_NAME = 'DSKH KDS_CHÍNH PHỤ_KEY NON.xlsx';
+  let sessionId = null;
+  let assignmentId = null;
+  let customerId = null;
+  let conn = null;
+  try {
+    // 0. Kết nối DB dev — chỉ để chèn dòng KPI giả + đọc dữ liệu thật
+    const envRaw = readFileSync(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.env'), 'utf8');
+    const env = Object.fromEntries(
+      envRaw
+        .split(/\r?\n/)
+        .map((l) => l.match(/^\s*([A-Z_]+)\s*=\s*(.*)$/))
+        .filter((m) => m && m[2] !== undefined)
+        .map((m) => [m[1], m[2].trim().replace(/^["']|["']$/g, '')]));
+    const backendRequire = createRequire(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'package.json'));
+    const mysql = backendRequire('mysql2/promise');
+    conn = await mysql.createConnection({
+      host: env.DB_HOST, port: Number(env.DB_PORT || 3306),
+      user: env.DB_USERNAME, password: env.DB_PASSWORD, database: env.DB_NAME,
+    });
+
+    // 1. Khách tag + 1 phân công Laptop (chạy lại: tái sử dụng nếu còn)
+    const search = await call('GET',
+      `/customers?search=${encodeURIComponent(FK_CODE)}&pageSize=10`, H());
+    const existingRow = (search.json?.data || []).find(
+      (x) => x.customer?.customerCode === FK_CODE && x.departmentSlug === 'laptop');
+    if (existingRow?.assignmentId) {
+      assignmentId = existingRow.assignmentId;
+      customerId = existingRow.customer?.id ?? null;
+      ok(`Tái sử dụng phân công #${assignmentId} từ lần chạy trước`);
+    } else {
+      const cr = await call('POST', '/customers', {
+        ...H(),
+        body: {
+          customer_code: FK_CODE, sap_code: FK_SAP, customer_name: `Khách test FK ${tag}`,
+          department_slug: 'laptop', customer_tier: 'KEY', sale_id: 1,
+        },
+      });
+      assert(cr.status === 200 || cr.status === 201,
+        `tạo khách tag HTTP ${cr.status}: ${JSON.stringify(cr.json).slice(0, 150)}`);
+      assignmentId = cr.json?.assignmentId;
+      customerId = cr.json?.customer?.id ?? null;
+      assert(assignmentId, `POST /customers không trả assignmentId: ${JSON.stringify(cr.json).slice(0, 150)}`);
+      ok(`Tạo khách tag ${FK_CODE} + phân công #${assignmentId}`);
+    }
+
+    // 2. Chèn dòng KPI giả → xoá cứng phân công chắc chắn bị FK chặn
+    await conn.query(
+      'INSERT IGNORE INTO customer_activity_daily (assignment_id, stat_date, inbound_count, outbound_count, zalo_linked) VALUES (?, ?, 1, 1, 1)',
+      [assignmentId, FK_DB]);
+    const [act] = await conn.query(
+      'SELECT COUNT(*) cnt FROM customer_activity_daily WHERE assignment_id = ?', [assignmentId]);
+    assert(act[0].cnt >= 1, `không chèn được dòng KPI cho assignment ${assignmentId}`);
+    ok(`Chèn dòng KPI giả (customer_activity_daily) cho phân công #${assignmentId}`);
+
+    // 3. Nạp file demo KHÔNG chứa khách tag → so khớp phải sinh lệnh xoá
+    const fixturePath = path.join(
+      path.dirname(fileURLToPath(import.meta.url)), '..', 'test-fixtures', FILE_NAME);
+    const buf = readFileSync(fixturePath);
+    const fd = new FormData();
+    fd.append('file', new Blob([buf]), FILE_NAME);
+    const up = await fetch(`${BASE}/customer-assignments/import`, {
+      method: 'POST', headers: { Authorization: `Bearer ${adminToken}` },
+      body: fd, signal: AbortSignal.timeout(180000),
+    });
+    const upJson = await up.json();
+    sessionId = upJson?.sessionId;
+    assert(up.status === 201 && sessionId, `upload HTTP ${up.status}: ${JSON.stringify(upJson).slice(0, 200)}`);
+    assert((upJson.summary?.delete ?? 0) >= 1,
+      `delete=${upJson.summary?.delete} — file thiếu khách tag phải sinh lệnh xoá`);
+    ok(`Upload → session ${sessionId}, sinh ${upJson.summary.delete} lệnh xoá`);
+
+    // 4. Lịch sử nạp phải lưu TÊN FILE ĐÚNG DẤU — không mojibake
+    await expect('[J2] Lịch sử nạp lưu tên file tiếng Việt đúng dấu', 200, async () => {
+      const r = await call('GET', '/customer-assignments/import-sessions?pageSize=20', H());
+      const mine = (r.json?.data || []).find((s) => s.id === sessionId);
+      assert(mine, `không thấy session ${sessionId} trong danh sách`);
+      assert(mine.file_name === FILE_NAME,
+        `file_name="${mine.file_name}" — kỳ vọng "${FILE_NAME}" (lỗi dấu khi upload?)`);
+      return r.status;
+    });
+
+    // 5. Có change xoá đúng cho khách tag (phòng laptop)
+    let deleteChangeId = null;
+    for (let page = 1; page <= 20 && !deleteChangeId; page++) {
+      const pv = await call('GET',
+        `/customer-assignments/import-sessions/${sessionId}/preview?action=delete&page=${page}&pageSize=100`, H());
+      const found = (pv.json?.data || []).find(
+        (c) => c.customer_code === FK_CODE && c.department_slug === 'laptop');
+      if (found) deleteChangeId = found.id;
+      else if ((pv.json?.data || []).length < 100) break;
+    }
+    if (deleteChangeId) ok(`Change xoá phân công ${FK_CODE}/laptop tồn tại (#${deleteChangeId})`);
+    else bad('Change xoá cho khách tag', 'không tìm thấy trong preview (action=delete)');
+
+    // 6. Apply — dòng KPI tham chiếu → KHÔNG xoá cứng được, phải báo conflict rõ ràng
+    const ap = await fetch(`${BASE}/customer-assignments/import-sessions/${sessionId}/apply`, {
+      method: 'POST', headers: { Authorization: `Bearer ${adminToken}` },
+      signal: AbortSignal.timeout(600000),
+    });
+    const apJson = await ap.json();
+    if (ap.status !== 200) {
+      bad('Apply session J2', `HTTP ${ap.status}: ${JSON.stringify(apJson).slice(0, 200)}`);
+    } else {
+      const fkConflict = (apJson.conflicts || []).find((c) => c.reason?.includes(FK_CODE));
+      if (fkConflict) {
+        ok(`Apply báo conflict rõ ràng cho dòng bị FK chặn: "${fkConflict.reason}"`);
+        assert(fkConflict.reason.includes('KPI/Zalo'),
+          'lý do conflict phải nói rõ còn dữ liệu KPI/Zalo tham chiếu');
+      } else {
+        bad('Apply FK-block',
+          `conflicts không nhắc khách ${FK_CODE}: ${JSON.stringify(apJson.conflicts).slice(0, 300)}`);
+      }
+    }
+
+    // 7. Sau apply: dòng phân công CÒN NGUYÊN + khách được ẨN
+    const [assignRow] = await conn.query('SELECT id FROM customer_assignments WHERE id = ?', [assignmentId]);
+    assert(assignRow.length === 1,
+      `dòng phân công #${assignmentId} phải được giữ (xoá tay = mất dữ liệu KPI)`);
+    if (customerId) {
+      const [cRow] = await conn.query('SELECT status FROM customers WHERE id = ?', [customerId]);
+      assert(cRow[0]?.status === 'deleted',
+        `khách phải bị ẩn (status=deleted) khi hết phân công — nhận ${cRow[0]?.status}`);
+    }
+    ok('Sau apply: dòng phân công còn nguyên + khách bị ẩn (status=deleted)');
+    await expect('[J2] Sau apply: khách tag ẩn khỏi danh sách (total 0)', 200, async () => {
+      const r = await call('GET', `/customers?search=${encodeURIComponent(FK_CODE)}&pageSize=10`, H());
+      assert((r.json?.total ?? -1) === 0, `total=${r.json?.total} — khách bị ẩn phải biến khỏi danh sách`);
+      return r.status;
+    });
+
+    // 8. Rollback — trả khách về ACTIVE, dòng phân công vẫn còn
+    const rb = await fetch(`${BASE}/customer-assignments/import-sessions/${sessionId}/rollback`, {
+      method: 'POST', headers: { Authorization: `Bearer ${adminToken}` },
+      signal: AbortSignal.timeout(600000),
+    });
+    const rbJson = await rb.json();
+    if (rb.status === 200) {
+      ok(`Rollback → 200 (restored ${rbJson.restored}, skip ${rbJson.skipped?.length})`);
+    } else {
+      bad('Rollback session J2', `HTTP ${rb.status}: ${JSON.stringify(rbJson).slice(0, 200)}`);
+    }
+    if (customerId) {
+      const [cRow] = await conn.query('SELECT status FROM customers WHERE id = ?', [customerId]);
+      assert(cRow[0]?.status === 'active',
+        `sau rollback status phải là active — nhận ${cRow[0]?.status} (rollback phải trả lại status)`);
+    }
+    await expect('[J2] Sau rollback: khách tag hiện lại (total 1)', 200, async () => {
+      const r = await call('GET', `/customers?search=${encodeURIComponent(FK_CODE)}&pageSize=10`, H());
+      assert((r.json?.total ?? 0) === 1, `total=${r.json?.total} — rollback phải trả khách về danh sách`);
+      return r.status;
+    });
+
+    // 9. Dọn dẹp: xoá dòng KPI giả + ẩn khách tag + huỷ session
+    await conn.query('DELETE FROM customer_activity_daily WHERE assignment_id = ?', [assignmentId]);
+    await expect('[J2] Dọn: xoá mềm khách tag → 200', 200,
+      async () => (await call('DELETE', `/customers/${assignmentId}`, H())).status);
+    await expect('[J2] Dọn: huỷ session → 200', 200,
+      async () => (await call('DELETE', `/customer-assignments/import-sessions/${sessionId}`, H())).status);
+    sessionId = null;
+  } catch (e) {
+    bad('[J2] Chuẩn bị', e.message);
+    if (sessionId) { try { await call('DELETE', `/customer-assignments/import-sessions/${sessionId}`, H()); } catch {} }
+  } finally {
+    if (conn) { try { await conn.end(); } catch {} }
+  }
+}
+
 // ============ K. MUC 3 — LIEN KET ZALO: SUA TAY + DANH SACH CHUA KHOP ============
 console.log('\n-- K. Liên kết Zalo: sửa tay + danh sách chưa khớp (Mục 3) --');
 {
@@ -1958,6 +2142,157 @@ console.log('\n-- M. Mục 4: rollup Python → engine KPI → chỉ tiêu → g
       bad('[M] Chuẩn bị/chạy rollup + engine', e.message);
     }
     await cleanup();
+  }
+}
+
+// ============ O. HOÀN TÁC ĐỀ XUẤT CHỈ TIÊU (DUYỆT NHẦM) + OLD_DATA TRONG CHI TIẾT ============
+// Lỗi P2: đề xuất giao chỉ tiêu duyệt nhầm thì không hoàn tác được bằng luồng
+// đề xuất — import có backup rollback, đề xuất không có gì. Giờ BE trả old_data
+// trong chi tiết đề xuất + có POST :id/undo trả chỉ tiêu về giá trị cũ.
+console.log('\n-- O. Hoàn tác đề xuất chỉ tiêu (duyệt nhầm) + old_data trong chi tiết --');
+{
+  let conn = null;
+  const requestIds = [];
+  const CRITERION = 'doanh_so_key';
+  try {
+    const envRaw = readFileSync(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.env'), 'utf8');
+    const env = Object.fromEntries(
+      envRaw
+        .split(/\r?\n/)
+        .map((l) => l.match(/^\s*([A-Z_]+)\s*=\s*(.*)$/))
+        .filter((m) => m && m[2] !== undefined)
+        .map((m) => [m[1], m[2].trim().replace(/^["']|["']$/g, '')]));
+    const backendRequire = createRequire(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'package.json'));
+    const mysql = backendRequire('mysql2/promise');
+    conn = await mysql.createConnection({
+      host: env.DB_HOST, port: Number(env.DB_PORT || 3306),
+      user: env.DB_USERNAME, password: env.DB_PASSWORD, database: env.DB_NAME,
+    });
+
+    const MONTH = new Date().toISOString().slice(0, 7);
+    const SALE_ID = 1; // admin — đã tồn tại, thoả FK sale_id
+    const targetWhere = [CRITERION, MONTH, SALE_ID, 0];
+
+    // Dựng đề xuất pending + dòng chỉ tiêu (giống cách trưởng phòng đề xuất)
+    const mkProposal = async (oldVal, newVal, note) => {
+      const [ins] = await conn.query(
+        "INSERT INTO approval_requests (request_type, requested_by, target_user_id, status, note, created_at, updated_at) VALUES ('kpi_target', ?, ?, 'pending', ?, NOW(), NOW())",
+        [SALE_ID, SALE_ID, note]);
+      requestIds.push(Number(ins.insertId));
+      await conn.query(
+        'INSERT INTO approval_request_target_items (request_id, criterion_key, period_month, sale_id, customer_id, old_target_value, new_target_value, created_at) VALUES (?, ?, ?, ?, NULL, ?, ?, NOW())',
+        [ins.insertId, CRITERION, MONTH, SALE_ID, oldVal, newVal]);
+      return Number(ins.insertId);
+    };
+    const getTarget = async () => {
+      const [rows] = await conn.query(
+        'SELECT target_value FROM kpi_targets WHERE criterion_key = ? AND period_month = ? AND sale_id = ? AND customer_id = ?',
+        targetWhere);
+      return rows.length ? Number(rows[0].target_value) : null;
+    };
+    await conn.query(
+      'DELETE FROM kpi_targets WHERE criterion_key = ? AND period_month = ? AND sale_id = ? AND customer_id = ?',
+      targetWhere);
+    try {
+      // 1. Chỉ tiêu CÓ SẴN (giá trị cũ 90) + đề xuất đổi sang 55
+      await conn.query(
+        'INSERT INTO kpi_targets (criterion_key, period_month, sale_id, customer_id, target_value, created_by, created_at) VALUES (?, ?, ?, 0, 90, 1, NOW())',
+        [CRITERION, MONTH, SALE_ID]);
+      const req1 = await mkProposal(90, 55, 'test undo cập nhật');
+      ok(`Dựng đề xuất #${req1} (cập nhật 90 → 55) + chỉ tiêu có sẵn 90`);
+
+      // 2. Chi tiết đề xuất phải trả OLD_DATA — lỗi P2: FE đọc old_data nhưng rỗng
+      await expect('[O] Chi tiết đề xuất trả old_data/new_data/action', 200, async () => {
+        const r = await call('GET', `/approval-requests/${req1}`, H());
+        assert(r.status === 200, `HTTP ${r.status}: ${r.text?.slice(0, 150)}`);
+        const item = r.json?.items?.[0];
+        assert(item, 'detail không có items');
+        assert(item.action === 'update', `action="${item.action}" — kỳ vọng update (có giá trị cũ)`);
+        assert(Number(item.old_data?.target_value) === 90,
+          `old_data.target_value=${JSON.stringify(item.old_data)} — kỳ vọng 90 (giá trị cũ lúc đề xuất)`);
+        assert(Number(item.new_data?.target_value) === 55,
+          `new_data.target_value=${JSON.stringify(item.new_data)} — kỳ vọng 55`);
+        return r.status;
+      });
+
+      // 3. Duyệt → ghi 55
+      await expect('[O] Duyệt đề xuất → ghi 55 vào kpi_targets', 200, async () => {
+        const r = await call('POST', `/approval-requests/${req1}/decide`, { ...H(), body: { action: 'approve' } });
+        assert(r.status === 200, `HTTP ${r.status}: ${r.text?.slice(0, 150)}`);
+        return r.status;
+      });
+      assert(await getTarget() === 55, `sau duyệt target=${await getTarget()} — kỳ vọng 55`);
+
+      // 4. Duyệt nhầm → hoàn tác → trả về 90
+      await expect('[O] Hoàn tác đề xuất đã duyệt → trả chỉ tiêu về giá trị cũ', 200, async () => {
+        const r = await call('POST', `/approval-requests/${req1}/undo`, H());
+        assert(r.status === 200, `HTTP ${r.status}: ${r.text?.slice(0, 200)}`);
+        assert(r.json?.restored >= 1, `restored=${r.json?.restored}`);
+        const now = await getTarget();
+        assert(now === 90, `sau hoàn tác target=${now} — kỳ vọng 90 (giá trị trước khi duyệt)`);
+        return r.status;
+      });
+      const [stRows] = await conn.query('SELECT status, undone_by FROM approval_requests WHERE id = ?', [req1]);
+      assert(stRows[0].status === 'undone', `status="${stRows[0].status}" — kỳ vọng undone`);
+      ok(`Đề xuất chuyển trạng thái undone (hoàn tác bởi user #${stRows[0].undone_by})`);
+
+      await expect('[O] Hoàn tác lần 2 → 400 (đề xuất không còn ở trạng thái đã duyệt)', 400,
+        async () => (await call('POST', `/approval-requests/${req1}/undo`, H())).status);
+      await expect('[O] Đề xuất đã hoàn tác → duyệt lại → 400', 400,
+        async () => (await call('POST', `/approval-requests/${req1}/decide`, { ...H(), body: { action: 'approve' } })).status);
+
+      // 5. Chỉ tiêu bị GÁN LẠI sau khi duyệt → từ chối hoàn tác, không ghi đè
+      const req2 = await mkProposal(90, 55, 'test undo xung đột');
+      await call('POST', `/approval-requests/${req2}/decide`, { ...H(), body: { action: 'approve' } });
+      await conn.query(
+        'UPDATE kpi_targets SET target_value = 77 WHERE criterion_key = ? AND period_month = ? AND sale_id = ? AND customer_id = ?',
+        targetWhere);
+      await expect('[O] Có người gán lại sau khi duyệt → hoàn tác bị từ chối + báo xung đột', 400, async () => {
+        const r = await call('POST', `/approval-requests/${req2}/undo`, H());
+        assert(r.status === 400, `HTTP ${r.status}: ${r.text?.slice(0, 200)}`);
+        const conflicts = r.json?.conflicts || [];
+        assert(conflicts.some((c) => c.saleId === SALE_ID), `conflicts=${JSON.stringify(conflicts)}`);
+        return r.status;
+      });
+      assert(await getTarget() === 77, `giá trị mới hơn (77) phải được giữ — nhận ${await getTarget()}`);
+
+      // 6. Đề xuất TẠO MỚI (old rỗng) → duyệt → hoàn tác thì dòng bị xoá đi
+      await conn.query(
+        'DELETE FROM kpi_targets WHERE criterion_key = ? AND period_month = ? AND sale_id = ? AND customer_id = ?',
+        targetWhere);
+      const req3 = await mkProposal(null, 42, 'test undo tạo mới');
+      await call('POST', `/approval-requests/${req3}/decide`, { ...H(), body: { action: 'approve' } });
+      assert(await getTarget() === 42, `sau duyệt tạo mới target=${await getTarget()} — kỳ vọng 42`);
+      await expect('[O] Hoàn tác đề xuất tạo mới → dòng chỉ tiêu bị xoá (về như trước khi duyệt)', 200, async () => {
+        const r = await call('POST', `/approval-requests/${req3}/undo`, H());
+        assert(r.status === 200, `HTTP ${r.status}: ${r.text?.slice(0, 200)}`);
+        const now = await getTarget();
+        assert(now === null, `sau hoàn tác target=${now} — kỳ vọng null (dòng đã bị xoá)`);
+        return r.status;
+      });
+
+      // 7. Đề xuất KHÁC LOẠI (customer_list) → undo → 400 rõ ràng
+      const [clIns] = await conn.query(
+        "INSERT INTO approval_requests (request_type, requested_by, target_user_id, status, note, created_at, updated_at) VALUES ('customer_list', ?, 1, 'approved', 'test undo sai loại', NOW(), NOW())",
+        [SALE_ID]);
+      requestIds.push(Number(clIns.insertId));
+      await expect('[O] Hoàn tác đề xuất sửa danh sách khách → 400 (chỉ hỗ trợ đề xuất chỉ tiêu)', 400,
+        async () => (await call('POST', `/approval-requests/${clIns.insertId}/undo`, H())).status);
+    } finally {
+      // Dọn: chỉ tiêu test + đề xuất (xoá request → items theo CASCADE)
+      await conn.query(
+        'DELETE FROM kpi_targets WHERE criterion_key = ? AND period_month = ? AND sale_id = ? AND customer_id = ?',
+        targetWhere).catch(() => {});
+      if (requestIds.length) {
+        await conn.query('DELETE FROM approval_requests WHERE id IN (?)', [requestIds]).catch(() => {});
+      }
+    }
+  } catch (e) {
+    bad('[O] Chuẩn bị', e.message);
+  } finally {
+    if (conn) { try { await conn.end(); } catch {} }
   }
 }
 

@@ -23,7 +23,8 @@ import {
 /**
  * Hàng chờ duyệt dùng chung: sửa danh sách khách hàng (nhân viên -> trưởng
  * phòng) và giao chỉ tiêu (trưởng phòng -> admin). Ai được duyệt gì kiểm tra
- * ở service theo request_type và vai trò.
+ * ở service theo request_type và vai trò. Đề xuất chỉ tiêu duyệt nhầm thì
+ * hoàn tác được qua POST :id/undo.
  */
 @Controller('approval-requests')
 @UseGuards(JwtAuthGuard, PermissionGuard)
@@ -51,5 +52,13 @@ export class ApprovalRequestsController {
     @Req() req: any,
   ) {
     return this.approvalsService.decide(id, dto, req.user);
+  }
+
+  /** Hoàn tác đề xuất giao chỉ tiêu đã duyệt — trả chỉ tiêu về giá trị cũ. */
+  @Post(':id/undo')
+  @HttpCode(HttpStatus.OK)
+  @Permission('khach-hang', 'approve')
+  undo(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.approvalsService.undo(id, req.user);
   }
 }

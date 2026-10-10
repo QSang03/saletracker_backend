@@ -21,6 +21,8 @@ export enum ApprovalStatus {
   PENDING = 'pending',
   APPROVED = 'approved',
   REJECTED = 'rejected',
+  /** Đã duyệt rồi hoàn tác — dữ liệu được trả về trạng thái trước khi duyệt. */
+  UNDONE = 'undone',
 }
 
 /**
@@ -75,6 +77,13 @@ export class ApprovalRequest {
 
   @Column({ type: 'text', nullable: true })
   reject_reason: string | null;
+
+  /** Ai hoàn tác đề xuất đã duyệt (undo) + thời điểm. */
+  @Column({ type: 'int', nullable: true })
+  undone_by: number | null;
+
+  @Column({ type: 'datetime', nullable: true })
+  undone_at: Date | null;
 
   @CreateDateColumn()
   created_at: Date;

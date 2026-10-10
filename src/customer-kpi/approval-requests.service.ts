@@ -4,8 +4,8 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 import { User } from '../users/user.entity';
 import { Customer, CustomerStatus } from './customer.entity';
 import { CustomerAssignment, CustomerTier } from './customer-assignment.entity';
@@ -53,6 +53,8 @@ export class ApprovalRequestsService {
     private readonly assignmentRepo: Repository<CustomerAssignment>,
     @InjectRepository(KpiTarget)
     private readonly kpiTargetRepo: Repository<KpiTarget>,
+    @InjectDataSource()
+    private readonly dataSource: DataSource,
   ) {}
 
   /**
@@ -175,16 +177,35 @@ export class ApprovalRequestsService {
     });
     if (!request) throw new NotFoundException('Không tìm thấy đề xuất');
 
-    const items =
-      request.request_type === ApprovalRequestType.CUSTOMER_LIST
-        ? await this.customerItemRepo.find({
-            where: { request_id: id },
-            order: { created_at: 'ASC' },
-          })
-        : await this.targetItemRepo.find({
-            where: { request_id: id },
-            order: { created_at: 'ASC' },
-          });
+    // Cả hai loại đề xuất trả CÙNG hình dạng diff (old_data/new_data/action)
+    // để màn hình hàng chờ duyệt render một bộ code. Dòng chỉ tiêu chưa từng
+    // có (old_target_value = null) là "thêm mới", đã có là "cập nhật" — giá
+    // trị cũ lấy từ lúc đề xuất, dùng để hoàn tác khi duyệt nhầm.
+    let items: any[];
+    if (request.request_type === ApprovalRequestType.CUSTOMER_LIST) {
+      items = await this.customerItemRepo.find({
+        where: { request_id: id },
+        order: { created_at: 'ASC' },
+      });
+    } else {
+      const targetItems = await this.targetItemRepo.find({
+        where: { request_id: id },
+        order: { created_at: 'ASC' },
+      });
+      items = targetItems.map((item) => ({
+        ...item,
+        action: item.old_target_value != null ? 'update' : 'create',
+        old_data:
+          item.old_target_value != null
+            ? { target_value: Number(item.old_target_value) }
+            : null,
+        new_data:
+          item.new_target_value != null
+            ? { target_value: Number(item.new_target_value) }
+            : null,
+        target_value: item.new_target_value,
+      }));
+    }
 
     // Tên người trong phòng bị tác động (nếu có)
     const targetUser = request.target_user_id
@@ -273,30 +294,34 @@ export class ApprovalRequestsService {
         return { decided: true, status: 'rejected' };
       }
       // Duyệt → ghi từng mục vào kpi_targets (customer_id null quy về 0 =
-      // chỉ tiêu cả danh sách — cùng quy ước UNIQUE key với gán thẳng)
+      // chỉ tiêu cả danh sách — cùng quy ước UNIQUE key với gán thẳng).
+      // MỘT TRANSACTION: duyệt nhầm phải hoàn tác được (xem undo) nên không
+      // được để lại trạng thái "đã duyệt một nửa".
       const targetItems = await this.targetItemRepo.find({
         where: { request_id: id },
       });
-      for (const item of targetItems) {
-        await this.kpiTargetRepo.manager
-          .createQueryBuilder()
-          .insert()
-          .into(KpiTarget)
-          .values({
-            criterion_key: item.criterion_key,
-            period_month: item.period_month,
-            sale_id: item.sale_id,
-            customer_id: item.customer_id ?? 0,
-            target_value: Number(item.new_target_value ?? 0),
-            created_by: user.id,
-          })
-          .orUpdate({ overwrite: ['target_value', 'created_by'] })
-          .execute();
-      }
-      request.status = ApprovalStatus.APPROVED;
-      request.decided_by = user.id;
-      request.decided_at = new Date();
-      await this.requestRepo.save(request);
+      await this.dataSource.transaction(async (em) => {
+        for (const item of targetItems) {
+          await em
+            .createQueryBuilder()
+            .insert()
+            .into(KpiTarget)
+            .values({
+              criterion_key: item.criterion_key,
+              period_month: item.period_month,
+              sale_id: item.sale_id,
+              customer_id: item.customer_id ?? 0,
+              target_value: Number(item.new_target_value ?? 0),
+              created_by: user.id,
+            })
+            .orUpdate({ overwrite: ['target_value', 'created_by'] })
+            .execute();
+        }
+        request.status = ApprovalStatus.APPROVED;
+        request.decided_by = user.id;
+        request.decided_at = new Date();
+        await em.save(request);
+      });
       return { decided: true, status: 'approved', applied: targetItems.length };
     }
 
@@ -412,5 +437,98 @@ export class ApprovalRequestsService {
     request.decided_at = new Date();
     await this.requestRepo.save(request);
     return { decided: true, status: 'approved', appliedItems: applied };
+  }
+
+  /**
+   * Hoàn tác đề xuất giao chỉ tiêu ĐÃ DUYỆT — trả chỉ tiêu về giá trị cũ
+   * (old_target_value đã lưu lúc đề xuất; dòng mà đề xuất tạo mới thì bị xoá
+   * đi). Đây là cơ chế "cứu" khi admin duyệt nhầm, tương tự rollback của
+   * import — không bắt người dùng xuống tầng database.
+   *
+   * Từ chối hoàn tác nếu giá trị HIỆN TẠI khác giá trị đề xuất đã ghi
+   * (nghĩa là sau khi duyệt có người gán lại): trả về danh sách xung đột để
+   * người dùng tự quyết, KHÔNG ghi đè dữ liệu mới hơn.
+   */
+  async undo(id: number, user: any) {
+    const request = await this.requestRepo.findOne({
+      where: { id },
+      relations: ['requested_by'],
+    });
+    if (!request) throw new NotFoundException('Không tìm thấy đề xuất');
+    if (request.request_type !== ApprovalRequestType.KPI_TARGET) {
+      throw new BadRequestException('Chỉ hoàn tác được đề xuất giao chỉ tiêu');
+    }
+    if (!isAdmin(user)) {
+      throw new ForbiddenException(
+        'Chỉ quản trị viên mới được hoàn tác đề xuất chỉ tiêu',
+      );
+    }
+    if (request.status !== ApprovalStatus.APPROVED) {
+      throw new BadRequestException('Chỉ hoàn tác được đề xuất đã duyệt');
+    }
+
+    // Kiểm tra hết TRƯỚC khi ghi — hoàn tác phải nguyên tử: hoặc trả về
+    // nguyên trạng thái trước khi duyệt, hoặc không đụng vào gì.
+    const items = await this.targetItemRepo.find({ where: { request_id: id } });
+    const conflicts: Array<{ saleId: number; reason: string }> = [];
+    const plans: Array<{ item: ApprovalRequestTargetItem; row: KpiTarget }> =
+      [];
+    for (const item of items) {
+      const row = await this.kpiTargetRepo.findOne({
+        where: {
+          criterion_key: item.criterion_key,
+          period_month: item.period_month,
+          sale_id: item.sale_id,
+          customer_id: item.customer_id ?? 0,
+        },
+      });
+      if (!row) {
+        // Đề xuất TẠO MỚI (old rỗng) mà dòng sau đó đã bị xoá → không cần gì.
+        // Đề xuất CẬP NHẬT mà dòng đã mất → không khôi phục được, phải báo.
+        if (item.old_target_value != null) {
+          conflicts.push({
+            saleId: item.sale_id,
+            reason: 'chỉ tiêu không còn trong hệ thống',
+          });
+        }
+        continue;
+      }
+      if (
+        item.new_target_value != null &&
+        Number(row.target_value) !== Number(item.new_target_value)
+      ) {
+        conflicts.push({
+          saleId: item.sale_id,
+          reason: `giá trị hiện tại (${row.target_value}) khác giá trị đề xuất đã duyệt (${item.new_target_value}) — có thể đã gán lại sau đó`,
+        });
+        continue;
+      }
+      plans.push({ item, row });
+    }
+    if (conflicts.length) {
+      throw new BadRequestException({
+        message: 'Không hoàn tác được — chỉ tiêu đã thay đổi sau khi duyệt',
+        conflicts,
+      });
+    }
+
+    let restored = 0;
+    await this.dataSource.transaction(async (em) => {
+      for (const { item, row } of plans) {
+        if (item.old_target_value == null) {
+          await em.delete(KpiTarget, row.id);
+        } else {
+          row.target_value = Number(item.old_target_value);
+          await em.save(row);
+        }
+        restored++;
+      }
+      request.status = ApprovalStatus.UNDONE;
+      request.undone_by = user.id;
+      request.undone_at = new Date();
+      await em.save(request);
+    });
+
+    return { undone: true, restored, status: request.status };
   }
 }

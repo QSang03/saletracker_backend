@@ -24,6 +24,7 @@ import {
   ImportSessionQueryDto,
   ChangeDecisionDto,
 } from './dto/import-session-query.dto';
+import { decodeUploadedFileName } from '../common/utils/upload-file-name';
 import {
   parseImportWorkbook,
   ParsedCustomerRow,
@@ -215,7 +216,11 @@ export class CustomerAssignmentsService {
    */
   async createImport(file: any, user: any) {
     if (!file) throw new BadRequestException('Thiếu file Excel');
-    const originalName = String(file.originalname || 'import.xlsx');
+    // Multer đọc header filename dạng latin1 — tên tiếng Việt bị vỡ dấu
+    // (mojibake) nếu không chuyển ngược về UTF-8 trước khi lưu session.
+    const originalName = decodeUploadedFileName(
+      String(file.originalname || 'import.xlsx'),
+    );
     if (!originalName.toLowerCase().endsWith('.xlsx')) {
       throw new BadRequestException('Chỉ nhận file .xlsx');
     }
@@ -528,6 +533,9 @@ export class CustomerAssignmentsService {
    * - CREATE/UPDATE/DELETE đều ghi backup trước khi đụng dữ liệu → rollback được.
    * - DELETE: xoá cứng dòng phân công (backup giữ nguyên trạng thái để khôi phục
    *   cả id); nếu khách không còn phân công nào → đặt customers.status='deleted'.
+   *   Phân công bị FK giữ lại (còn dữ liệu KPI/Zalo tham chiếu) thì KHÔNG xoá
+   *   cứng được: giữ nguyên dòng, vẫn loại khỏi danh sách hiện hành, ẩn khách
+   *   nếu hết phân công, và báo lại qua conflicts (không bỏ qua im lặng).
    */
   async applySession(sessionId: number, user: any) {
     const session = await this.sessionRepo.findOne({
@@ -727,7 +735,6 @@ export class CustomerAssignmentsService {
               applied++;
             }
           } else if (change.action === ImportChangeAction.DELETE) {
-            const od = change.old_data || {};
             const customerId = this.customerIdFromChange(change, customerByKey);
             const assignment = (
               assignmentsByCustomer.get(customerId) || []
@@ -740,7 +747,7 @@ export class CustomerAssignmentsService {
               continue;
             }
             const customer = customers.get(customerId);
-            await em.save(
+            const backup = await em.save(
               em.create(CustomerImportBackup, {
                 session_id: sessionId,
                 assignment_id: assignment.id,
@@ -760,24 +767,31 @@ export class CustomerAssignmentsService {
                 user_id: user?.id ?? null,
               }),
             );
+            let hardDeleted = true;
             try {
               await em.delete(CustomerAssignment, assignment.id);
-              assignmentsByCustomer.set(
-                customerId,
-                (assignmentsByCustomer.get(customerId) || []).filter(
-                  (x) => x.id !== assignment.id,
-                ),
-              );
             } catch {
-              // FK chặn (đang có dữ liệu daily tham chiếu) → giữ nguyên dòng,
-              // khách hàng vẫn ẩn qua status nếu toàn bộ phân công bị xoá
-              conflicts.push({
-                changeId: change.id,
-                reason:
-                  'phân công đang có dữ liệu KPI tham chiếu, không xoá được',
-              });
-              continue;
+              // FK chặn: customer_zalo / customer_activity_daily /
+              // customer_response_daily còn tham chiếu dòng phân công →
+              // KHÔNG xoá cứng được (xoá tay các bảng đó = mất dữ liệu KPI).
+              // Giữ nguyên dòng, đánh dấu vào backup để rollback biết mà
+              // khôi phục lại status của khách (apply sẽ ẩn khách bên dưới).
+              hardDeleted = false;
+              backup.original_data = {
+                ...backup.original_data,
+                assignment_kept: true,
+              };
+              await em.save(backup);
             }
+            // Dù xoá cứng được hay bị FK chặn, phân công này không còn là
+            // phân công HIỆN HÀNH của khách — loại khỏi bộ đệm để các change
+            // sau và phép tính "khách không còn phân công nào" bên dưới đúng.
+            assignmentsByCustomer.set(
+              customerId,
+              (assignmentsByCustomer.get(customerId) || []).filter(
+                (x) => x.id !== assignment.id,
+              ),
+            );
             const remaining = (
               assignmentsByCustomer.get(customerId) || []
             ).filter(
@@ -785,13 +799,25 @@ export class CustomerAssignmentsService {
                 x.department_slug &&
                 DEPARTMENT_SLUGS.includes(x.department_slug),
             );
-            if (
-              customer &&
+            const customerHidden =
+              !!customer &&
               remaining.length === 0 &&
-              customer.status !== CustomerStatus.DELETED
-            ) {
+              customer.status !== CustomerStatus.DELETED;
+            if (customerHidden) {
               customer.status = CustomerStatus.DELETED;
               await em.save(customer);
+            }
+            if (!hardDeleted) {
+              conflicts.push({
+                changeId: change.id,
+                reason:
+                  `phân công #${assignment.id} (${change.customer_code}|${change.sap_code} – ${change.department_slug}) còn dữ liệu KPI/Zalo tham chiếu nên không xoá cứng được — ` +
+                  (customerHidden
+                    ? 'giữ nguyên dòng phân công và ẩn khách hàng (status=deleted)'
+                    : 'giữ nguyên dòng phân công') +
+                  '; rollback sẽ khôi phục',
+              });
+              continue;
             }
             applied++;
           }
@@ -834,7 +860,9 @@ export class CustomerAssignmentsService {
   /**
    * Hoàn tác session đã apply — đi ngược qua backup theo thứ tự ngược lại:
    * CREATE → xoá phân công (khách tự tạo bị xoá mềm), UPDATE → trả trạng thái cũ,
-   * DELETE → dựng lại phân công (giữ nguyên id để dữ liệu KPI nối lại được).
+   * DELETE → dựng lại phân công (giữ nguyên id để dữ liệu KPI nối lại được);
+   * dòng bị FK giữ lại khi apply thì khôi phục lại status của khách (apply đã
+   * ẩn khách khi đó).
    */
   async rollbackSession(sessionId: number, user: any) {
     const session = await this.sessionRepo.findOne({
@@ -918,23 +946,31 @@ export class CustomerAssignmentsService {
             const existed = await em.findOne(CustomerAssignment, {
               where: { id: backup.assignment_id },
             });
-            if (existed) {
+            if (existed && !od.assignment_kept) {
+              // Dòng đã tồn tại lại sau apply — không cần dựng nữa
               skipped.push({
                 assignmentId: backup.assignment_id,
                 reason: 'phân công vẫn còn, không cần dựng lại',
               });
               continue;
             }
-            await em.save(
-              em.create(CustomerAssignment, {
-                id: backup.assignment_id,
-                customer_id: odA.customer_id,
-                sale_id: odA.sale_id,
-                department_slug: odA.department_slug,
-                customer_tier: odA.customer_tier,
-                zalo_account_id: odA.zalo_account_id ?? null,
-              }),
-            );
+            let didRestore = false;
+            if (!existed) {
+              await em.save(
+                em.create(CustomerAssignment, {
+                  id: backup.assignment_id,
+                  customer_id: odA.customer_id,
+                  sale_id: odA.sale_id,
+                  department_slug: odA.department_slug,
+                  customer_tier: odA.customer_tier,
+                  zalo_account_id: odA.zalo_account_id ?? null,
+                }),
+              );
+              didRestore = true;
+            }
+            // Trạng thái khách phải trả lại CẢ KHI dòng phân công không xoá
+            // được (apply đã ẩn khách bằng status='deleted') — nếu không,
+            // rollback xong khách vẫn nằm ẩn dù phân công chưa từng mất.
             if (
               od.customer_status_before === CustomerStatus.ACTIVE &&
               odA.customer_id
@@ -945,9 +981,10 @@ export class CustomerAssignmentsService {
               if (customer && customer.status === CustomerStatus.DELETED) {
                 customer.status = CustomerStatus.ACTIVE;
                 await em.save(customer);
+                didRestore = true;
               }
             }
-            restored++;
+            if (didRestore) restored++;
           }
         } catch (e) {
           skipped.push({
