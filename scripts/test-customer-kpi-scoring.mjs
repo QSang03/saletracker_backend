@@ -323,5 +323,120 @@ r = engine.scoreSale(
 );
 check('all_customers + không có khách → no_data lý do riêng', r.status === 'no_data' && r.reason === REASON_NO_CUSTOMERS, r);
 
+// ─── Tiêu chí 3/4 — binary theo tháng (thiết kế TC3/TC4) ───
+const mvDay = (d, count, o = {}) => ({
+  stat_date: d,
+  inbound_count: 0,
+  outbound_count: 0,
+  order_count: 0,
+  revenue: 0,
+  zalo_linked: o.linked !== false,
+  movement_count: count,
+});
+
+console.log('\n[N] Tiêu chí 3 — movement_report (báo cáo di chuyển khớp cú pháp)');
+
+r = engine.scoreCustomer(
+  def({ metric: 'movement_report', scoring_mode: 'binary', target_value: 1, period: 'month' }),
+  [mvDay('2026-10-05', 0), mvDay('2026-10-12', 1)],
+  1,
+  FROM,
+);
+check('có tin báo cáo trong tháng → pass', r.status === 'pass', r);
+
+r = engine.scoreCustomer(
+  def({ metric: 'movement_report', scoring_mode: 'binary', target_value: 1, period: 'month' }),
+  [mvDay('2026-10-05', 0), mvDay('2026-10-12', 0)],
+  1,
+  FROM,
+);
+check('không có tin báo cáo → fail (mặc định chưa đạt)', r.status === 'fail', r);
+
+r = engine.scoreCustomer(
+  def({ metric: 'movement_report', scoring_mode: 'binary', target_value: 1, period: 'month' }),
+  [mvDay('2026-10-12', 2, { linked: false })],
+  1,
+  FROM,
+);
+check('báo cáo không cần khớp liên hệ Zalo', r.status === 'pass', r);
+
+r = engine.scoreCustomer(
+  def({ metric: 'movement_report', scoring_mode: 'binary', target_value: 1, period: 'month' }),
+  [mvDay('2026-09-28', 1)],
+  1,
+  FROM,
+);
+check('báo cáo trước cửa sổ → không tính', r.status === 'fail', r);
+
+// mẫu số = TOÀN BỘ khách; C chưa khớp Zalo nhưng có báo cáo vẫn tính đạt
+const mvA = { days: [mvDay('2026-10-12', 1)] };
+const mvB = { days: [mvDay('2026-10-01', 0, { linked: false })] };
+const mvC = { days: [mvDay('2026-10-03', 3, { linked: false })] };
+r = engine.scoreSale(
+  def({ metric: 'movement_report', scoring_mode: 'binary', target_value: 1, period: 'month' }),
+  [mvA, mvB, mvC],
+  1,
+  false,
+  FROM,
+);
+check('mẫu số = 3 (toàn bộ khách, không gate reachable)', r.denominatorValue === 3, r);
+check('x = 2 (A + C, kể C không khớp Zalo)', r.numerator === 2, r);
+check('sale đạt khi x > 0', r.status === 'pass', r);
+
+r = engine.scoreSale(
+  def({ metric: 'movement_report', scoring_mode: 'binary', target_value: 1, period: 'month' }),
+  [mvB],
+  1,
+  false,
+  FROM,
+);
+check('không khách nào báo cáo → fail, x = 0', r.status === 'fail' && r.numerator === 0, r);
+
+r = engine.scoreSale(
+  def({ metric: 'movement_report', scoring_mode: 'binary', target_value: 1, period: 'month' }),
+  [],
+  1,
+  false,
+  FROM,
+);
+check('sale không có khách → no_data', r.status === 'no_data' && r.reason === REASON_NO_CUSTOMERS, r);
+
+console.log('\n[N] Tiêu chí 4 — monthly_contact (sale nhắn tin tới khách trong tháng)');
+
+r = engine.scoreCustomer(
+  def({ metric: 'monthly_contact', scoring_mode: 'binary', target_value: 1, period: 'month' }),
+  [day('2026-10-04', { ob: 1 })],
+  1,
+  FROM,
+);
+check('sale nhắn 1 tin, khách không trả lời → pass', r.status === 'pass', r);
+
+r = engine.scoreCustomer(
+  def({ metric: 'monthly_contact', scoring_mode: 'binary', target_value: 1, period: 'month' }),
+  [day('2026-10-04', { ib: 5, ob: 0 })],
+  1,
+  FROM,
+);
+check('chỉ khách nhắn → fail', r.status === 'fail', r);
+
+r = engine.scoreCustomer(
+  def({ metric: 'monthly_contact', scoring_mode: 'binary', target_value: 1, period: 'month' }),
+  [day('2026-10-04', { ob: 2, linked: false })],
+  1,
+  FROM,
+);
+check('không đo được Zalo → no_data (khác fail)', r.status === 'no_data' && r.reason === REASON_NO_ZALO_LINK, r);
+
+r = engine.scoreSale(
+  def({ metric: 'monthly_contact', scoring_mode: 'binary', target_value: 1, period: 'month' }),
+  [custA, custB],
+  1,
+  true,
+  FROM,
+);
+check('mẫu số = 1 (chỉ khách đo được)', r.denominatorValue === 1, r);
+check('x = 1 (A có tin đi)', r.numerator === 1, r);
+check('sale đạt khi x > 0', r.status === 'pass', r);
+
 console.log(`\n===== ${pass} pass, ${fail} fail =====`);
 process.exit(fail === 0 ? 0 : 1);

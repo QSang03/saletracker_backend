@@ -7,6 +7,8 @@ import { Debt, DebtStatus } from '../debts/debt.entity';
 import { Customer } from './customer.entity';
 import { CustomerAssignment } from './customer-assignment.entity';
 import { CustomerActivityDaily } from './customer-activity-daily.entity';
+import { CustomerMovementReport } from './customer-movement-report.entity';
+import { KpiCriterionOverride } from './kpi-criterion-overrides.entity';
 import { KpiDefinition, ScoringMode } from './kpi-definition.entity';
 import { KpiTarget } from './kpi-target.entity';
 import { CustomersService } from './customers.service';
@@ -49,6 +51,13 @@ const SUGGESTION_REASON_PRIORITY: Record<string, number> = {
 
 const SUGGESTION_LIMIT_PER_SALE = 20;
 
+/** Một sự kiện báo cáo di chuyển thô, đọc từ customer_movement_reports. */
+interface MovementEventRow {
+  user_id: number;
+  customer_code: string;
+  sent_at: Date | string;
+}
+
 interface AssignmentRow {
   assignmentId: number;
   saleId: number;
@@ -85,6 +94,10 @@ export class CustomerKpiReportsService {
     private readonly userRepo: Repository<User>,
     @InjectRepository(Debt)
     private readonly debtRepo: Repository<Debt>,
+    @InjectRepository(CustomerMovementReport)
+    private readonly movementRepo: Repository<CustomerMovementReport>,
+    @InjectRepository(KpiCriterionOverride)
+    private readonly overrideRepo: Repository<KpiCriterionOverride>,
     private readonly customersService: CustomersService,
   ) { }
 
@@ -208,6 +221,85 @@ export class CustomerKpiReportsService {
     return result;
   }
 
+  /**
+   * Sự kiện báo cáo di chuyển (tiêu chí 3) của các sale trong cửa sổ — job
+   * Python ghi theo (user_id, mã KH). Chỉ nạp trong [from, to]: tiêu chí này
+   * không cần lookback. `to` là ngày cuối cửa sổ nên phải cộng 1 ngày để
+   * so sánh với cột DATETIME (không mất ngày cuối).
+   */
+  private async loadMovementEvents(
+    saleIds: number[],
+    from: string,
+    to: string,
+  ): Promise<MovementEventRow[]> {
+    if (saleIds.length === 0) return [];
+    const toExclusive = this.shiftDate(to, 1);
+    return this.movementRepo
+      .createQueryBuilder('m')
+      .select('m.user_id', 'user_id')
+      .addSelect('m.customer_code', 'customer_code')
+      .addSelect('m.sent_at', 'sent_at')
+      .where('m.user_id IN (:...saleIds)', { saleIds: [...new Set(saleIds)] })
+      .andWhere('m.sent_at >= :from', { from })
+      .andWhere('m.sent_at < :toExclusive', { toExclusive })
+      .getRawMany<MovementEventRow>();
+  }
+
+  /**
+   * Ghép sự kiện báo cáo di chuyển vào map ngày hoạt động. Khớp theo
+   * (user_id, customer_code chuẩn hoá) — NestJS tự tra khách của sale, job
+   * Python không cần biết bảng khách. Ngày chưa có dòng thì tạo dòng mới với
+   * inbound/outbound = 0 và zalo_linked = false (các metric Zalo lọc
+   * zalo_linked nên không bị ảnh hưởng; adapter movement_report không gate).
+   */
+  private mergeMovementReports(
+    activity: Map<number, ActivityDayRow[]>,
+    rows: AssignmentRow[],
+    events: MovementEventRow[],
+  ): void {
+    if (events.length === 0) return;
+    const normCode = (value: unknown): string =>
+      String(value ?? '')
+        .trim()
+        .toLowerCase();
+    // (user_id | mã KH) -> ngày -> số tin
+    const counts = new Map<string, Map<string, number>>();
+    for (const event of events) {
+      const key = `${Number(event.user_id)}|${normCode(event.customer_code)}`;
+      const day =
+        event.sent_at instanceof Date
+          ? this.fmtDate(event.sent_at)
+          : String(event.sent_at ?? '').slice(0, 10);
+      if (!day) continue;
+      const byDay = counts.get(key) ?? new Map<string, number>();
+      byDay.set(day, (byDay.get(day) ?? 0) + 1);
+      counts.set(key, byDay);
+    }
+    for (const row of rows) {
+      const byDay = counts.get(`${row.saleId}|${normCode(row.customerCode)}`);
+      if (!byDay) continue;
+      const days = activity.get(row.assignmentId) ?? [];
+      for (const [day, count] of byDay) {
+        const existing = days.find((d) => d.stat_date === day);
+        if (existing) {
+          existing.movement_count = (existing.movement_count ?? 0) + count;
+        } else {
+          days.push({
+            stat_date: day,
+            inbound_count: 0,
+            outbound_count: 0,
+            order_count: 0,
+            revenue: 0,
+            zalo_linked: false,
+            movement_count: count,
+          });
+        }
+      }
+      days.sort((a, b) => a.stat_date.localeCompare(b.stat_date));
+      activity.set(row.assignmentId, days);
+    }
+  }
+
   private async loadSaleInfos(
     saleIds: number[],
   ): Promise<Map<number, { fullName: string; zaloLinked: boolean }>> {
@@ -275,6 +367,41 @@ export class CustomerKpiReportsService {
   }
 
   /**
+   * Ghi đè thủ công theo (sale_id, customer_id, criterion_key, period_month).
+   * `customer_id = 0` là ghi đè CẢ DANH SÁCH của sale — mạnh nhất, áp cho mọi
+   * khách; >0 là ghi đè riêng từng khách. Chỉ áp cho 2 tiêu chí hành vi
+   * (service API chặn key khác trước khi vào bảng).
+   */
+  private async loadOverrides(
+    saleIds: number[],
+    criterionKeys: string[],
+    months: string[],
+  ): Promise<Map<string, KpiCriterionOverride>> {
+    const result = new Map<string, KpiCriterionOverride>();
+    if (
+      saleIds.length === 0 ||
+      criterionKeys.length === 0 ||
+      months.length === 0
+    ) {
+      return result;
+    }
+    const rows = await this.overrideRepo.find({
+      where: {
+        sale_id: In([...new Set(saleIds)]),
+        criterion_key: In(criterionKeys),
+        period_month: In(months),
+      },
+    });
+    for (const row of rows) {
+      result.set(
+        `${row.sale_id}|${row.customer_id}|${row.criterion_key}|${row.period_month}`,
+        row,
+      );
+    }
+    return result;
+  }
+
+  /**
    * Số dư công nợ hiện tại của từng khách — nguồn cho metric `debt_balance`
    * (adapter Debt đọc thẳng module công nợ, thiết kế mục 5.1.6).
    *
@@ -331,6 +458,61 @@ export class CustomerKpiReportsService {
 
   // ------------------------------------------------------- dữ liệu chấm
 
+  /** Tra override theo tháng; báo cáo lấy override của tháng nằm trong cửa sổ. */
+  private findOverride(
+    overrides: Map<string, KpiCriterionOverride>,
+    saleId: number,
+    customerId: number,
+    criterionKey: string,
+    months: string[],
+  ): KpiCriterionOverride | undefined {
+    for (const month of months) {
+      const found = overrides.get(
+        `${saleId}|${customerId}|${criterionKey}|${month}`,
+      );
+      if (found) return found;
+    }
+    return undefined;
+  }
+
+  /**
+   * Ghi đè 1 ô KHÁCH: ép về "chưa đạt". `force` = ghi đè cấp sale (ép kể cả
+   * khi engine đã fail). Chỉ HẠ — trả true khi thực sự đổi kết quả (để trừ
+   * vào x/y đầu bảng cấp sale).
+   */
+  private applyCustomerOverride(
+    criterion: CustomerCriterion,
+    override: KpiCriterionOverride | undefined,
+    force = false,
+  ): boolean {
+    if (!override) return false;
+    if (!force && criterion.status === 'fail') return false;
+    const changed = criterion.status !== 'fail';
+    criterion.status = 'fail';
+    criterion.actualValue = 0;
+    if (changed) {
+      criterion.overridden = true;
+      criterion.overrideReason = override.reason;
+    }
+    return changed;
+  }
+
+  /** Ghi đè CẢ TIÊU CHÍ của sale: đầu bảng về "Không đạt (ghi đè)", x = 0. */
+  private applySaleOverride(
+    criterion: SaleCriterion,
+    override: KpiCriterionOverride | undefined,
+  ): void {
+    if (!override) return;
+    const changed = criterion.status !== 'fail';
+    criterion.status = 'fail';
+    criterion.numerator = 0;
+    criterion.passedCriteria = 0;
+    if (changed) {
+      criterion.overridden = true;
+      criterion.overrideReason = override.reason;
+    }
+  }
+
   private buildScoredData(
     assignments: AssignmentRow[],
     activity: Map<number, ActivityDayRow[]>,
@@ -340,6 +522,7 @@ export class CustomerKpiReportsService {
     fromDate: string,
     months: string[],
     debtBalances: Map<number, number | null>,
+    overrides: Map<string, KpiCriterionOverride>,
   ) {
     const customersBySale = new Map<number, AssignmentRow[]>();
     for (const row of assignments) {
@@ -432,6 +615,50 @@ export class CustomerKpiReportsService {
             fromDate,
           ),
         );
+
+        // ── Ghi đè thủ công (trưởng phòng cùng phòng / admin) ──
+        // Ghi đè cả sale mạnh nhất: cả tiêu chí tháng đó không đạt cho mọi khách.
+        const saleOverride = this.findOverride(
+          overrides,
+          saleId,
+          0,
+          definition.key,
+          months,
+        );
+        if (saleOverride) {
+          this.applySaleOverride(
+            saleCriteria[saleCriteria.length - 1],
+            saleOverride,
+          );
+          for (const pc of perCustomer) {
+            this.applyCustomerOverride(pc.criterion, saleOverride, true);
+          }
+        } else {
+          let demoted = 0;
+          for (const pc of perCustomer) {
+            const customerOverride = this.findOverride(
+              overrides,
+              saleId,
+              pc.row.customerId,
+              definition.key,
+              months,
+            );
+            if (this.applyCustomerOverride(pc.criterion, customerOverride)) {
+              demoted += 1;
+            }
+          }
+          if (demoted > 0) {
+            // Ghi đè từng khách trừ vào x/y — đầu bảng tự khớp với bảng dưới
+            const criterion = saleCriteria[saleCriteria.length - 1];
+            criterion.passedCriteria = Math.max(
+              0,
+              (criterion.passedCriteria ?? 0) - demoted,
+            );
+            criterion.numerator = criterion.passedCriteria;
+            criterion.status =
+              criterion.passedCriteria > 0 ? 'pass' : 'fail';
+          }
+        }
       }
 
       for (const row of saleCustomers) {
@@ -440,16 +667,38 @@ export class CustomerKpiReportsService {
           const customerTarget = this.scoring.resolveCustomerTarget(
             definition,
             targets.get(`${saleId}|${row.customerId}|${definition.key}`) ??
-            null,
+              null,
             targets.get(`${saleId}|0|${definition.key}`) ?? null,
           );
-          return this.scoring.scoreCustomer(
+          const criterion = this.scoring.scoreCustomer(
             definition,
             days,
             customerTarget,
             fromDate,
             debtBalances.get(row.customerId) ?? null,
           );
+          // Cùng luật ghi đè với vòng chấm cấp sale: ghi đè cả sale ép mọi ô
+          // khách, ghi đè từng khách chỉ hạ ô của khách đó
+          const saleOverride = this.findOverride(
+            overrides,
+            saleId,
+            0,
+            definition.key,
+            months,
+          );
+          this.applyCustomerOverride(
+            criterion,
+            saleOverride ??
+              this.findOverride(
+                overrides,
+                saleId,
+                row.customerId,
+                definition.key,
+                months,
+              ),
+            Boolean(saleOverride),
+          );
+          return criterion;
         });
         const latest = days[days.length - 1];
         customerRows.push({
@@ -513,19 +762,23 @@ export class CustomerKpiReportsService {
     }
     const lookbackFrom = this.shiftDate(from, -SUGGESTION_GAP_DAYS);
     const assignments = await this.loadAssignments(userIds, saleId);
+    const saleIds = assignments.map((row) => row.saleId);
     const activity = await this.loadActivity(
       assignments.map((row) => row.assignmentId),
       lookbackFrom,
       to,
     );
-    const targets = await this.loadTargets(
-      assignments.map((row) => row.saleId),
-      definitions.map((definition) => definition.key),
-      this.monthsInRange(from, to),
+    const months = this.monthsInRange(from, to);
+    // Sự kiện báo cáo di chuyển (tiêu chí 3) ghép thẳng vào map ngày hoạt động
+    this.mergeMovementReports(
+      activity,
+      assignments,
+      await this.loadMovementEvents(saleIds, from, to),
     );
-    const saleInfos = await this.loadSaleInfos([
-      ...new Set(assignments.map((row) => row.saleId)),
-    ]);
+    const criterionKeys = definitions.map((definition) => definition.key);
+    const targets = await this.loadTargets(saleIds, criterionKeys, months);
+    const overrides = await this.loadOverrides(saleIds, criterionKeys, months);
+    const saleInfos = await this.loadSaleInfos([...new Set(saleIds)]);
     // Chỉ nạp công nợ khi có tiêu chí dùng metric debt_balance hoặc khi người
     // dùng lọc/sắp xếp theo công nợ — tránh 1 query thừa cho mọi lần tải
     const debtBalances =
@@ -541,8 +794,9 @@ export class CustomerKpiReportsService {
         definitions,
         saleInfos,
         from,
-        this.monthsInRange(from, to),
+        months,
         debtBalances,
+        overrides,
       ),
       definitions,
       debtBalances,
@@ -1089,6 +1343,7 @@ export class CustomerKpiReportsService {
   }
 
   private criterionCell(c: SaleCriterion): string {
+    if (c.overridden) return 'Không đạt (ghi đè)';
     if (c.status === 'no_data') return 'Thiếu dữ liệu';
     if (c.scoringMode === 'ratio') {
       const num = c.passedCriteria ?? c.numerator ?? 0;
@@ -1101,6 +1356,7 @@ export class CustomerKpiReportsService {
   }
 
   private customerCell(c: CustomerCriterion): string {
+    if (c.overridden) return 'Không đạt (ghi đè)';
     if (c.status === 'no_data') return '—';
     if (c.status === 'pass') return 'Đạt';
     if (c.status === 'fail') return 'Không đạt';

@@ -3,6 +3,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
   OnModuleInit,
 } from '@nestjs/common';
@@ -54,23 +55,27 @@ const DEFAULT_KPI_DEFINITIONS: Array<Partial<KpiDefinition>> = [
     team_group: 'kinh-doanh',
     key: 'support_khach',
     name: 'Support Khách / Thăm hỏi',
-    metric: 'contacted_customers',
-    scoring_mode: ScoringMode.RATIO,
-    denominator: KpiDenominator.REACHABLE_CUSTOMERS,
-    period: KpiPeriod.DAY,
+    metric: 'movement_report',
+    scoring_mode: ScoringMode.BINARY,
+    comparison: KpiComparison.GTE,
+    period: KpiPeriod.MONTH,
+    target_value: 1,
     sort_order: 3,
-    description: 'Nguồn Zalo: đếm khách được liên lạc trong ngày',
+    description:
+      'Tiêu chí 3: tháng đạt khi có ≥1 tin báo cáo di chuyển khớp cụm system_config.movement_report_pattern ("di gap khach") + mã KH (bảng customer_movement_reports, job Python ghi)',
   },
   {
     team_group: 'kinh-doanh',
     key: 'lien_lac_phan_hoi',
     name: 'Liên lạc / phản hồi',
-    metric: 'responded_customers',
-    scoring_mode: ScoringMode.RATIO,
-    denominator: KpiDenominator.REACHABLE_CUSTOMERS,
-    period: KpiPeriod.DAY,
+    metric: 'monthly_contact',
+    scoring_mode: ScoringMode.BINARY,
+    comparison: KpiComparison.GTE,
+    period: KpiPeriod.MONTH,
+    target_value: 1,
     sort_order: 4,
-    description: 'Nguồn Zalo: đếm khách được phản hồi trong ngày',
+    description:
+      'Tiêu chí 4: tháng đạt khi có ≥1 tin nhắn từ sale tới khách (outbound > 0)',
   },
   {
     team_group: 'kinh-doanh',
@@ -89,6 +94,8 @@ const DEFAULT_KPI_DEFINITIONS: Array<Partial<KpiDefinition>> = [
 /** CRUD cấu hình tiêu chí KPI — làm đủ hôm nay (bảng + seed mặc định). */
 @Injectable()
 export class CustomerKpiDefinitionsService implements OnModuleInit {
+  private readonly logger = new Logger(CustomerKpiDefinitionsService.name);
+
   constructor(
     @InjectRepository(KpiDefinition)
     private readonly definitionRepo: Repository<KpiDefinition>,
@@ -104,6 +111,44 @@ export class CustomerKpiDefinitionsService implements OnModuleInit {
     if (count === 0) {
       await this.definitionRepo.save(
         this.definitionRepo.create(DEFAULT_KPI_DEFINITIONS),
+      );
+    }
+    await this.upgradeBehaviorCriteria();
+  }
+
+  /**
+   * Nâng cấp tiêu chí 3/4 từ ratio/theo-ngày lên binary/theo-tháng cho môi
+   * trường ĐÃ seed (nhánh count === 0 không chạy lại được). Idempotent —
+   * chạy lại không đổi gì. Chỉ đè dòng còn đúng định dạng CŨ; ai đã sửa tay
+   * sang khác thì giữ nguyên (không đè cấu hình chủ đích).
+   */
+  private async upgradeBehaviorCriteria() {
+    const oldMetricByKey: Record<string, string> = {
+      support_khach: 'contacted_customers',
+      lien_lac_phan_hoi: 'responded_customers',
+    };
+    const rows = await this.definitionRepo.find({
+      where: { team_group: 'kinh-doanh' },
+    });
+    const stale = rows.filter(
+      (row) => oldMetricByKey[row.key] === row.metric,
+    );
+    for (const row of stale) {
+      Object.assign(row, {
+        metric: row.key === 'support_khach' ? 'movement_report' : 'monthly_contact',
+        scoring_mode: ScoringMode.BINARY,
+        comparison: KpiComparison.GTE,
+        period: KpiPeriod.MONTH,
+        target_value: 1,
+        denominator: null,
+      });
+    }
+    if (stale.length > 0) {
+      await this.definitionRepo.save(stale);
+      this.logger.log(
+        `Đã nâng cấp tiêu chí hành vi sang binary/theo-tháng: ${stale
+          .map((r) => r.key)
+          .join(', ')}`,
       );
     }
   }

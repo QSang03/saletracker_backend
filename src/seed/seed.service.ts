@@ -441,6 +441,14 @@ export class SeedService implements OnModuleInit {
           section: 'system',
           status: 1,
         },
+        {
+          name: 'movement_report_pattern',
+          display_name: 'Cụm báo cáo di chuyển (tiêu chí 3)',
+          value: 'di gap khach',
+          type: 'text',
+          section: 'kpi',
+          status: 1,
+        },
       ];
       for (const config of configs) {
         await this.systemConfigRepo.save(this.systemConfigRepo.create(config));
@@ -481,6 +489,14 @@ export class SeedService implements OnModuleInit {
           value: '7',
           type: 'number',
           section: 'system',
+          status: 1,
+        },
+        {
+          name: 'movement_report_pattern',
+          display_name: 'Cụm báo cáo di chuyển (tiêu chí 3)',
+          value: 'di gap khach',
+          type: 'text',
+          section: 'kpi',
           status: 1,
         },
       ];

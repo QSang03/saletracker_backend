@@ -1704,6 +1704,7 @@ console.log('\n-- M. Mục 4: rollup Python → engine KPI → chỉ tiêu → g
     let oldZaloStatus = null;
     let userRid = null;
     let lowUserId = null;
+    let lowToken = null;
     let overviewSaleName = null;
     const asgIds = {};
     const customerIds = {};
@@ -1736,7 +1737,11 @@ console.log('\n-- M. Mục 4: rollup Python → engine KPI → chỉ tiêu → g
             await mainConn.query('DELETE FROM customer_zalo WHERE assignment_id IN (?)', [ids]);
             await mainConn.query('DELETE FROM customer_zalo_scan_results WHERE assignment_id IN (?)', [ids]);
           }
-          if (saleUserId) await mainConn.query('DELETE FROM kpi_targets WHERE sale_id = ?', [saleUserId]);
+          if (saleUserId) {
+            await mainConn.query('DELETE FROM kpi_criterion_overrides WHERE sale_id = ?', [saleUserId]);
+            await mainConn.query('DELETE FROM customer_movement_reports WHERE user_id = ?', [saleUserId]);
+            await mainConn.query('DELETE FROM kpi_targets WHERE sale_id = ?', [saleUserId]);
+          }
           if (requestIds.length) {
             await mainConn.query('DELETE FROM approval_request_target_items WHERE request_id IN (?)', [requestIds]);
             await mainConn.query('DELETE FROM approval_requests WHERE id IN (?)', [requestIds]);
@@ -1895,6 +1900,15 @@ console.log('\n-- M. Mục 4: rollup Python → engine KPI → chỉ tiêu → g
         [asgIds.key, accountId, CONTACTS.key, `Khách test M key (${CONTACTS.key})`,
          asgIds.non, accountId, CONTACTS.non, `Khách test M non (${CONTACTS.non})`],
       );
+      // 3b. Sự kiện báo cáo di chuyển (tiêu chí 3): job Python ghi bảng này,
+      // test giả lập 1 tin khớp cú pháp cho KEY hôm nay + 1 tin của NON hôm
+      // qua (ngoài cửa sổ TODAY — kiểm tra lọc theo ngày).
+      const mvBase = 9500000000 + (Date.now() % 100000000);
+      await mainConn.query(
+        'INSERT INTO customer_movement_reports (user_id, customer_code, sent_at, source_type, raw_text, source_message_id, created_at) VALUES (?, ?, ?, ?, ?, ?, NOW()), (?, ?, ?, ?, ?, ?, NOW())',
+        [saleUserId, CODES.key, `${TODAY} 10:00:00`, 'group', `ĐI GAP KHACH ${CODES.key}`, mvBase,
+         saleUserId, CODES.non, `${YESTERDAY} 10:00:00`, 'personal', `di gap khach ${CODES.non}`, mvBase + 1],
+      );
       const s1 = runRollup();
       assert(s1, 'rollup không in được summary — chạy tay: py -m src.services.common.customer_kpi_rollup_service');
       ok(`Rollup 1: ${JSON.stringify(s1)}`);
@@ -1945,17 +1959,20 @@ console.log('\n-- M. Mục 4: rollup Python → engine KPI → chỉ tiêu → g
       });
 
       // 6. Engine chấm điểm lúc đọc — overview
-      await expect('[M] Overview: support 50% (1/2), two-way 50%, gợi ý pass, doanh số no_data', 200, async () => {
+      await expect('[M] Overview: TC3 support 1/2 (có báo cáo), TC4 tương tác 1/2, gợi ý pass, doanh số no_data', 200, async () => {
         const r = await call('GET', `/customer-kpi-reports/overview?saleId=${saleUserId}&from=${TODAY}&to=${TODAY}`, H());
         assert(r.status === 200, `HTTP ${r.status}: ${r.text?.slice(0, 200)}`);
         const sale = (r.json?.sales || []).find((x) => x.saleId === saleUserId);
         assert(sale, 'không thấy sale test trong overview');
         const byKey = new Map(sale.criteria.map((c) => [c.key, c]));
+        // TC3 binary: KEY có báo cáo di chuyển trong cửa sổ → 1/2 khách đạt
         const support = byKey.get('support_khach');
-        assert(support && support.status === 'ratio' && support.actualValue === 50, JSON.stringify(support));
+        assert(support && support.status === 'pass' && support.actualValue === 1, JSON.stringify(support));
         assert(support.numerator === 1 && support.denominatorValue === 2 && support.totalCriteria === 2, JSON.stringify(support));
+        assert(support.passedCriteria === 1, JSON.stringify(support));
+        // TC4 binary: KEY có tin sale nhắn đi, NON không → 1/2
         const reply = byKey.get('lien_lac_phan_hoi');
-        assert(reply && reply.status === 'ratio' && reply.actualValue === 50, JSON.stringify(reply));
+        assert(reply && reply.status === 'pass' && reply.numerator === 1 && reply.denominatorValue === 2, JSON.stringify(reply));
         const ack = byKey.get('goi_y_thuc_hien');
         assert(ack && ack.status === 'pass' && ack.passedCriteria === 1 && ack.totalCriteria === 2, JSON.stringify(ack));
         const rev = byKey.get('doanh_so_key');
@@ -1972,10 +1989,22 @@ console.log('\n-- M. Mục 4: rollup Python → engine KPI → chỉ tiêu → g
         assert(sale && sale.customers.length === 2, `customers=${sale?.customers?.length}`);
         const key = sale.customers.find((c) => c.customerCode === CODES.key);
         assert(key, 'không thấy khách KEY');
+        const non = sale.customers.find((c) => c.customerCode === CODES.non);
+        assert(non, 'không thấy khách NON');
         assert(key.totals.inbound === 2 && key.totals.outbound === 3 && key.totals.orders === 1 && key.totals.revenue === 200000, JSON.stringify(key.totals));
         assert(key.zaloLinked === true, 'khách KEY phải zaloLinked');
         const ackKey = key.criteria.find((c) => c.key === 'goi_y_thuc_hien');
         assert(ackKey && ackKey.status === 'pass', JSON.stringify(ackKey));
+        // TC3/TC4 binary cấp khách: KEY đạt cả 2; NON không có báo cáo + không
+        // có tin sale nhắn đi → chưa đạt cả 2
+        const keyTc3 = key.criteria.find((c) => c.key === 'support_khach');
+        assert(keyTc3 && keyTc3.status === 'pass', JSON.stringify(keyTc3));
+        const keyTc4 = key.criteria.find((c) => c.key === 'lien_lac_phan_hoi');
+        assert(keyTc4 && keyTc4.status === 'pass', JSON.stringify(keyTc4));
+        const nonTc3 = non.criteria.find((c) => c.key === 'support_khach');
+        assert(nonTc3 && nonTc3.status === 'fail', JSON.stringify(nonTc3));
+        const nonTc4 = non.criteria.find((c) => c.key === 'lien_lac_phan_hoi');
+        assert(nonTc4 && nonTc4.status === 'fail', JSON.stringify(nonTc4));
         return r.status;
       });
 
@@ -2024,7 +2053,7 @@ console.log('\n-- M. Mục 4: rollup Python → engine KPI → chỉ tiêu → g
       await expect('[M] POST targets scope=sale (admin) → applied 1', [200, 201], async () => {
         const r = await call('POST', '/customer-kpi-targets', {
           ...H(),
-          body: { criterion_key: 'support_khach', period_month: MONTH, scope: 'sale', sale_ids: [saleUserId], target_value: 80 },
+          body: { criterion_key: 'doanh_so_key', period_month: MONTH, scope: 'sale', sale_ids: [saleUserId], target_value: 80 },
         });
         assert(r.status === 200 || r.status === 201, `HTTP ${r.status}: ${r.text?.slice(0, 200)}`);
         assert(r.json?.applied === 1, JSON.stringify(r.json));
@@ -2033,10 +2062,10 @@ console.log('\n-- M. Mục 4: rollup Python → engine KPI → chỉ tiêu → g
       await expect('[M] Gán lại cùng tháng → upsert (vẫn 1 dòng, giá mới 90)', 200, async () => {
         const r2 = await call('POST', '/customer-kpi-targets', {
           ...H(),
-          body: { criterion_key: 'support_khach', period_month: MONTH, scope: 'sale', sale_ids: [saleUserId], target_value: 90 },
+          body: { criterion_key: 'doanh_so_key', period_month: MONTH, scope: 'sale', sale_ids: [saleUserId], target_value: 90 },
         });
         assert(r2.status === 200 || r2.status === 201, `HTTP ${r2.status}`);
-        const list = await call('GET', `/customer-kpi-targets?criterion_key=support_khach&saleId=${saleUserId}&period_month=${MONTH}`, H());
+        const list = await call('GET', `/customer-kpi-targets?criterion_key=doanh_so_key&saleId=${saleUserId}&period_month=${MONTH}`, H());
         assert(list.json?.total === 1, `total=${list.json?.total} — upsert bị nhân bản`);
         assert(Number(list.json.data[0].targetValue) === 90, JSON.stringify(list.json.data));
         return list.status;
@@ -2044,10 +2073,10 @@ console.log('\n-- M. Mục 4: rollup Python → engine KPI → chỉ tiêu → g
       await expect('[M] POST targets scope=customer → chỉ tiêu riêng cho khách KEY', [200, 201], async () => {
         const r = await call('POST', '/customer-kpi-targets', {
           ...H(),
-          body: { criterion_key: 'support_khach', period_month: MONTH, scope: 'customer', sale_id: saleUserId, items: [{ customer_id: customerIds.key, target_value: 60 }] },
+          body: { criterion_key: 'doanh_so_key', period_month: MONTH, scope: 'customer', sale_id: saleUserId, items: [{ customer_id: customerIds.key, target_value: 60 }] },
         });
         assert(r.status === 200 || r.status === 201, `HTTP ${r.status}: ${r.text?.slice(0, 200)}`);
-        const list = await call('GET', `/customer-kpi-targets?criterion_key=support_khach&saleId=${saleUserId}&period_month=${MONTH}`, H());
+        const list = await call('GET', `/customer-kpi-targets?criterion_key=doanh_so_key&saleId=${saleUserId}&period_month=${MONTH}`, H());
         const perCustomer = list.json.data.find((x) => x.customerId === customerIds.key);
         assert(perCustomer && Number(perCustomer.targetValue) === 60, JSON.stringify(list.json.data));
         return r.status;
@@ -2062,7 +2091,7 @@ console.log('\n-- M. Mục 4: rollup Python → engine KPI → chỉ tiêu → g
       await expect('[M] POST targets scope=department phòng không có người → 404', 404, async () => {
         const r = await call('POST', '/customer-kpi-targets', {
           ...H(),
-          body: { criterion_key: 'support_khach', period_month: MONTH, scope: 'department', department_slug: `khong-ton-tai-${tag}`, target_value: 10 },
+          body: { criterion_key: 'doanh_so_key', period_month: MONTH, scope: 'department', department_slug: `khong-ton-tai-${tag}`, target_value: 10 },
         });
         return r.status;
       });
@@ -2076,13 +2105,13 @@ console.log('\n-- M. Mục 4: rollup Python → engine KPI → chỉ tiêu → g
         requestIds.push(Number(reqIns.insertId));
         await mainConn.query(
           'INSERT INTO approval_request_target_items (request_id, criterion_key, period_month, sale_id, customer_id, old_target_value, new_target_value, created_at) VALUES (?, ?, ?, ?, NULL, 90, 55, NOW())',
-          [reqIns.insertId, 'support_khach', MONTH, saleUserId],
+          [reqIns.insertId, 'doanh_so_key', MONTH, saleUserId],
         );
         const r = await call('POST', `/approval-requests/${reqIns.insertId}/decide`, { ...H(), body: { action: 'approve' } });
         assert(r.status === 200 || r.status === 201, `HTTP ${r.status}: ${r.text?.slice(0, 200)}`);
         const [trows] = await mainConn.query(
           'SELECT target_value FROM kpi_targets WHERE criterion_key = ? AND period_month = ? AND sale_id = ? AND customer_id = 0',
-          ['support_khach', MONTH, saleUserId],
+          ['doanh_so_key', MONTH, saleUserId],
         );
         assert(trows.length === 1 && Number(trows[0].target_value) === 55, JSON.stringify(trows));
         return r.status;
@@ -2114,15 +2143,84 @@ console.log('\n-- M. Mục 4: rollup Python → engine KPI → chỉ tiêu → g
       if (userRid) {
         lowUserId = await ensureTestUser('kpi_kpi_usr_t', [userRid]);
         const lowLogin = await call('POST', '/auth/login', { body: { username: 'kpi_kpi_usr_t', password: DEFAULT_PASSWORD } });
-        const lowToken = lowLogin.json?.access_token || lowLogin.json?.token || lowLogin.json?.accessToken;
+        lowToken = lowLogin.json?.access_token || lowLogin.json?.token || lowLogin.json?.accessToken;
         await expect('[M] user thường gán chỉ tiêu → 403', 403, async () => {
           const r = await call('POST', '/customer-kpi-targets', {
             token: lowToken,
-            body: { criterion_key: 'support_khach', period_month: MONTH, scope: 'sale', sale_ids: [saleUserId], target_value: 10 },
+            body: { criterion_key: 'doanh_so_key', period_month: MONTH, scope: 'sale', sale_ids: [saleUserId], target_value: 10 },
           });
           return r.status;
         });
       }
+
+      // 11b. Ghi đè thủ công tiêu chí 3 — quản lý tự ghi, không qua duyệt
+      await expect('[M] Ghi đè 1 khách → ô fail + đầu bảng x giảm; ghi đè cả sale → mạnh nhất', [200, 201], async () => {
+        // Cấp khách: KEY đang đạt TC3 → ép chưa đạt
+        const r = await call('POST', '/customer-kpi-overrides', {
+          ...H(),
+          body: {
+            sale_id: saleUserId, criterion_key: 'support_khach', period_month: MONTH,
+            customer_id: customerIds.key, reason: 'test: khách báo cáo xấu',
+          },
+        });
+        assert(r.status === 200 || r.status === 201, `HTTP ${r.status}: ${r.text?.slice(0, 200)}`);
+        const bs = await call('GET', `/customer-kpi-reports/by-sale?saleId=${saleUserId}&from=${TODAY}&to=${TODAY}`, H());
+        assert(bs.status === 200, `HTTP ${bs.status}`);
+        const saleBs = bs.json?.sales?.[0];
+        const keyRow = saleBs?.customers?.find((c) => c.customerId === customerIds.key);
+        const keyTc3 = keyRow?.criteria?.find((c) => c.key === 'support_khach');
+        assert(keyTc3 && keyTc3.status === 'fail' && keyTc3.overridden === true, JSON.stringify(keyTc3));
+        // Đầu bảng cấp sale: x từ 1 → 0 (ghi đè trừ vào tổng)
+        const saleTc3 = saleBs?.criteria?.find((c) => c.key === 'support_khach');
+        assert(saleTc3 && saleTc3.status === 'fail' && saleTc3.passedCriteria === 0, JSON.stringify(saleTc3));
+        // Cấp sale: mạnh nhất — cả tiêu chí không đạt cho mọi khách
+        const r2 = await call('POST', '/customer-kpi-overrides', {
+          ...H(),
+          body: { sale_id: saleUserId, criterion_key: 'support_khach', period_month: MONTH, customer_id: 0, reason: 'test: không công nhận cả tháng' },
+        });
+        assert(r2.status === 200 || r2.status === 201, `HTTP ${r2.status}`);
+        const ov = await call('GET', `/customer-kpi-reports/overview?saleId=${saleUserId}&from=${TODAY}&to=${TODAY}`, H());
+        const saleOv = ov.json?.sales?.find((x) => x.saleId === saleUserId);
+        const ovTc3 = saleOv?.criteria?.find((c) => c.key === 'support_khach');
+        assert(ovTc3 && ovTc3.status === 'fail' && ovTc3.overridden === true && ovTc3.passedCriteria === 0, JSON.stringify(ovTc3));
+        return r.status;
+      });
+      if (lowToken) {
+        await expect('[M] user thường ghi đè tiêu chí → 403 (không tự hạ KPI)', 403, async () => {
+          const r = await call('POST', '/customer-kpi-overrides', {
+            token: lowToken,
+            body: { sale_id: saleUserId, criterion_key: 'support_khach', period_month: MONTH, customer_id: customerIds.key, reason: 'tự hạ KPI' },
+          });
+          return r.status;
+        });
+      }
+      await expect('[M] Ghi đè sai tiêu chí (doanh số) → 400', 400, async () => {
+        const r = await call('POST', '/customer-kpi-overrides', {
+          ...H(),
+          body: { sale_id: saleUserId, criterion_key: 'doanh_so_key', period_month: MONTH, customer_id: 0, reason: 'sai tiêu chí' },
+        });
+        return r.status;
+      });
+      await expect('[M] Ghi đè khách không thuộc sale → 400', 400, async () => {
+        const r = await call('POST', '/customer-kpi-overrides', {
+          ...H(),
+          body: { sale_id: saleUserId, criterion_key: 'support_khach', period_month: MONTH, customer_id: 999999999, reason: 'khách lạ' },
+        });
+        return r.status;
+      });
+      await expect('[M] Xoá override → kết quả engine hiện lại', 200, async () => {
+        const list = await call('GET', `/customer-kpi-overrides?saleId=${saleUserId}`, H());
+        assert(list.status === 200 && (list.json?.total ?? 0) >= 2, JSON.stringify(list.json));
+        for (const row of list.json.data) {
+          const del = await call('DELETE', `/customer-kpi-overrides/${row.id}`, H());
+          assert(del.status === 200 || del.status === 201, `DELETE HTTP ${del.status}`);
+        }
+        const ov = await call('GET', `/customer-kpi-reports/overview?saleId=${saleUserId}&from=${TODAY}&to=${TODAY}`, H());
+        const sale = ov.json?.sales?.find((x) => x.saleId === saleUserId);
+        const tc3 = sale?.criteria?.find((c) => c.key === 'support_khach');
+        assert(tc3 && tc3.status === 'pass' && tc3.overridden !== true, JSON.stringify(tc3));
+        return 200;
+      });
 
       // 12. Export Excel
       await expect('[M] Export → file xlsx có nội dung', 200, async () => {

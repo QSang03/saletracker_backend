@@ -35,6 +35,9 @@ export class SeedCustomerTriggerService {
     'kpi_targets_after_insert',
     'kpi_targets_after_update',
     'kpi_targets_after_delete',
+    'kpi_criterion_overrides_after_insert',
+    'kpi_criterion_overrides_after_update',
+    'kpi_criterion_overrides_after_delete',
     'approval_requests_after_insert',
     'approval_requests_after_update',
   ];
@@ -70,6 +73,9 @@ export class SeedCustomerTriggerService {
       await this.dataSource.query(this.kpiTargetsInsertTrigger());
       await this.dataSource.query(this.kpiTargetsUpdateTrigger());
       await this.dataSource.query(this.kpiTargetsDeleteTrigger());
+      await this.dataSource.query(this.overridesInsertTrigger());
+      await this.dataSource.query(this.overridesUpdateTrigger());
+      await this.dataSource.query(this.overridesDeleteTrigger());
       await this.dataSource.query(this.approvalRequestsInsertTrigger());
       await this.dataSource.query(this.approvalRequestsUpdateTrigger());
 
@@ -514,6 +520,126 @@ export class SeedCustomerTriggerService {
             'sale_id', OLD.sale_id,
             'customer_id', OLD.customer_id,
             'target_value', OLD.target_value,
+            'created_by', OLD.created_by
+          ),
+          NOW()
+        );
+      END
+    `;
+  }
+
+  // ─── kpi_criterion_overrides ─────────────────────────────────────────────
+
+  private overridesInsertTrigger(): string {
+    return `
+      CREATE TRIGGER \`kpi_criterion_overrides_after_insert\`
+      AFTER INSERT ON \`kpi_criterion_overrides\`
+      FOR EACH ROW
+      BEGIN
+        INSERT INTO \`database_change_log\` (
+          \`table_name\`, \`record_id\`, \`action\`, \`new_values\`, \`triggered_at\`
+        ) VALUES (
+          'kpi_criterion_overrides', NEW.id, 'INSERT',
+          JSON_OBJECT(
+            'id', NEW.id,
+            'criterion_key', NEW.criterion_key,
+            'period_month', NEW.period_month,
+            'sale_id', NEW.sale_id,
+            'customer_id', NEW.customer_id,
+            'forced_status', NEW.forced_status,
+            'reason', NEW.reason,
+            'created_by', NEW.created_by,
+            'created_at', NEW.created_at
+          ),
+          NOW()
+        );
+      END
+    `;
+  }
+
+  private overridesUpdateTrigger(): string {
+    return `
+      CREATE TRIGGER \`kpi_criterion_overrides_after_update\`
+      AFTER UPDATE ON \`kpi_criterion_overrides\`
+      FOR EACH ROW
+      BEGIN
+        DECLARE changed_fields JSON DEFAULT JSON_ARRAY();
+
+        -- sale_id: đổi người bị ghi đè
+        IF OLD.sale_id != NEW.sale_id THEN
+          SET changed_fields = JSON_ARRAY_APPEND(changed_fields, '$', 'sale_id');
+        END IF;
+
+        -- customer_id: đổi mức ghi đè (cả danh sách <-> từng khách)
+        IF OLD.customer_id != NEW.customer_id THEN
+          SET changed_fields = JSON_ARRAY_APPEND(changed_fields, '$', 'customer_id');
+        END IF;
+
+        -- period_month: đổi tháng áp dụng
+        IF OLD.period_month != NEW.period_month THEN
+          SET changed_fields = JSON_ARRAY_APPEND(changed_fields, '$', 'period_month');
+        END IF;
+
+        -- reason: lý do đổi (upsert của FE ghi lại lý do mới)
+        IF NOT (OLD.reason <=> NEW.reason) THEN
+          SET changed_fields = JSON_ARRAY_APPEND(changed_fields, '$', 'reason');
+        END IF;
+
+        -- created_by: đổi người ghi đè
+        IF NOT (OLD.created_by <=> NEW.created_by) THEN
+          SET changed_fields = JSON_ARRAY_APPEND(changed_fields, '$', 'created_by');
+        END IF;
+
+        -- NOTE: criterion_key là danh tính tiêu chí, forced_status chỉ có 'fail' — không track
+
+        IF JSON_LENGTH(changed_fields) > 0 THEN
+          INSERT INTO \`database_change_log\` (
+            \`table_name\`, \`record_id\`, \`action\`, \`old_values\`, \`new_values\`, \`changed_fields\`, \`triggered_at\`
+          ) VALUES (
+            'kpi_criterion_overrides', NEW.id, 'UPDATE',
+            JSON_OBJECT(
+              'id', OLD.id,
+              'criterion_key', OLD.criterion_key,
+              'period_month', OLD.period_month,
+              'sale_id', OLD.sale_id,
+              'customer_id', OLD.customer_id,
+              'reason', OLD.reason,
+              'created_by', OLD.created_by
+            ),
+            JSON_OBJECT(
+              'id', NEW.id,
+              'criterion_key', NEW.criterion_key,
+              'period_month', NEW.period_month,
+              'sale_id', NEW.sale_id,
+              'customer_id', NEW.customer_id,
+              'reason', NEW.reason,
+              'created_by', NEW.created_by
+            ),
+            changed_fields,
+            NOW()
+          );
+        END IF;
+      END
+    `;
+  }
+
+  private overridesDeleteTrigger(): string {
+    return `
+      CREATE TRIGGER \`kpi_criterion_overrides_after_delete\`
+      AFTER DELETE ON \`kpi_criterion_overrides\`
+      FOR EACH ROW
+      BEGIN
+        INSERT INTO \`database_change_log\` (
+          \`table_name\`, \`record_id\`, \`action\`, \`old_values\`, \`triggered_at\`
+        ) VALUES (
+          'kpi_criterion_overrides', OLD.id, 'DELETE',
+          JSON_OBJECT(
+            'id', OLD.id,
+            'criterion_key', OLD.criterion_key,
+            'period_month', OLD.period_month,
+            'sale_id', OLD.sale_id,
+            'customer_id', OLD.customer_id,
+            'reason', OLD.reason,
             'created_by', OLD.created_by
           ),
           NOW()

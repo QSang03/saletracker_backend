@@ -16,9 +16,13 @@ import {
  * engine. Tiêu chí doanh thu chờ API doanh thu — luôn trả no_data kèm reason.
  *
  * BẢNG QUY TẮC ĐÃ CHỐT VỚI NGƯỜI DÙNG (10/06/2026):
- * - support_khach  : một ngày "đạt" khi sale nhắn ≥1 tin (outbound > 0).
- * - lien_lac_phan_hoi: một ngày "đạt" khi có hội thoại 2 chiều — khách nhắn
- *   ≥1 tin VÀ sale nhắn ≥1 tin (inbound > 0 và outbound > 0).
+ * - support_khach  : TIÊU CHÍ 3 — "có đi hỗ trợ khách chưa". metric
+ *   movement_report: tháng đạt khi có ≥1 tin nhắn báo cáo di chuyển khớp cụm
+ *   system_config.movement_report_pattern (mặc định "di gap khach") + mã KH
+ *   (bảng customer_movement_reports, job Python ghi, không phân biệt nguồn).
+ * - lien_lac_phan_hoi: TIÊU CHÍ 4 — "có chủ động hỏi thăm khách chưa". metric
+ *   monthly_contact: tháng đạt khi có ≥1 tin SALE nhắn đi tới khách
+ *   (outbound > 0, không cần khách trả lời). (Trước đây là ratio 2 chiều.)
  * - goi_y_thuc_hien: binary. "Được gợi ý ngày D" = khách Key/Non không được
  *   liên lạc bằng tin đi trong SUGGESTION_GAP_DAYS ngày trước đó (bị bỏ bê);
  *   "đã xử lý" = ngày D sale nhắn lại ≥1 tin → tự nhận từ tin nhắn, không cần
@@ -83,6 +87,8 @@ export interface ActivityDayRow {
   order_count: number;
   revenue: number;
   zalo_linked: boolean;
+  /** Số tin báo cáo di chuyển khớp cú pháp trong ngày (tiêu chí 3). */
+  movement_count?: number;
 }
 
 /** Kết quả chấm MỘT tiêu chí cho MỘT khách hàng (màn hình chi tiết / by-sale). */
@@ -93,6 +99,9 @@ export interface CustomerCriterion {
   actualValue: number | null;
   targetValue: number | null;
   reason?: string;
+  /** Bị quản lý ghi đè thủ công thành chưa đạt (khách báo cáo xấu...). */
+  overridden?: boolean;
+  overrideReason?: string | null;
 }
 
 /** Kết quả chấm MỘT tiêu chí cho MỘT sale (overview / đầu trang by-sale). */
@@ -109,6 +118,9 @@ export interface SaleCriterion {
   totalCriteria: number | null;
   passedCriteria: number | null;
   reason?: string;
+  /** Cả tiêu chí của sale bị quản lý ghi đè thành chưa đạt. */
+  overridden?: boolean;
+  overrideReason?: string | null;
 }
 
 const pct = (num: number, den: number): number =>
@@ -157,6 +169,20 @@ export class CustomerKpiScoringService {
       return { ...base, reason: REASON_NO_REVENUE_SOURCE };
     }
 
+    // Tiêu chí 3 KHÔNG gate zalo_linked: báo cáo di chuyển tồn tại độc lập với
+    // khớp liên hệ Zalo nên phải chấm TRƯỚC nhánh lọc ngày đo được (sale chưa
+    // khớp liên hệ vẫn có thể đã gửi báo cáo trong nhóm).
+    if (definition.metric === 'movement_report') {
+      const reported = days.filter(
+        (row) => (row.movement_count ?? 0) > 0 && row.stat_date >= fromDate,
+      );
+      return {
+        ...base,
+        status: reported.length > 0 ? 'pass' : 'fail',
+        actualValue: reported.length > 0 ? 1 : 0,
+      };
+    }
+
     const linked = days.filter((row) => Boolean(row.zalo_linked));
     const windowed = linked.filter((row) => row.stat_date >= fromDate);
     if (windowed.length === 0) {
@@ -186,6 +212,16 @@ export class CustomerKpiScoringService {
         ...base,
         status: 'ratio',
         actualValue: pct(passed, windowed.length),
+      };
+    }
+
+    // Tiêu chí 4 — tháng đạt khi có ≥1 tin SALE nhắn đi tới khách.
+    if (definition.metric === 'monthly_contact') {
+      const touched = windowed.filter(isOutbound).length;
+      return {
+        ...base,
+        status: touched > 0 ? 'pass' : 'fail',
+        actualValue: touched > 0 ? 1 : 0,
       };
     }
 
@@ -435,6 +471,52 @@ export class CustomerKpiScoringService {
         ...base,
         status: 'ratio',
         actualValue: pct(passed.length, pool.length),
+        numerator: passed.length,
+        denominatorValue: pool.length,
+        totalCriteria: pool.length,
+        passedCriteria: passed.length,
+      };
+    }
+
+    // Tiêu chí 3 — báo cáo không cần khớp liên hệ Zalo nên mẫu số là TOÀN BỘ
+    // khách của sale (khác reachable của các tiêu chí Zalo)
+    if (definition.metric === 'movement_report') {
+      const pool = windowedCustomers;
+      if (pool.length === 0) {
+        return { ...base, reason: REASON_NO_CUSTOMERS };
+      }
+      const passed = pool.filter((c) =>
+        c.days.some(
+          (row) => (row.movement_count ?? 0) > 0 && row.stat_date >= fromDate,
+        ),
+      );
+      return {
+        ...base,
+        status: passed.length > 0 ? 'pass' : 'fail',
+        actualValue: passed.length > 0 ? 1 : 0,
+        numerator: passed.length,
+        denominatorValue: pool.length,
+        totalCriteria: pool.length,
+        passedCriteria: passed.length,
+      };
+    }
+
+    // Tiêu chí 4 — cùng mẫu số reachable với contacted_customers
+    if (definition.metric === 'monthly_contact') {
+      const pool = reachable(windowedCustomers);
+      if (pool.length === 0) {
+        return {
+          ...base,
+          reason: emptyPoolReason,
+        };
+      }
+      const passed = pool.filter((c) =>
+        c.days.some((row) => row.zalo_linked && isOutbound(row)),
+      );
+      return {
+        ...base,
+        status: passed.length > 0 ? 'pass' : 'fail',
+        actualValue: passed.length > 0 ? 1 : 0,
         numerator: passed.length,
         denominatorValue: pool.length,
         totalCriteria: pool.length,

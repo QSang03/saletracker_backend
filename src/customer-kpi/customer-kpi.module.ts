@@ -11,9 +11,11 @@ import { CustomerZalo } from './customer-zalo.entity';
 import { CustomerZaloScanResult } from './customer-zalo-scan-result.entity';
 import { ZaloPythonApiClient } from './zalo-python-api.client';
 import { CustomerActivityDaily } from './customer-activity-daily.entity';
+import { CustomerMovementReport } from './customer-movement-report.entity';
 import { CustomerResponseDaily } from './customer-response-daily.entity';
 import { KpiDefinition } from './kpi-definition.entity';
 import { KpiTarget } from './kpi-target.entity';
+import { KpiCriterionOverride } from './kpi-criterion-overrides.entity';
 import { CustomerImportSession } from './customer-import-session.entity';
 import { CustomerImportChange } from './customer-import-change.entity';
 import { CustomerImportBackup } from './customer-import-backup.entity';
@@ -26,6 +28,7 @@ import { CustomerKpiReportsController } from './customer-kpi-reports.controller'
 import { CustomerKpiDefinitionsController } from './customer-kpi-definitions.controller';
 import { CustomerKpiTargetsController } from './customer-kpi-targets.controller';
 import { ApprovalRequestsController } from './approval-requests.controller';
+import { KpiCriterionOverridesController } from './kpi-criterion-overrides.controller';
 import { CustomersService } from './customers.service';
 import { CustomerAssignmentsService } from './customer-assignments.service';
 import { CustomerKpiScoringService } from './customer-kpi-scoring.service';
@@ -33,6 +36,7 @@ import { CustomerKpiReportsService } from './customer-kpi-reports.service';
 import { CustomerKpiDefinitionsService } from './customer-kpi-definitions.service';
 import { CustomerKpiTargetsService } from './customer-kpi-targets.service';
 import { ApprovalRequestsService } from './approval-requests.service';
+import { KpiCriterionOverridesService } from './kpi-criterion-overrides.service';
 
 /**
  * Module khách hàng & KPI (thiết kế: BAO-CAO-KPI-KHACH-HANG.md).
@@ -52,9 +56,11 @@ import { ApprovalRequestsService } from './approval-requests.service';
       CustomerZalo,
       CustomerZaloScanResult,
       CustomerActivityDaily,
+      CustomerMovementReport,
       CustomerResponseDaily,
       KpiDefinition,
       KpiTarget,
+      KpiCriterionOverride,
       CustomerImportSession,
       CustomerImportChange,
       CustomerImportBackup,
@@ -74,6 +80,7 @@ import { ApprovalRequestsService } from './approval-requests.service';
     CustomerKpiDefinitionsController,
     CustomerKpiTargetsController,
     ApprovalRequestsController,
+    KpiCriterionOverridesController,
   ],
   providers: [
     ZaloPythonApiClient,
@@ -84,6 +91,7 @@ import { ApprovalRequestsService } from './approval-requests.service';
     CustomerKpiDefinitionsService,
     CustomerKpiTargetsService,
     ApprovalRequestsService,
+    KpiCriterionOverridesService,
     CustomerSuggestionsCronjob,
   ],
 })
