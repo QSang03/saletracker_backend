@@ -17,7 +17,12 @@ import {
   REASON_SALE_OFFLINE,
   REASON_NO_CUSTOMERS,
   criterionAppliesToTier,
+  rollupRevenue,
 } from '../dist/customer-kpi/customer-kpi-scoring.service.js';
+import {
+  employeeCodeOfLabel,
+  saleNameOfLabel,
+} from '../dist/customer-kpi/nkm-label.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 void path.join(__dirname, '../'); // giữ import path dùng cho build theo máy
@@ -928,6 +933,73 @@ check(
   'NON đạt 4/4 vẫn không ra kết luận đạt/trượt',
   t.verdict === null && t.passed === 4,
   t,
+);
+
+
+// ─── Cộng dồn phân phối (nhóm / công ty) + cắt nhãn nhân viên ───
+const rev = (tier, quantity, lineTotal, customerId = 1) => ({ tier, quantity, lineTotal, customerId });
+
+console.log('\n[R6] rollupRevenue — cộng dồn sale → nhóm → công ty (cùng cách cộng ở cả 3 cấp)');
+let roll = rollupRevenue([
+  rev('KEY', 5, 100000, 1),
+  rev('KEY', 0, 0, 2),
+  rev('KEY', 3, 50000, 3),
+  rev('NON', 0, 0, 4),
+  rev('NON', 7, 25000, 5),
+]);
+check('Dso Key = 150.000', roll.dsoKey === 150000, roll);
+check('Dso Non = 25.000', roll.dsoNon === 25000, roll);
+check('tỷ lệ DS Key = 150/175 → 0,8571', roll.keyShareRatio === 0.8571, roll);
+check('% DS Key = 85,71', roll.keySharePct === 85.71, roll);
+check('% DS Non = 14,29', roll.nonSharePct === 14.29, roll);
+check('Key: 2/3 khách có phát sinh', roll.keyCustomers.reached === 2 && roll.keyCustomers.total === 3, roll);
+check('Non: 1/2 khách có phát sinh', roll.nonCustomers.reached === 1 && roll.nonCustomers.total === 2, roll);
+
+roll = rollupRevenue([rev('KEY', 1, 100)]);
+check('chỉ có khách KEY → tỷ lệ 1, Dso Non 0', roll.keyShareRatio === 1 && roll.dsoNon === 0, roll);
+roll = rollupRevenue([rev('NON', 1, 100)]);
+check('chỉ có khách NON → tỷ lệ 0', roll.keyShareRatio === 0, roll);
+roll = rollupRevenue([rev('KEY', 0, 0), rev('NON', 0, 0)]);
+check(
+  'chưa ai bán gì → tỷ lệ NULL (không phải NaN/0 gây hiểu nhầm)',
+  roll.keyShareRatio === null && roll.keySharePct === null,
+  roll,
+);
+roll = rollupRevenue([rev(null, 4, 9999)]);
+check(
+  'khách chưa xác định KEY/NON → không vào cột nào nhưng cũng không sai số',
+  roll.dsoKey === 0 && roll.dsoNon === 0 && roll.keyCustomers.total === 0,
+  roll,
+);
+roll = rollupRevenue([]);
+check('rỗng → toàn 0, tỷ lệ null', roll.dsoKey === 0 && roll.keyShareRatio === null, roll);
+// Làm tròn: 1/3 = 0,3333 (4 chữ số)
+roll = rollupRevenue([rev('KEY', 1, 1), rev('NON', 2, 2)]);
+check('1/3 làmm tròn 4 chữ số → 0,3333', roll.keyShareRatio === 0.3333, roll);
+// Cộng 2 nhóm phải bằng cộng 1 lượt (tính chất cộng được)
+const a = rollupRevenue([rev('KEY', 2, 700), rev('NON', 1, 300)]);
+const b = rollupRevenue([rev('KEY', 1, 400)]);
+const c = rollupRevenue([rev('NON', 1, 300), rev('KEY', 1, 300)]);
+check(
+  'gộp 2 nhóm = gộp 1 lượt (không trùng, không mất)',
+  a.dsoKey + a.dsoNon === b.dsoKey + b.dsoNon + c.dsoKey + c.dsoNon,
+  { a, b, c },
+);
+
+console.log('\n[R7] Cắt nhãn nhân viên — lấy mã trước dấu gạch ĐẦU TIÊN');
+const eqStr = (name, actual, expected) => check(name, actual === expected, { actual, expected });
+eqStr('NKDS33-NGUYỄN CHÍ ĐẠO → NKDS33', employeeCodeOfLabel('NKDS33-NGUYỄN CHÍ ĐẠO'), 'NKDS33');
+eqStr('NKDS12-ĐÀO-CẨM TÚ (nhiều dấu gạch) → NKDS12', employeeCodeOfLabel('NKDS12-ĐÀO-CẨM TÚ'), 'NKDS12');
+eqStr('chữ thường + khoảng trắng → viết hoa', employeeCodeOfLabel('  nkds07-a b  '), 'NKDS07');
+eqStr('không có dấu gạch → cả nhãn là mã', employeeCodeOfLabel('NKDS33'), 'NKDS33');
+eqStr('nhãn rỗng → rỗng', employeeCodeOfLabel(''), '');
+eqStr('tên: NKDS12-ĐÀO CẨM TÚ → ĐÀO CẨM TÚ', saleNameOfLabel('NKDS12-ĐÀO CẨM TÚ'), 'ĐÀO CẨM TÚ');
+eqStr('tên giữ nguyên dấu gạch trong họ tên', saleNameOfLabel('NKDS12-ĐÀO-CẨM TÚ'), 'ĐÀO-CẨM TÚ');
+eqStr('tên: không có dấu gạch → null', saleNameOfLabel('NKDS33'), null);
+eqStr('tên: nhãn rỗng → null', saleNameOfLabel(''), null);
+check(
+  'mã + tên ghép lại đúng nhãn gốc',
+  `${employeeCodeOfLabel('NKDS33-NGUYỄN CHÍ ĐẠO')}-${saleNameOfLabel('NKDS33-NGUYỄN CHÍ ĐẠO')}` === 'NKDS33-NGUYỄN CHÍ ĐẠO',
 );
 
 

@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as ExcelJS from 'exceljs';
+import { employeeCodeOfLabel, saleNameOfLabel } from './nkm-label';
 import { NkmSaleMap } from './nkm-sale-map.entity';
 import { NkmGroupMap } from './nkm-group-map.entity';
 
@@ -40,19 +41,6 @@ function normHeader(value: unknown): string {
     .toUpperCase()
     .replace(/\s+/g, ' ')
     .trim();
-}
-
-/** Mã nhân viên trong nhãn: `NKDS12-ĐÀO CẨM TÚ` → `NKDS12`. */
-export function employeeCodeOfLabel(label: string): string {
-  const dash = label.indexOf('-');
-  return (dash > 0 ? label.slice(0, dash) : label).trim().toUpperCase();
-}
-
-/** Tên người trong nhãn: `NKDS12-ĐÀO CẨM TÚ` → `ĐÀM CẨM TÚ`. */
-export function saleNameOfLabel(label: string): string | null {
-  const dash = label.indexOf('-');
-  const name = dash > 0 ? label.slice(dash + 1).trim() : '';
-  return name || null;
 }
 
 @Injectable()

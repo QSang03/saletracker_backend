@@ -2767,6 +2767,218 @@ console.log('\n-- N. Hồi quy so khớp: vắng mặt / tier sai / template --'
     }
   }
 }
+// ============ Q. Tiêu chí doanh số API NKM (v1.6) ============
+// Hợp đồng mới: khoảng xem theo QUÝ TÀI CHÍNH, cột phân phối trên từng sale,
+// tierSummary theo loại khách, chặn nhập tay, xuất file có sheet PHAN PHOI.
+{
+  const backendRequire = createRequire(
+    path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'package.json'));
+  const qOf = (date) => {
+    const d = new Date(date);
+    const month = d.getMonth() + 1;
+    const fiscalYear = month >= 4 ? d.getFullYear() : d.getFullYear() - 1;
+    const quarter = month >= 4 ? Math.ceil((month - 3) / 3) : 4;
+    return { fiscalYear, quarter, label: `Q${quarter}/${fiscalYear}` };
+  };
+
+  // 1. Không truyền gì → mặc định quý tài chính HIỆN TẠI
+  await expect('[Q] overview không truyền tham số → mặc định quý tài chính hiện tại', 200, async () => {
+    const r = await call('GET', '/customer-kpi-reports/overview', H());
+    assert(r.status === 200, `HTTP ${r.status}: ${r.text?.slice(0, 200)}`);
+    const expected = qOf(new Date());
+    assert(r.json?.quarter, 'thiếu quarter');
+    assert(r.json.quarter.label === expected.label, `quarter=${r.json.quarter.label}, kỳ vọng ${expected.label}`);
+    assert(r.json.isWholeQuarter === true, `isWholeQuarter=${r.json.isWholeQuarter}`);
+    // Khoảng ngày phải là đúng quý đó
+    assert(/^\d{4}-\d{2}-\d{2}$/.test(r.json.from) && /^\d{4}-\d{2}-\d{2}$/.test(r.json.to), 'from/to sai định dạng');
+    return r.status;
+  });
+
+  // 2. Hai tham số phải đi cùng nhau
+  await expect('[Q] truyền fiscal_year không quarter → 400', 400, async () => {
+    const r = await call('GET', '/customer-kpi-reports/overview?fiscal_year=2026', H());
+    assert(r.status === 400, `HTTP ${r.status}`);
+    return r.status;
+  });
+  await expect('[Q] truyền quarter không fiscal_year → 400', 400, async () => {
+    const r = await call('GET', '/customer-kpi-reports/overview?quarter=3', H());
+    assert(r.status === 400, `HTTP ${r.status}`);
+    return r.status;
+  });
+  await expect('[Q] quarter ngoài 1..4 → 400 (validation pipe)', 400, async () => {
+    const r = await call('GET', '/customer-kpi-reports/overview?fiscal_year=2026&quarter=9', H());
+    assert(r.status === 400, `HTTP ${r.status}`);
+    return r.status;
+  });
+
+  // 3. Hợp lệ → đủ 3 cấp báo cáo
+  await expect('[Q] overview quý 3/2026 → sales[].revenue + groups[] + company', 200, async () => {
+    const r = await call('GET', '/customer-kpi-reports/overview?fiscal_year=2026&quarter=3', H());
+    assert(r.status === 200, `HTTP ${r.status}: ${r.text?.slice(0, 200)}`);
+    assert(r.json.from === '2026-10-01' && r.json.to === '2026-12-31', `from/to=${r.json.from}..${r.json.to}`);
+    assert(Array.isArray(r.json.sales) && r.json.sales.length > 0, 'thiếu sales');
+    // Cột phân phối trên từng dòng sale
+    for (const sale of r.json.sales.slice(0, 5)) {
+      const rev = sale.revenue;
+      assert(rev, `sale ${sale.saleId} thiếu revenue`);
+      for (const field of ['keyCustomers', 'nonCustomers', 'dsoKey', 'dsoNon', 'keyShareRatio', 'quarterTarget', 'achievedRatio', 'achievedPct', 'verdict', 'keyFullyPassed', 'nonCriteria']) {
+        assert(field in rev, `sale ${sale.saleId} thiếu trường revenue.${field}`);
+      }
+      assert('reached' in rev.keyCustomers && 'total' in rev.keyCustomers, 'keyCustomers sai hình dạng');
+      assert('passed' in rev.nonCriteria && 'applicable' in rev.nonCriteria, 'nonCriteria sai hình dạng');
+    }
+    assert(Array.isArray(r.json.groups) && r.json.groups.length > 0, 'thiếu groups');
+    assert(r.json.company && 'dsoKey' in r.json.company && 'verdict' in r.json.company, 'company sai hình dạng');
+    // Tổng công ty = tổng các nhóm (theo cách làm: cộng dồn, không trùng doanh thu)
+    return r.status;
+  });
+
+  // 4. Lọc theo tiêu chí doanh số (met/minRatio đọc % ĐẠT, không đọc tỷ lệ Key/Non)
+  await expect('[Q] lọc criterionKey=doanh_so_key&met=false → 200', 200, async () => {
+    const all = await call('GET', '/customer-kpi-reports/overview?fiscal_year=2026&quarter=3', H());
+    const filtered = await call('GET', '/customer-kpi-reports/overview?fiscal_year=2026&quarter=3&criterionKey=doanh_so_key&met=false', H());
+    assert(filtered.status === 200, `HTTP ${filtered.status}: ${filtered.text?.slice(0, 200)}`);
+    assert(filtered.json.sales.length <= all.json.sales.length, 'lọc met=false trả nhiều sale hơn tổng');
+    for (const sale of filtered.json.sales) {
+      const criterion = sale.criteria.find((c) => c.key === 'doanh_so_key');
+      assert(criterion && (criterion.revenue?.verdict === 'fail'), `sale ${sale.saleId} không đạt nhưng vẫn lọt lọc`);
+    }
+    return filtered.status;
+  });
+  await expect('[Q] lọc criterionKey=doanh_so_key&minRatio=100 → 200', 200, async () => {
+    const r = await call('GET', '/customer-kpi-reports/overview?fiscal_year=2026&quarter=3&criterionKey=doanh_so_key&minRatio=100', H());
+    assert(r.status === 200, `HTTP ${r.status}: ${r.text?.slice(0, 200)}`);
+    for (const sale of r.json.sales) {
+      const criterion = sale.criteria.find((c) => c.key === 'doanh_so_key');
+      assert(criterion && (criterion.revenue?.achievedPct ?? 0) >= 100, `sale ${sale.saleId} % đạt ${criterion?.revenue?.achievedPct} < 100`);
+    }
+    return r.status;
+  });
+  await expect('[Q] lọc chéo: summary vẫn đếm trên tập đầy đủ, không nhảy số khi bật lọc', 200, async () => {
+    const plain = await call('GET', '/customer-kpi-reports/overview?fiscal_year=2026&quarter=3', H());
+    const filtered = await call('GET', '/customer-kpi-reports/overview?fiscal_year=2026&quarter=3&criterionKey=doanh_so_key&met=false', H());
+    const keyOf = (json, key) => json.summary.find((s) => s.key === key);
+    const a = keyOf(plain.json, 'doanh_so_key');
+    const b = keyOf(filtered.json, 'doanh_so_key');
+    assert(a && b, `thiếu summary doanh_so_key (${JSON.stringify(plain.json.summary?.map((s) => s.key))})`);
+    assert(a.totalSales === b.totalSales, `totalSales đổi: ${a.totalSales} → ${b.totalSales}`);
+    assert(a.notMetSales === b.notMetSales, `notMetSales đổi: ${a.notMetSales} → ${b.notMetSales}`);
+    return filtered.status;
+  });
+
+  // 5. by-sale: tierSummary + chỉ chấm đúng loại khách
+  await expect('[Q] by-sale: mỗi khách có tierSummary, cột doanh số đúng loại khách', 200, async () => {
+    const overview = await call('GET', '/customer-kpi-reports/overview?fiscal_year=2026&quarter=3', H());
+    const withCustomers = overview.json.sales.find((s) => s.revenue.nonCriteria.customers + s.revenue.keyFullyPassed.total > 0);
+    assert(withCustomers, 'không có sale nào có khách để kiểm tra');
+    const r = await call('GET', `/customer-kpi-reports/by-sale?saleId=${withCustomers.saleId}&fiscal_year=2026&quarter=3&pageSize=200`, H());
+    assert(r.status === 200, `HTTP ${r.status}: ${r.text?.slice(0, 200)}`);
+    assert(r.json.quarter?.label === 'Q3/2026', `quarter=${JSON.stringify(r.json.quarter)}`);
+    const sale = (r.json.sales || [])[0];
+    assert(sale && sale.customers?.length > 0, 'by-sale không có khách');
+    assert(sale.revenue && 'achievedPct' in sale.revenue, 'by-sale thiếu revenue');
+    const byKey = new Map(sale.criteria.map((c) => [c.key, c]));
+    for (const customer of sale.customers) {
+      const tier = (customer.customerTier || '').toUpperCase();
+      const summary = customer.tierSummary;
+      assert(summary && summary.tier === (tier || null), `khách ${customer.customerCode} thiếu tierSummary đúng loại`);
+      const keyCell = customer.criteria.find((c) => c.key === 'doanh_so_key');
+      const nonCell = customer.criteria.find((c) => c.key === 'doanh_so_non');
+      if (tier === 'KEY') {
+        assert(keyCell && keyCell.notApplicable !== true, `khách KEY bị bỏ qua ô doanh_so_key: ${JSON.stringify(keyCell)}`);
+        assert(nonCell && nonCell.notApplicable === true, `khách KEY KHÔNG được chấm doanh_so_non: ${JSON.stringify(nonCell)}`);
+        assert(summary.verdict === 'pass' || summary.verdict === 'fail', `khách KEY phải có kết luận: ${JSON.stringify(summary)}`);
+        assert(summary.applicable === 4, `khách KEY phải chấm 4 tiêu chí: ${JSON.stringify(summary)}`);
+      } else if (tier === 'NON') {
+        assert(nonCell && nonCell.notApplicable !== true, `khách NON bị bỏ qua ô doanh_so_non: ${JSON.stringify(nonCell)}`);
+        assert(keyCell && keyCell.notApplicable === true, `khách NON KHÔNG được chấm doanh_so_key: ${JSON.stringify(keyCell)}`);
+        assert(summary.verdict === null, `khách NON không được kết luận: ${JSON.stringify(summary)}`);
+        assert(summary.applicable === 4, `khách NON phải chấm 4 tiêu chí: ${JSON.stringify(summary)}`);
+      }
+      // Ô đúng loại phải có số phiếu/doanh số (kể cả 0)
+      const cell = tier === 'KEY' ? keyCell : nonCell;
+      if (cell && cell.notApplicable !== true) {
+        assert(typeof cell.quantity === 'number' && typeof cell.lineTotal === 'number', `thiếu quantity/lineTotal: ${JSON.stringify(cell)}`);
+      }
+    }
+    return r.status;
+  });
+
+  // 6. Khoảng không trọn quý → không so chỉ tiêu
+  await expect('[Q] by-sale theo TUẦN → chỉ doanh thu thực, không kết luận', 200, async () => {
+    const overview = await call('GET', '/customer-kpi-reports/overview?fiscal_year=2026&quarter=3', H());
+    // Chọn sale ĐÃ tra được mã NKM (dsoKey/quarterTarget không null) — sale chưa
+    // nạp bảng tra mã trả no_data, không có object revenue để kiểm tra.
+    const mapped = overview.json.sales.find(
+      (x) => x.revenue.dsoKey !== null || x.revenue.quarterTarget !== null,
+    );
+    assert(mapped, 'không có sale nào tra được mã NKM — bỏ qua kiểm tra xem tuần');
+    const r = await call('GET', `/customer-kpi-reports/by-sale?saleId=${mapped.saleId}&from=2026-10-05&to=2026-10-11`, H());
+    assert(r.status === 200, `HTTP ${r.status}: ${r.text?.slice(0, 200)}`);
+    assert(r.json.quarter === null, `khoảng tuần không được coi là trọn quý: ${JSON.stringify(r.json.quarter)}`);
+    assert(r.json.isWholeQuarter === false, 'isWholeQuarter phải false');
+    const sale = (r.json.sales || [])[0];
+    for (const criterion of sale.criteria.filter((c) => c.key.startsWith('doanh_so'))) {
+      assert(criterion.revenue.verdict === null, `${criterion.key} không được kết luận khi xem tuần`);
+      assert(criterion.revenue.achievedRatio === null, `${criterion.key} không được tính % đạt khi xem tuần`);
+      assert(criterion.status === 'ratio', `${criterion.key} phải trả ratio khi xem tuần, nhận ${criterion.status}`);
+    }
+    return r.status;
+  });
+
+  // 7. Chặn nhập tay tiêu chí doanh số
+  await expect('[Q] POST /customer-kpi-overrides tiêu chí doanh số → 400', 400, async () => {
+    const overview = await call('GET', '/customer-kpi-reports/overview?fiscal_year=2026&quarter=3', H());
+    const saleId = overview.json.sales[0]?.saleId;
+    const r = await call('POST', '/customer-kpi-overrides', {
+      ...H(),
+      body: { sale_id: saleId, customer_id: 0, criterion_key: 'doanh_so_key', period_month: '2026-10', reason: 'thử chặn' },
+    });
+    assert(r.status === 400, `HTTP ${r.status}: ${r.text?.slice(0, 150)}`);
+    return r.status;
+  });
+
+  // 8. Xuất file phải có sheet PHAN PHOI
+  await expect('[Q] export quý 3/2026 → file có 3 sheet, có PHAN PHOI', 200, async () => {
+    const res = await fetch(
+      `${BASE}/customer-kpi-reports/export?fiscal_year=2026&quarter=3`,
+      { headers: { Authorization: `Bearer ${adminToken}` }, signal: AbortSignal.timeout(120000) },
+    );
+    assert(res.status === 200, `HTTP ${res.status}`);
+    const contentType = res.headers.get('content-type') || '';
+    assert(contentType.includes('spreadsheetml'), `content-type=${contentType}`);
+    const buffer = Buffer.from(await res.arrayBuffer());
+    const ExcelJS = backendRequire('exceljs');
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(buffer);
+    const names = wb.worksheets.map((w) => w.name);
+    assert(names.length === 3, `kỳ vọng 3 sheet, nhận ${names.join(', ')}`);
+    assert(names.some((n) => n.includes('PHAN PHOI')), `thiếu sheet PHAN PHOI: ${names.join(', ')}`);
+    // Sheet phân phối phải có hàng CÔNG TY
+    const sheet = wb.worksheets.find((w) => w.name.includes('PHAN PHOI'));
+    const values = [];
+    sheet.eachRow((row) => values.push(row.values.map((v) => String(v ?? ''))));
+    assert(values.some((cells) => cells.some((v) => v.includes('CÔNG TY'))), 'thiếu hàng tổng công ty');
+    assert(values.some((cells) => cells.some((v) => v.includes('Tỷ lệ'))), 'thiếu cột Tỷ lệ (DS Key)');
+    return res.status;
+  });
+
+  // 9. Nhóm /nkm-mapping đọc được
+  await expect('[Q] GET /nkm-mapping/sales + groups → 200, data là mảng', 200, async () => {
+    const sales = await call('GET', '/nkm-mapping/sales', H());
+    const groups = await call('GET', '/nkm-mapping/groups', H());
+    assert(sales.status === 200 && Array.isArray(sales.json?.data), `sales HTTP ${sales.status}`);
+    assert(groups.status === 200 && Array.isArray(groups.json?.data), `groups HTTP ${groups.status}`);
+    if (sales.json.data.length > 0) {
+      const row = sales.json.data[0];
+      for (const field of ['slp_code', 'sale_label', 'employee_code', 'dept_slug']) {
+        assert(field in row, `nkm_sale_map thiếu trường ${field}`);
+      }
+    }
+    return sales.status;
+  });
+}
+
 // ============ DỌN DẸP AN TOÀN ============
 if (createdId) {
   try { await call('DELETE', `/customer-kpi-definitions/${createdId}`, H()); } catch {}

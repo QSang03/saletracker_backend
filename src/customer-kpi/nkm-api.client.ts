@@ -6,6 +6,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { SystemConfig } from '../system_config/system_config.entity';
+import { employeeCodeOfLabel } from './nkm-label';
 
 /**
  * Client gọi 3 API NKM do lead cấp — nguồn chân lý của tiêu chí doanh số
@@ -320,11 +321,11 @@ export class NkmApiClient {
     };
   }
 
-  /** Mã nhân viên trong `sale_label` của API quý: `NKDS12-ĐÀO CẨM TÚ` → `NKDS12`. */
+  /**
+   * Mã nhân viên trong `sale_label` của API quý: `NKDS12-ĐÀO CẨM TÚ` → `NKDS12`.
+   * Cùng một quy tắc với service nạp bảng tra nên 2 bên không bao giờ lệch mã.
+   */
   static employeeCodeOf(saleLabel: string): string {
-    const dash = saleLabel.indexOf('-');
-    return (dash > 0 ? saleLabel.slice(0, dash) : saleLabel)
-      .trim()
-      .toUpperCase();
+    return employeeCodeOfLabel(saleLabel);
   }
 }

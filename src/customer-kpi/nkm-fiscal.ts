@@ -90,23 +90,21 @@ export function currentFiscalQuarter(today?: string): FiscalQuarter {
 }
 
 /**
- * Quý tài chính phủ TRỌN khoảng `[from, to]` — chỉ trả về khi khoảng xem đã
- * chứa cả quý (khoảng bằng đúng quý, hoặc rộng hơn).
+ * Quý tài chính mà khoảng xem phủ trọn — chỉ trả về khi khoảng xem ĐÚNG BẰNG
+ * một quý (từ ngày đầu quý đến ngày cuối quý). Chỉ khi đó mới được kết luận
+ * đạt/không đạt so với chỉ tiêu quý: xem tuần hay tháng thì chỉ báo doanh thu
+ * thực, không chia target (§1.2).
  *
- * Chỉ khi đó mới được kết luận đạt/không đạt so với chỉ tiêu quý: xem tuần hay
- * tháng thì chỉ báo cáo doanh thu thực, không chia target (§1.2).
+ * Cố tính KHÔNG nhận khoảng rộng hơn một quý (ví dụ 01/04→31/12): doanh thu khi
+ * đó có ngày nằm ngoài quý, so với target quý sẽ thổi phồng % đạt. Khoảng như
+ * vậy cũng chỉ báo doanh thu thực.
  */
 export function fiscalQuarterCovering(
   from: string,
   to: string,
 ): FiscalQuarter | null {
   if (!from || !to || from > to) return null;
-  const candidates = [
-    fiscalQuarterRange(fiscalYearOf(from), fiscalQuarterOf(from)),
-    fiscalQuarterRange(fiscalYearOf(to), fiscalQuarterOf(to)),
-  ].filter((q): q is FiscalQuarter => q !== null);
-  for (const quarter of candidates) {
-    if (from <= quarter.from && to >= quarter.to) return quarter;
-  }
-  return null;
+  const quarter = fiscalQuarterRange(fiscalYearOf(from), fiscalQuarterOf(from));
+  if (!quarter || from !== quarter.from || to !== quarter.to) return null;
+  return quarter;
 }
