@@ -26,7 +26,13 @@ import {
 
 /**
  * Bộ tiêu chí mặc định nhóm `kinh-doanh` (thiết kế mục 5.1).
- * Hai tiêu chí doanh số để trống nguồn — adapter revenue chờ API doanh thu.
+ *
+ * Hai tiêu chí doanh số lấy từ API NKM: cấp khách chấm "có phát sinh", cấp sale
+ * chấm doanh thu + tỷ lệ Key/Non so CHỈ TIÊU QUÝ. Chu kỳ của cả hai là `quarter`
+ * — target phân theo quý, xem tuần/tháng chỉ có doanh thu thực (thiết kế
+ * THIET-KE-DOANH-SO-API-NKM.md §1.2). Chỉ tiêu không nhập tay nữa: bảng
+ * `sale_revenue_target` do job đồng bộ ghi, API `/customer-kpi-targets` chặn
+ * hai tiêu chí này.
  */
 const DEFAULT_KPI_DEFINITIONS: Array<Partial<KpiDefinition>> = [
   {
@@ -36,9 +42,10 @@ const DEFAULT_KPI_DEFINITIONS: Array<Partial<KpiDefinition>> = [
     metric: 'revenue_key',
     scoring_mode: ScoringMode.RATIO,
     denominator: KpiDenominator.TARGET_VALUE,
-    period: KpiPeriod.MONTH,
+    period: KpiPeriod.QUARTER,
     sort_order: 1,
-    description: 'Chờ API doanh thu',
+    description:
+      'Cấp khách: có phát sinh (≥1 phiếu) trong kỳ. Cấp sale: Dso Key / tổng Dso, chỉ tiêu quý lấy từ API NKM (get-doanhso-quy-truhangtra)',
   },
   {
     team_group: 'kinh-doanh',
@@ -47,9 +54,10 @@ const DEFAULT_KPI_DEFINITIONS: Array<Partial<KpiDefinition>> = [
     metric: 'revenue_non',
     scoring_mode: ScoringMode.RATIO,
     denominator: KpiDenominator.TARGET_VALUE,
-    period: KpiPeriod.MONTH,
+    period: KpiPeriod.QUARTER,
     sort_order: 2,
-    description: 'Chờ API doanh thu',
+    description:
+      'Cấp khách: có phát sinh (≥1 phiếu) trong kỳ. Cấp sale: Dso Non / tổng Dso, dùng chung chỉ tiêu quý với doanh_so_key',
   },
   {
     team_group: 'kinh-doanh',
@@ -114,6 +122,7 @@ export class CustomerKpiDefinitionsService implements OnModuleInit {
       );
     }
     await this.upgradeBehaviorCriteria();
+    await this.upgradeRevenueCriteria();
   }
 
   /**
@@ -130,12 +139,11 @@ export class CustomerKpiDefinitionsService implements OnModuleInit {
     const rows = await this.definitionRepo.find({
       where: { team_group: 'kinh-doanh' },
     });
-    const stale = rows.filter(
-      (row) => oldMetricByKey[row.key] === row.metric,
-    );
+    const stale = rows.filter((row) => oldMetricByKey[row.key] === row.metric);
     for (const row of stale) {
       Object.assign(row, {
-        metric: row.key === 'support_khach' ? 'movement_report' : 'monthly_contact',
+        metric:
+          row.key === 'support_khach' ? 'movement_report' : 'monthly_contact',
         scoring_mode: ScoringMode.BINARY,
         comparison: KpiComparison.GTE,
         period: KpiPeriod.MONTH,
@@ -147,6 +155,48 @@ export class CustomerKpiDefinitionsService implements OnModuleInit {
       await this.definitionRepo.save(stale);
       this.logger.log(
         `Đã nâng cấp tiêu chí hành vi sang binary/theo-tháng: ${stale
+          .map((r) => r.key)
+          .join(', ')}`,
+      );
+    }
+  }
+
+  /**
+   * Nâng cấp hai tiêu chí doanh số từ "chờ API" (chu kỳ tháng, mô tả tạm) sang
+   * chu kỳ QUÝ + mô tả đúng luật API NKM — cho môi trường ĐÃ seed trước khi làm
+   * module doanh số. Idempotent, chỉ đè dòng còn đúng định dạng CŨ; ai đã sửa
+   * cấu hình theo cách khác thì giữ nguyên (không đè tay của chủ cấu hình).
+   *
+   * Lưu ý: KHÔNG đổi `metric` (`revenue_key`/`revenue_non`) vì đó là khoá mà
+   * engine dùng nhận ra tiêu chí doanh số.
+   */
+  private async upgradeRevenueCriteria() {
+    const rows = await this.definitionRepo.find({
+      where: { team_group: 'kinh-doanh' },
+    });
+    const stale = rows.filter(
+      (row) =>
+        (row.key === 'doanh_so_key' || row.key === 'doanh_so_non') &&
+        (row.metric === 'revenue_key' || row.metric === 'revenue_non') &&
+        (row.period === KpiPeriod.MONTH ||
+          row.description === 'Chờ API doanh thu'),
+    );
+    for (const row of stale) {
+      const index = DEFAULT_KPI_DEFINITIONS.findIndex(
+        (definition) => definition.key === row.key,
+      );
+      const next = DEFAULT_KPI_DEFINITIONS[index];
+      Object.assign(row, {
+        period: KpiPeriod.QUARTER,
+        description: next?.description ?? row.description,
+        scoring_mode: ScoringMode.RATIO,
+        denominator: KpiDenominator.TARGET_VALUE,
+      });
+    }
+    if (stale.length > 0) {
+      await this.definitionRepo.save(stale);
+      this.logger.log(
+        `Đã nâng cấp tiêu chí doanh số sang chu kỳ quý (API NKM): ${stale
           .map((r) => r.key)
           .join(', ')}`,
       );

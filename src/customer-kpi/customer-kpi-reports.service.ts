@@ -1,4 +1,8 @@
-import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import * as ExcelJS from 'exceljs';
@@ -8,6 +12,10 @@ import { Customer } from './customer.entity';
 import { CustomerAssignment } from './customer-assignment.entity';
 import { CustomerActivityDaily } from './customer-activity-daily.entity';
 import { CustomerMovementReport } from './customer-movement-report.entity';
+import { CustomerRevenueDaily } from './customer-revenue-daily.entity';
+import { DeptRevenueTarget } from './dept-revenue-target.entity';
+import { NkmSaleMap } from './nkm-sale-map.entity';
+import { SaleRevenueTarget } from './sale-revenue-target.entity';
 import { KpiCriterionOverride } from './kpi-criterion-overrides.entity';
 import { KpiDefinition, ScoringMode } from './kpi-definition.entity';
 import { KpiTarget } from './kpi-target.entity';
@@ -17,9 +25,19 @@ import {
   ActivityDayRow,
   CustomerCriterion,
   CustomerKpiScoringService,
+  CustomerTierSummary,
+  REVENUE_METRICS,
+  RevenueCustomerInput,
   SaleCriterion,
   SUGGESTION_GAP_DAYS,
+  roundTo,
 } from './customer-kpi-scoring.service';
+import {
+  currentFiscalQuarter,
+  FiscalQuarter,
+  fiscalQuarterCovering,
+  fiscalQuarterRange,
+} from './nkm-fiscal';
 import {
   KpiCustomerFilters,
   KpiCriterionStatus,
@@ -58,6 +76,24 @@ interface MovementEventRow {
   sent_at: Date | string;
 }
 
+/**
+ * Khoảng xem của báo cáo. `quarter != null` nghĩa là khoảng xem phủ trọn một
+ * QUÝ TÀI CHÍNH — chỉ khi đó mới so chỉ tiêu quý và kết luận đạt/không đạt.
+ */
+export interface KpiWindow {
+  from: string;
+  to: string;
+  quarter: FiscalQuarter | null;
+  /** Sale có chỉ tiêu quý cần lấy theo quý này. */
+  isWholeQuarter: boolean;
+}
+
+/** Dòng doanh thu đã đọc — tổng kỳ theo từng khách. */
+interface CustomerRevenueAmount {
+  quantity: number;
+  lineTotal: number;
+}
+
 interface AssignmentRow {
   assignmentId: number;
   saleId: number;
@@ -70,11 +106,43 @@ interface AssignmentRow {
   sapCode: string;
 }
 
+/** Dòng phân phối của một sale trong báo cáo 3 cấp (pivot của lead). */
+export interface SaleRevenueRow {
+  keyCustomers: { reached: number; total: number };
+  nonCustomers: { reached: number; total: number };
+  /** Doanh số khách KEY trong kỳ (chưa VAT) — `null` khi chưa đồng bộ được. */
+  dsoKey: number | null;
+  dsoNon: number | null;
+  keyShareRatio: number | null;
+  quarterTarget: number | null;
+  achievedRatio: number | null;
+  achievedPct: number | null;
+  verdict: 'pass' | 'fail' | null;
+  /** "x/y khách KEY đạt toàn bộ tiêu chí" (lớp tổng hợp theo loại khách). */
+  keyFullyPassed: { passed: number; total: number } | null;
+  /** Khách NON: đếm tiêu chí đạt / tổng tiêu chí đã áp dụng (không kết luận). */
+  nonCriteria: { passed: number; applicable: number; customers: number } | null;
+}
+
+/**
+ * Dữ liệu doanh thu của một khách để nạp adapter. `undefined` (chưa đồng bộ được
+ * dữ liệu NKM) KHÁC với "khách không mua gì": adapter sẽ trả no_data kèm lý do
+ * thay vì kết luận trượt oan.
+ */
+const revenueData = (
+  loaded: { bySale: Map<number, RevenueCustomerInput[]> } | undefined,
+  customer: { tier: string | null; quantity: number; lineTotal: number },
+) => (loaded ? customer : undefined);
+
 /**
  * Báo cáo KPI. Engine chấm điểm nằm ở CustomerKpiScoringService (tính lúc đọc
  * từ kpi_definitions + customer_activity_daily — sửa tiêu chí là hiện ngay,
  * không đợi cron). Bảng customer_response_daily chỉ dùng cho màn hình chi tiết
  * khách hàng (mục 4.7 — không dùng chấm KPI).
+ *
+ * Tiêu chí doanh số đọc thêm `customer_revenue_daily` + `sale_revenue_target`
+ * (job đồng bộ API NKM ghi) — xem THIET-KE-DOANH-SO-API-NKM.md. Báo cáo trả
+ * theo BA CẤP tuân thủ bảng phân phối khách / doanh số: Sale / QL Nhóm / QL KD.
  */
 @Injectable()
 export class CustomerKpiReportsService {
@@ -98,8 +166,16 @@ export class CustomerKpiReportsService {
     private readonly movementRepo: Repository<CustomerMovementReport>,
     @InjectRepository(KpiCriterionOverride)
     private readonly overrideRepo: Repository<KpiCriterionOverride>,
+    @InjectRepository(CustomerRevenueDaily)
+    private readonly revenueRepo: Repository<CustomerRevenueDaily>,
+    @InjectRepository(SaleRevenueTarget)
+    private readonly quarterTargetRepo: Repository<SaleRevenueTarget>,
+    @InjectRepository(DeptRevenueTarget)
+    private readonly deptTargetRepo: Repository<DeptRevenueTarget>,
+    @InjectRepository(NkmSaleMap)
+    private readonly saleMapRepo: Repository<NkmSaleMap>,
     private readonly customersService: CustomersService,
-  ) { }
+  ) {}
 
   /**
    * Phạm vi xem báo cáo — cùng luật với scopeUserIds của CustomersService
@@ -300,19 +376,53 @@ export class CustomerKpiReportsService {
     }
   }
 
-  private async loadSaleInfos(
-    saleIds: number[],
-  ): Promise<Map<number, { fullName: string; zaloLinked: boolean }>> {
-    const result = new Map();
+  /**
+   * Thông tin sale cần cho báo cáo: tên hiển thị, trạng thái Zalo, MÃ NHÂN VIÊN
+   * (để nối bảng tra NKM) và phòng ban (để gom nhóm QL Nhóm / QL KD).
+   */
+  private async loadSaleInfos(saleIds: number[]): Promise<
+    Map<
+      number,
+      {
+        fullName: string;
+        zaloLinked: boolean;
+        employeeCode: string | null;
+        departments: { slug: string; name: string }[];
+      }
+    >
+  > {
+    const result = new Map<
+      number,
+      {
+        fullName: string;
+        zaloLinked: boolean;
+        employeeCode: string | null;
+        departments: { slug: string; name: string }[];
+      }
+    >();
     if (saleIds.length === 0) return result;
-    const users = await this.userRepo.find({
-      where: { id: In([...new Set(saleIds)]) },
-      select: ['id', 'fullName', 'zaloLinkStatus'],
-    });
+    const users = await this.userRepo
+      .createQueryBuilder('user')
+      .leftJoinAndSelect('user.departments', 'dept')
+      .where('user.id IN (:...ids)', { ids: [...new Set(saleIds)] })
+      .andWhere('user.deletedAt IS NULL')
+      .select([
+        'user.id',
+        'user.fullName',
+        'user.zaloLinkStatus',
+        'user.employeeCode',
+      ])
+      .addSelect(['dept.id', 'dept.slug', 'dept.name'])
+      .getMany();
     for (const user of users) {
       result.set(user.id, {
-        fullName: user.fullName,
+        fullName: user.fullName ?? `User #${user.id}`,
         zaloLinked: Number(user.zaloLinkStatus) === 1,
+        employeeCode: user.employeeCode ?? null,
+        departments: (user.departments ?? []).map((dept: any) => ({
+          slug: dept.slug,
+          name: dept.name,
+        })),
       });
     }
     return result;
@@ -456,6 +566,252 @@ export class CustomerKpiReportsService {
     return result;
   }
 
+  // ------------------------------------------------- doanh thu (API NKM)
+
+  /**
+   * Khoảng xem của báo cáo:
+   *
+   * - `fiscal_year` + `quarter` → khoảng = ĐÚNG QUÝ TÀI CHÍNH đó (mặc định là
+   *   quý hiện tại) — nơi duy nhất có target, % đạt và kết luận đạt/không đạt.
+   * - `from`/`to` → khoảng tuỳ chọn (tuần, tháng...). Nếu khoảng đó trọn một
+   *   quý thì vẫn so được chỉ tiêu; không thì chỉ báo doanh thu thực.
+   *
+   * Thứ tự ưu tiên là chuẩn mực của lead: "target cốt lõi là target theo quý".
+   */
+  private resolveWindow(query: any): KpiWindow {
+    const hasYear =
+      query.fiscal_year !== undefined &&
+      query.fiscal_year !== null &&
+      query.fiscal_year !== '';
+    const hasQuarter =
+      query.quarter !== undefined &&
+      query.quarter !== null &&
+      query.quarter !== '';
+    if (hasYear !== hasQuarter) {
+      throw new BadRequestException(
+        'fiscal_year và quarter phải đi cùng nhau (hoặc không truyền cái nào)',
+      );
+    }
+    if (hasYear) {
+      const range = fiscalQuarterRange(
+        Number(query.fiscal_year),
+        Number(query.quarter),
+      );
+      if (!range) {
+        throw new BadRequestException(
+          `fiscal_year/quarter không hợp lệ: ${query.fiscal_year}/${query.quarter}`,
+        );
+      }
+      return {
+        from: range.from,
+        to: range.to,
+        quarter: range,
+        isWholeQuarter: true,
+      };
+    }
+
+    const isDate = (value: unknown): value is string =>
+      typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
+    const today = vnToday();
+    const from = isDate(query.from) ? query.from : undefined;
+    const to = isDate(query.to) ? query.to : undefined;
+    // Thiếu một đầu thì giữ luật cũ: chỉ có `to` → mặc định 30 ngày trước đó
+    const start = from ?? (to ? shiftDateStr(to, -30) : undefined);
+    const end = to ?? (from ? today : undefined);
+    if (start && end) {
+      if (start > end) {
+        throw new BadRequestException('from phải nhỏ hơn hoặc bằng to');
+      }
+      const quarter = fiscalQuarterCovering(start, end);
+      return {
+        from: start,
+        to: end,
+        quarter,
+        isWholeQuarter: quarter != null,
+      };
+    }
+    // Không khoanh gì → mặc định quý tài chính hiện tại
+    const current = currentFiscalQuarter(today);
+    return {
+      from: current.from,
+      to: current.to,
+      quarter: current,
+      isWholeQuarter: true,
+    };
+  }
+
+  /**
+   * Doanh thu trong kỳ của từng khách, theo từng sale — nạp MỘT lần cho cả báo
+   * cáo.
+   *
+   * Nối ba bước: `users.employee_code` → `nkm_sale_map.employee_code` →
+   * `nkm_sale_map.slp_code` → `customer_revenue_daily.slp_code`. Mã khách tra
+   * theo `customer_code` (đúng như CardCode API trả về). Khách do nhiều sale
+   * cùng quản lý thì mỗi sale chỉ lấy phần phiếu do mình bán — không đếm trùng.
+   */
+  private async loadRevenue(
+    assignments: AssignmentRow[],
+    saleInfos: Map<number, { employeeCode: string | null }>,
+    from: string,
+    to: string,
+  ): Promise<{
+    byAssignment: Map<number, CustomerRevenueAmount>;
+    bySale: Map<number, RevenueCustomerInput[]>;
+    /** Sale không tra được mã nhân viên NKM — chưa nạp bảng tra mã. */
+    salesWithoutMapping: Set<number>;
+  }> {
+    const byAssignment = new Map<number, CustomerRevenueAmount>();
+    const bySale = new Map<number, RevenueCustomerInput[]>();
+    const salesWithoutMapping = new Set<number>();
+    if (assignments.length === 0) {
+      return { byAssignment, bySale, salesWithoutMapping };
+    }
+
+    const saleMap = await this.saleMapRepo.find({
+      where: { is_active: true },
+      select: ['slp_code', 'employee_code'],
+    });
+    const slpByEmployeeCode = new Map<string, number[]>();
+    for (const row of saleMap) {
+      const list = slpByEmployeeCode.get(row.employee_code) ?? [];
+      list.push(row.slp_code);
+      slpByEmployeeCode.set(row.employee_code, list);
+    }
+
+    const slpCodesOf = new Map<number, number[]>();
+    const allSlp = new Set<number>();
+    for (const row of assignments) {
+      const employeeCode = saleInfos.get(row.saleId)?.employeeCode ?? null;
+      const codes = employeeCode
+        ? (slpByEmployeeCode.get(employeeCode) ?? [])
+        : [];
+      slpCodesOf.set(row.saleId, codes);
+      codes.forEach((code) => allSlp.add(code));
+      if (codes.length === 0) salesWithoutMapping.add(row.saleId);
+    }
+
+    // (slp_code|mã khách) → tổng phiếu + doanh số trong kỳ
+    const totals = new Map<string, CustomerRevenueAmount>();
+    const codes = [...allSlp];
+    for (let i = 0; i < codes.length; i += 200) {
+      const chunk = codes.slice(i, i + 200);
+      const rows = await this.revenueRepo
+        .createQueryBuilder('r')
+        .select('r.slp_code', 'slpCode')
+        .addSelect('r.customer_code', 'customerCode')
+        .addSelect('SUM(r.quantity)', 'quantity')
+        .addSelect('SUM(r.line_total)', 'lineTotal')
+        .where('r.slp_code IN (:...slp)', { slp: chunk })
+        .andWhere('r.stat_date >= :from', { from })
+        .andWhere('r.stat_date <= :to', { to })
+        .groupBy('r.slp_code')
+        .addGroupBy('r.customer_code')
+        .getRawMany<{
+          slpCode: number;
+          customerCode: string;
+          quantity: string;
+          lineTotal: string;
+        }>();
+      for (const row of rows) {
+        totals.set(`${row.slpCode}|${String(row.customerCode)}`, {
+          quantity: Number(row.quantity) || 0,
+          lineTotal: Number(row.lineTotal) || 0,
+        });
+      }
+    }
+
+    for (const row of assignments) {
+      const codes = slpCodesOf.get(row.saleId) ?? [];
+      let quantity = 0;
+      let lineTotal = 0;
+      for (const slp of codes) {
+        const found = totals.get(`${slp}|${row.customerCode}`);
+        if (found) {
+          quantity += found.quantity;
+          lineTotal += found.lineTotal;
+        }
+      }
+      byAssignment.set(row.assignmentId, { quantity, lineTotal });
+      const list = bySale.get(row.saleId) ?? [];
+      list.push({
+        customerId: row.customerId,
+        tier: row.customerTier,
+        quantity,
+        lineTotal,
+      });
+      bySale.set(row.saleId, list);
+    }
+    return { byAssignment, bySale, salesWithoutMapping };
+  }
+
+  /** Chỉ tiêu quý của từng sale — cả hai tiêu chí doanh số dùng chung. */
+  private async loadQuarterTargets(
+    slpCodes: number[],
+    quarter: FiscalQuarter,
+  ): Promise<Map<number, number>> {
+    const result = new Map<number, number>();
+    if (slpCodes.length === 0) return result;
+    const rows = await this.quarterTargetRepo.find({
+      where: {
+        slp_code: In([...new Set(slpCodes)]),
+        fiscal_year: quarter.fiscalYear,
+        quarter: quarter.quarter,
+      },
+    });
+    for (const row of rows) {
+      result.set(row.slp_code, Number(row.target_value) || 0);
+    }
+    return result;
+  }
+
+  /**
+   * Chỉ tiêu cấp NHÓM do người quản lý nhập tay. Không có dòng thì nhóm lấy
+   * TỔNG chỉ tiêu quý của các sale trong phòng — API quý chỉ có target theo
+   * sale nên đây là cách chia mặc định, có dòng thì dùng dòng nhập tay.
+   */
+  private async loadDeptTargets(
+    deptSlugs: string[],
+    quarter: FiscalQuarter,
+  ): Promise<Map<string, number>> {
+    const result = new Map<string, number>();
+    if (deptSlugs.length === 0) return result;
+    const rows = await this.deptTargetRepo.find({
+      where: {
+        dept_slug: In([...new Set(deptSlugs)]),
+        fiscal_year: quarter.fiscalYear,
+        quarter: quarter.quarter,
+      },
+    });
+    for (const row of rows) {
+      result.set(row.dept_slug, Number(row.target_value) || 0);
+    }
+    return result;
+  }
+
+  /** Ngày chưa chốt (hôm nay) trong khoảng xem — FE hiện nhãn "tạm tính". */
+  private async loadProvisionalDates(
+    slpCodes: number[],
+    from: string,
+    to: string,
+  ): Promise<string[]> {
+    if (slpCodes.length === 0) return [];
+    const rows = await this.revenueRepo
+      .createQueryBuilder('r')
+      .select('DISTINCT r.stat_date', 'stat_date')
+      .where('r.slp_code IN (:...slp)', { slp: [...new Set(slpCodes)] })
+      .andWhere('r.stat_date >= :from', { from })
+      .andWhere('r.stat_date <= :to', { to })
+      .andWhere('r.is_provisional = 1')
+      .getRawMany<{ stat_date: string | Date }>();
+    return rows
+      .map((row) =>
+        row.stat_date instanceof Date
+          ? row.stat_date.toISOString().slice(0, 10)
+          : String(row.stat_date).slice(0, 10),
+      )
+      .sort();
+  }
+
   // ------------------------------------------------------- dữ liệu chấm
 
   /** Tra override theo tháng; báo cáo lấy override của tháng nằm trong cửa sổ. */
@@ -518,11 +874,28 @@ export class CustomerKpiReportsService {
     activity: Map<number, ActivityDayRow[]>,
     targets: Map<string, number>,
     definitions: KpiDefinition[],
-    saleInfos: Map<number, { fullName: string; zaloLinked: boolean }>,
+    saleInfos: Map<
+      number,
+      {
+        fullName: string;
+        zaloLinked: boolean;
+        employeeCode: string | null;
+        departments: { slug: string; name: string }[];
+      }
+    >,
     fromDate: string,
     months: string[],
     debtBalances: Map<number, number | null>,
     overrides: Map<string, KpiCriterionOverride>,
+    revenue?: {
+      byAssignment: Map<number, CustomerRevenueAmount>;
+      bySale: Map<number, RevenueCustomerInput[]>;
+      /** Chỉ tiêu quý của từng sale (null = chưa đồng bộ được). */
+      quarterTargetBySale: Map<number, number | null>;
+      quarter: FiscalQuarter | null;
+      /** Sale chưa tra được mã nhân viên NKM. */
+      salesWithoutMapping: Set<number>;
+    },
   ) {
     const customersBySale = new Map<number, AssignmentRow[]>();
     for (const row of assignments) {
@@ -536,10 +909,13 @@ export class CustomerKpiReportsService {
       {
         saleName: string;
         zaloLinked: boolean;
+        employeeCode: string | null;
+        departments: { slug: string; name: string }[];
         criteria: SaleCriterion[];
         customers: {
           row: AssignmentRow;
           zaloLinked: boolean;
+          tierSummary: CustomerTierSummary;
           criteria: CustomerCriterion[];
           totals: {
             inbound: number;
@@ -557,6 +933,7 @@ export class CustomerKpiReportsService {
       const customerRows: {
         row: AssignmentRow;
         zaloLinked: boolean;
+        tierSummary: CustomerTierSummary;
         criteria: CustomerCriterion[];
         totals: {
           inbound: number;
@@ -565,6 +942,15 @@ export class CustomerKpiReportsService {
           revenue: number;
         };
       }[] = [];
+      const revenueCustomers = revenue?.bySale.get(saleId) ?? [];
+      const revenueFor = (row: AssignmentRow) => {
+        const found = revenue?.byAssignment.get(row.assignmentId);
+        return {
+          tier: row.customerTier,
+          quantity: found?.quantity ?? 0,
+          lineTotal: found?.lineTotal ?? 0,
+        };
+      };
 
       for (const definition of definitions) {
         const perCustomer = saleCustomers.map((row) => {
@@ -572,7 +958,7 @@ export class CustomerKpiReportsService {
           const customerTarget = this.scoring.resolveCustomerTarget(
             definition,
             targets.get(`${saleId}|${row.customerId}|${definition.key}`) ??
-            null,
+              null,
             targets.get(`${saleId}|0|${definition.key}`) ?? null,
           );
           return {
@@ -586,6 +972,7 @@ export class CustomerKpiReportsService {
               customerTarget,
               fromDate,
               debtBalances.get(row.customerId) ?? null,
+              revenueData(revenue, revenueFor(row)),
             ),
           };
         });
@@ -613,6 +1000,19 @@ export class CustomerKpiReportsService {
             saleTarget,
             saleInfo?.zaloLinked ?? false,
             fromDate,
+            // Tiêu chí doanh số cần doanh thu từng khách + chỉ tiêu quý; các
+            // tiêu chí khác bỏ qua tham số này.
+            revenue
+              ? {
+                  quarter: revenue.quarter,
+                  quarterTarget:
+                    revenue.quarterTargetBySale.get(saleId) ?? null,
+                  customers: revenueCustomers,
+                  // Chưa tra được mã nhân viên NKM → no_data kèm lý do đúng,
+                  // KHÔNG phải "sale không bán được gì"
+                  mapped: !revenue.salesWithoutMapping.has(saleId),
+                }
+              : undefined,
           ),
         );
 
@@ -655,8 +1055,7 @@ export class CustomerKpiReportsService {
               (criterion.passedCriteria ?? 0) - demoted,
             );
             criterion.numerator = criterion.passedCriteria;
-            criterion.status =
-              criterion.passedCriteria > 0 ? 'pass' : 'fail';
+            criterion.status = criterion.passedCriteria > 0 ? 'pass' : 'fail';
           }
         }
       }
@@ -676,6 +1075,7 @@ export class CustomerKpiReportsService {
             customerTarget,
             fromDate,
             debtBalances.get(row.customerId) ?? null,
+            revenueData(revenue, revenueFor(row)),
           );
           // Cùng luật ghi đè với vòng chấm cấp sale: ghi đè cả sale ép mọi ô
           // khách, ghi đè từng khách chỉ hạ ô của khách đó
@@ -704,6 +1104,11 @@ export class CustomerKpiReportsService {
         customerRows.push({
           row,
           zaloLinked: Boolean(latest?.zalo_linked),
+          // KEY/NON: khách KEY phải đạt cả 4 tiêu chí, khách NON chỉ đếm x/4
+          tierSummary: this.scoring.summarizeCustomerByTier(
+            criteria,
+            row.customerTier,
+          ),
           criteria,
           totals: days.reduce(
             (acc, day) => ({
@@ -720,6 +1125,8 @@ export class CustomerKpiReportsService {
       scored.set(saleId, {
         saleName: saleInfo?.fullName ?? `Sale #${saleId}`,
         zaloLinked: saleInfo?.zaloLinked ?? false,
+        employeeCode: saleInfo?.employeeCode ?? null,
+        departments: saleInfo?.departments ?? [],
         criteria: saleCriteria,
         customers: customerRows,
       });
@@ -732,19 +1139,23 @@ export class CustomerKpiReportsService {
 
   /**
    * Pipeline dùng chung cho overview / by-sale / export: nạp phân công +
-   * hoạt động (kèm lookback cho bài toán gợi ý) + chỉ tiêu rồi chấm điểm.
-   * Map rỗng = người dùng không thấy sale nào trong phạm vi.
+   * hoạt động (kèm lookback cho bài toán gợi ý) + doanh thu API NKM + chỉ tiêu
+   * rồi chấm điểm. Map rỗng = người dùng không thấy sale nào trong phạm vi.
    *
    * `loadDebt` = buộc nạp công nợ dù không có tiêu chí `debt_balance` (khi
    * người dùng lọc/sắp xếp theo công nợ). Trả luôn công nợ đã nạp + ngày có
    * tin đi gần nhất để by-sale dựng bộ lọc mà không cần query lại, và trả
    * `definitions` để overview kiểm tra mã tiêu chí truyền vào.
+   *
+   * Doanh thu chỉ nạp khi có tiêu chí doanh số đang bật — báo cáo không dùng tới
+   * thì khỏi tốn 2 query và khỏi phụ thuộc bảng tra NKM đã nạp hay chưa.
    */
   private async buildScoredFor(
     saleId: number | undefined,
     from: string,
     to: string,
     user: any,
+    quarter: FiscalQuarter | null,
     options: { loadDebt?: boolean } = {},
   ) {
     const userIds = await this.scopeUserIds(user);
@@ -755,6 +1166,7 @@ export class CustomerKpiReportsService {
         definitions,
         debtBalances: new Map<number, number | null>(),
         lastOutboundByAssignment: new Map<number, string | null>(),
+        provisionalDates: [] as string[],
       };
     }
     if (saleId !== undefined) {
@@ -786,6 +1198,16 @@ export class CustomerKpiReportsService {
       definitions.some((definition) => definition.metric === 'debt_balance')
         ? await this.loadDebtBalances(assignments)
         : new Map<number, number | null>();
+
+    const revenue = await this.loadRevenueForReport(
+      assignments,
+      saleInfos,
+      definitions,
+      from,
+      to,
+      quarter,
+    );
+
     return {
       scored: this.buildScoredData(
         assignments,
@@ -797,15 +1219,88 @@ export class CustomerKpiReportsService {
         months,
         debtBalances,
         overrides,
+        revenue,
       ),
       definitions,
       debtBalances,
+      revenue,
       lastOutboundByAssignment: this.lastOutboundByAssignment(activity),
     };
   }
 
-  /** Ngày gần nhất có tin SALE gửi đi, theo assignmentId (`null` = chưa có). */
-  private lastOutboundByAssignment(
+  /**
+   * Nạp doanh thu + chỉ tiêu quý cho báo cáo. Trả `undefined` khi không có tiêu
+   * chí doanh số đang bật (đỡ query thừa) hoặc khi bảng tra mã còn trống.
+   */
+  private async loadRevenueForReport(
+    assignments: AssignmentRow[],
+    saleInfos: Map<number, { employeeCode: string | null }>,
+    definitions: KpiDefinition[],
+    from: string,
+    to: string,
+    quarter: FiscalQuarter | null,
+  ) {
+    const revenueDefinitions = definitions.filter((definition) =>
+      REVENUE_METRICS.includes(definition.metric),
+    );
+    if (revenueDefinitions.length === 0) return undefined;
+
+    const loaded = await this.loadRevenue(assignments, saleInfos, from, to);
+    // Chỉ tiêu quý theo TỪNG SALE: ngược dòng bảng tra mã để ra slp_code rồi
+    // tra bảng chỉ tiêu. Một sale có nhiều slpCode thì lấy tổng (hiếm, nhưng
+    // đúng hơn là bỏ mất).
+    const saleMap = await this.saleMapRepo.find({
+      where: { is_active: true },
+      select: ['slp_code', 'employee_code'],
+    });
+    const slpByEmployeeCode = new Map<string, number[]>();
+    for (const row of saleMap) {
+      const list = slpByEmployeeCode.get(row.employee_code) ?? [];
+      list.push(row.slp_code);
+      slpByEmployeeCode.set(row.employee_code, list);
+    }
+    const quarterTargetBySale = new Map<number, number | null>();
+    const slpCodesOfSale = new Map<number, number[]>();
+    for (const saleId of new Set(assignments.map((row) => row.saleId))) {
+      const employeeCode = saleInfos.get(saleId)?.employeeCode ?? null;
+      const codes = employeeCode
+        ? (slpByEmployeeCode.get(employeeCode) ?? [])
+        : [];
+      slpCodesOfSale.set(saleId, codes);
+      quarterTargetBySale.set(saleId, null);
+    }
+    if (quarter) {
+      const targets = await this.loadQuarterTargets(
+        [...slpCodesOfSale.values()].flat(),
+        quarter,
+      );
+      for (const [saleId, codes] of slpCodesOfSale) {
+        let total = 0;
+        let found = false;
+        for (const slp of codes) {
+          if (targets.has(slp)) {
+            total += targets.get(slp) as number;
+            found = true;
+          }
+        }
+        quarterTargetBySale.set(saleId, found ? total : null);
+      }
+    }
+
+    const provisionalDates = await this.loadProvisionalDates(
+      [...slpCodesOfSale.values()].flat(),
+      from,
+      to,
+    );
+    return {
+      ...loaded,
+      quarterTargetBySale,
+      quarter,
+      provisionalDates,
+    };
+  }
+
+  /** Ngày gần nhất có tin SALE gửi đi, theo assignmentId (`null` = chưa có). */ private lastOutboundByAssignment(
     activity: Map<number, ActivityDayRow[]>,
   ): Map<number, string | null> {
     const result = new Map<number, string | null>();
@@ -819,11 +1314,13 @@ export class CustomerKpiReportsService {
   }
 
   async overview(query: any, user: any) {
-    const { scored, definitions } = await this.buildScoredFor(
+    const window = this.resolveWindow(query);
+    const { scored, definitions, revenue } = await this.buildScoredFor(
       query.saleId,
-      query.from,
-      query.to,
+      window.from,
+      window.to,
       user,
+      window.quarter,
     );
 
     // search = lọc theo TÊN SALE (dataset là các sale trong phạm vi — khách
@@ -834,7 +1331,7 @@ export class CustomerKpiReportsService {
     const filters = this.parseOverviewFilters(query);
 
     // Tập sale đang xem = trong phạm vi (hoặc đúng `saleId`) và khớp `search`.
-    // Cả `summary` lẫn `sales` đều tính trên tập này.
+    // Cả `summary`, `groups` lẫn `company` đều tính trên tập này.
     const inView = [...scored.entries()]
       .sort((a, b) => a[0] - b[0])
       .filter(
@@ -844,21 +1341,252 @@ export class CustomerKpiReportsService {
         saleId,
         saleName: data.saleName,
         zaloLinked: data.zaloLinked,
+        employeeCode: data.employeeCode,
+        departments: data.departments,
         criteria: data.criteria,
+        revenue: this.saleRevenueRow(data),
       }));
 
     this.assertOverviewFilters(filters, definitions);
 
     // summary tính TRƯỚC bộ lọc tiêu chí: "tiêu chí này bao nhiêu sale đạt /
     // không đạt" không nhảy số khi bật lọc — cùng nguyên tắc đầu bảng
-    // `criteria` của by-sale (tổng hợp luôn trên tập đầy đủ)
+    // `criteria` của by-sale (tổng hợp luôn trên tập đầy đủ). `groups` và
+    // `company` cũng tính trên tập đầy đủ vì đây là số liệu tổng quan.
     const summary = summarizeKpiSales(inView.map((sale) => sale.criteria));
+    const { groups, company } = await this.rollupGroups(inView, window);
 
     return {
-      from: query.from,
-      to: query.to,
+      from: window.from,
+      to: window.to,
+      quarter: window.quarter,
+      isWholeQuarter: window.isWholeQuarter,
+      // Ngày chưa chốt (hôm nay) — FE hiện kèm nhãn "tạm tính"
+      provisionalDates: revenue?.provisionalDates ?? [],
       summary,
       sales: filterKpiSales(inView, filters),
+      groups,
+      company,
+    };
+  }
+
+  /**
+   * Dòng phân phối của MỘT sale — số liệu FE vẽ bảng phân phối (pivot) của lead:
+   * Key x/y, Non x/y, Dso, tỷ lệ, % đạt, kết luận.
+   *
+   * Thiếu dữ liệu đồng bộ (chưa nạp bảng tra mã / chưa chạy job) thì các cột
+   * tiền là `null` kèm `reason` ở tiêu chí tương ứng, KHÔNG phải 0 — tránh FE
+   * hiểu nhầm "sale không bán được gì".
+   */
+  private saleRevenueRow(entry: {
+    criteria: SaleCriterion[];
+    customers: {
+      row: AssignmentRow;
+      tierSummary: CustomerTierSummary;
+    }[];
+  }): SaleRevenueRow {
+    const tierOf = (row: { row: AssignmentRow }) =>
+      (row.row.customerTier ?? '').toUpperCase();
+    const keyRows = entry.customers.filter((row) => tierOf(row) === 'KEY');
+    const nonRows = entry.customers.filter((row) => tierOf(row) === 'NON');
+    const detail =
+      entry.criteria.find((criterion) => criterion.revenue)?.revenue ?? null;
+    return {
+      keyCustomers: detail?.keyCustomers ?? {
+        reached: 0,
+        total: keyRows.length,
+      },
+      nonCustomers: detail?.nonCustomers ?? {
+        reached: 0,
+        total: nonRows.length,
+      },
+      dsoKey: detail?.dsoKey ?? null,
+      dsoNon: detail?.dsoNon ?? null,
+      keyShareRatio: detail?.keyShareRatio ?? null,
+      quarterTarget: detail?.quarterTarget ?? null,
+      achievedRatio: detail?.achievedRatio ?? null,
+      achievedPct: detail?.achievedPct ?? null,
+      verdict: detail?.verdict ?? null,
+      // "x/y khách KEY đạt toàn bộ tiêu chí" + trung bình tiêu chí khách NON
+      keyFullyPassed: {
+        passed: keyRows.filter((row) => row.tierSummary.verdict === 'pass')
+          .length,
+        total: keyRows.length,
+      },
+      nonCriteria: {
+        passed: nonRows.reduce((acc, row) => acc + row.tierSummary.passed, 0),
+        applicable: nonRows.reduce(
+          (acc, row) => acc + row.tierSummary.applicable,
+          0,
+        ),
+        customers: nonRows.length,
+      },
+    };
+  }
+
+  /**
+   * Báo cáo 3 cấp: `groups` = mỗi phòng kinh doanh một hàng tổng, `company` =
+   * hàng tổng công ty. Phạm vi tự nhiên đã đúng 3 cấp qua `scopeUserIds`
+   * (sale = mình, trưởng phòng = phòng mình, admin/pm = cả công ty) nên QL Nhóm
+   * chỉ nhận đúng nhóm của mình trong `groups`.
+   *
+   * Chỉ tiêu cấp nhóm: có dòng trong `dept_revenue_target` thì dùng dòng đó,
+   * không thì TỔNG chỉ tiêu quý của các sale trong nhóm (API quý chỉ có target
+   * theo sale — xem thiết kế §6.3).
+   */
+  private async rollupGroups(
+    rows: {
+      saleId: number;
+      revenue: SaleRevenueRow;
+      departments: { slug: string; name: string }[];
+    }[],
+    window: KpiWindow,
+  ): Promise<{
+    groups: (SaleRevenueRow & {
+      slug: string | null;
+      name: string;
+      salesCount: number;
+    })[];
+    company: SaleRevenueRow;
+  }> {
+    const byDept = new Map<
+      string,
+      {
+        slug: string | null;
+        name: string;
+        salesCount: number;
+        rows: SaleRevenueRow[];
+      }
+    >();
+    for (const row of rows) {
+      const dept = row.departments[0];
+      const slug = dept?.slug ?? null;
+      const key = slug ?? '(chua-xac-dinh)';
+      const bucket = byDept.get(key) ?? {
+        slug,
+        name: dept?.name ?? 'Chưa xác định phòng',
+        salesCount: 0,
+        rows: [],
+      };
+      bucket.salesCount += 1;
+      bucket.rows.push(row.revenue);
+      byDept.set(key, bucket);
+    }
+
+    const deptTargets = window.quarter
+      ? await this.loadDeptTargets(
+          [...byDept.values()]
+            .map((bucket) => bucket.slug)
+            .filter((slug): slug is string => slug != null),
+          window.quarter,
+        )
+      : new Map<string, number>();
+
+    const groups = [...byDept.values()]
+      .sort((a, b) => (a.slug ?? 'zzz').localeCompare(b.slug ?? 'zzz'))
+      .map((bucket) => {
+        const rollup = this.rollupRevenueRows(bucket.rows);
+        // Không có target nhóm nhập tay → tổng target quý của các sale trong nhóm
+        const target =
+          bucket.slug != null && deptTargets.has(bucket.slug)
+            ? (deptTargets.get(bucket.slug) as number)
+            : bucket.rows.reduce(
+                (acc, row) => acc + (row.quarterTarget ?? 0),
+                0,
+              );
+        const revenue = (rollup.dsoKey ?? 0) + (rollup.dsoNon ?? 0);
+        const achievedRatio =
+          target > 0 && window.quarter ? roundTo(revenue / target, 4) : null;
+        const verdict: SaleRevenueRow['verdict'] =
+          achievedRatio === null ? null : achievedRatio >= 1 ? 'pass' : 'fail';
+        return {
+          slug: bucket.slug,
+          name: bucket.name,
+          salesCount: bucket.salesCount,
+          ...rollup,
+          quarterTarget: target,
+          achievedRatio,
+          achievedPct:
+            achievedRatio === null ? null : roundTo(achievedRatio * 100, 2),
+          verdict,
+        };
+      });
+
+    const company: SaleRevenueRow = {
+      ...this.rollupRevenueRows(rows.map((row) => row.revenue)),
+      quarterTarget: rows.reduce(
+        (acc, row) => acc + (row.revenue.quarterTarget ?? 0),
+        0,
+      ),
+      achievedRatio: null,
+      achievedPct: null,
+      verdict: null,
+    };
+    const companyRevenue = (company.dsoKey ?? 0) + (company.dsoNon ?? 0);
+    if (
+      window.quarter &&
+      company.quarterTarget != null &&
+      company.quarterTarget > 0
+    ) {
+      company.achievedRatio = roundTo(
+        companyRevenue / company.quarterTarget,
+        4,
+      );
+      company.achievedPct = roundTo(company.achievedRatio * 100, 2);
+      company.verdict = company.achievedRatio >= 1 ? 'pass' : 'fail';
+    }
+    return { groups, company };
+  }
+
+  /** Cộng dồn các dòng phân phối (sale → nhóm, nhóm → công ty). */
+  private rollupRevenueRows(rows: SaleRevenueRow[]): SaleRevenueRow {
+    const dsoKey = rows.reduce((acc, row) => acc + (row.dsoKey ?? 0), 0);
+    const dsoNon = rows.reduce((acc, row) => acc + (row.dsoNon ?? 0), 0);
+    const total = dsoKey + dsoNon;
+    return {
+      keyCustomers: {
+        reached: rows.reduce((acc, row) => acc + row.keyCustomers.reached, 0),
+        total: rows.reduce((acc, row) => acc + row.keyCustomers.total, 0),
+      },
+      nonCustomers: {
+        reached: rows.reduce((acc, row) => acc + row.nonCustomers.reached, 0),
+        total: rows.reduce((acc, row) => acc + row.nonCustomers.total, 0),
+      },
+      dsoKey,
+      dsoNon,
+      keyShareRatio: total > 0 ? roundTo(dsoKey / total, 4) : null,
+      quarterTarget: null,
+      achievedRatio: null,
+      achievedPct: null,
+      verdict: null,
+      keyFullyPassed: rows.some((row) => row.keyFullyPassed)
+        ? {
+            passed: rows.reduce(
+              (acc, row) => acc + (row.keyFullyPassed?.passed ?? 0),
+              0,
+            ),
+            total: rows.reduce(
+              (acc, row) => acc + (row.keyFullyPassed?.total ?? 0),
+              0,
+            ),
+          }
+        : null,
+      nonCriteria: rows.some((row) => row.nonCriteria)
+        ? {
+            passed: rows.reduce(
+              (acc, row) => acc + (row.nonCriteria?.passed ?? 0),
+              0,
+            ),
+            applicable: rows.reduce(
+              (acc, row) => acc + (row.nonCriteria?.applicable ?? 0),
+              0,
+            ),
+            customers: rows.reduce(
+              (acc, row) => acc + (row.nonCriteria?.customers ?? 0),
+              0,
+            ),
+          }
+        : null,
     };
   }
 
@@ -885,16 +1613,27 @@ export class CustomerKpiReportsService {
       filters.minDebt !== undefined ||
       filters.hasDebt !== undefined ||
       filters.sortBy === 'debtBalance';
-    const { scored, debtBalances, lastOutboundByAssignment } =
-      await this.buildScoredFor(query.saleId, query.from, query.to, user, {
-        loadDebt: needsDebt,
-      });
+    const window = this.resolveWindow(query);
+    const { scored, debtBalances, lastOutboundByAssignment, revenue } =
+      await this.buildScoredFor(
+        query.saleId,
+        window.from,
+        window.to,
+        user,
+        window.quarter,
+        {
+          loadDebt: needsDebt,
+        },
+      );
 
     const entry = scored.get(query.saleId);
     if (!entry) {
       return {
-        from: query.from,
-        to: query.to,
+        from: window.from,
+        to: window.to,
+        quarter: window.quarter,
+        isWholeQuarter: window.isWholeQuarter,
+        provisionalDates: revenue?.provisionalDates ?? [],
         page,
         pageSize,
         total: 0,
@@ -902,7 +1641,7 @@ export class CustomerKpiReportsService {
       };
     }
 
-    // Bộ lọc/sắp xếp theo tiêu chí phải trúng tiêu chí ĐANG BẶT — mã sai hoặc
+    // Bộ lọc/sắp xếp theo tiêu chí phải trúng tiêu chí ĐANG BẬT — mã sai hoặc
     // khoanh một tiêu chí mà không kèm điều kiện thì báo lỗi ngay thay vì im
     // lặng trả bảng rỗng.
     const criterionKeys = entry.criteria.map((criterion) => criterion.key);
@@ -916,7 +1655,7 @@ export class CustomerKpiReportsService {
       daysSinceContact.set(
         assignmentId,
         lastOutbound
-          ? this.diffDays(lastOutbound, query.to)
+          ? this.diffDays(lastOutbound, window.to)
           : Number.MAX_SAFE_INTEGER,
       );
     }
@@ -943,13 +1682,18 @@ export class CustomerKpiReportsService {
         customerTier: customer.row.customerTier,
         customerRole: customer.row.customerRole,
         zaloLinked: customer.zaloLinked,
+        // Kết luận theo loại khách: KEY = đạt cả 4 tiêu chí, NON = đếm x/4
+        tierSummary: customer.tierSummary,
         totals: customer.totals,
         criteria: customer.criteria,
       }));
 
     return {
-      from: query.from,
-      to: query.to,
+      from: window.from,
+      to: window.to,
+      quarter: window.quarter,
+      isWholeQuarter: window.isWholeQuarter,
+      provisionalDates: revenue?.provisionalDates ?? [],
       page,
       pageSize,
       total,
@@ -959,6 +1703,7 @@ export class CustomerKpiReportsService {
           saleName: entry.saleName,
           zaloLinked: entry.zaloLinked,
           criteria: entry.criteria,
+          revenue: this.saleRevenueRow(entry),
           customers: paged,
         },
       ],
@@ -1066,14 +1811,23 @@ export class CustomerKpiReportsService {
         ? definitions.find((d) => d.key === filters.criterionKey)
         : undefined;
       if (definition) {
-        if (definition.scoring_mode === ScoringMode.RATIO) {
+        // Tiêu chí doanh số là ratio trong cấu hình NHƯNG cấp sale vẫn kết luận
+        // được đạt/không đạt (% đạt so chỉ tiêu quý) nên vẫn lọc được.
+        const hasVerdict = REVENUE_METRICS.includes(definition.metric);
+        if (definition.scoring_mode === ScoringMode.RATIO && !hasVerdict) {
           throw new BadRequestException(
             `Tiêu chí "${filters.criterionKey}" là ratio — ở cấp sale không có pass/fail. Dùng met hoặc minRatio`,
           );
         }
-      } else if (!definitions.some((d) => d.scoring_mode === ScoringMode.BINARY)) {
+      } else if (
+        !definitions.some(
+          (d) =>
+            d.scoring_mode === ScoringMode.BINARY ||
+            REVENUE_METRICS.includes(d.metric),
+        )
+      ) {
         throw new BadRequestException(
-          'status=pass/fail cần tiêu chí binary — hiện chỉ có tiêu chí ratio. Dùng minRatio hoặc met',
+          'status=pass/fail cần tiêu chí binary hoặc tiêu chí doanh số. Dùng minRatio hoặc met',
         );
       }
     }
@@ -1083,10 +1837,7 @@ export class CustomerKpiReportsService {
     filters: KpiCustomerFilters,
     criterionKeys: string[],
   ) {
-    if (
-      filters.criterionKey &&
-      !criterionKeys.includes(filters.criterionKey)
-    ) {
+    if (filters.criterionKey && !criterionKeys.includes(filters.criterionKey)) {
       throw new BadRequestException(
         `Không có tiêu chí "${filters.criterionKey}". Tiêu chí đang bật: ${criterionKeys.join(', ') || '(chưa có)'}`,
       );
@@ -1278,24 +2029,29 @@ export class CustomerKpiReportsService {
 
   // ------------------------------------------------------------- export
 
-  async exportReport(
-    saleId: number | undefined,
-    from: string,
-    to: string,
-    user: any,
-  ) {
+  async exportReport(saleId: number | undefined, query: any, user: any) {
+    const window = this.resolveWindow(query);
     // Dùng pipeline chung một lần duy nhất — export KHÔNG truyền saleId vẫn
     // được (toàn công ty) vì sheet CHI TIET được dựng từ dữ liệu đã chấm,
     // không đi qua by-sale (nơi bắt buộc saleId để giới hạn payload)
-    const { scored } = await this.buildScoredFor(saleId, from, to, user);
+    const { scored } = await this.buildScoredFor(
+      saleId,
+      window.from,
+      window.to,
+      user,
+      window.quarter,
+    );
     const saleRows = [...scored.entries()].sort((a, b) => a[0] - b[0]);
+    const { from, to } = window;
 
     const wb = new ExcelJS.Workbook();
     wb.creator = 'saletracker';
     const summary = wb.addWorksheet('TONG KET');
     const criteriaNames = saleRows[0]?.[1].criteria.map((c) => c.name) ?? [];
 
-    summary.addRow([`Báo cáo KPI khách hàng ${from} → ${to}`]);
+    summary.addRow([
+      `Báo cáo KPI khách hàng ${from} → ${to}${window.quarter ? ` (${window.quarter.label})` : ''}`,
+    ]);
     summary.addRow([]);
     summary.addRow(['Sale', ...criteriaNames]);
     for (const [, data] of saleRows) {
@@ -1304,6 +2060,86 @@ export class CustomerKpiReportsService {
         ...data.criteria.map((c) => this.criterionCell(c)),
       ]);
     }
+
+    // Sheet phân phối — đúng hình bảng pivot lead gửi: Key x/y, Non x/y, Dso Key,
+    // Dso Non, Tỷ lệ (DS Key), target quý, % đạt, đạt/không đạt; kèm hàng tổng
+    // từng phòng và hàng tổng công ty.
+    const distSheet = wb.addWorksheet('PHAN PHOI');
+    distSheet.addRow([
+      'Cấp',
+      'Đối tượng',
+      'Key (phát sinh/tổng)',
+      'Non (phát sinh/tổng)',
+      'Dso Key',
+      'Dso Non',
+      'Tỷ lệ (DS Key)',
+      'Chỉ tiêu quý',
+      '% đạt',
+      'Kết luận',
+    ]);
+    distSheet.addRow([]);
+    distSheet.addRow(['SALE', 'Tất cả sale', '', '', '', '', '', '', '', '']);
+    for (const [, data] of saleRows) {
+      const row = this.saleRevenueRow(data);
+      distSheet.addRow([
+        'Sale',
+        data.saleName,
+        this.reachedText(row.keyCustomers),
+        this.reachedText(row.nonCustomers),
+        row.dsoKey,
+        row.dsoNon,
+        this.ratioText(row.keyShareRatio),
+        row.quarterTarget,
+        this.percentText(row.achievedPct),
+        this.verdictText(row.verdict),
+      ]);
+    }
+    distSheet.addRow([]);
+    distSheet.addRow([
+      'NHÓM',
+      'Tổng theo phòng ban',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+    ]);
+    const inView = saleRows.map(([saleId, data]) => ({
+      saleId,
+      revenue: this.saleRevenueRow(data),
+      departments: data.departments,
+    }));
+    const { groups, company } = await this.rollupGroups(inView, window);
+    for (const group of groups) {
+      distSheet.addRow([
+        'Nhóm',
+        group.name,
+        this.reachedText(group.keyCustomers),
+        this.reachedText(group.nonCustomers),
+        group.dsoKey,
+        group.dsoNon,
+        this.ratioText(group.keyShareRatio),
+        group.quarterTarget,
+        this.percentText(group.achievedPct),
+        this.verdictText(group.verdict),
+      ]);
+    }
+    distSheet.addRow([]);
+    distSheet.addRow([
+      'CÔNG TY',
+      'Tổng công ty',
+      this.reachedText(company.keyCustomers),
+      this.reachedText(company.nonCustomers),
+      company.dsoKey,
+      company.dsoNon,
+      this.ratioText(company.keyShareRatio),
+      company.quarterTarget,
+      this.percentText(company.achievedPct),
+      this.verdictText(company.verdict),
+    ]);
 
     const detailSheet = wb.addWorksheet('CHI TIET');
     detailSheet.addRow([
@@ -1316,6 +2152,9 @@ export class CustomerKpiReportsService {
       'Tin ra',
       'Số đơn',
       'Doanh thu',
+      'Số phiếu NKM',
+      'Doanh số NKM',
+      'Kết luận loại khách',
       ...criteriaNames,
     ]);
     for (const [, data] of saleRows) {
@@ -1330,6 +2169,9 @@ export class CustomerKpiReportsService {
           customer.totals.outbound,
           customer.totals.orders,
           customer.totals.revenue,
+          this.occurrenceCell(customer.criteria),
+          this.occurrenceRevenueCell(customer.criteria),
+          this.tierCell(customer.tierSummary),
           ...customer.criteria.map((c) => this.customerCell(c)),
         ]);
       }
@@ -1361,6 +2203,62 @@ export class CustomerKpiReportsService {
     if (c.status === 'pass') return 'Đạt';
     if (c.status === 'fail') return 'Không đạt';
     return `${c.actualValue}%`;
+  }
+
+  /** Số phiếu khách mua trong kỳ — ô của tiêu chí doanh số đúng loại khách. */
+  private occurrenceCell(criteria: CustomerCriterion[]): number | string {
+    const found = criteria.find(
+      (criterion) =>
+        (criterion.key === 'doanh_so_key' ||
+          criterion.key === 'doanh_so_non') &&
+        criterion.quantity !== undefined,
+    );
+    if (!found) return '';
+    return found.quantity ?? 0;
+  }
+
+  /** Doanh số của khách trong kỳ (LineTotal, chưa VAT). */
+  private occurrenceRevenueCell(
+    criteria: CustomerCriterion[],
+  ): number | string {
+    const found = criteria.find(
+      (criterion) => criterion.lineTotal !== undefined,
+    );
+    if (!found) return '';
+    return found.lineTotal ?? 0;
+  }
+
+  /**
+   * Kết luận theo loại khách: KEY phải đạt cả 4 tiêu chí, NON chỉ đếm "đạt x/4"
+   * (không cho ra đạt/trượt).
+   */
+  private tierCell(summary: CustomerTierSummary | undefined): string {
+    if (!summary || summary.applicable === 0) return '';
+    if (summary.tier === 'KEY') {
+      return summary.verdict === 'pass' ? 'Đạt toàn bộ' : 'Thiếu tiêu chí';
+    }
+    return `Đạt ${summary.passed}/${summary.applicable} tiêu chí`;
+  }
+
+  private reachedText(value: { reached: number; total: number }): string {
+    return `${value.reached}/${value.total}`;
+  }
+
+  private ratioText(value: number | null): string {
+    if (value === null) return '';
+    // 4 chữ số thập phân — doanh thu nhiều số lẻ nên giữ đủ như thiết kế §1.2
+    return value.toFixed(4).replace('.', ',');
+  }
+
+  private percentText(value: number | null): string {
+    if (value === null) return '';
+    return `${String(value).replace('.', ',')}%`;
+  }
+
+  private verdictText(value: 'pass' | 'fail' | null): string {
+    if (value === 'pass') return 'Đạt';
+    if (value === 'fail') return 'Không đạt';
+    return '';
   }
 
   // ------------------------------------------------------------- helpers

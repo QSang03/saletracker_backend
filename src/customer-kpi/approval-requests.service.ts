@@ -18,6 +18,7 @@ import {
 import { ApprovalCustomerAction } from './approval-request-customer-item.entity';
 import { ApprovalRequestCustomerItem } from './approval-request-customer-item.entity';
 import { ApprovalRequestTargetItem } from './approval-request-target-item.entity';
+import { REVENUE_TARGET_CRITERION_KEYS } from './customer-kpi-targets.service';
 import {
   ApprovalRequestQueryDto,
   DecideApprovalDto,
@@ -300,6 +301,20 @@ export class ApprovalRequestsService {
       const targetItems = await this.targetItemRepo.find({
         where: { request_id: id },
       });
+      // Đề xuất cũ (tạo trước khi chặn nhập tay tiêu chí doanh số) vẫn phải bị
+      // chặn lúc duyệt — nếu không, "đề xuất trước rồi duyệt sau" sẽ thủng luật
+      // API NKM là nguồn chân lý.
+      const blocked = targetItems.filter((item) =>
+        REVENUE_TARGET_CRITERION_KEYS.includes(item.criterion_key),
+      );
+      if (blocked.length > 0) {
+        const keys = [
+          ...new Set(blocked.map((item) => item.criterion_key)),
+        ].join(', ');
+        throw new BadRequestException(
+          `Đề xuất có ${blocked.length} mục tiêu chí doanh số (${keys}) — tiêu chí này lấy từ API NKM, không nhập tay. Hãy từ chối đề xuất.`,
+        );
+      }
       await this.dataSource.transaction(async (em) => {
         for (const item of targetItems) {
           await em

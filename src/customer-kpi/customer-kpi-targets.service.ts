@@ -31,6 +31,16 @@ interface TargetRow {
 }
 
 /**
+ * Tiêu chí doanh số — nguồn chân lý là API NKM nên KHÔNG nhập tay (thiết kế
+ * §5.4, §7). Dùng chung cho cả API giao chỉ tiêu và luồng trưởng phòng đề xuất
+ * chờ duyệt (`approval_requests` loại `kpi_target`).
+ *
+ * Nếu sau này cần ép "khách KEY không đạt" (khách báo cáo xấu), thêm các mã này
+ * vào `OVERRIDABLE_CRITERION_KEYS` của module ghi đè — mở rộng đúng một chỗ.
+ */
+export const REVENUE_TARGET_CRITERION_KEYS = ['doanh_so_key', 'doanh_so_non'];
+
+/**
  * Chỉ tiêu theo tháng. Danh sách đã làm hôm nay; LUỒNG GÁN (cả ba cách gán +
  * luồng trưởng phòng đề xuất -> admin duyệt) thuộc Mục 4 — công việc con 4.
  */
@@ -187,6 +197,14 @@ export class CustomerKpiTargetsService {
     if (!definition || !definition.is_active) {
       throw new NotFoundException(
         `Không tìm thấy tiêu chí "${dto.criterion_key}" hoặc tiêu chí đã tắt`,
+      );
+    }
+    // Tiêu chí doanh số lấy từ API NKM — không cho nhập tay ở BẤT KỲ cấp nào
+    // (thiết kế THIET-KE-DOANH-SO-API-NKM.md §5.4, §7). Job đồng bộ ghi thẳng
+    // vào `sale_revenue_target`, không đi qua đây nên không bị chặn.
+    if (REVENUE_TARGET_CRITERION_KEYS.includes(dto.criterion_key)) {
+      throw new BadRequestException(
+        `Tiêu chí doanh số "${dto.criterion_key}" lấy từ API NKM, không nhập tay. Chỉ tiêu quý của sale do hệ thống đồng bộ tự động.`,
       );
     }
     if (definition.scoring_mode !== ScoringMode.RATIO) {

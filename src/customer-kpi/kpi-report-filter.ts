@@ -1,5 +1,6 @@
 import {
   CustomerCriterion,
+  CustomerTierSummary,
   SaleCriterion,
 } from './customer-kpi-scoring.service';
 import { ScoringMode } from './kpi-definition.entity';
@@ -34,6 +35,8 @@ export interface KpiReportCustomer {
     sapCode: string;
   };
   zaloLinked: boolean;
+  /** Kết luận theo loại khách: KEY = đạt cả 4 tiêu chí, NON = đếm x/4. */
+  tierSummary: CustomerTierSummary;
   criteria: CustomerCriterion[];
   totals: {
     inbound: number;
@@ -328,6 +331,20 @@ export function sortKpiCustomers(
 const round1 = (value: number): number => Math.round(value * 10) / 10;
 
 /**
+ * Giá trị % của một tiêu chí cấp sale — dùng cho lọc `minRatio` và cột
+ * "trung bình" của `summary`.
+ *
+ * Tiêu chí doanh số là trường hợp đặc biệt: `actualValue` là TỶ LỆ Key/Non
+ * (pivot), không phải % đạt. % cần so sánh với mốc 100 là `achievedPct` (% đạt
+ * so chỉ tiêu quý); khoảng xem không trọn quý thì chưa có số này (chỉ có doanh
+ * thu thực) nên trả `null` để không khớp bộ lọc, đúng kiểu "thiếu dữ liệu".
+ */
+export const saleCriterionPct = (criterion: SaleCriterion): number | null => {
+  if (criterion.revenue) return criterion.revenue.achievedPct;
+  return criterion.actualValue;
+};
+
+/**
  * Một tiêu chí ở cấp SALE có "đạt" hay không — dùng cho cả bộ đếm `summary`
  * và bộ lọc `met`.
  *
@@ -335,6 +352,8 @@ const round1 = (value: number): number => Math.round(value * 10) / 10;
  * lẫn không đạt, để khỏi biến "sale chưa đăng nhập Zalo" thành "sale không
  * đạt". Luật khớp với cách engine đang chấm:
  * - binary: đúng theo `status` (pass = có ≥1 khách đạt).
+ * - doanh số: theo kết luận của TIÊU CHÍ QUÝ — `(Dso Key + Dso Non) / target
+ *   quý ≥ 100%`. Khoảng xem là tuần/tháng thì không so target nên `null`.
  * - ratio: `actualValue` luôn là %, nên KHÔNG so với `targetValue` khi mẫu số
  *   là `target_value` (targetValue ở đó là số tuyệt đối — chỉ tiêu doanh thu
  *   chẳng hạn) mà lấy mốc 100 = hoàn thành chỉ tiêu. Các mẫu số đếm khách thì
@@ -342,11 +361,18 @@ const round1 = (value: number): number => Math.round(value * 10) / 10;
  */
 export function criterionMet(criterion: SaleCriterion): boolean | null {
   if (criterion.status === 'no_data') return null;
+  if (criterion.revenue) {
+    return criterion.revenue.verdict === null
+      ? null
+      : criterion.revenue.verdict === 'pass';
+  }
   if (criterion.scoringMode === ScoringMode.BINARY) {
     return criterion.status === 'pass';
   }
   const target =
-    criterion.denominator === 'target_value' ? 100 : (criterion.targetValue ?? 100);
+    criterion.denominator === 'target_value'
+      ? 100
+      : (criterion.targetValue ?? 100);
   return criterion.actualValue !== null && criterion.actualValue >= target;
 }
 
@@ -384,7 +410,13 @@ export function summarizeKpiSales(
   const meta = new Map<string, SaleCriterion>();
   const counters = new Map<
     string,
-    { met: number; notMet: number; noData: number; sum: number; counted: number }
+    {
+      met: number;
+      notMet: number;
+      noData: number;
+      sum: number;
+      counted: number;
+    }
   >();
 
   for (const criteria of criteriaBySale) {
@@ -409,7 +441,15 @@ export function summarizeKpiSales(
       } else {
         counter.notMet += 1;
       }
-      if (criterion.actualValue !== null) {
+      if (criterion.revenue) {
+        // Tiêu chí doanh số: cột trung bình phải là % ĐẠT so chỉ tiêu quý,
+        // không phải tỷ lệ Key/Non của `actualValue`.
+        const achieved = criterion.revenue.achievedPct;
+        if (achieved !== null) {
+          counter.sum += achieved;
+          counter.counted += 1;
+        }
+      } else if (criterion.actualValue !== null) {
         counter.sum += criterion.actualValue;
         counter.counted += 1;
       }
@@ -443,7 +483,10 @@ export interface KpiSaleFilters {
   criterionKey?: string;
   /** Đạt / không đạt — `no_data` không khớp 2 chiều. */
   met?: boolean;
-  /** Ngưỡng `actualValue`. */
+  /**
+   * Ngưỡng % đạt — tiêu chí doanh số đọc `achievedPct` (% so chỉ tiêu quý),
+   * các tiêu chí khác đọc `actualValue`.
+   */
   minRatio?: number;
   status?: SaleCriterion['status'];
 }
@@ -477,7 +520,8 @@ export function filterKpiSales<T extends { criteria: SaleCriterion[] }>(
     if (filters.minRatio !== undefined) {
       const ok = scope.some(
         (c) =>
-          c.actualValue !== null && c.actualValue >= (filters.minRatio ?? 0),
+          saleCriterionPct(c) !== null &&
+          (saleCriterionPct(c) as number) >= (filters.minRatio ?? 0),
       );
       if (!ok) return false;
     }

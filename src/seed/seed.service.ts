@@ -427,7 +427,8 @@ export class SeedService implements OnModuleInit {
         },
         {
           name: 'customer_kpi_rollup_rest_time',
-          display_name: 'Thời gian nghỉ giữa các lần tổng hợp số liệu KPI (giây)',
+          display_name:
+            'Thời gian nghỉ giữa các lần tổng hợp số liệu KPI (giây)',
           value: '21600',
           type: 'number',
           section: 'system',
@@ -435,7 +436,8 @@ export class SeedService implements OnModuleInit {
         },
         {
           name: 'customer_kpi_rollup_days',
-          display_name: 'Số ngày gần nhất job tổng hợp KPI tính lại mỗi lần chạy',
+          display_name:
+            'Số ngày gần nhất job tổng hợp KPI tính lại mỗi lần chạy',
           value: '7',
           type: 'number',
           section: 'system',
@@ -445,6 +447,58 @@ export class SeedService implements OnModuleInit {
           name: 'movement_report_pattern',
           display_name: 'Cụm báo cáo di chuyển (tiêu chí 3)',
           value: 'di gap khach',
+          type: 'text',
+          section: 'kpi',
+          status: 1,
+        },
+        // API NKM — nguồn chân lý của tiêu chí doanh số
+        // (thiết kế THIET-KE-DOANH-SO-API-NKM.md). Đổi môi trường thì sửa value
+        // ở đây, không cần sửa code.
+        {
+          name: 'nkm_revenue_url',
+          display_name: 'API doanh thu theo khách/sale (NKM)',
+          value: 'http://192.168.245.188:3701/get-doanhthu-theo-doitac',
+          type: 'text',
+          section: 'kpi',
+          status: 1,
+        },
+        {
+          name: 'nkm_quarter_url',
+          display_name: 'API chỉ tiêu doanh số theo quý (NKM)',
+          value: 'http://192.168.245.188:3701/get-doanhso-quy-truhangtra',
+          type: 'text',
+          section: 'kpi',
+          status: 1,
+        },
+        {
+          name: 'nkm_access_scarest',
+          display_name: 'Khu vực dữ liệu (tham số access_scarest của API quý)',
+          value: 'zone_zero',
+          type: 'text',
+          section: 'kpi',
+          status: 1,
+        },
+        {
+          name: 'nkm_list_bp_url',
+          display_name: 'API tra mã khách ↔ mã đối tác (NKM)',
+          value: 'http://192.168.117.222:8094/NKC/Web/GetListBP',
+          type: 'text',
+          section: 'kpi',
+          status: 1,
+        },
+        {
+          name: 'nkm_quarter_cache_hours',
+          display_name: 'Thời gian cache khi gọi lại API quý (giờ)',
+          value: '6',
+          type: 'number',
+          section: 'kpi',
+          status: 1,
+        },
+        {
+          name: 'nkm_sync_grp_id',
+          display_name:
+            'Lọc theo nhóm hàng khi đồng bộ (grpId — để trống = không lọc)',
+          value: '',
           type: 'text',
           section: 'kpi',
           status: 1,
@@ -477,7 +531,8 @@ export class SeedService implements OnModuleInit {
         },
         {
           name: 'customer_kpi_rollup_rest_time',
-          display_name: 'Thời gian nghỉ giữa các lần tổng hợp số liệu KPI (giây)',
+          display_name:
+            'Thời gian nghỉ giữa các lần tổng hợp số liệu KPI (giây)',
           value: '21600',
           type: 'number',
           section: 'system',
@@ -485,7 +540,8 @@ export class SeedService implements OnModuleInit {
         },
         {
           name: 'customer_kpi_rollup_days',
-          display_name: 'Số ngày gần nhất job tổng hợp KPI tính lại mỗi lần chạy',
+          display_name:
+            'Số ngày gần nhất job tổng hợp KPI tính lại mỗi lần chạy',
           value: '7',
           type: 'number',
           section: 'system',
@@ -495,6 +551,58 @@ export class SeedService implements OnModuleInit {
           name: 'movement_report_pattern',
           display_name: 'Cụm báo cáo di chuyển (tiêu chí 3)',
           value: 'di gap khach',
+          type: 'text',
+          section: 'kpi',
+          status: 1,
+        },
+        // API NKM — nguồn chân lý của tiêu chí doanh số
+        // (thiết kế THIET-KE-DOANH-SO-API-NKM.md). Đổi môi trường thì sửa value
+        // ở đây, không cần sửa code.
+        {
+          name: 'nkm_revenue_url',
+          display_name: 'API doanh thu theo khách/sale (NKM)',
+          value: 'http://192.168.245.188:3701/get-doanhthu-theo-doitac',
+          type: 'text',
+          section: 'kpi',
+          status: 1,
+        },
+        {
+          name: 'nkm_quarter_url',
+          display_name: 'API chỉ tiêu doanh số theo quý (NKM)',
+          value: 'http://192.168.245.188:3701/get-doanhso-quy-truhangtra',
+          type: 'text',
+          section: 'kpi',
+          status: 1,
+        },
+        {
+          name: 'nkm_access_scarest',
+          display_name: 'Khu vực dữ liệu (tham số access_scarest của API quý)',
+          value: 'zone_zero',
+          type: 'text',
+          section: 'kpi',
+          status: 1,
+        },
+        {
+          name: 'nkm_list_bp_url',
+          display_name: 'API tra mã khách ↔ mã đối tác (NKM)',
+          value: 'http://192.168.117.222:8094/NKC/Web/GetListBP',
+          type: 'text',
+          section: 'kpi',
+          status: 1,
+        },
+        {
+          name: 'nkm_quarter_cache_hours',
+          display_name: 'Thời gian cache khi gọi lại API quý (giờ)',
+          value: '6',
+          type: 'number',
+          section: 'kpi',
+          status: 1,
+        },
+        {
+          name: 'nkm_sync_grp_id',
+          display_name:
+            'Lọc theo nhóm hàng khi đồng bộ (grpId — để trống = không lọc)',
+          value: '',
           type: 'text',
           section: 'kpi',
           status: 1,

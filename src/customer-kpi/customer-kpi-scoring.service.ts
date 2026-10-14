@@ -5,15 +5,16 @@ import {
   KpiDenominator,
   ScoringMode,
 } from './kpi-definition.entity';
+import { FiscalQuarter } from './nkm-fiscal';
 
 /**
  * Engine chấm điểm KPI — tính LÚC ĐỌC (thiết kế mục 5.3): sửa tiêu chí trên
  * web là hiện ngay ở lần tải báo cáo sau, không đợi cron.
  *
  * Nguồn dữ liệu: `customer_activity_daily` (job Python ghi, NestJS chỉ đọc —
- * đúng tiền lệ sale-response). Mỗi metric một nhánh xử lý (adapter, mục 5.1.6):
- * thêm nhóm phòng ban sau này chỉ là thêm dòng `kpi_definitions`, không sửa
- * engine. Tiêu chí doanh thu chờ API doanh thu — luôn trả no_data kèm reason.
+ * đúng tiền lệ sale-response) và `customer_revenue_daily` (job đồng bộ API NKM
+ * ghi). Mỗi metric một nhánh xử lý (adapter, mục 5.1.6): thêm nhóm phòng ban
+ * sau này chỉ là thêm dòng `kpi_definitions`, không sửa engine.
  *
  * BẢNG QUY TẮC ĐÃ CHỐT VỚI NGƯỜI DÙNG (10/06/2026):
  * - support_khach  : TIÊU CHÍ 3 — "có đi hỗ trợ khách chưa". metric
@@ -30,8 +31,9 @@ import {
  * - order_count / debt_balance: metric kiểu NGƯỠNG (giá trị tuyệt đối) — chấm
  *   binary so ngưỡng hoặc ratio so chỉ tiêu (chỉ mẫu số target_value; mẫu số
  *   đếm khách không có nghĩa với giá trị tuyệt đối).
- * - revenue_key / revenue_non: luôn no_data — chờ API doanh thu (quyết định
- *   mục 4.4: cố ý không đọc 2 sheet ẩn BCBH/CNO của file Excel).
+ * - revenue_key / revenue_non: tiêu chí DOANH SỐ, nguồn chân lý là API NKM.
+ *   Cấp khách = có phát sinh (≥1 phiếu); cấp sale = doanh thu + tỷ lệ Key/Non
+ *   so chỉ tiêu QUÝ. Xem chi tiết ở khối REVENUE bên dưới.
  * - Cấp khách hàng: chỉ tiêu ratio trả % ngày đạt trong khoảng xem (FE ẩn nếu
  *   không cần — mục 5.1.6); binary trả pass/fail.
  * - Cấp Sale: ratio = "x/y khách đạt" (mẫu số mặc định là khách CÓ THỂ ĐO —
@@ -46,12 +48,19 @@ export const SUGGESTION_GAP_DAYS = 7;
 /** Nhìn lại bao nhiêu ngày hoạt động để chấm gợi ý ở đầu khoảng xem. */
 export const SUGGESTION_LOOKBACK_DAYS = SUGGESTION_GAP_DAYS;
 
-export const REASON_NO_REVENUE_SOURCE = 'Chưa có nguồn dữ liệu doanh thu.';
+export const REASON_NO_REVENUE_DATA =
+  'Chưa có dữ liệu doanh thu cho khách hàng này.';
+export const REASON_NO_QUARTER_TARGET = 'Chưa có chỉ tiêu quý cho sale này.';
+export const REASON_NO_SALE_MAPPING =
+  'Chưa nạp được bảng tra mã NKM cho sale này — kiểm tra employee_code của nhân viên.';
+export const REASON_NO_CUSTOMER_TIER =
+  'Chưa xác định được loại khách (KEY/NON).';
 export const REASON_SALE_OFFLINE =
   'Sale chưa đăng nhập Zalo. Dữ liệu sẽ tự cập nhật khi Sale đăng nhập lại.';
 export const REASON_NO_ZALO_LINK =
   'Chưa có khách hàng nào khớp được tài khoản Zalo.';
-export const REASON_NO_CUSTOMERS = 'Sale chưa có khách hàng nào trong danh sách.';
+export const REASON_NO_CUSTOMERS =
+  'Sale chưa có khách hàng nào trong danh sách.';
 
 /**
  * Metric kiểu NGƯỠNG — chấm trên giá trị tuyệt đối (số đơn, số dư công nợ)
@@ -62,6 +71,26 @@ export const REASON_NO_CUSTOMERS = 'Sale chưa có khách hàng nào trong danh 
  *   hiện tại (không theo ngày).
  */
 export const THRESHOLD_METRICS = ['order_count', 'debt_balance'];
+
+/**
+ * Metric DOANH SỐ — nguồn chân lý là API NKM (thiết kế
+ * THIET-KE-DOANH-SO-API-NKM.md). Hai cấp hai cách chấm khác nhau:
+ *
+ * - Cấp KHÁCH (`scoreCustomer`): ĐẠT khi có PHÁT SINH trong kỳ — ≥1 phiếu.
+ *   Mỗi tiêu chí chỉ áp đúng loại khách: `doanh_so_key` chỉ chấm khách KEY,
+ *   `doanh_so_non` chỉ chấm khách NON (khách KEY không bị quẹt "theo NON").
+ *   Không gate `zalo_linked` — khách có mua hàng là có thật, dù sale chưa khớp
+ *   liên hệ Zalo, nên adapter đứng TRƯỚC nhánh lọc ngày đo được, cùng chỗ với
+ *   `movement_report`.
+ * - Cấp SALE (`scoreSale`): doanh thu + tỷ lệ giữa Key và Non + % đạt so với
+ *   chỉ tiêu QUÝ. `doanh_so_key` và `doanh_so_non` DÙNG CHUNG một target quý
+ *   (target phân cho sale, không phân cho khách) nên cả hai trả cùng số:
+ *   tỷ lệ Key/Non khác nhau, % đạt và kết luận đạt/không đạt giống nhau.
+ *
+ * Điểm then chốt đã đối chiếu từng đồng: doanh số = `LineTotal` (CHƯA VAT);
+ * cộng `LineTotal` một sale cả quý 2 = `DatThucTeQ2` của API quý.
+ */
+export const REVENUE_METRICS = ['revenue_key', 'revenue_non'];
 
 const thresholdValueOf = (
   metric: string,
@@ -102,6 +131,90 @@ export interface CustomerCriterion {
   /** Bị quản lý ghi đè thủ công thành chưa đạt (khách báo cáo xấu...). */
   overridden?: boolean;
   overrideReason?: string | null;
+  /**
+   * Tiêu chí chỉ áp cho MỘT loại khách — `KEY` (doanh_so_key) hoặc `NON`
+   * (doanh_so_non). `undefined` = áp cho cả hai loại.
+   */
+  tierScope?: 'KEY' | 'NON';
+  /** Tiêu chí không áp cho loại khách của khách này — bỏ qua khi tổng hợp. */
+  notApplicable?: boolean;
+  /** Số phiếu của khách trong kỳ — > 0 là có phát sinh. */
+  quantity?: number;
+  /** Doanh số của khách trong kỳ (`LineTotal`, chưa VAT). */
+  lineTotal?: number;
+}
+
+/** Kết luận theo LOẠI KHÁCH (thiết kế §5.3) — lớp tổng hợp trên các tiêu chí. */
+export interface CustomerTierSummary {
+  tier: 'KEY' | 'NON' | null;
+  /** Số tiêu chí áp dụng cho loại khách này (cả Key và Non đều 4). */
+  applicable: number;
+  /** Số tiêu chí đã đạt. */
+  passed: number;
+  /**
+   * KEY: đạt khi đạt TOÀN BỘ tiêu chí (nghiêm ngặt — "khách key bắt buộc phải
+   * đạt 100%", hiểu là không được trượt một tiêu chí nào).
+   * NON: `null` — KHÔNG kết luận đạt/trượt, chỉ đếm "đạt x/4 tiêu chí".
+   */
+  verdict: 'pass' | 'fail' | null;
+}
+
+/** Doanh thu của MỘT khách trong kỳ — báo cáo nạp sẵn từ customer_revenue_daily. */
+export interface RevenueCustomerInput {
+  customerId: number;
+  /** `KEY` | `NON` — lấy từ `customer_assignments.customer_tier` (từng phân công). */
+  tier: string | null;
+  /** Số phiếu trong kỳ. */
+  quantity: number;
+  /** Doanh số trong kỳ (`LineTotal`, chưa VAT). */
+  lineTotal: number;
+}
+
+/** Dữ liệu cần cho adapter doanh số cấp SALE. */
+export interface RevenueSaleInput {
+  /**
+   * Quý tài chính mà khoảng xem phủ trọn — `null` khi khoảng xem là tuần/tháng
+   * (hoặc không trọn quý). Chỉ khi có mới kết luận đạt/không đạt.
+   */
+  quarter: FiscalQuarter | null;
+  /** Chỉ tiêu quý của sale (`sale_revenue_target`); cả hai tiêu chí dùng chung. */
+  quarterTarget: number | null;
+  /** Toàn bộ khách của sale kèm doanh thu trong kỳ. */
+  customers: RevenueCustomerInput[];
+  /**
+   * `false` khi chưa nạp được bảng tra mã cho sale (chưa có `employee_code`
+   * khớp NKM) — KHÔNG phải "sale không bán được gì", phải no_data kèm lý do để
+   * admin nạp bảng tra mã.
+   */
+  mapped?: boolean;
+}
+
+/** Số liệu doanh số cấp sale — nguồn cho bảng phân phối (pivot) của lead. */
+export interface SaleRevenueDetail {
+  /** Tổng doanh số khách KEY trong kỳ. */
+  dsoKey: number;
+  /** Tổng doanh số khách NON trong kỳ. */
+  dsoNon: number;
+  /** `Dso Key / (Dso Key + Dso Non)` — 4 chữ số thập phân. */
+  keyShareRatio: number | null;
+  /** Tỷ lệ (DS Key) % — 2 chữ số thập phân. */
+  keySharePct: number | null;
+  /** Tỷ lệ (DS Non) % — 2 chữ số thập phân. */
+  nonSharePct: number | null;
+  /** Khách KEY có phát sinh / tổng khách KEY. */
+  keyCustomers: { reached: number; total: number };
+  /** Khách NON có phát sinh / tổng khách NON. */
+  nonCustomers: { reached: number; total: number };
+  /** Chỉ tiêu quý — cả hai tiêu chí dùng chung. */
+  quarterTarget: number | null;
+  /** `(Dso Key + Dso Non) / target quý` — 4 chữ số thập phân. */
+  achievedRatio: number | null;
+  /** % đạt — 2 chữ số thập phân. */
+  achievedPct: number | null;
+  /** `null` = khoảng xem không trọn quý, không kết luận được. */
+  verdict: 'pass' | 'fail' | null;
+  quarter: FiscalQuarter | null;
+  isWholeQuarter: boolean;
 }
 
 /** Kết quả chấm MỘT tiêu chí cho MỘT sale (overview / đầu trang by-sale). */
@@ -121,10 +234,82 @@ export interface SaleCriterion {
   /** Cả tiêu chí của sale bị quản lý ghi đè thành chưa đạt. */
   overridden?: boolean;
   overrideReason?: string | null;
+  /** Số liệu doanh số đầy đủ (chỉ tiêu chí doanh số cấp sale). */
+  revenue?: SaleRevenueDetail;
 }
 
 const pct = (num: number, den: number): number =>
   den > 0 ? Math.round((num / den) * 1000) / 10 : 0;
+
+/** Làm tròn `digits` chữ số thập phân — dùng cho tỉ lệ doanh số. */
+export const roundTo = (value: number, digits: number): number => {
+  const factor = 10 ** digits;
+  return Math.round(value * factor) / factor;
+};
+
+/**
+ * Tiêu chí có áp cho loại khách này không. Tiêu chí doanh số chỉ áp đúng loại
+ * (`tierScope`); các tiêu chí còn lại áp cho cả Key và Non.
+ */
+export const criterionAppliesToTier = (
+  criterion: CustomerCriterion,
+  tier: string,
+): boolean =>
+  criterion.notApplicable !== true &&
+  (!criterion.tierScope || criterion.tierScope === tier);
+
+/** Số liệu phân phối (pivot) gộp được từ một tập khách — sale, nhóm hay công ty. */
+export interface RevenueRollup {
+  /** Tổng doanh số khách KEY. */
+  dsoKey: number;
+  /** Tổng doanh số khách NON. */
+  dsoNon: number;
+  /** `Dso Key / (Dso Key + Dso Non)` — 4 chữ số thập phân. */
+  keyShareRatio: number | null;
+  /** Tỷ lệ (DS Key) % — 2 chữ số thập phân. */
+  keySharePct: number | null;
+  /** Tỷ lệ (DS Non) % — 2 chữ số thập phân. */
+  nonSharePct: number | null;
+  /** Khách KEY có phát sinh / tổng khách KEY. */
+  keyCustomers: { reached: number; total: number };
+  /** Khách NON có phát sinh / tổng khách NON. */
+  nonCustomers: { reached: number; total: number };
+}
+
+/**
+ * Gộp doanh thu một tập khách thành một dòng bảng phân phối — dùng cho đầu bảng
+ * cấp sale, hàng tổng cấp nhóm và hàng tổng công ty nên cả ba cấp luôn khớp
+ * nhau. Cấp nhóm/công ty CỘNG DỒN các sale nên doanh thu không bị trùng (lấy
+ * theo `slpCode` từng sale); riêng đếm khách theo quan hệ PHÂN CÔNG nên khách
+ * thuộc nhiều phòng bị đếm ở cả hai phòng — FE cần ghi chú cho khỏi hiểu nhầm.
+ */
+export const rollupRevenue = (
+  customers: RevenueCustomerInput[],
+): RevenueRollup => {
+  const tierOf = (row: RevenueCustomerInput) => (row.tier ?? '').toUpperCase();
+  const keyRows = customers.filter((row) => tierOf(row) === 'KEY');
+  const nonRows = customers.filter((row) => tierOf(row) === 'NON');
+  const sumOf = (rows: RevenueCustomerInput[]) =>
+    rows.reduce((acc, row) => acc + row.lineTotal, 0);
+  const dsoKey = sumOf(keyRows);
+  const dsoNon = sumOf(nonRows);
+  const total = dsoKey + dsoNon;
+  return {
+    dsoKey,
+    dsoNon,
+    keyShareRatio: total > 0 ? roundTo(dsoKey / total, 4) : null,
+    keySharePct: total > 0 ? roundTo((dsoKey / total) * 100, 2) : null,
+    nonSharePct: total > 0 ? roundTo((dsoNon / total) * 100, 2) : null,
+    keyCustomers: {
+      reached: keyRows.filter((row) => row.quantity > 0).length,
+      total: keyRows.length,
+    },
+    nonCustomers: {
+      reached: nonRows.filter((row) => row.quantity > 0).length,
+      total: nonRows.length,
+    },
+  };
+};
 
 const sumOutbound = (rows: ActivityDayRow[]): number =>
   rows.reduce((acc, row) => acc + (Number(row.outbound_count) || 0), 0);
@@ -146,6 +331,8 @@ export class CustomerKpiScoringService {
    * liên lạc). Chỉ những ngày >= fromDate mới được tính vào kết quả.
    * `debtBalance`: chỉ cần cho metric `debt_balance` — số dư công nợ hiện tại
    * của khách (báo cáo nạp sẵn từ bảng `debts`).
+   * `revenue`: chỉ cần cho tiêu chí doanh số — số phiếu + doanh số của khách
+   * trong kỳ (báo cáo nạp sẵn từ `customer_revenue_daily`).
    */
   scoreCustomer(
     definition: KpiDefinition,
@@ -153,6 +340,7 @@ export class CustomerKpiScoringService {
     targetValue: number | null,
     fromDate: string,
     debtBalance?: number | null,
+    revenue?: { tier: string | null; quantity: number; lineTotal: number },
   ): CustomerCriterion {
     const base: CustomerCriterion = {
       key: definition.key,
@@ -162,11 +350,8 @@ export class CustomerKpiScoringService {
       targetValue,
     };
 
-    if (
-      definition.metric === 'revenue_key' ||
-      definition.metric === 'revenue_non'
-    ) {
-      return { ...base, reason: REASON_NO_REVENUE_SOURCE };
+    if (REVENUE_METRICS.includes(definition.metric)) {
+      return this.scoreCustomerRevenue(definition, base, revenue);
     }
 
     // Tiêu chí 3 KHÔNG gate zalo_linked: báo cáo di chuyển tồn tại độc lập với
@@ -238,6 +423,170 @@ export class CustomerKpiScoringService {
     return {
       ...base,
       reason: `Chưa hỗ trợ metric "${definition.metric}".`,
+    };
+  }
+
+  /**
+   * Cấp KHÁCH của tiêu chí doanh số: khách đạt khi có PHÁT SINH trong kỳ ≥1
+   * phiếu (khách KEY bắt buộc có phát sinh — "phát sinh số" như file lead gửi).
+   *
+   * Chỉ chấm đúng loại khách: `doanh_so_key` chỉ chấm khách KEY, `doanh_so_non`
+   * chỉ chấm khách NON; tiêu chí của loại kia trả `no_data` kèm ghi chú "khách X
+   * không chấm tiêu chí này" để FE hiểu là cột đó cố tịt, không phải lỗi. Lớp
+   * tổng hợp theo loại khách (`summarizeCustomerByTier`) bỏ qua các ô này.
+   */
+  private scoreCustomerRevenue(
+    definition: KpiDefinition,
+    base: CustomerCriterion,
+    revenue?: { tier: string | null; quantity: number; lineTotal: number },
+  ): CustomerCriterion {
+    const tierScope: 'KEY' | 'NON' =
+      definition.metric === 'revenue_key' ? 'KEY' : 'NON';
+    if (!revenue) {
+      // Chưa nạp được dữ liệu đồng bộ (bảng tra mã trống / job chưa chạy) —
+      // KHÔNG kết luận trượt, tránh "sale không bán được gì" oan.
+      return { ...base, tierScope, reason: REASON_NO_REVENUE_DATA };
+    }
+    const tier = (revenue.tier ?? '').toUpperCase();
+    if (tier && tier !== tierScope) {
+      return {
+        ...base,
+        tierScope,
+        notApplicable: true,
+        reason: `Khách ${tier} không chấm tiêu chí này.`,
+      };
+    }
+    if (!tier) {
+      return {
+        ...base,
+        tierScope,
+        notApplicable: true,
+        reason: REASON_NO_CUSTOMER_TIER,
+      };
+    }
+    const occurred = revenue.quantity > 0;
+    return {
+      ...base,
+      tierScope,
+      status: occurred ? 'pass' : 'fail',
+      actualValue: occurred ? 1 : 0,
+      quantity: revenue.quantity,
+      lineTotal: revenue.lineTotal,
+    };
+  }
+
+  /**
+   * Cấp SALE của tiêu chí doanh số — đầu ra khớp bảng phân phối (pivot) lead
+   * gửi: Dso Key, Dso Non, Tỷ lệ (DS Key), % đạt so với target quý.
+   *
+   * `doanh_so_key` và `doanh_so_non` dùng CHUNG một target quý nên hai dòng có
+   * cùng % đạt và cùng kết luận; khác nhau ở tử số (Dso Key hay Dso Non) và tỷ
+   * lệ tương ứng. Mẫu số của cả hai là tổng Dso (Dso Key + Dso Non) — đúng cách
+   * pivot chia tỷ lệ Key/Non.
+   *
+   * Khoảng xem = tuần/tháng (không trọn quý) thì KHÔNG so target: chỉ báo doanh
+   * thu thực của đúng khoảng đó, `status: 'ratio'`, không kết luận đạt/không
+   * đạt — "target sao mà chia được" (chủ sở hữu chốt).
+   */
+  private scoreSaleRevenue(
+    definition: KpiDefinition,
+    base: SaleCriterion,
+    revenue?: RevenueSaleInput,
+  ): SaleCriterion {
+    const tierScope: 'KEY' | 'NON' =
+      definition.metric === 'revenue_key' ? 'KEY' : 'NON';
+    if (!revenue || revenue.mapped === false) {
+      // Chưa nạp được bảng tra mã / job chưa chạy — KHÔNG kết luận trượt, tránh
+      // "sale không bán được gì" oan.
+      return {
+        ...base,
+        reason:
+          revenue?.mapped === false
+            ? REASON_NO_SALE_MAPPING
+            : REASON_NO_REVENUE_DATA,
+      };
+    }
+    if (revenue.customers.length === 0) {
+      return { ...base, reason: REASON_NO_CUSTOMERS };
+    }
+    const rollup = rollupRevenue(revenue.customers);
+    const numerator = tierScope === 'KEY' ? rollup.dsoKey : rollup.dsoNon;
+    const total = rollup.dsoKey + rollup.dsoNon;
+    const achievedRatio =
+      revenue.quarter != null &&
+      revenue.quarterTarget != null &&
+      revenue.quarterTarget > 0
+        ? roundTo(total / revenue.quarterTarget, 4)
+        : null;
+
+    const detail: SaleRevenueDetail = {
+      ...rollup,
+      quarterTarget: revenue.quarterTarget,
+      achievedRatio,
+      achievedPct:
+        achievedRatio != null ? roundTo(achievedRatio * 100, 2) : null,
+      verdict:
+        achievedRatio != null ? (achievedRatio >= 1 ? 'pass' : 'fail') : null,
+      quarter: revenue.quarter,
+      isWholeQuarter: revenue.quarter != null,
+    };
+
+    // Trọn quý mà chưa có chỉ tiêu → no_data: không thể kết luận đạt/không đạt,
+    // nhưng vẫn giữ số liệu doanh thu trong `revenue` để FE hiện đúng thực tế.
+    if (revenue.quarter != null && revenue.quarterTarget == null) {
+      return {
+        ...base,
+        status: 'no_data',
+        reason: REASON_NO_QUARTER_TARGET,
+        revenue: detail,
+      };
+    }
+
+    const actualValue =
+      tierScope === 'KEY' ? detail.keySharePct : detail.nonSharePct;
+    return {
+      ...base,
+      // Không trọn quý → không kết luận, chỉ báo doanh thu thực (kiểu ratio)
+      status: detail.verdict ?? 'ratio',
+      actualValue,
+      numerator,
+      denominatorValue: total,
+      targetValue: revenue.quarterTarget,
+      revenue: detail,
+    };
+  }
+
+  /**
+   * Kết luận theo loại khách (§5.3): KEY thì nghiêm ngặt — đạt khi đạt TOÀN BỘ
+   * tiêu chí áp dụng (doanh số đúng loại + TC3 + TC4 + Gợi ý, mặc định 4); NON
+   * thì không kết luận đạt/trượt, chỉ đếm "đạt x/4 tiêu chí".
+   *
+   * Tiêu chí không áp cho loại khách (`notApplicable` — ví dụ khách KEY bị quẹt
+   * `doanh_so_non`) bị bỏ qua khỏi cả tử và mẫu.
+   */
+  summarizeCustomerByTier(
+    criteria: CustomerCriterion[],
+    tier: string | null,
+  ): CustomerTierSummary {
+    const upper = (tier ?? '').toUpperCase();
+    const normalized: 'KEY' | 'NON' | null =
+      upper === 'KEY' ? 'KEY' : upper === 'NON' ? 'NON' : null;
+    const applicable = criteria.filter((criterion) =>
+      criterionAppliesToTier(criterion, upper),
+    );
+    const passed = applicable.filter(
+      (criterion) => criterion.status === 'pass',
+    ).length;
+    return {
+      tier: normalized,
+      applicable: applicable.length,
+      passed,
+      verdict:
+        normalized === 'KEY'
+          ? applicable.length > 0 && passed === applicable.length
+            ? 'pass'
+            : 'fail'
+          : null,
     };
   }
 
@@ -324,6 +673,8 @@ export class CustomerKpiScoringService {
    * Chấm MỘT tiêu chí cho MỘT sale trên khoảng ngày, từ dữ liệu thô từng
    * khách. `customers`: mỗi phần tử là hoạt động của một khách + chỉ tiêu
    * riêng (nếu có) — đã lọc khách thuộc sale.
+   * `revenue`: chỉ cần cho tiêu chí doanh số — doanh thu từng khách + chỉ tiêu
+   * quý của sale.
    */
   scoreSale(
     definition: KpiDefinition,
@@ -335,6 +686,7 @@ export class CustomerKpiScoringService {
     saleTargetValue: number | null,
     saleOnline: boolean,
     fromDate: string,
+    revenue?: RevenueSaleInput,
   ): SaleCriterion {
     const base: SaleCriterion = {
       key: definition.key,
@@ -350,11 +702,8 @@ export class CustomerKpiScoringService {
       passedCriteria: null,
     };
 
-    if (
-      definition.metric === 'revenue_key' ||
-      definition.metric === 'revenue_non'
-    ) {
-      return { ...base, reason: REASON_NO_REVENUE_SOURCE };
+    if (REVENUE_METRICS.includes(definition.metric)) {
+      return this.scoreSaleRevenue(definition, base, revenue);
     }
 
     // Chỉ những ngày >= fromDate được tính vào kết quả — ngày lookback (trước
@@ -421,10 +770,7 @@ export class CustomerKpiScoringService {
       if (saleTargetValue == null) {
         return { ...base, reason: 'Chưa có chỉ tiêu cho tiêu chí này.' };
       }
-      const total = perCustomer.reduce(
-        (acc, pc) => acc + (pc.value ?? 0),
-        0,
-      );
+      const total = perCustomer.reduce((acc, pc) => acc + (pc.value ?? 0), 0);
       return {
         ...base,
         status: 'ratio',

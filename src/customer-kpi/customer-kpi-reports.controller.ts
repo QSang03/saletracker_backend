@@ -25,6 +25,10 @@ import { shiftDateStr, vnToday } from './vn-date';
  * ty, view/manager/user theo quy tắc sẵn có). Kết quả KPI có 3 trạng thái:
  * pass/fail (binary) | ratio | no_data (kèm reason) — xem cấu trúc trong
  * tài liệu thiết kế, phần "Danh sách API".
+ *
+ * Khoảng xem: ưu tiên `fiscal_year` + `quarter` (mặc định quý tài chính hiện
+ * tại), sau tới `from`/`to`. Chỉ quý mới có target + kết luận đạt/không đạt;
+ * tuần/tháng chỉ báo doanh thu thực.
  */
 @Controller('customer-kpi-reports')
 @UseGuards(JwtAuthGuard, PermissionGuard)
@@ -45,31 +49,15 @@ export class CustomerKpiReportsController {
   @Get('overview')
   @Permission('khach-hang', 'read')
   overview(@Query() query: KpiOverviewQueryDto, @Req() req: any) {
-    const range = this.normalizeRange(query.from, query.to);
-    return this.reportsService.overview(
-      {
-        // giữ nguyên full query để các filter mới (criterionKey/met/minRatio/
-        // status) tới được service; from/to chuẩn hoá đè lên cuối
-        ...query,
-        ...range,
-      },
-      req.user,
-    );
+    // from/to/sắp quý do service phân giải (resolveWindow) — controller không
+    // gán mặc định 30 ngày nữa vì sẽ đè lên khoảng quý
+    return this.reportsService.overview(query, req.user);
   }
 
   @Get('by-sale')
   @Permission('khach-hang', 'read')
   bySale(@Query() query: KpiBySaleQueryDto, @Req() req: any) {
-    const range = this.normalizeRange(query.from, query.to);
-    return this.reportsService.bySale(
-      {
-        ...query,
-        saleId: query.saleId,
-        search: query.search,
-        ...range,
-      },
-      req.user,
-    );
+    return this.reportsService.bySale(query, req.user);
   }
 
   @Get('customers/:id')
@@ -102,16 +90,13 @@ export class CustomerKpiReportsController {
   @Permission('khach-hang', 'export')
   async export(
     @Query('saleId') saleId: string | undefined,
-    @Query('from') from: string | undefined,
-    @Query('to') to: string | undefined,
+    @Query() query: any,
     @Req() req: any,
     @Res() res: any,
   ) {
-    const range = this.normalizeRange(from, to);
     const { buffer, fileName } = await this.reportsService.exportReport(
       saleId ? Number(saleId) : undefined,
-      range.from,
-      range.to,
+      query,
       req.user,
     );
     res.setHeader(

@@ -1711,6 +1711,8 @@ console.log('\n-- M. Mục 4: rollup Python → engine KPI → chỉ tiêu → g
     const convIds = {};
     const orderIds = [];
     const requestIds = [];
+    // v1.6: tiêu chí tạm dựng cho luồng chỉ tiêu (doanh_so_* không nhập tay được)
+    const tempDefinitionKeys = [];
     const CONTACTS = { key: `kpi_r_${tag}_k`, non: `kpi_r_${tag}_n` };
     const CODES = { key: `KPI_RLP_${tag}K`, non: `KPI_RLP_${tag}N` };
 
@@ -1745,6 +1747,12 @@ console.log('\n-- M. Mục 4: rollup Python → engine KPI → chỉ tiêu → g
           if (requestIds.length) {
             await mainConn.query('DELETE FROM approval_request_target_items WHERE request_id IN (?)', [requestIds]);
             await mainConn.query('DELETE FROM approval_requests WHERE id IN (?)', [requestIds]);
+          }
+          for (const key of tempDefinitionKeys) {
+            try { await mainConn.query('DELETE FROM kpi_definitions WHERE criterion_key = ? AND team_group = ?', [key, 'kinh-doanh']); } catch {}
+          }
+          if (saleUserId) {
+            try { await mainConn.query('DELETE FROM kpi_targets WHERE sale_id = ?', [saleUserId]); } catch {}
           }
           if (saleUserId && oldZaloStatus !== null) {
             await mainConn.query('UPDATE users SET zalo_link_status = ? WHERE id = ?', [oldZaloStatus, saleUserId]);
@@ -1975,8 +1983,21 @@ console.log('\n-- M. Mục 4: rollup Python → engine KPI → chỉ tiêu → g
         assert(reply && reply.status === 'pass' && reply.numerator === 1 && reply.denominatorValue === 2, JSON.stringify(reply));
         const ack = byKey.get('goi_y_thuc_hien');
         assert(ack && ack.status === 'pass' && ack.passedCriteria === 1 && ack.totalCriteria === 2, JSON.stringify(ack));
+        // v1.6: tiêu chí doanh số đọc API NKM. Sale test chưa có employee_code
+        // khớp bảng tra mã → no_data kèm lý do rõ ràng (chứ không phải "trượt").
         const rev = byKey.get('doanh_so_key');
-        assert(rev && rev.status === 'no_data' && (rev.reason || '').includes('doanh thu'), JSON.stringify(rev));
+        assert(rev && rev.status === 'no_data', JSON.stringify(rev));
+        assert(
+          /bảng tra mã|doanh thu/.test(rev.reason || ''),
+          `reason doanh số không đúng: ${rev.reason}`,
+        );
+        // Dòng phân phối trên sale vẫn đủ cột dù thiếu nguồn
+        assert(sale.revenue && sale.revenue.verdict === null, JSON.stringify(sale.revenue));
+        assert(
+          (sale.revenue.keyCustomers.total >= 1 && sale.revenue.nonCustomers.total >= 1) ||
+            sale.revenue.keyCustomers.total + sale.revenue.nonCustomers.total >= 2,
+          JSON.stringify(sale.revenue),
+        );
         overviewSaleName = sale.saleName; // dùng cho test search ở dưới
         return r.status;
       });
@@ -2050,10 +2071,34 @@ console.log('\n-- M. Mục 4: rollup Python → engine KPI → chỉ tiêu → g
       });
 
       // 9. Giao chỉ tiêu: admin gán theo sale + theo khách, gán lại là cập nhật
-      await expect('[M] POST targets scope=sale (admin) → applied 1', [200, 201], async () => {
+      // v1.6: doanh_so_key/doanh_so_non KHÔNG nhập tay được nữa (nguồn API NKM)
+      // nên luồng gán chỉ tiêu chuyển sang một tiêu chí ratio tạm.
+      const TARGET_CRITERION = 'kpi_test_target';
+      tempDefinitionKeys.push(TARGET_CRITERION);
+      await expect('[M] Chuẩn bị: tiêu chí ratio tạm cho luồng gán chỉ tiêu', 201, async () => {
+        const r = await call('POST', '/customer-kpi-definitions', {
+          ...H(),
+          body: {
+            key: TARGET_CRITERION, name: 'Tiêu chí tạm cho luồng chỉ tiêu',
+            metric: 'contacted_customers', scoring_mode: 'ratio',
+            denominator: 'target_value', period: 'month',
+          },
+        });
+        assert(r.json?.id || r.status === 409, `không có id: ${r.text?.slice(0, 150)}`);
+        return r.status;
+      });
+      await expect('[M] POST targets tiêu chí doanh số → 400 (API NKM là nguồn chân lý)', 400, async () => {
         const r = await call('POST', '/customer-kpi-targets', {
           ...H(),
           body: { criterion_key: 'doanh_so_key', period_month: MONTH, scope: 'sale', sale_ids: [saleUserId], target_value: 80 },
+        });
+        assert(/API NKM/.test(r.json?.message || ''), `message: ${r.json?.message}`);
+        return r.status;
+      });
+      await expect('[M] POST targets scope=sale (admin) → applied 1', [200, 201], async () => {
+        const r = await call('POST', '/customer-kpi-targets', {
+          ...H(),
+          body: { criterion_key: TARGET_CRITERION, period_month: MONTH, scope: 'sale', sale_ids: [saleUserId], target_value: 80 },
         });
         assert(r.status === 200 || r.status === 201, `HTTP ${r.status}: ${r.text?.slice(0, 200)}`);
         assert(r.json?.applied === 1, JSON.stringify(r.json));
@@ -2062,10 +2107,10 @@ console.log('\n-- M. Mục 4: rollup Python → engine KPI → chỉ tiêu → g
       await expect('[M] Gán lại cùng tháng → upsert (vẫn 1 dòng, giá mới 90)', 200, async () => {
         const r2 = await call('POST', '/customer-kpi-targets', {
           ...H(),
-          body: { criterion_key: 'doanh_so_key', period_month: MONTH, scope: 'sale', sale_ids: [saleUserId], target_value: 90 },
+          body: { criterion_key: TARGET_CRITERION, period_month: MONTH, scope: 'sale', sale_ids: [saleUserId], target_value: 90 },
         });
         assert(r2.status === 200 || r2.status === 201, `HTTP ${r2.status}`);
-        const list = await call('GET', `/customer-kpi-targets?criterion_key=doanh_so_key&saleId=${saleUserId}&period_month=${MONTH}`, H());
+        const list = await call('GET', `/customer-kpi-targets?criterion_key=${TARGET_CRITERION}&saleId=${saleUserId}&period_month=${MONTH}`, H());
         assert(list.json?.total === 1, `total=${list.json?.total} — upsert bị nhân bản`);
         assert(Number(list.json.data[0].targetValue) === 90, JSON.stringify(list.json.data));
         return list.status;
@@ -2073,10 +2118,10 @@ console.log('\n-- M. Mục 4: rollup Python → engine KPI → chỉ tiêu → g
       await expect('[M] POST targets scope=customer → chỉ tiêu riêng cho khách KEY', [200, 201], async () => {
         const r = await call('POST', '/customer-kpi-targets', {
           ...H(),
-          body: { criterion_key: 'doanh_so_key', period_month: MONTH, scope: 'customer', sale_id: saleUserId, items: [{ customer_id: customerIds.key, target_value: 60 }] },
+          body: { criterion_key: TARGET_CRITERION, period_month: MONTH, scope: 'customer', sale_id: saleUserId, items: [{ customer_id: customerIds.key, target_value: 60 }] },
         });
         assert(r.status === 200 || r.status === 201, `HTTP ${r.status}: ${r.text?.slice(0, 200)}`);
-        const list = await call('GET', `/customer-kpi-targets?criterion_key=doanh_so_key&saleId=${saleUserId}&period_month=${MONTH}`, H());
+        const list = await call('GET', `/customer-kpi-targets?criterion_key=${TARGET_CRITERION}&saleId=${saleUserId}&period_month=${MONTH}`, H());
         const perCustomer = list.json.data.find((x) => x.customerId === customerIds.key);
         assert(perCustomer && Number(perCustomer.targetValue) === 60, JSON.stringify(list.json.data));
         return r.status;
@@ -2091,8 +2136,24 @@ console.log('\n-- M. Mục 4: rollup Python → engine KPI → chỉ tiêu → g
       await expect('[M] POST targets scope=department phòng không có người → 404', 404, async () => {
         const r = await call('POST', '/customer-kpi-targets', {
           ...H(),
-          body: { criterion_key: 'doanh_so_key', period_month: MONTH, scope: 'department', department_slug: `khong-ton-tai-${tag}`, target_value: 10 },
+          body: { criterion_key: TARGET_CRITERION, period_month: MONTH, scope: 'department', department_slug: `khong-ton-tai-${tag}`, target_value: 10 },
         });
+        return r.status;
+      });
+      // v1.6: đề xuất cũ (tạo trước khi chặn) vẫn bị chặn lúc DUYỆT — "đề xuất
+      // trước rồi duyệt sau" không được thủng luật API NKM là nguồn chân lý.
+      await expect('[M] Duyệt đề xuất chứa tiêu chí doanh số → 400 (chặn cả đề xuất cũ)', 400, async () => {
+        const [reqIns] = await mainConn.query(
+          "INSERT INTO approval_requests (request_type, requested_by, target_user_id, status, note, created_at, updated_at) VALUES ('kpi_target', ?, ?, 'pending', 'test', NOW(), NOW())",
+          [saleUserId, saleUserId],
+        );
+        requestIds.push(Number(reqIns.insertId));
+        await mainConn.query(
+          'INSERT INTO approval_request_target_items (request_id, criterion_key, period_month, sale_id, customer_id, old_target_value, new_target_value, created_at) VALUES (?, ?, ?, ?, NULL, 90, 55, NOW())',
+          [reqIns.insertId, 'doanh_so_key', MONTH, saleUserId],
+        );
+        const r = await call('POST', `/approval-requests/${reqIns.insertId}/decide`, { ...H(), body: { action: 'approve' } });
+        assert(/API NKM/.test(r.json?.message || ''), `message: ${r.json?.message}`);
         return r.status;
       });
 
@@ -2105,13 +2166,13 @@ console.log('\n-- M. Mục 4: rollup Python → engine KPI → chỉ tiêu → g
         requestIds.push(Number(reqIns.insertId));
         await mainConn.query(
           'INSERT INTO approval_request_target_items (request_id, criterion_key, period_month, sale_id, customer_id, old_target_value, new_target_value, created_at) VALUES (?, ?, ?, ?, NULL, 90, 55, NOW())',
-          [reqIns.insertId, 'doanh_so_key', MONTH, saleUserId],
+          [reqIns.insertId, TARGET_CRITERION, MONTH, saleUserId],
         );
         const r = await call('POST', `/approval-requests/${reqIns.insertId}/decide`, { ...H(), body: { action: 'approve' } });
         assert(r.status === 200 || r.status === 201, `HTTP ${r.status}: ${r.text?.slice(0, 200)}`);
         const [trows] = await mainConn.query(
           'SELECT target_value FROM kpi_targets WHERE criterion_key = ? AND period_month = ? AND sale_id = ? AND customer_id = 0',
-          ['doanh_so_key', MONTH, saleUserId],
+          [TARGET_CRITERION, MONTH, saleUserId],
         );
         assert(trows.length === 1 && Number(trows[0].target_value) === 55, JSON.stringify(trows));
         return r.status;
@@ -2147,7 +2208,7 @@ console.log('\n-- M. Mục 4: rollup Python → engine KPI → chỉ tiêu → g
         await expect('[M] user thường gán chỉ tiêu → 403', 403, async () => {
           const r = await call('POST', '/customer-kpi-targets', {
             token: lowToken,
-            body: { criterion_key: 'doanh_so_key', period_month: MONTH, scope: 'sale', sale_ids: [saleUserId], target_value: 10 },
+            body: { criterion_key: TARGET_CRITERION, period_month: MONTH, scope: 'sale', sale_ids: [saleUserId], target_value: 10 },
           });
           return r.status;
         });
@@ -2257,7 +2318,8 @@ console.log('\n-- O. Hoàn tác đề xuất chỉ tiêu (duyệt nhầm) + old_
 {
   let conn = null;
   const requestIds = [];
-  const CRITERION = 'doanh_so_key';
+  const CRITERION = 'kpi_test_undo';
+  let tempDefId = null;
   try {
     const envRaw = readFileSync(
       path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.env'), 'utf8');
@@ -2278,6 +2340,19 @@ console.log('\n-- O. Hoàn tác đề xuất chỉ tiêu (duyệt nhầm) + old_
     const MONTH = new Date().toISOString().slice(0, 7);
     const SALE_ID = 1; // admin — đã tồn tại, thoả FK sale_id
     const targetWhere = [CRITERION, MONTH, SALE_ID, 0];
+    // v1.6: tiêu chí doanh số không nhập tay được nên dùng tiêu chí ratio tạm
+    if (CRITERION !== 'doanh_so_key') {
+      const def = await call('POST', '/customer-kpi-definitions', {
+        ...H(),
+        body: {
+          key: CRITERION, name: 'Tiêu chí tạm kiểm thử hoàn tác',
+          metric: 'contacted_customers', scoring_mode: 'ratio',
+          denominator: 'target_value', period: 'month',
+        },
+      });
+      assert(def.status === 201 || def.status === 409, `dựng tiêu chí tạm HTTP ${def.status}: ${def.text?.slice(0, 150)}`);
+      tempDefId = def.json?.id ?? null;
+    }
 
     // Dựng đề xuất pending + dòng chỉ tiêu (giống cách trưởng phòng đề xuất)
     const mkProposal = async (oldVal, newVal, note) => {
@@ -2392,6 +2467,8 @@ console.log('\n-- O. Hoàn tác đề xuất chỉ tiêu (duyệt nhầm) + old_
       if (requestIds.length) {
         await conn.query('DELETE FROM approval_requests WHERE id IN (?)', [requestIds]).catch(() => {});
       }
+      // Tiêu chí tạm dựng cho luồng hoàn tác — xoá cho khỏi nhiễu báo cáo
+      try { await call('DELETE', `/customer-kpi-definitions/${tempDefId}`, H()); } catch {}
     }
   } catch (e) {
     bad('[O] Chuẩn bị', e.message);

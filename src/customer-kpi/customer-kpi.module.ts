@@ -22,6 +22,12 @@ import { CustomerImportBackup } from './customer-import-backup.entity';
 import { ApprovalRequest } from './approval-request.entity';
 import { ApprovalRequestCustomerItem } from './approval-request-customer-item.entity';
 import { ApprovalRequestTargetItem } from './approval-request-target-item.entity';
+import { NkmSaleMap } from './nkm-sale-map.entity';
+import { NkmGroupMap } from './nkm-group-map.entity';
+import { CustomerRevenueDaily } from './customer-revenue-daily.entity';
+import { SaleRevenueTarget } from './sale-revenue-target.entity';
+import { DeptRevenueTarget } from './dept-revenue-target.entity';
+import { SystemConfig } from '../system_config/system_config.entity';
 import { CustomersController } from './customers.controller';
 import { CustomerAssignmentsController } from './customer-assignments.controller';
 import { CustomerKpiReportsController } from './customer-kpi-reports.controller';
@@ -29,6 +35,7 @@ import { CustomerKpiDefinitionsController } from './customer-kpi-definitions.con
 import { CustomerKpiTargetsController } from './customer-kpi-targets.controller';
 import { ApprovalRequestsController } from './approval-requests.controller';
 import { KpiCriterionOverridesController } from './kpi-criterion-overrides.controller';
+import { NkmMappingController } from './nkm-mapping.controller';
 import { CustomersService } from './customers.service';
 import { CustomerAssignmentsService } from './customer-assignments.service';
 import { CustomerKpiScoringService } from './customer-kpi-scoring.service';
@@ -37,6 +44,10 @@ import { CustomerKpiDefinitionsService } from './customer-kpi-definitions.servic
 import { CustomerKpiTargetsService } from './customer-kpi-targets.service';
 import { ApprovalRequestsService } from './approval-requests.service';
 import { KpiCriterionOverridesService } from './kpi-criterion-overrides.service';
+import { NkmApiClient } from './nkm-api.client';
+import { NkmMappingService } from './nkm-mapping.service';
+import { NkmSyncService } from './nkm-sync.service';
+import { NkmSyncCronjob } from './nkm-sync.cronjob';
 
 /**
  * Module khách hàng & KPI (thiết kế: BAO-CAO-KPI-KHACH-HANG.md).
@@ -67,6 +78,13 @@ import { KpiCriterionOverridesService } from './kpi-criterion-overrides.service'
       ApprovalRequest,
       ApprovalRequestCustomerItem,
       ApprovalRequestTargetItem,
+      // Tiêu chí doanh số theo API NKM (thiết kế THIET-KE-DOANH-SO-API-NKM.md)
+      NkmSaleMap,
+      NkmGroupMap,
+      CustomerRevenueDaily,
+      SaleRevenueTarget,
+      DeptRevenueTarget,
+      SystemConfig,
       User,
       Department,
       Debt,
@@ -81,6 +99,7 @@ import { KpiCriterionOverridesService } from './kpi-criterion-overrides.service'
     CustomerKpiTargetsController,
     ApprovalRequestsController,
     KpiCriterionOverridesController,
+    NkmMappingController,
   ],
   providers: [
     ZaloPythonApiClient,
@@ -93,6 +112,10 @@ import { KpiCriterionOverridesService } from './kpi-criterion-overrides.service'
     ApprovalRequestsService,
     KpiCriterionOverridesService,
     CustomerSuggestionsCronjob,
+    NkmApiClient,
+    NkmMappingService,
+    NkmSyncService,
+    NkmSyncCronjob,
   ],
 })
 export class CustomerKpiModule {}

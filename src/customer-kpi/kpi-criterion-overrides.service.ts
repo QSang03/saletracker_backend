@@ -8,7 +8,11 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { User } from '../users/user.entity';
 import { CustomerAssignment } from './customer-assignment.entity';
-import { ForcedStatus, KpiCriterionOverride } from './kpi-criterion-overrides.entity';
+import {
+  ForcedStatus,
+  KpiCriterionOverride,
+} from './kpi-criterion-overrides.entity';
+import { REVENUE_TARGET_CRITERION_KEYS } from './customer-kpi-targets.service';
 import {
   KpiCriterionOverrideQueryDto,
   CreateKpiCriterionOverrideDto,
@@ -61,6 +65,14 @@ export class KpiCriterionOverridesService {
     const saleId = Number(dto.sale_id);
     const customerId = dto.customer_id ?? 0;
     await this.assertCanOverrideSale(saleId, user);
+    // Tiêu chí doanh số không cho ghi đè tay: số tiền lấy từ API NKM, ghi đè sẽ
+    // mâu thuẫn với nguồn chân lý (thiết kế §5.4). Ghi đè vẫn dành cho TC3 +
+    // TC4. Sau này nếu ép "khách KEY không đạt" thì mở rộng đúng danh sách này.
+    if (REVENUE_TARGET_CRITERION_KEYS.includes(dto.criterion_key)) {
+      throw new BadRequestException(
+        `Tiêu chí doanh số "${dto.criterion_key}" lấy từ API NKM, không ghi đè thủ công`,
+      );
+    }
     if (customerId > 0) {
       const assignment = await this.assignmentRepo.findOne({
         where: { sale_id: saleId, customer_id: customerId },
@@ -135,7 +147,10 @@ export class KpiCriterionOverridesService {
    */
   private async assertCanOverrideSale(saleId: number, user: any) {
     const roles = this.roleNames(user);
-    if (!roles.includes('admin') && !roles.some((r) => r.startsWith('manager-'))) {
+    if (
+      !roles.includes('admin') &&
+      !roles.some((r) => r.startsWith('manager-'))
+    ) {
       throw new ForbiddenException(
         'Chỉ quản lý (trưởng phòng) hoặc quản trị viên mới được ghi đè tiêu chí',
       );

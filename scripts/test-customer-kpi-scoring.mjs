@@ -12,10 +12,11 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import {
   CustomerKpiScoringService,
-  REASON_NO_REVENUE_SOURCE,
+  REASON_NO_REVENUE_DATA,
   REASON_NO_ZALO_LINK,
   REASON_SALE_OFFLINE,
   REASON_NO_CUSTOMERS,
+  criterionAppliesToTier,
 } from '../dist/customer-kpi/customer-kpi-scoring.service.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -30,7 +31,11 @@ const check = (name, cond, extra) => {
     console.log('  ok  -', name);
   } else {
     fail += 1;
-    console.log('  FAIL-', name, extra !== undefined ? JSON.stringify(extra) : '');
+    console.log(
+      '  FAIL-',
+      name,
+      extra !== undefined ? JSON.stringify(extra) : '',
+    );
   }
 };
 
@@ -57,15 +62,22 @@ const day = (d, o = {}) => ({
   zalo_linked: o.linked !== false,
 });
 // 2 khách: A liên lạc tốt; B không có ngày nào đo được (sale offline)
-const custA = { days: [day('2026-10-01', { ob: 3, ib: 1 }), day('2026-10-02', { ob: 1 })] };
+const custA = {
+  days: [day('2026-10-01', { ob: 3, ib: 1 }), day('2026-10-02', { ob: 1 })],
+};
 const custB = {
-  days: [day('2026-10-01', { linked: false }), day('2026-10-02', { linked: false })],
+  days: [
+    day('2026-10-01', { linked: false }),
+    day('2026-10-02', { linked: false }),
+  ],
 };
 const FROM = '2026-10-01';
 
 console.log('-- Engine chấm điểm KPI (unit) --');
 
-console.log('\n[1] denominator reachable_customers (mặc định) — B bị loại khỏi mẫu số');
+console.log(
+  '\n[1] denominator reachable_customers (mặc định) — B bị loại khỏi mẫu số',
+);
 let r = engine.scoreSale(
   def({ metric: 'contacted_customers', denominator: 'reachable_customers' }),
   [custA, custB],
@@ -103,17 +115,29 @@ check('mẫu số = 3', r.denominatorValue === 3, r);
 check('đạt = 1 (chỉ A 2 chiều)', r.numerator === 1, r);
 
 console.log('\n[4] order_count binary gte — ngưỡng 2 đơn/khách');
-const custD = { days: [day('2026-10-01', { orders: 3 }), day('2026-10-02', { orders: 0 })] };
+const custD = {
+  days: [day('2026-10-01', { orders: 3 }), day('2026-10-02', { orders: 0 })],
+};
 const custE = { days: [day('2026-10-01', { orders: 1 })] };
 r = engine.scoreCustomer(
-  def({ metric: 'order_count', scoring_mode: 'binary', comparison: 'gte', target_value: 2 }),
+  def({
+    metric: 'order_count',
+    scoring_mode: 'binary',
+    comparison: 'gte',
+    target_value: 2,
+  }),
   custD.days,
   2,
   FROM,
 );
 check('A: 3 đơn >= 2 → pass', r.status === 'pass', r);
 r = engine.scoreCustomer(
-  def({ metric: 'order_count', scoring_mode: 'binary', comparison: 'gte', target_value: 2 }),
+  def({
+    metric: 'order_count',
+    scoring_mode: 'binary',
+    comparison: 'gte',
+    target_value: 2,
+  }),
   custE.days,
   2,
   FROM,
@@ -123,14 +147,24 @@ check('actualValue = số đơn thật (1)', r.actualValue === 1, r);
 
 console.log('\n[5] order_count binary lte — ít đơn hơn mới đạt');
 r = engine.scoreCustomer(
-  def({ metric: 'order_count', scoring_mode: 'binary', comparison: 'lte', target_value: 1 }),
+  def({
+    metric: 'order_count',
+    scoring_mode: 'binary',
+    comparison: 'lte',
+    target_value: 1,
+  }),
   custE.days,
   1,
   FROM,
 );
 check('1 đơn <= 1 → pass', r.status === 'pass', r);
 r = engine.scoreCustomer(
-  def({ metric: 'order_count', scoring_mode: 'binary', comparison: 'lte', target_value: 1 }),
+  def({
+    metric: 'order_count',
+    scoring_mode: 'binary',
+    comparison: 'lte',
+    target_value: 1,
+  }),
   custD.days,
   1,
   FROM,
@@ -139,29 +173,51 @@ check('3 đơn > 1 → fail', r.status === 'fail', r);
 
 console.log('\n[6] order_count ratio target_value — % chỉ tiêu');
 r = engine.scoreCustomer(
-  def({ metric: 'order_count', scoring_mode: 'ratio', denominator: 'target_value' }),
+  def({
+    metric: 'order_count',
+    scoring_mode: 'ratio',
+    denominator: 'target_value',
+  }),
   custD.days,
   5,
   FROM,
 );
 check('3/5 = 60%', r.actualValue === 60, r);
 r = engine.scoreCustomer(
-  def({ metric: 'order_count', scoring_mode: 'ratio', denominator: 'target_value' }),
+  def({
+    metric: 'order_count',
+    scoring_mode: 'ratio',
+    denominator: 'target_value',
+  }),
   custE.days,
   null,
   FROM,
 );
-check('không có chỉ tiêu → no_data + reason', r.status === 'no_data' && !!r.reason, r);
+check(
+  'không có chỉ tiêu → no_data + reason',
+  r.status === 'no_data' && !!r.reason,
+  r,
+);
 
-console.log('\n[7] order_count ratio với mẫu số đếm khách → no_data cảnh báo cấu hình sai');
+console.log(
+  '\n[7] order_count ratio với mẫu số đếm khách → no_data cảnh báo cấu hình sai',
+);
 r = engine.scoreCustomer(
-  def({ metric: 'order_count', scoring_mode: 'ratio', denominator: 'reachable_customers' }),
+  def({
+    metric: 'order_count',
+    scoring_mode: 'ratio',
+    denominator: 'reachable_customers',
+  }),
   custD.days,
   5,
   FROM,
 );
 check('no_data', r.status === 'no_data', r);
-check('reason nói rõ mẫu số không áp dụng', /reachable_customers/.test(r.reason || ''), r);
+check(
+  'reason nói rõ mẫu số không áp dụng',
+  /reachable_customers/.test(r.reason || ''),
+  r,
+);
 
 console.log('\n[8] order_count binary không có ngưỡng → no_data');
 r = engine.scoreCustomer(
@@ -170,11 +226,20 @@ r = engine.scoreCustomer(
   null,
   FROM,
 );
-check('no_data + reason', r.status === 'no_data' && /ngưỡng/.test(r.reason || ''), r);
+check(
+  'no_data + reason',
+  r.status === 'no_data' && /ngưỡng/.test(r.reason || ''),
+  r,
+);
 
 console.log('\n[9] debt_balance');
 r = engine.scoreCustomer(
-  def({ metric: 'debt_balance', scoring_mode: 'binary', comparison: 'lte', target_value: 1000 }),
+  def({
+    metric: 'debt_balance',
+    scoring_mode: 'binary',
+    comparison: 'lte',
+    target_value: 1000,
+  }),
   custD.days,
   1000,
   FROM,
@@ -182,7 +247,12 @@ r = engine.scoreCustomer(
 );
 check('nợ 500 <= 1000 → pass', r.status === 'pass', r);
 r = engine.scoreCustomer(
-  def({ metric: 'debt_balance', scoring_mode: 'binary', comparison: 'lte', target_value: 1000 }),
+  def({
+    metric: 'debt_balance',
+    scoring_mode: 'binary',
+    comparison: 'lte',
+    target_value: 1000,
+  }),
   custD.days,
   1000,
   FROM,
@@ -190,15 +260,28 @@ r = engine.scoreCustomer(
 );
 check('nợ 5000 > 1000 → fail', r.status === 'fail', r);
 r = engine.scoreCustomer(
-  def({ metric: 'debt_balance', scoring_mode: 'binary', comparison: 'lte', target_value: 1000 }),
+  def({
+    metric: 'debt_balance',
+    scoring_mode: 'binary',
+    comparison: 'lte',
+    target_value: 1000,
+  }),
   custD.days,
   1000,
   FROM,
   null,
 );
-check('không tra được nợ → no_data', r.status === 'no_data' && /công nợ/.test(r.reason || ''), r);
+check(
+  'không tra được nợ → no_data',
+  r.status === 'no_data' && /công nợ/.test(r.reason || ''),
+  r,
+);
 r = engine.scoreCustomer(
-  def({ metric: 'debt_balance', scoring_mode: 'ratio', denominator: 'target_value' }),
+  def({
+    metric: 'debt_balance',
+    scoring_mode: 'ratio',
+    denominator: 'target_value',
+  }),
   custD.days,
   400,
   FROM,
@@ -224,7 +307,11 @@ check('đạt = 1', r.passedCriteria === 1, r);
 check('status pass (có 1 khách đạt)', r.status === 'pass', r);
 
 r = engine.scoreSale(
-  def({ metric: 'debt_balance', scoring_mode: 'ratio', denominator: 'target_value' }),
+  def({
+    metric: 'debt_balance',
+    scoring_mode: 'ratio',
+    denominator: 'target_value',
+  }),
   dcust,
   3000,
   false,
@@ -236,7 +323,11 @@ check('tỉ lệ 150%', r.actualValue === 150, r);
 
 console.log('\n[11] order_count cấp sale ratio — tổng đơn / chỉ tiêu');
 r = engine.scoreSale(
-  def({ metric: 'order_count', scoring_mode: 'ratio', denominator: 'target_value' }),
+  def({
+    metric: 'order_count',
+    scoring_mode: 'ratio',
+    denominator: 'target_value',
+  }),
   [
     { days: custD.days, targetValue: 5 },
     { days: custE.days, targetValue: 5 },
@@ -284,11 +375,23 @@ check(
   r.status === 'no_data' && r.reason === REASON_SALE_OFFLINE,
   r,
 );
-r = engine.scoreCustomer(def({ metric: 'revenue_key', denominator: 'target_value' }), custD.days, 100, FROM);
-check('revenue vẫn no_data chờ API', r.status === 'no_data' && r.reason === REASON_NO_REVENUE_SOURCE, r);
+r = engine.scoreCustomer(
+  def({ metric: 'revenue_key', denominator: 'target_value' }),
+  custD.days,
+  100,
+  FROM,
+);
+check(
+  'revenue không có dữ liệu đồng bộ → no_data kèm lý do',
+  r.status === 'no_data' && r.reason === REASON_NO_REVENUE_DATA,
+  r,
+);
 r = engine.scoreCustomer(
   def({ metric: 'suggestion_ack', scoring_mode: 'binary', target_value: 1 }),
-  [day('2026-10-08', { ob: 1 }), ...Array.from({ length: 7 }, (_, i) => day(`2026-10-0${i + 1}`, { ob: 0 }))],
+  [
+    day('2026-10-08', { ob: 1 }),
+    ...Array.from({ length: 7 }, (_, i) => day(`2026-10-0${i + 1}`, { ob: 0 })),
+  ],
   1,
   '2026-10-08',
 );
@@ -306,14 +409,22 @@ r = engine.scoreCustomer(
   null,
   FROM,
 );
-check('contacted cấp khách vẫn trả %', r.status === 'ratio' && r.actualValue === 50, r);
+check(
+  'contacted cấp khách vẫn trả %',
+  r.status === 'ratio' && r.actualValue === 50,
+  r,
+);
 r = engine.scoreCustomer(
   def({ metric: 'responded_customers', denominator: 'reachable_customers' }),
   [day('2026-10-01', { ob: 2, ib: 1 }), day('2026-10-02', { ob: 0, ib: 5 })],
   null,
   FROM,
 );
-check('responded cấp khách: 1/2 ngày 2 chiều = 50%', r.status === 'ratio' && r.actualValue === 50, r);
+check(
+  'responded cấp khách: 1/2 ngày 2 chiều = 50%',
+  r.status === 'ratio' && r.actualValue === 50,
+  r,
+);
 r = engine.scoreSale(
   def({ metric: 'contacted_customers', denominator: 'all_customers' }),
   [],
@@ -321,7 +432,11 @@ r = engine.scoreSale(
   false,
   FROM,
 );
-check('all_customers + không có khách → no_data lý do riêng', r.status === 'no_data' && r.reason === REASON_NO_CUSTOMERS, r);
+check(
+  'all_customers + không có khách → no_data lý do riêng',
+  r.status === 'no_data' && r.reason === REASON_NO_CUSTOMERS,
+  r,
+);
 
 // ─── Tiêu chí 3/4 — binary theo tháng (thiết kế TC3/TC4) ───
 const mvDay = (d, count, o = {}) => ({
@@ -334,10 +449,17 @@ const mvDay = (d, count, o = {}) => ({
   movement_count: count,
 });
 
-console.log('\n[N] Tiêu chí 3 — movement_report (báo cáo di chuyển khớp cú pháp)');
+console.log(
+  '\n[N] Tiêu chí 3 — movement_report (báo cáo di chuyển khớp cú pháp)',
+);
 
 r = engine.scoreCustomer(
-  def({ metric: 'movement_report', scoring_mode: 'binary', target_value: 1, period: 'month' }),
+  def({
+    metric: 'movement_report',
+    scoring_mode: 'binary',
+    target_value: 1,
+    period: 'month',
+  }),
   [mvDay('2026-10-05', 0), mvDay('2026-10-12', 1)],
   1,
   FROM,
@@ -345,15 +467,29 @@ r = engine.scoreCustomer(
 check('có tin báo cáo trong tháng → pass', r.status === 'pass', r);
 
 r = engine.scoreCustomer(
-  def({ metric: 'movement_report', scoring_mode: 'binary', target_value: 1, period: 'month' }),
+  def({
+    metric: 'movement_report',
+    scoring_mode: 'binary',
+    target_value: 1,
+    period: 'month',
+  }),
   [mvDay('2026-10-05', 0), mvDay('2026-10-12', 0)],
   1,
   FROM,
 );
-check('không có tin báo cáo → fail (mặc định chưa đạt)', r.status === 'fail', r);
+check(
+  'không có tin báo cáo → fail (mặc định chưa đạt)',
+  r.status === 'fail',
+  r,
+);
 
 r = engine.scoreCustomer(
-  def({ metric: 'movement_report', scoring_mode: 'binary', target_value: 1, period: 'month' }),
+  def({
+    metric: 'movement_report',
+    scoring_mode: 'binary',
+    target_value: 1,
+    period: 'month',
+  }),
   [mvDay('2026-10-12', 2, { linked: false })],
   1,
   FROM,
@@ -361,7 +497,12 @@ r = engine.scoreCustomer(
 check('báo cáo không cần khớp liên hệ Zalo', r.status === 'pass', r);
 
 r = engine.scoreCustomer(
-  def({ metric: 'movement_report', scoring_mode: 'binary', target_value: 1, period: 'month' }),
+  def({
+    metric: 'movement_report',
+    scoring_mode: 'binary',
+    target_value: 1,
+    period: 'month',
+  }),
   [mvDay('2026-09-28', 1)],
   1,
   FROM,
@@ -373,38 +514,72 @@ const mvA = { days: [mvDay('2026-10-12', 1)] };
 const mvB = { days: [mvDay('2026-10-01', 0, { linked: false })] };
 const mvC = { days: [mvDay('2026-10-03', 3, { linked: false })] };
 r = engine.scoreSale(
-  def({ metric: 'movement_report', scoring_mode: 'binary', target_value: 1, period: 'month' }),
+  def({
+    metric: 'movement_report',
+    scoring_mode: 'binary',
+    target_value: 1,
+    period: 'month',
+  }),
   [mvA, mvB, mvC],
   1,
   false,
   FROM,
 );
-check('mẫu số = 3 (toàn bộ khách, không gate reachable)', r.denominatorValue === 3, r);
+check(
+  'mẫu số = 3 (toàn bộ khách, không gate reachable)',
+  r.denominatorValue === 3,
+  r,
+);
 check('x = 2 (A + C, kể C không khớp Zalo)', r.numerator === 2, r);
 check('sale đạt khi x > 0', r.status === 'pass', r);
 
 r = engine.scoreSale(
-  def({ metric: 'movement_report', scoring_mode: 'binary', target_value: 1, period: 'month' }),
+  def({
+    metric: 'movement_report',
+    scoring_mode: 'binary',
+    target_value: 1,
+    period: 'month',
+  }),
   [mvB],
   1,
   false,
   FROM,
 );
-check('không khách nào báo cáo → fail, x = 0', r.status === 'fail' && r.numerator === 0, r);
+check(
+  'không khách nào báo cáo → fail, x = 0',
+  r.status === 'fail' && r.numerator === 0,
+  r,
+);
 
 r = engine.scoreSale(
-  def({ metric: 'movement_report', scoring_mode: 'binary', target_value: 1, period: 'month' }),
+  def({
+    metric: 'movement_report',
+    scoring_mode: 'binary',
+    target_value: 1,
+    period: 'month',
+  }),
   [],
   1,
   false,
   FROM,
 );
-check('sale không có khách → no_data', r.status === 'no_data' && r.reason === REASON_NO_CUSTOMERS, r);
+check(
+  'sale không có khách → no_data',
+  r.status === 'no_data' && r.reason === REASON_NO_CUSTOMERS,
+  r,
+);
 
-console.log('\n[N] Tiêu chí 4 — monthly_contact (sale nhắn tin tới khách trong tháng)');
+console.log(
+  '\n[N] Tiêu chí 4 — monthly_contact (sale nhắn tin tới khách trong tháng)',
+);
 
 r = engine.scoreCustomer(
-  def({ metric: 'monthly_contact', scoring_mode: 'binary', target_value: 1, period: 'month' }),
+  def({
+    metric: 'monthly_contact',
+    scoring_mode: 'binary',
+    target_value: 1,
+    period: 'month',
+  }),
   [day('2026-10-04', { ob: 1 })],
   1,
   FROM,
@@ -412,7 +587,12 @@ r = engine.scoreCustomer(
 check('sale nhắn 1 tin, khách không trả lời → pass', r.status === 'pass', r);
 
 r = engine.scoreCustomer(
-  def({ metric: 'monthly_contact', scoring_mode: 'binary', target_value: 1, period: 'month' }),
+  def({
+    metric: 'monthly_contact',
+    scoring_mode: 'binary',
+    target_value: 1,
+    period: 'month',
+  }),
   [day('2026-10-04', { ib: 5, ob: 0 })],
   1,
   FROM,
@@ -420,15 +600,29 @@ r = engine.scoreCustomer(
 check('chỉ khách nhắn → fail', r.status === 'fail', r);
 
 r = engine.scoreCustomer(
-  def({ metric: 'monthly_contact', scoring_mode: 'binary', target_value: 1, period: 'month' }),
+  def({
+    metric: 'monthly_contact',
+    scoring_mode: 'binary',
+    target_value: 1,
+    period: 'month',
+  }),
   [day('2026-10-04', { ob: 2, linked: false })],
   1,
   FROM,
 );
-check('không đo được Zalo → no_data (khác fail)', r.status === 'no_data' && r.reason === REASON_NO_ZALO_LINK, r);
+check(
+  'không đo được Zalo → no_data (khác fail)',
+  r.status === 'no_data' && r.reason === REASON_NO_ZALO_LINK,
+  r,
+);
 
 r = engine.scoreSale(
-  def({ metric: 'monthly_contact', scoring_mode: 'binary', target_value: 1, period: 'month' }),
+  def({
+    metric: 'monthly_contact',
+    scoring_mode: 'binary',
+    target_value: 1,
+    period: 'month',
+  }),
   [custA, custB],
   1,
   true,
@@ -438,5 +632,305 @@ check('mẫu số = 1 (chỉ khách đo được)', r.denominatorValue === 1, r)
 check('x = 1 (A có tin đi)', r.numerator === 1, r);
 check('sale đạt khi x > 0', r.status === 'pass', r);
 
-console.log(`\n===== ${pass} pass, ${fail} fail =====`);
+// ─── Tiêu chí doanh số — API NKM (thiết kế THIET-KE-DOANH-SO-API-NKM.md) ───
+const Q3 = {
+  fiscalYear: 2026,
+  quarter: 3,
+  from: '2026-10-01',
+  to: '2026-12-31',
+  label: 'Q3/2026',
+};
+const FROM_Q = '2026-10-01';
+const KEY_DEF = () =>
+  def({
+    key: 'doanh_so_key',
+    metric: 'revenue_key',
+    scoring_mode: 'ratio',
+    denominator: 'target_value',
+  });
+const NON_DEF = () =>
+  def({
+    key: 'doanh_so_non',
+    metric: 'revenue_non',
+    scoring_mode: 'ratio',
+    denominator: 'target_value',
+  });
+
+// Fixture khớp pivot của lead: NKDS33 có 3 khách KEY mua 77.842.135.300, 19 khách NON không mua
+const pivotKeyCustomers = [
+  { customerId: 1, tier: 'KEY', quantity: 12, lineTotal: 77842135300 },
+  { customerId: 2, tier: 'KEY', quantity: 3, lineTotal: 0 },
+  { customerId: 3, tier: 'KEY', quantity: 0, lineTotal: 0 },
+];
+const pivotNonCustomers = [
+  { customerId: 4, tier: 'NON', quantity: 0, lineTotal: 0 },
+  { customerId: 5, tier: 'NON', quantity: 0, lineTotal: 0 },
+];
+const PIVOT_INPUT = {
+  quarter: Q3,
+  quarterTarget: 31500000000,
+  customers: [...pivotKeyCustomers, ...pivotNonCustomers],
+};
+
+console.log('\n[R1] Tiêu chí doanh số cấp KHÁCH — đạt khi có phát sinh');
+r = engine.scoreCustomer(KEY_DEF(), custD.days, null, FROM_Q, null, {
+  tier: 'KEY',
+  quantity: 4,
+  lineTotal: 125000000,
+});
+check(
+  'khách KEY có phiếu → pass',
+  r.status === 'pass' && r.actualValue === 1,
+  r,
+);
+check(
+  'kèm số phiếu + doanh số của khách',
+  r.quantity === 4 && r.lineTotal === 125000000,
+  r,
+);
+r = engine.scoreCustomer(KEY_DEF(), custD.days, null, FROM_Q, null, {
+  tier: 'KEY',
+  quantity: 0,
+  lineTotal: 0,
+});
+check(
+  'khách KEY không phát sinh → fail (bắt buộc có phát sinh)',
+  r.status === 'fail',
+  r,
+);
+r = engine.scoreCustomer(KEY_DEF(), custB.days, null, FROM_Q, null, {
+  tier: 'KEY',
+  quantity: 9,
+  lineTotal: 1000,
+});
+check('không gate khớp liên hệ Zalo — mua là đạt', r.status === 'pass', r);
+
+console.log('\n[R2] Mỗi tiêu chí chỉ chấm đúng loại khách');
+r = engine.scoreCustomer(KEY_DEF(), custD.days, null, FROM_Q, null, {
+  tier: 'NON',
+  quantity: 4,
+  lineTotal: 100,
+});
+check(
+  'khách NON chấm doanh_so_key → không áp dụng',
+  r.notApplicable === true && r.status === 'no_data',
+  r,
+);
+r = engine.scoreCustomer(NON_DEF(), custD.days, null, FROM_Q, null, {
+  tier: 'KEY',
+  quantity: 4,
+  lineTotal: 100,
+});
+check(
+  'khách KEY chấm doanh_so_non → không áp dụng',
+  r.notApplicable === true && r.status === 'no_data',
+  r,
+);
+r = engine.scoreCustomer(KEY_DEF(), custD.days, null, FROM_Q, null, {
+  tier: null,
+  quantity: 4,
+  lineTotal: 100,
+});
+check(
+  'chưa xác định KEY/NON → no_data',
+  r.status === 'no_data' && /KEY\/NON/.test(r.reason || ''),
+  r,
+);
+check(
+  'criterionAppliesToTier bỏ qua ô không áp dụng',
+  !criterionAppliesToTier(r, 'KEY'),
+  r,
+);
+
+console.log(
+  '\n[R3] Tiêu chí doanh số cấp SALE — pivot: Dso Key, Dso Non, tỷ lệ, % đạt',
+);
+r = engine.scoreSale(KEY_DEF(), [], null, true, FROM_Q, PIVOT_INPUT);
+check('Dso Key = 77.842.135.300', r.revenue.dsoKey === 77842135300, r.revenue);
+check('Dso Non = 0', r.revenue.dsoNon === 0, r.revenue);
+check(
+  'tỷ lệ DS Key = 100%',
+  r.revenue.keyShareRatio === 1 && r.revenue.keySharePct === 100,
+  r.revenue,
+);
+check('tỷ lệ DS Non = 0%', r.revenue.nonSharePct === 0, r.revenue);
+check(
+  'Key: 2/3 khách có phát sinh',
+  r.revenue.keyCustomers.reached === 2 && r.revenue.keyCustomers.total === 3,
+  r.revenue,
+);
+check(
+  'Non: 0/2 khách có phát sinh',
+  r.revenue.nonCustomers.reached === 0 && r.revenue.nonCustomers.total === 2,
+  r.revenue,
+);
+check(
+  '% đạt = (77,84 tỷ)/31,5 tỷ = 247,12%',
+  r.revenue.achievedPct === 247.12,
+  r.revenue,
+);
+check(
+  'tỷ lệ đạt = 2,4712 (4 số lẻ)',
+  r.revenue.achievedRatio === 2.4712,
+  r.revenue,
+);
+check(
+  'kết luận đạt khi >= 100%',
+  r.status === 'pass' && r.revenue.verdict === 'pass',
+  r,
+);
+check(
+  'numerator = Dso Key, mẫu số = tổng Dso',
+  r.numerator === 77842135300 && r.denominatorValue === 77842135300,
+  r,
+);
+check('target quý nạp vào targetValue', r.targetValue === 31500000000, r);
+
+r = engine.scoreSale(NON_DEF(), [], null, true, FROM_Q, PIVOT_INPUT);
+check('doanh_so_non: numerator = Dso Non', r.numerator === 0, r);
+check(
+  'doanh_so_non: cùng target quý và cùng kết luận',
+  r.targetValue === 31500000000 && r.revenue.verdict === 'pass',
+  r,
+);
+check('doanh_so_non: actualValue = tỷ lệ NON (0%)', r.actualValue === 0, r);
+
+console.log('\n[R4] Kết luận theo % đạt so chỉ tiêu quý');
+const belowTarget = {
+  quarter: Q3,
+  quarterTarget: 31500000000,
+  customers: [
+    { customerId: 1, tier: 'KEY', quantity: 5, lineTotal: 1000000000 },
+  ],
+};
+r = engine.scoreSale(KEY_DEF(), [], null, true, FROM_Q, belowTarget);
+check(
+  '3,2% so với chỉ tiêu → không đạt',
+  r.status === 'fail' && r.revenue.achievedRatio === 0.0317,
+  r,
+);
+const noTarget = {
+  quarter: Q3,
+  quarterTarget: null,
+  customers: belowTarget.customers,
+};
+r = engine.scoreSale(KEY_DEF(), [], null, true, FROM_Q, noTarget);
+check(
+  'chưa có chỉ tiêu quý → no_data kèm lý do',
+  r.status === 'no_data' && !!r.reason,
+  r,
+);
+const notWholeQuarter = {
+  quarter: null,
+  quarterTarget: 31500000000,
+  customers: belowTarget.customers,
+};
+r = engine.scoreSale(KEY_DEF(), [], null, true, '2026-10-05', notWholeQuarter);
+check(
+  'khoảng xem không trọn quý → không kết luận',
+  r.status === 'ratio' && r.revenue.verdict === null,
+  r,
+);
+check('vẫn báo doanh thu thực của khoảng', r.numerator === 1000000000, r);
+check(
+  'không tính % đạt khi không trọn quý',
+  r.revenue.achievedRatio === null && r.revenue.achievedPct === null,
+  r,
+);
+
+console.log('\n[R5] Lớp tổng hợp theo loại khách (§5.3)');
+const mixNon = { quarter: Q3, quarterTarget: 1000000000, customers: [] };
+r = engine.scoreSale(KEY_DEF(), [], null, true, FROM_Q, mixNon);
+check(
+  'sale không có khách → no_data',
+  r.status === 'no_data' && r.reason === REASON_NO_CUSTOMERS,
+  r,
+);
+
+const criteriaOf = (list) => list.map((c) => c);
+const keyAllPass = [
+  {
+    key: 'doanh_so_key',
+    scoringMode: 'ratio',
+    status: 'pass',
+    actualValue: 1,
+    targetValue: null,
+    tierScope: 'KEY',
+  },
+  {
+    key: 'doanh_so_non',
+    scoringMode: 'ratio',
+    status: 'no_data',
+    actualValue: null,
+    targetValue: null,
+    tierScope: 'NON',
+    notApplicable: true,
+  },
+  {
+    key: 'support_khach',
+    scoringMode: 'binary',
+    status: 'pass',
+    actualValue: 1,
+    targetValue: 1,
+  },
+  {
+    key: 'lien_lac_phan_hoi',
+    scoringMode: 'binary',
+    status: 'pass',
+    actualValue: 1,
+    targetValue: 1,
+  },
+  {
+    key: 'goi_y_thuc_hien',
+    scoringMode: 'binary',
+    status: 'pass',
+    actualValue: 1,
+    targetValue: 1,
+  },
+];
+let t = engine.summarizeCustomerByTier(criteriaOf(keyAllPass), 'KEY');
+check(
+  'KEY đạt cả 4 → đạt',
+  t.verdict === 'pass' && t.applicable === 4 && t.passed === 4,
+  t,
+);
+const keyMissOne = criteriaOf(keyAllPass).map((c, i) =>
+  i === 3 ? { ...c, status: 'fail' } : c,
+);
+t = engine.summarizeCustomerByTier(keyMissOne, 'KEY');
+check(
+  'KEY trượt 1 tiêu chí → không đạt (nghiêm ngặt)',
+  t.verdict === 'fail' && t.passed === 3,
+  t,
+);
+// Khách NON đổi chiều: doanh_so_non chấm được, doanh_so_key là cột loại khác
+const nonCriteria = keyAllPass.map((c, i) => {
+  if (i === 0) {
+    return { ...c, tierScope: 'KEY', notApplicable: true, status: 'no_data' };
+  }
+  if (i === 1) {
+    return { ...c, tierScope: 'NON', notApplicable: false, status: 'pass' };
+  }
+  if (i === 3) return { ...c, status: 'fail' };
+  return c;
+});
+t = engine.summarizeCustomerByTier(criteriaOf(nonCriteria), 'NON');
+check(
+  'NON đếm x/4 tiêu chí, không kết luận',
+  t.verdict === null && t.applicable === 4 && t.passed === 3,
+  t,
+);
+t = engine.summarizeCustomerByTier(
+  criteriaOf(nonCriteria).map((c) => ({ ...c, status: 'pass' })),
+  'NON',
+);
+check(
+  'NON đạt 4/4 vẫn không ra kết luận đạt/trượt',
+  t.verdict === null && t.passed === 4,
+  t,
+);
+
+
+console.log(`
+===== ${pass} pass, ${fail} fail =====`);
 process.exit(fail === 0 ? 0 : 1);

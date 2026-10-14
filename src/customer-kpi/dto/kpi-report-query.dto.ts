@@ -12,10 +12,13 @@ import {
 /**
  * Bộ lọc chung cho nhóm API báo cáo KPI.
  *
- * `from`/`to` giữ nguyên luật của `normalizeRange`: sai định dạng hoặc thiếu
- * → mặc định 30 ngày gần nhất theo ngày VN. Quyền xem không đổi — server vẫn
- * ép phạm vi theo role (saleId ngoài phạm vi → 403); bộ lọc chỉ thu hẹp
- * trong dữ liệu đã được phép xem.
+ * Khoảng xem do `resolveWindow` của service phân giải: `fiscal_year` +
+ * `quarter` (mặc định quý tài chính hiện tại) → khoảng = đúng quý; `from`/`to`
+ * → khoảng tuỳ chọn, thiếu một đầu thì điền như luật cũ (chỉ có `to` → lùi 30
+ * ngày, chỉ có `from` → tới hôm nay).
+ *
+ * Quyền xem không đổi — server vẫn ép phạm vi theo role (saleId ngoài phạm vi →
+ * 403); bộ lọc chỉ thu hẹp trong dữ liệu đã được phép xem.
  *
  * Nhóm `criterionKey`/`status`/`minRatio`/`met` đọc ở HAI cấp khác nhau:
  * - overview (cấp SALE): đếm/lọc các sale theo kết quả một tiêu chí.
@@ -37,6 +40,30 @@ export class KpiOverviewQueryDto {
   to?: string;
 
   /**
+   * Khoảng xem theo QUÝ TÀI CHÍNH — `fiscal_year` và `quarter` phải đi cùng
+   * nhau (thiếu một cái → 400). Năm tài chính: Q1 = tháng 4-6, Q2 = 7-8-9,
+   * Q3 = 10-11-12, Q4 = 1-2-3; năm tài chính 2026 = 01/04/2026–31/03/2027
+   * (đúng tham số `year` của API chỉ tiêu).
+   *
+   * Có đủ hai tham số thì khoảng xem = đúng quý đó; không truyền gì thì mặc
+   * định quý tài chính hiện tại. Chỉ quý mới so được chỉ tiêu và kết luận
+   * đạt/không đạt; khoảng `from`/`to` (tuần, tháng...) chỉ báo doanh thu thực.
+   */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(2000)
+  @Max(2100)
+  fiscal_year?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(4)
+  quarter?: number;
+
+  /**
    * overview: lọc theo tên sale. by-sale: lọc theo mã, tên hoặc mã SAP
    * khách hàng.
    */
@@ -55,14 +82,19 @@ export class KpiOverviewQueryDto {
   /**
    * Trạng thái của tiêu chí đang khoanh.
    * - by-sale (cấp khách): `ratio` = tiêu chí ratio, giá trị là % đạt.
-   * - overview (cấp sale): tiêu chí ratio luôn trả `ratio` nên `pass`/`fail`
-   *   bị từ chối (400) — dùng `met` hoặc `minRatio` thay thế.
+   * - overview (cấp sale): tiêu chí ratio thường trả `ratio` nên `pass`/`fail`
+   *   bị từ chối (400) — dùng `met` hoặc `minRatio` thay thế. NGOẠI LỆ là hai
+   *   tiêu chí doanh số: ở cấp sale chúng CÓ kết luận đạt/không đạt (% đạt so
+   *   chỉ tiêu quý) nên `pass`/`fail` được nhận.
    */
   @IsOptional()
   @IsIn(['pass', 'fail', 'ratio', 'no_data'])
   status?: 'pass' | 'fail' | 'ratio' | 'no_data';
 
-  /** % đạt tối thiểu — ratio đọc `actualValue`, binary đọc 1/0. */
+  /**
+   * % đạt tối thiểu. Tiêu chí doanh số đọc `% đạt so chỉ tiêu quý`, các tiêu
+   * chí khác đọc `actualValue`; binary đọc 1/0.
+   */
   @IsOptional()
   @Type(() => Number)
   @IsNumber()
