@@ -584,9 +584,13 @@ if (!SKIP_ZALO_CONTACTS) {
   console.log('  ⏭️ Bỏ qua liên hệ mẫu zalo_contacts (--skip-zalo-contacts)');
 }
 
-// 5e. Chỉ tiêu tháng hiện tại cho 2 tiêu chí doanh số — gán cấp nhân viên
-//     (customer_id = 0) cho từng sale kpi_emp. INSERT IGNORE để giữ số đã sửa tay.
-if (!SKIP_TARGETS) {
+// 5e. CHỈ TIÊU DOANH SỐ KHÔNG SEED BẰNG TAY NỮA (v1.6): hai tiêu chí
+//     doanh_so_key/doanh_so_non lấy từ API NKM, API gán chỉ tiêu và luồng duyệt
+//     đều chặn. Chỉ tiêu quý xuống từ job đồng bộ (sale_revenue_target) — xem
+//     THIET-KE-DOANH-SO-API-NKM.md. Nếu muốn demo có số thì chạy
+//     POST /nkm-mapping/sync-quarter + POST /nkm-mapping/sync-revenue?day=...
+//     trên server đang chạy (sale kpi_emp_* phải có employee_code dạng NKDS**).
+if (false && !SKIP_TARGETS) {
   const month = `${today.getFullYear()}-${pad2(today.getMonth() + 1)}`;
   const [defs] = await conn.query(
     "SELECT criterion_key FROM kpi_definitions WHERE criterion_key IN ('doanh_so_key','doanh_so_non') AND is_active = 1",
@@ -616,7 +620,7 @@ if (!SKIP_TARGETS) {
     console.log('  ⏭️ Bỏ qua kpi_targets — chưa có tiêu chí doanh_so_key/doanh_so_non trong kpi_definitions');
   }
 } else {
-  console.log('  ⏭️ Bỏ qua kpi_targets (--skip-targets)');
+  console.log('  ⏭️  Bỏ qua seed kpi_targets — tiêu chí doanh số lấy từ API NKM, không nhập tay');
 }
 
 await conn.end();
