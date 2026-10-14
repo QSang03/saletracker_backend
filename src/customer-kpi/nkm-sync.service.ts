@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { NkmSaleMap } from './nkm-sale-map.entity';
 import { CustomerRevenueDaily } from './customer-revenue-daily.entity';
+import { NkmSyncLog } from './nkm-sync-log.entity';
 import { SaleRevenueTarget } from './sale-revenue-target.entity';
 import { NkmApiClient } from './nkm-api.client';
 import { NkmMappingService } from './nkm-mapping.service';
@@ -30,6 +31,8 @@ export class NkmSyncService {
   constructor(
     @InjectRepository(CustomerRevenueDaily)
     private readonly revenueRepo: Repository<CustomerRevenueDaily>,
+    @InjectRepository(NkmSyncLog)
+    private readonly syncLogRepo: Repository<NkmSyncLog>,
     @InjectRepository(SaleRevenueTarget)
     private readonly targetRepo: Repository<SaleRevenueTarget>,
     @InjectRepository(NkmSaleMap)
@@ -100,6 +103,22 @@ export class NkmSyncService {
     this.logger.log(
       `Đồng bộ doanh thu ${target}: ${sales.length - failed}/${sales.length} sale, ${rows.length} dòng khách${provisional ? ' (tạm tính)' : ''}`,
     );
+    // Ghi nhật ký kể cả khi 0 dòng (ngày nghỉ): nhờ đó soi hụt phân biệt được
+    // "chưa chạy" với "đã chạy, hôm đó cả công ty không bán gì" — khỏi tốn 72
+    // lần gọi API mỗi đêm cho những ngày đã biết chắc không có số.
+    await this.syncLogRepo
+      .createQueryBuilder()
+      .insert()
+      .into(NkmSyncLog)
+      .values({
+        stat_date: target,
+        sales: sales.length,
+        rows: rows.length,
+        failed,
+        provisional,
+      })
+      .orUpdate({ overwrite: ['sales', 'rows', 'failed', 'provisional'] })
+      .execute();
     return {
       day: target,
       sales: sales.length,
@@ -193,24 +212,41 @@ export class NkmSyncService {
     );
   }
 
-  /** Ngày bắt đầu còn thiếu trong khoảng (để backfill, tối đa BACKFILL_DAYS). */
+  /**
+   * Ngày còn thiếu trong khoảng (để backfill, tối đa BACKFILL_DAYS).
+   *
+   * Ngày coi là xong nếu **có dữ liệu** HOẶC **đã chạy thành công** (nhật ký
+   * `nkm_sync_log`, `failed = 0`) — ngày nghỉ không có phiếu vẫn nằm trong nhật
+   * ký nên không bị gọi lại mãi. Ngày chạy bị lỗi (`failed > 0`) vẫn bị coi là
+   * hụt để lần sau thử lại.
+   */
   async findMissingDays(from: string, to: string): Promise<string[]> {
-    const rows = await this.revenueRepo
+    const dayKey = (value: string | Date): string =>
+      value instanceof Date
+        ? value.toISOString().slice(0, 10)
+        : String(value).slice(0, 10);
+
+    const dataDays = await this.revenueRepo
       .createQueryBuilder('r')
       .select('DISTINCT r.stat_date', 'stat_date')
       .where('r.stat_date >= :from AND r.stat_date <= :to', { from, to })
       .getRawMany<{ stat_date: string | Date }>();
-    const present = new Set(
-      rows.map((row) =>
-        row.stat_date instanceof Date
-          ? row.stat_date.toISOString().slice(0, 10)
-          : String(row.stat_date).slice(0, 10),
-      ),
-    );
+    const done = new Set(dataDays.map((row) => dayKey(row.stat_date)));
+
+    const logs = await this.syncLogRepo
+      .createQueryBuilder('l')
+      .select('l.stat_date', 'stat_date')
+      .addSelect('l.failed', 'failed')
+      .where('l.stat_date >= :from AND l.stat_date <= :to', { from, to })
+      .getRawMany<{ stat_date: string | Date; failed: string | number }>();
+    for (const log of logs) {
+      if (Number(log.failed) === 0) done.add(dayKey(log.stat_date));
+    }
+
     const missing: string[] = [];
     let cursor = from;
     while (cursor <= to && missing.length < NkmSyncService.BACKFILL_DAYS) {
-      if (!present.has(cursor)) missing.push(cursor);
+      if (!done.has(cursor)) missing.push(cursor);
       cursor = shiftDateStr(cursor, 1);
     }
     return missing;

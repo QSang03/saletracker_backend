@@ -23,6 +23,7 @@ import { ApprovalRequest } from './approval-request.entity';
 import { ApprovalRequestCustomerItem } from './approval-request-customer-item.entity';
 import { ApprovalRequestTargetItem } from './approval-request-target-item.entity';
 import { NkmSaleMap } from './nkm-sale-map.entity';
+import { NkmSyncLog } from './nkm-sync-log.entity';
 import { NkmGroupMap } from './nkm-group-map.entity';
 import { CustomerRevenueDaily } from './customer-revenue-daily.entity';
 import { SaleRevenueTarget } from './sale-revenue-target.entity';
@@ -80,6 +81,7 @@ import { NkmSyncCronjob } from './nkm-sync.cronjob';
       ApprovalRequestTargetItem,
       // Tiêu chí doanh số theo API NKM (thiết kế THIET-KE-DOANH-SO-API-NKM.md)
       NkmSaleMap,
+      NkmSyncLog,
       NkmGroupMap,
       CustomerRevenueDaily,
       SaleRevenueTarget,

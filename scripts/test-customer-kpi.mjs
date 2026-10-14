@@ -2706,6 +2706,67 @@ console.log('\n-- N. Hồi quy so khớp: vắng mặt / tier sai / template --'
   }
 }
 
+// ============ P. Nhật ký đồng bộ NKM — ngày đã chạy (kể cả 0 dòng) khỏi bị gọi lại ============
+{
+  // Ngày cố ý chọn không có dữ liệu: 15/08/2026 (thứ Bảy, ngoài khoảng đã đồng bộ)
+  const DAY = '2026-08-15';
+  const RANGE = `?from=${DAY}&to=${DAY}`;
+  let conn = null;
+  try {
+    const backendRequire = createRequire(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'package.json'));
+    const mysql = backendRequire('mysql2/promise');
+    const envRaw = readFileSync(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.env'), 'utf8');
+    const env = Object.fromEntries(
+      envRaw
+        .split(/\r?\n/)
+        .map((l) => l.match(/^\s*([A-Z_]+)\s*=\s*(.*)$/))
+        .filter((m) => m && m[2] !== undefined)
+        .map((m) => [m[1], m[2].trim().replace(/^["']|["']$/g, '')]));
+    conn = await mysql.createConnection({
+      host: env.DB_HOST, port: Number(env.DB_PORT || 3306),
+      user: env.DB_USERNAME, password: env.DB_PASSWORD, database: env.DB_NAME,
+    });
+    // Chắc trước: ngày này chưa có dữ liệu và chưa có nhật ký
+    await conn.query('DELETE FROM nkm_sync_log WHERE stat_date = ?', [DAY]);
+
+    await expect('[P] missing-days: ngày chưa chạy bị coi là hụt', 200, async () => {
+      const r = await call('GET', `/nkm-mapping/missing-days${RANGE}`, H());
+      assert(r.status === 200, `HTTP ${r.status}: ${r.text?.slice(0, 150)}`);
+      assert(r.json?.includes(DAY), `kỳ vọng thấy ${DAY} trong danh sách hụt: ${JSON.stringify(r.json)}`);
+      return r.status;
+    });
+
+    // Ghi nhật ký "đã chạy, hôm đó cả công ty không bán gì" (rows = 0)
+    await conn.query(
+      'INSERT INTO nkm_sync_log (stat_date, sales, `rows`, failed, provisional, created_at) VALUES (?, 72, 0, 0, 0, NOW())',
+      [DAY]);
+
+    await expect('[P] missing-days: ngày đã chạy dù 0 dòng cũng KHÔNG bị gọi lại', 200, async () => {
+      const r = await call('GET', `/nkm-mapping/missing-days${RANGE}`, H());
+      assert(r.status === 200, `HTTP ${r.status}: ${r.text?.slice(0, 150)}`);
+      assert(!r.json?.includes(DAY), `ngày đã chạy vẫn bị coi là hụt: ${JSON.stringify(r.json)}`);
+      return r.status;
+    });
+
+    // Ngày chạy BỊ LỖI thì vẫn phải bị coi là hụt để thử lại
+    await conn.query('UPDATE nkm_sync_log SET failed = 3 WHERE stat_date = ?', [DAY]);
+    await expect('[P] missing-days: ngày chạy bị lỗi vẫn bị coi là hụt (để thử lại)', 200, async () => {
+      const r = await call('GET', `/nkm-mapping/missing-days${RANGE}`, H());
+      assert(r.status === 200, `HTTP ${r.status}: ${r.text?.slice(0, 150)}`);
+      assert(r.json?.includes(DAY), `ngày chạy lỗi phải nằm trong danh sách hụt: ${JSON.stringify(r.json)}`);
+      return r.status;
+    });
+  } catch (e) {
+    bad('[P] Chuẩn bị', e.message);
+  } finally {
+    if (conn) {
+      try { await conn.query('DELETE FROM nkm_sync_log WHERE stat_date = ?', [DAY]); } catch {}
+      try { await conn.end(); } catch {}
+    }
+  }
+}
 // ============ DỌN DẸP AN TOÀN ============
 if (createdId) {
   try { await call('DELETE', `/customer-kpi-definitions/${createdId}`, H()); } catch {}
