@@ -41,8 +41,11 @@ export interface KpiReportCustomer {
   totals: {
     inbound: number;
     outbound: number;
+    /** Đơn của luồng Zalo (rollup ghi) — KHÔNG phải phiếu NKM. */
     orders: number;
     revenue: number;
+    /** Số phiếu NKM (mua qua SAP) — cùng nguồn với revenue; khách chỉ mua SAP có orders = 0 nhưng nkmQuantity > 0. */
+    nkmQuantity: number;
   };
   /**
    * 'has_revenue' khi khách có phát sinh NKM trong kỳ (≥1 phiếu); 'no_revenue'

@@ -948,8 +948,11 @@ export class CustomerKpiReportsService {
         totals: {
           inbound: number;
           outbound: number;
+          /** Đơn luồng Zalo (rollup ghi). */
           orders: number;
           revenue: number;
+          /** Số phiếu NKM — cùng nguồn với revenue, xem chú thích ở chỗ push. */
+          nkmQuantity: number;
         };
         revenueStatus: 'has_revenue' | 'no_revenue' | 'no_data';
       }[] = [];
@@ -1143,6 +1146,11 @@ export class CustomerKpiReportsService {
             ),
             // Doanh số thật theo đồng bộ NKM — xem ghi chú revenueRow đầu vòng
             revenue: revenueRow?.lineTotal ?? 0,
+            // Số phiếu NKM (mua qua SAP) — CÙNG nguồn với revenue ở trên.
+            // KHÁC totals.orders (đơn của luồng Zalo do rollup ghi): khách chỉ
+            // mua qua SAP có revenue > 0 nhưng orders = 0 — hai cột bổ sung
+            // cho nhau, không loại trừ nhau (chốt cách B 16/10/2026).
+            nkmQuantity: revenueRow?.quantity ?? 0,
           },
           // FE cột "Doanh số" đọc trạng thái này: có phát sinh = ≥1 phiếu trong
           // kỳ; no_data = sale chưa tra được mã NKM (KHÔNG kết luận trượt).

@@ -2042,6 +2042,46 @@ console.log('\n-- M. Mục 4: rollup Python → engine KPI → chỉ tiêu → g
         assert(first && first.customerCode === CODES.key && first.assignmentId, JSON.stringify(first));
         return r.status;
       });
+
+      // 7c. Cách B (v1.8): totals.orders (đơn Zalo) và totals.nkmQuantity
+      // (phiếu NKM) là HAI nguồn độc lập — khách chỉ mua qua SAP có doanh số
+      // nhưng orders = 0; seed nkm_sale_map + customer_revenue_daily để dựng
+      // đúng tình huống FE từng báo "có doanh số mà đơn vẫn 0".
+      await expect('[M] totals.nkmQuantity tách khỏi orders (đơn Zalo vs phiếu NKM)', 200, async () => {
+        const nkmTag = `KPML${tag}`;
+        const SLP = 900000000 + (Date.now() % 100000000); // slp_code test, không đụng bảng tra thật
+        const [[oldEmp]] = await mainConn.query('SELECT employee_code FROM users WHERE id = ?', [saleUserId]);
+        try {
+          await mainConn.query('UPDATE users SET employee_code = ? WHERE id = ?', [nkmTag, saleUserId]);
+          await mainConn.query(
+            'INSERT INTO nkm_sale_map (slp_code, sale_label, employee_code, sale_name, dept_slug, is_active) VALUES (?, ?, ?, ?, ?, 1)',
+            [SLP, `${nkmTag}-NV TEST`, nkmTag, 'NV TEST', 'laptop'],
+          );
+          // Khách NON không có đơn Zalo — chỉ mua SAP: 2 phiếu, 500.000
+          await mainConn.query(
+            'INSERT INTO customer_revenue_daily (customer_code, slp_code, stat_date, quantity, line_total, card_code, is_provisional) VALUES (?, ?, ?, 2, 500000, ?, 0)',
+            [CODES.non, SLP, TODAY, CODES.non],
+          );
+          const r = await call('GET', `/customer-kpi-reports/by-sale?saleId=${saleUserId}&from=${TODAY}&to=${TODAY}`, H());
+          assert(r.status === 200, `HTTP ${r.status}: ${r.text?.slice(0, 200)}`);
+          const sale = (r.json?.sales || []).find((x) => x.saleId === saleUserId);
+          const non = (sale?.customers || []).find((c) => c.customerCode === CODES.non);
+          assert(non, 'không thấy khách NON');
+          assert(non.totals.orders === 0, `khách chỉ mua SAP phải có orders = 0: ${JSON.stringify(non.totals)}`);
+          assert(non.totals.nkmQuantity === 2, `nkmQuantity phải = 2 phiếu NKM: ${JSON.stringify(non.totals)}`);
+          assert(non.totals.revenue === 500000, `revenue phải = 500000: ${JSON.stringify(non.totals)}`);
+          assert(non.revenueStatus === 'has_revenue', `revenueStatus phải has_revenue: ${non.revenueStatus}`);
+          // Khách KEY ngược lại: có đơn Zalo, không có phiếu NKM
+          const key = (sale?.customers || []).find((c) => c.customerCode === CODES.key);
+          assert(key && key.totals.orders === 1 && key.totals.nkmQuantity === 0,
+            `khách KEY phải orders=1, nkmQuantity=0: ${JSON.stringify(key?.totals)}`);
+          return r.status;
+        } finally {
+          try { await mainConn.query('DELETE FROM customer_revenue_daily WHERE slp_code = ?', [SLP]); } catch {}
+          try { await mainConn.query('DELETE FROM nkm_sale_map WHERE slp_code = ?', [SLP]); } catch {}
+          try { await mainConn.query('UPDATE users SET employee_code = ? WHERE id = ?', [oldEmp?.employee_code ?? null, saleUserId]); } catch {}
+        }
+      });
       await expect('[M] by-sale phân trang pageSize=1 → 2 trang không trùng khách', 200, async () => {
         const p1 = await call('GET', `/customer-kpi-reports/by-sale?saleId=${saleUserId}&from=${TODAY}&to=${TODAY}&page=1&pageSize=1`, H());
         assert(p1.status === 200 && p1.json?.total === 2 && p1.json?.sales?.[0]?.customers?.length === 1, JSON.stringify({ total: p1.json?.total, n: p1.json?.sales?.[0]?.customers?.length }));
