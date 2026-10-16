@@ -76,6 +76,8 @@ interface RowInput {
   /** Số ngày chưa liên lạc; giữ MAX_SAFE_INTEGER = chưa có tin trong cửa sổ. */
   since?: number;
   criteria?: Record<string, { status: string; actualValue: number | null }>;
+  /** Kết luận theo loại khách; mặc định 0 tiêu chí đạt / không áp dụng. */
+  tierSummary?: { applicable: number; passed: number; verdict: 'pass' | 'fail' | null };
 }
 
 const CRITERIA = ['support_khach', 'lien_lac_phan_hoi', 'goi_y_thuc_hien'];
@@ -93,6 +95,12 @@ const makeRow = (input: RowInput): KpiReportCustomer => ({
     sapCode: input.sapCode ?? '',
   },
   zaloLinked: input.zaloLinked ?? true,
+  tierSummary: input.tierSummary ?? {
+    tier: input.tier ?? null,
+    applicable: 0,
+    passed: 0,
+    verdict: null,
+  },
   criteria: (
     input.criteria
       ? Object.entries(input.criteria)
@@ -152,6 +160,7 @@ const keyAllPass = customer(1, {
     lien_lac_phan_hoi: { status: 'ratio', actualValue: 80 },
     goi_y_thuc_hien: { status: 'pass', actualValue: 1 },
   },
+  tierSummary: { applicable: 3, passed: 3, verdict: 'pass' },
   debt: 5000,
   since: 1,
 });
@@ -172,6 +181,7 @@ const nonFailing = customer(2, {
     lien_lac_phan_hoi: { status: 'no_data', actualValue: null },
     goi_y_thuc_hien: { status: 'fail', actualValue: 0 },
   },
+  tierSummary: { applicable: 3, passed: 0, verdict: null },
   debt: null, // không xác định được công nợ
   since: NO_CONTACT,
 });
@@ -190,6 +200,7 @@ const keyNoData = customer(3, {
     lien_lac_phan_hoi: { status: 'ratio', actualValue: 60 },
     goi_y_thuc_hien: { status: 'fail', actualValue: 0 },
   },
+  tierSummary: { applicable: 3, passed: 1, verdict: 'fail' },
   debt: 0,
   since: 10,
 });
@@ -284,11 +295,31 @@ check('không sortBy giữ nguyên thứ tự', sortKpiCustomers(ROWS, undefined
 check('sortBy=revenue desc', order(sortKpiCustomers(ROWS, 'revenue', 'desc', CTX)) === '1,3,2');
 check('sortBy=revenue asc', order(sortKpiCustomers(ROWS, 'revenue', 'asc', CTX)) === '2,3,1');
 check('sortBy=tier đứng KEY trước NON', order(sortKpiCustomers(ROWS, 'tier', 'asc', CTX)) === '1,3,2');
+check('sortBy=tierSummary desc đưa khách đạt nhiều tiêu chí lên đầu', order(sortKpiCustomers(ROWS, 'tierSummary', 'desc', CTX)) === '1,3,2');
+check('sortBy=tierSummary asc', order(sortKpiCustomers(ROWS, 'tierSummary', 'asc', CTX)) === '2,3,1');
+check(
+  'sortBy=tierSummary applicable=0 (không có tiêu chí) vẫn xếp cuối khi desc',
+  order(
+    sortKpiCustomers(
+      [
+        ROWS[1],
+        {
+          ...ROWS[0],
+          tierSummary: { tier: 'KEY', applicable: 0, passed: 0, verdict: null },
+        },
+        ROWS[2],
+      ],
+      'tierSummary',
+      'desc',
+      CTX,
+    ),
+  ) === '3,2,1',
+);
 check('sortBy=mã tiêu chí, no_data rơi xuống cuối', order(sortKpiCustomers(ROWS, 'support_khach', 'desc', CTX)) === '1,2,3');
 check('sortBy=mã tiêu chí asc vẫn đẩy no_data xuống cuối', order(sortKpiCustomers(ROWS, 'lien_lac_phan_hoi', 'asc', CTX)) === '3,1,2');
 check('sortBy=daysSinceContact desc đưa khách chưa liên lạc lên đầu', order(sortKpiCustomers(ROWS, 'daysSinceContact', 'desc', CTX)) === '2,3,1');
 check('sortBy=debtBalance null xếp cuối', order(sortKpiCustomers(ROWS, 'debtBalance', 'desc', CTX)) === '1,3,2');
-check('KPI_SORT_KEYS có đủ cột mong đợi', KPI_SORT_KEYS.length === 11);
+check('KPI_SORT_KEYS có đủ cột mong đợi', KPI_SORT_KEYS.length === 12);
 
 // ------------------------------------------------------- overview (cấp sale)
 

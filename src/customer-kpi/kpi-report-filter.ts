@@ -86,6 +86,7 @@ export interface KpiFilterContext {
 /** Cột sắp xếp cố định; ngoài ra chấp nhận mã tiêu chí đang bật. */
 export const KPI_SORT_KEYS = [
   'tier',
+  'tierSummary',
   'role',
   'customerCode',
   'customerName',
@@ -267,6 +268,12 @@ const sortValueOf = (
   switch (sortBy) {
     case 'tier':
       return TIER_RANK[customer.row.customerTier?.toUpperCase() ?? ''] ?? null;
+    case 'tierSummary':
+      // Tỷ lệ đạt theo loại khách: KEY = đạt cả 4 tiêu chí, NON = đếm x/4.
+      // Không có tiêu chí áp dụng → null (xếp cuối).
+      return customer.tierSummary.applicable > 0
+        ? customer.tierSummary.passed / customer.tierSummary.applicable
+        : null;
     case 'role':
       return ROLE_RANK[customer.row.customerRole?.toUpperCase() ?? ''] ?? null;
     case 'customerCode':
