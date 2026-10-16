@@ -24,6 +24,7 @@ import { Permission } from '../common/guards/permission.decorator';
 import { CustomerAssignmentsService } from './customer-assignments.service';
 import {
   ChangeDecisionDto,
+  ExportAssignmentsQueryDto,
   ImportSessionQueryDto,
 } from './dto/import-session-query.dto';
 
@@ -56,6 +57,34 @@ export class CustomerAssignmentsController {
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     );
     res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    res.send(buffer);
+  }
+
+  /**
+   * Xuất danh sách phân công HIỆN TẠI ra file đúng bản mẫu import (2 sheet,
+   * cùng header) — mở trong Excel sửa rồi nạp ngược lại qua POST .../import.
+   * Nhận cùng bộ lọc với màn hình danh sách khách; quyền `export` theo ma
+   * trận phân quyền (user-khach-hang không tải được).
+   */
+  @Get('export')
+  @Permission('khach-hang', 'export')
+  async export(
+    @Query() query: ExportAssignmentsQueryDto,
+    @Req() req: any,
+    @Res() res: any,
+  ) {
+    const { buffer, fileName } = await this.assignmentsService.exportAssignments(
+      query,
+      req.user,
+    );
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${fileName}"`,
+    );
     res.send(buffer);
   }
 

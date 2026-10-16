@@ -2979,6 +2979,236 @@ console.log('\n-- N. Hồi quy so khớp: vắng mặt / tier sai / template --'
   });
 }
 
+// ============ R. XUẤT DANH SÁCH PHÂN CÔNG RA EXCEL ĐÚNG BẢN NẠP ============
+// File xuất ra phải nạp ngược lại được qua import và (khi không lọc) không
+// sinh bất kỳ thay đổi nào — đó mới là "xuất đúng bản để sửa bằng Excel".
+console.log('\n-- R. Xuất danh sách phân công ra Excel đúng bản nạp --');
+{
+  const tag = Date.now().toString(36).slice(-6).toUpperCase();
+  const CODE = `KPIR_${tag}`;
+  const SAP = `S${tag}R`;
+  const EMP = `KEX${tag}`;
+  const sessionIds = [];
+  const assignmentIds = [];
+  let saleId = null;
+  let conn = null;
+
+  try {
+    const require2 = createRequire(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'package.json'),
+    );
+    const ExcelJS = require2('exceljs');
+    // Cần đọc thẳng customer_import_changes — khách test chìm trong ~10k dòng
+    // xoá của các khách vắng mặt trong file LỌC (cùng cách nhóm N đọc).
+    try {
+      const mysql = require2('mysql2/promise');
+      const parseEnv = (file) => {
+        const out = {};
+        try {
+          for (const line of readFileSync(file, 'utf8').split(/\r?\n/)) {
+            const i = line.indexOf('=');
+            if (i > 0) out[line.slice(0, i).trim()] = line.slice(i + 1).trim();
+          }
+        } catch {}
+        return out;
+      };
+      const backendEnv = parseEnv(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.env'));
+      conn = await mysql.createConnection({
+        host: backendEnv.DB_HOST, port: +(backendEnv.DB_PORT || 3306),
+        user: backendEnv.DB_USERNAME, password: backendEnv.DB_PASSWORD, database: backendEnv.DB_NAME,
+      });
+    } catch {}
+    const readWorkbook = async (buffer) => {
+      const wb = new ExcelJS.Workbook();
+      await wb.xlsx.load(buffer);
+      return wb;
+    };
+    const uploadWorkbook = async (buffer, name) => {
+      const fd = new FormData();
+      fd.append('file', new Blob([buffer]), name);
+      const res = await fetch(`${BASE}/customer-assignments/import`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${adminToken}` },
+        body: fd,
+        signal: AbortSignal.timeout(180000),
+      });
+      return { status: res.status, json: await res.json().catch(() => null) };
+    };
+    // cells của một dòng, cắt theo số cột yêu cầu (exceljs: values[0] là nil)
+    const cellsOf = (row, width) => {
+      const cells = (row.values || []).slice(1);
+      for (let i = cells.length; i < width; i++) cells.push('');
+      return cells.map((v) => String(v ?? ''));
+    };
+
+    // Chuẩn bị: 1 sale test + 1 khách 2 phòng (may-in KEY, pc NON, khách CHÍNH)
+    const userRoleId = await findRoleId('user');
+    const newUser = await call('POST', '/users', {
+      ...H(),
+      body: { username: `kpi_export_${tag}`, fullName: 'NV xuất file', employeeCode: EMP },
+    });
+    saleId = newUser.json?.id;
+    if (!saleId && newUser.status === 409) {
+      const s = await call('GET', `/users?search=${encodeURIComponent(`kpi_export_${tag}`)}&limit=5`, H());
+      saleId = (s.json?.data || []).find((u) => u.username === `kpi_export_${tag}`)?.id;
+    }
+    assert(saleId, `không chuẩn bị được sale test: HTTP ${newUser.status} ${JSON.stringify(newUser.json).slice(0, 200)}`);
+    if (userRoleId) await call('POST', `/users/${saleId}/roles`, { ...H(), body: [userRoleId] });
+    for (const c of [
+      { department_slug: 'may-in', customer_tier: 'KEY' },
+      { department_slug: 'pc', customer_tier: 'NON' },
+    ]) {
+      const r = await call('POST', '/customers', {
+        ...H(),
+        body: {
+          customer_code: CODE, sap_code: SAP, customer_role: 'CHINH',
+          department_slug: c.department_slug, sale_id: saleId,
+          customer_tier: c.customer_tier, customer_name: 'KH xuất file',
+        },
+      });
+      assert(r.status === 201, `POST /customers (${c.department_slug}) → HTTP ${r.status}: ${r.text?.slice(0, 200)}`);
+      if (r.json?.assignmentId) assignmentIds.push(r.json.assignmentId);
+    }
+    ok('Chuẩn bị 1 khách 2 phân công (may-in KEY + pc NON)');
+
+    // 1) Không token → 401
+    await expect('[R] export không token → 401', 401, async () =>
+      (await fetch(`${BASE}/customer-assignments/export`)).status);
+
+    // 2) Bộ lọc sai → 400
+    await expect('[R] export tier=KEYY → 400', 400, async () =>
+      (await call('GET', '/customer-assignments/export?tier=KEYY', H())).status);
+
+    // 3) Export chỉ khách test → đúng content-type, tên file, 2 sheet, đủ cột
+    const expRes = await fetch(
+      `${BASE}/customer-assignments/export?search=${encodeURIComponent(CODE)}`,
+      { headers: { Authorization: `Bearer ${adminToken}` }, signal: AbortSignal.timeout(120000) },
+    );
+    assert(expRes.status === 200, `export → HTTP ${expRes.status}`);
+    const ct = expRes.headers.get('content-type') || '';
+    assert(ct.includes('spreadsheetml'), `content-type=${ct}`);
+    const cd = expRes.headers.get('content-disposition') || '';
+    assert(cd.includes('phan-bo-khach-hang_'), `content-disposition=${cd}`);
+    ok('Xuất file → 200, content-type + tên file đúng');
+    const buf = Buffer.from(await expRes.arrayBuffer());
+    const wb = await readWorkbook(buf);
+    assert(wb.getWorksheet('TIÊU CHÍ'), 'thiếu sheet TIÊU CHÍ');
+    const ws = wb.getWorksheet('File Chi Tiết');
+    assert(ws, 'thiếu sheet File Chi Tiết');
+    const header = cellsOf(ws.getRow(1), 1);
+    for (const col of ['MÃ KH', 'LOẠI MÃ', 'MÃ ĐỐI TÁC SAP', 'S1-MÁY IN, MỰC IN', 'S1-PC, LCD',
+      'LAPTOP', 'LINH KIỆN', 'MÁY IN', 'PC - SERVER', 'PTKH1', 'PTKH2', 'hạn mức', 'T04', 'ĐIỂM', 'tổng ds']) {
+      assert(header.includes(col), `thiếu cột ${col} trong header`);
+    }
+    ok('Đủ 2 sheet + header giống bản mẫu import');
+
+    // 4) Dòng dữ liệu: đúng khách, 2 phòng trên CÙNG dòng, đúng nhân viên/tier
+    const dataRows = [];
+    ws.eachRow((row, n) => {
+      if (n === 1) return;
+      const cells = cellsOf(row, header.length);
+      if (cells.some((v) => v !== '')) dataRows.push(cells);
+    });
+    assert(dataRows.length === 1, `search khách test phải ra đúng 1 dòng, nhận ${dataRows.length}`);
+    const R = dataRows[0];
+    const idx = (name) => header.indexOf(name);
+    assert(R[idx('MÃ KH')] === CODE, `cột MÃ KH = ${R[idx('MÃ KH')]}, kỳ vọng ${CODE}`);
+    assert(R[idx('MÃ ĐỐI TÁC SAP')] === SAP, `cột MÃ ĐỐI TÁC SAP = ${R[idx('MÃ ĐỐI TÁC SAP')]}`);
+    assert(R[idx('LOẠI MÃ')] === 'CHÍNH', `cột LOẠI MÃ = ${R[idx('LOẠI MÃ')]}, kỳ vọng CHÍNH`);
+    assert(R[idx('S1-MÁY IN, MỰC IN')] === `${EMP}-NV xuất file`, `cột S1-MÁY IN = ${R[idx('S1-MÁY IN, MỰC IN')]}`);
+    assert(R[idx('S1-PC, LCD')] === `${EMP}-NV xuất file`, `cột S1-PC = ${R[idx('S1-PC, LCD')]}`);
+    assert(R[idx('MÁY IN')] === 'Key', `cột MÁY IN = ${R[idx('MÁY IN')]} — tiếng Việt không dấu đúng chuẩn parser`);
+    assert(R[idx('PC - SERVER')] === 'NON', `cột PC - SERVER = ${R[idx('PC - SERVER')]}`);
+    // Phòng không có phân công phải để trống — nạp lại không hiểu là bỏ phòng
+    for (const col of ['S1-PTTT', 'S1-LAPTOP', 'S1-PTKH1', 'S1-PTKH2', 'LAPTOP', 'LINH KIỆN', 'PTKH1', 'PTKH2']) {
+      assert(R[idx(col)] === '', `cột ${col} phải trống, nhận ${R[idx(col)]}`);
+    }
+    ok('Dòng dữ liệu đúng: 2 phòng trên cùng dòng, nhân viên + KEY/NON đúng');
+
+    // 5) Nạp NGƯỢC LẠI file vừa xuất (lọc theo khách test) → KHÁCH TEST không
+    // được sinh bất kỳ thay đổi nào. Các khách khác vắng mặt trong file lọc sẽ
+    // sinh lệnh xoá — đó là thiết kế có chủ đích của import, không kiểm ở đây.
+    const back = await uploadWorkbook(buf, 'phan-bo-khach-hang.xlsx');
+    assert(back.status === 201, `nạp lại file xuất → HTTP ${back.status}: ${JSON.stringify(back.json).slice(0, 200)}`);
+    sessionIds.push(back.json?.sessionId);
+    const s = back.json?.summary || {};
+    assert((s.errorRows ?? 0) === 0, `file xuất nạp lại phải KHÔNG có dòng lỗi: ${JSON.stringify(back.json?.errors || [])}`);
+    assert((s.unchanged ?? 0) >= 2, `2 phân công phải nhận diện là "không đổi": ${JSON.stringify(s)}`);
+    // Đọc thẳng dòng thay đổi CỦA KHÁCH TEST (không dùng preview: khách test
+    // chìm trong ~10k dòng xoá của các khách vắng mặt trong file lọc).
+    if (conn) {
+      const [mine] = await conn.query(
+        'SELECT action, department_slug, error FROM customer_import_changes WHERE session_id = ? AND customer_code = ?',
+        [back.json?.sessionId, CODE],
+      );
+      assert(mine.length === 2, `khách test phải có đúng 2 dòng thay đổi, nhận ${mine.length}: ${JSON.stringify(mine)}`);
+      assert(mine.every((r) => r.action === 'unchanged'), `cả 2 dòng phải là "không đổi": ${JSON.stringify(mine)}`);
+      assert(mine.every((r) => !r.error), `khách test không được có dòng lỗi: ${JSON.stringify(mine)}`);
+      const depts = mine.map((r) => r.department_slug).sort();
+      assert(depts.join(',') === 'may-in,pc', `phòng ban không đúng: ${depts.join(',')}`);
+    }
+    ok('Nạp ngược lại file xuất → 2 dòng "không đổi", khách test 0 thay đổi');
+
+    // 5b) Xuất file KHÔNG lọc (toàn bộ DB) → vẫn parse được, có dữ liệu
+    const fullRes = await fetch(
+      `${BASE}/customer-assignments/export`,
+      { headers: { Authorization: `Bearer ${adminToken}` }, signal: AbortSignal.timeout(300000) },
+    );
+    assert(fullRes.status === 200, `export toàn bộ → HTTP ${fullRes.status}`);
+    const fullWb = await readWorkbook(Buffer.from(await fullRes.arrayBuffer()));
+    const fullWs = fullWb.getWorksheet('File Chi Tiết');
+    const fullHeader = cellsOf(fullWs.getRow(1), 1);
+    let fullRows = 0;
+    fullWs.eachRow((row, n) => { if (n > 1) { const c = cellsOf(row, fullHeader.length); if (c.some((v) => v !== '')) fullRows++; } });
+    assert(fullRows >= 1, `DB dev có dữ liệu phải cho ≥1 dòng, nhận ${fullRows}`);
+    ok(`Xuất toàn bộ (không lọc) → ${fullRows} dòng khách`);
+
+    // 6) Lọc theo phòng: chỉ còn phân công phòng đó trên dòng xuất
+    const pcRes = await fetch(
+      `${BASE}/customer-assignments/export?search=${encodeURIComponent(CODE)}&department=pc`,
+      { headers: { Authorization: `Bearer ${adminToken}` }, signal: AbortSignal.timeout(120000) },
+    );
+    assert(pcRes.status === 200, `export lọc phòng → HTTP ${pcRes.status}`);
+    const pcWb = await readWorkbook(Buffer.from(await pcRes.arrayBuffer()));
+    const pcWs = pcWb.getWorksheet('File Chi Tiết');
+    const pcHeader = cellsOf(pcWs.getRow(1), 1);
+    const pcCells = [];
+    pcWs.eachRow((row, n) => { if (n > 1) { const c = cellsOf(row, pcHeader.length); if (c.some((v) => v !== '')) pcCells.push(c); } });
+    assert(pcCells.length === 1, `lọc department=pc phải còn 1 dòng, nhận ${pcCells.length}`);
+    const pcIdx = (name) => pcHeader.indexOf(name);
+    assert(pcCells[0][pcIdx('S1-PC, LCD')] === `${EMP}-NV xuất file`, 'phải còn phân công pc');
+    assert(pcCells[0][pcIdx('S1-MÁY IN, MỰC IN')] === '', 'phân công may-in phải bị lọc bỏ');
+    ok('Lọc department=pc → dòng xuất chỉ còn phân công phòng pc');
+
+    // 7) Lọc phòng không có dữ liệu → file chỉ còn header
+    const lapRes = await fetch(
+      `${BASE}/customer-assignments/export?search=${encodeURIComponent(CODE)}&department=laptop`,
+      { headers: { Authorization: `Bearer ${adminToken}` }, signal: AbortSignal.timeout(120000) },
+    );
+    assert(lapRes.status === 200, `export lọc laptop → HTTP ${lapRes.status}`);
+    const lapWb = await readWorkbook(Buffer.from(await lapRes.arrayBuffer()));
+    const lapWs = lapWb.getWorksheet('File Chi Tiết');
+    let lapRows = 0;
+    lapWs.eachRow((row, n) => { if (n > 1 && (row.values || []).slice(1).some((v) => v !== '' && v != null)) lapRows++; });
+    assert(lapRows === 0, `không có phân công laptop phải cho 0 dòng dữ liệu, nhận ${lapRows}`);
+    ok('Lọc department=laptop → 0 dòng dữ liệu (file chỉ có header)');
+  } catch (e) {
+    bad('[R] Xuất danh sách phân công', e.message);
+  } finally {
+    // Khách test xoá mềm qua đúng luồng hệ thống; session import huỷ sạch
+    for (const aid of assignmentIds) {
+      try { await call('DELETE', `/customers/${aid}`, H()); } catch {}
+    }
+    for (const sid of sessionIds) {
+      try { await call('DELETE', `/customer-assignments/import-sessions/${sid}`, H()); } catch {}
+    }
+    if (saleId) {
+      try { await call('DELETE', `/users/${saleId}`, H()); } catch {}
+    }
+    if (conn) { try { await conn.end(); } catch {} }
+  }
+}
+
 // ============ DỌN DẸP AN TOÀN ============
 if (createdId) {
   try { await call('DELETE', `/customer-kpi-definitions/${createdId}`, H()); } catch {}

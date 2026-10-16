@@ -8,7 +8,7 @@ import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, Repository } from 'typeorm';
 import * as fs from 'fs';
 import { User } from '../users/user.entity';
-import { Customer, CustomerStatus } from './customer.entity';
+import { Customer, CustomerRole, CustomerStatus } from './customer.entity';
 import { CustomerAssignment, CustomerTier } from './customer-assignment.entity';
 import {
   CustomerImportSession,
@@ -21,6 +21,7 @@ import {
   ImportChangeDecision,
 } from './customer-import-change.entity';
 import {
+  ExportAssignmentsQueryDto,
   ImportSessionQueryDto,
   ChangeDecisionDto,
 } from './dto/import-session-query.dto';
@@ -42,6 +43,65 @@ const DEPARTMENT_SLUGS = [
   'laptop',
   'ptkh1',
   'ptkh2',
+];
+
+/**
+ * Cột nhân viên theo đúng thứ tự của file mẫu — giữ TRÙNG thứ tự với bản
+ * `DSKH KDS_CHÍNH PHỤ_KEY NON` để người quen file cũ không bị rối.
+ */
+const EMP_DEPT_COLUMNS: Array<{ slug: string; header: string }> = [
+  { slug: 'may-in', header: 'S1-MÁY IN, MỰC IN' },
+  { slug: 'pc', header: 'S1-PC, LCD' },
+  { slug: 'linh-kien', header: 'S1-PTTT' },
+  { slug: 'laptop', header: 'S1-LAPTOP' },
+  { slug: 'ptkh1', header: 'S1-PTKH1' },
+  { slug: 'ptkh2', header: 'S1-PTKH2' },
+];
+
+/** Cột phân loại KEY/NON — thứ tự KHÁC cột nhân viên, đúng như file gốc. */
+const TIER_DEPT_COLUMNS: Array<{ slug: string; header: string }> = [
+  { slug: 'laptop', header: 'LAPTOP' },
+  { slug: 'linh-kien', header: 'LINH KIỆN' },
+  { slug: 'may-in', header: 'MÁY IN' },
+  { slug: 'pc', header: 'PC - SERVER' },
+  { slug: 'ptkh1', header: 'PTKH1' },
+  { slug: 'ptkh2', header: 'PTKH2' },
+];
+
+/**
+ * Dòng tiêu chí sheet "TIÊU CHÍ" — parser chỉ cần ≥5 dòng để đối chiếu mẫu,
+ * nội dung giữ đúng bản gốc (khách KEY/NON tự hiểu theo phòng phân loại).
+ */
+const CRITERIA_SHEET_LINES = [
+  'Tiêu  Chí',
+  '1/ Doanh số theo Key',
+  '2/ Doanh số theo NON',
+  '3/ Support Khách / Thăm hỏi',
+  '4/ Liên lạc / phản hồi',
+  '5/ Gợi ý thực hiện',
+];
+
+/**
+ * Header sheet "File Chi Tiết" của file mẫu — cột T04..T09/ĐIỂM/tổng ds
+ * không do backend sinh (sheet BCBH ẩn của file gốc) nhưng vẫn giữ đúng bản
+ * để file xuất ra có hình dạng y hệt bản người dùng đang quen.
+ */
+const FILE_CHI_TIET_HEADERS = [
+  'STT',
+  'MÃ ĐỐI TÁC SAP',
+  'MÃ KH',
+  ...EMP_DEPT_COLUMNS.map((c) => c.header),
+  'LOẠI MÃ',
+  ...TIER_DEPT_COLUMNS.map((c) => c.header),
+  'hạn mức',
+  'T04',
+  'T05',
+  'T06',
+  'T07',
+  'T08',
+  'T09',
+  'ĐIỂM',
+  'tổng ds',
 ];
 
 const isAdmin = (user: any) =>
@@ -1011,46 +1071,12 @@ export class CustomerAssignmentsService {
     const wb = new ExcelJS.Workbook();
 
     const tc = wb.addWorksheet('TIÊU CHÍ');
-    for (const line of [
-      'Tiêu  Chí',
-      '1/ Doanh số theo Key',
-      '2/ Doanh số theo NON',
-      '3/ Support Khách / Thăm hỏi',
-      '4/ Liên lạc / phản hồi',
-      '5/ Gợi ý thực hiện',
-    ]) {
+    for (const line of CRITERIA_SHEET_LINES) {
       tc.addRow([line]);
     }
 
     const ws = wb.addWorksheet('File Chi Tiết');
-    const headers = [
-      'STT',
-      'MÃ ĐỐI TÁC SAP',
-      'MÃ KH',
-      'S1-MÁY IN, MỰC IN',
-      'S1-PC, LCD',
-      'S1-PTTT',
-      'S1-LAPTOP',
-      'S1-PTKH1',
-      'S1-PTKH2',
-      'LOẠI MÃ',
-      'LAPTOP',
-      'LINH KIỆN',
-      'MÁY IN',
-      'PC - SERVER',
-      'PTKH1',
-      'PTKH2',
-      'hạn mức',
-      'T04',
-      'T05',
-      'T06',
-      'T07',
-      'T08',
-      'T09',
-      'ĐIẾM',
-      'tổng ds',
-    ];
-    ws.addRow(headers);
+    ws.addRow(FILE_CHI_TIET_HEADERS);
     // 2 dòng ví dụ — người nhập xoá đi rồi điền theo
     ws.addRow([
       1,
@@ -1098,6 +1124,194 @@ export class CustomerAssignmentsService {
       buffer: Buffer.from(buf as ArrayBuffer),
       fileName: 'mau-nap-khach-hang.xlsx',
     };
+  }
+
+  /**
+   * Phạm vi xem theo vai trò của MODULE KHÁCH HÀNG — CÙNG luật
+   * `scopeUserIds` ở customers.service (bản chuẩn, xem chú thích bên đó):
+   *   admin / PM / pm-khach-hang / view  -> toàn công ty
+   *   manager-<phòng>                    -> người trong các phòng ban của mình
+   *   còn lại                            -> chỉ của chính mình
+   * Trả undefined = không giới hạn. Xuất file KHÔNG được mở rộng phạm vi.
+   */
+  private async scopeUserIds(user: any): Promise<number[] | undefined> {
+    if (!user?.id)
+      throw new ForbiddenException('Không xác định được người dùng');
+    const roleNames: string[] = (user.roles || []).map((r: any) =>
+      typeof r === 'string' ? r : r?.name || '',
+    );
+    const lower = roleNames.map((r) => r.toLowerCase());
+    if (
+      lower.includes('admin') ||
+      lower.includes('pm') ||
+      lower.includes('view') ||
+      lower.some((r) => r.startsWith('pm-'))
+    ) {
+      return undefined;
+    }
+    if (lower.some((r) => r.startsWith('manager-'))) {
+      const departmentIds = (user.departments || [])
+        .map((d: any) => d?.id)
+        .filter(Boolean);
+      if (departmentIds.length === 0) return [];
+      const users = await this.userRepo
+        .createQueryBuilder('user')
+        .leftJoin('user.departments', 'dept')
+        .where('dept.id IN (:...departmentIds)', { departmentIds })
+        .andWhere('user.deletedAt IS NULL')
+        .getMany();
+      return users.map((u) => u.id);
+    }
+    return [user.id];
+  }
+
+  /**
+   * Xuất danh sách phân công hiện tại ra file ĐÚNG bản mẫu import (2 sheet,
+   * cùng header) — mở trong Excel, sửa, rồi nạp ngược lại qua POST .../import.
+   *
+   * Mỗi KHÁCH một dòng (danh tính = cặp mã–SAP, giống cách import gộp trùng):
+   * các phòng ban của khách nằm trên cùng dòng đó (cột nhân viên + cột phân
+   * loại). Không có phân công nào của khách bị bỏ sót trong phạm vi lọc nên
+   * nạp lại file KHÔNG LỌC sau khi sửa giữ nguyên toàn bộ dữ liệu. Các phân
+   * công KHỀN XUẤT ĐƯỢC mới bị coi là "bỏ phòng" khi nạp lại — xem ghi chú
+   * trong API-KHACH-HANG.md mục 3.
+   *
+   * Phân công mà sale không có mã nhân viên (employee_code) thì KHÔNG xuất:
+   * nạp lại cũng không tra được nhân viên nào, mà xuất ra sẽ tạo dòng lỗi.
+   */
+  async exportAssignments(
+    query: ExportAssignmentsQueryDto,
+    user: any,
+  ): Promise<{ buffer: Buffer; fileName: string }> {
+    const ExcelJS = require('exceljs');
+
+    const now = new Date();
+    const stamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const fileName = `phan-bo-khach-hang_${stamp}.xlsx`;
+
+    const userIds = await this.scopeUserIds(user);
+
+    const qb = this.assignmentRepo
+      .createQueryBuilder('a')
+      .innerJoinAndSelect('a.customer', 'c')
+      .innerJoinAndSelect('a.sale', 'u')
+      .where('c.status != :deleted', { deleted: CustomerStatus.DELETED });
+
+    if (userIds !== undefined) {
+      // Phạm vi rỗng (trưởng phòng không có nhân viên) — xuất file chỉ có header
+      if (userIds.length === 0) {
+        return {
+          buffer: await this.writeAssignmentsWorkbook(ExcelJS, new Map()),
+          fileName,
+        };
+      }
+      qb.andWhere('a.sale_id IN (:...userIds)', { userIds });
+    }
+    if (query.saleId) {
+      qb.andWhere('a.sale_id = :saleId', { saleId: query.saleId });
+    }
+    if (query.department) {
+      qb.andWhere('a.department_slug = :department', {
+        department: query.department,
+      });
+    }
+    if (query.tier) {
+      qb.andWhere('a.customer_tier = :tier', { tier: query.tier });
+    }
+    if (query.role) {
+      qb.andWhere('c.customer_role = :role', { role: query.role });
+    }
+    if (query.search) {
+      qb.andWhere(
+        '(c.customer_code LIKE :s OR c.customer_name LIKE :s OR c.sap_code LIKE :s)',
+        { s: `%${query.search}%` },
+      );
+    }
+
+    qb.orderBy('c.customer_code', 'ASC')
+      .addOrderBy('c.sap_code', 'ASC')
+      .addOrderBy('a.department_slug', 'ASC');
+    const assignments = await qb.getMany();
+
+    // Gộp theo khách — một dòng Excel cho một khách, giống cách import gộp trùng
+    const byCustomer = new Map<
+      number,
+      { customer: Customer; assignments: CustomerAssignment[] }
+    >();
+    for (const a of assignments) {
+      const group = byCustomer.get(a.customer_id);
+      if (group) group.assignments.push(a);
+      else byCustomer.set(a.customer_id, { customer: a.customer, assignments: [a] });
+    }
+
+    const buffer = await this.writeAssignmentsWorkbook(ExcelJS, byCustomer);
+    return { buffer, fileName };
+  }
+
+  /** Dựng workbook 2 sheet giống file mẫu từ danh sách phân công đã gộp theo khách. */
+  private async writeAssignmentsWorkbook(
+    ExcelJS: any,
+    byCustomer: Map<
+      number,
+      { customer: Customer; assignments: CustomerAssignment[] }
+    >,
+  ): Promise<Buffer> {
+    const wb = new ExcelJS.Workbook();
+    const tc = wb.addWorksheet('TIÊU CHÍ');
+    for (const line of CRITERIA_SHEET_LINES) tc.addRow([line]);
+
+    const ws = wb.addWorksheet('File Chi Tiết');
+    ws.addRow(FILE_CHI_TIET_HEADERS);
+
+    let stt = 0;
+    for (const { customer, assignments } of byCustomer.values()) {
+      const empBySlug = new Map<string, string>();
+      const tierBySlug = new Map<string, string>();
+      for (const a of assignments) {
+        const empCode = (a.sale?.employeeCode || '').trim();
+        if (!empCode) continue; // không có mã nhân viên — xuất ra cũng không nạp được
+        const name = (a.sale?.fullName || '').trim();
+        empBySlug.set(a.department_slug, name ? `${empCode}-${name}` : empCode);
+        tierBySlug.set(
+          a.department_slug,
+          a.customer_tier === CustomerTier.KEY ? 'Key' : 'NON',
+        );
+      }
+      // Khách không còn phân công xuất được → bỏ hẳn dòng: dòng trống sẽ bị
+      // import hiểu là "khách vắng mặt trong file" → xoá hết phân công đang có.
+      if (!empBySlug.size) continue;
+      stt++;
+
+      const row: Array<string | number> = [
+        stt,
+        customer.sap_code || '',
+        customer.customer_code,
+      ];
+      for (const { slug } of EMP_DEPT_COLUMNS) {
+        row.push(empBySlug.get(slug) ?? '');
+      }
+      row.push(
+        customer.customer_role === CustomerRole.PHU
+          ? 'PHỤ'
+          : customer.customer_role === CustomerRole.CHINH
+            ? 'CHÍNH'
+            : '',
+      );
+      for (const { slug } of TIER_DEPT_COLUMNS) {
+        row.push(tierBySlug.get(slug) ?? '');
+      }
+      row.push(customer.credit_days ?? '');
+      // Cột T04..T09 / ĐIỂM / tổng ds của bản gốc lấy từ sheet BCBH ẩn —
+      // backend không sinh, để trống (import cũng không đọc các cột này).
+      for (let i = 0; i < 8; i++) row.push('');
+
+      ws.addRow(row);
+    }
+
+    ws.columns.forEach((c) => (c.width = 22));
+
+    const buf = await wb.xlsx.writeBuffer();
+    return Buffer.from(buf as ArrayBuffer);
   }
 
   /** Huỷ session: chờ duyệt (xoá changes) hoặc đã hoàn tác (xoá changes + backup). */
