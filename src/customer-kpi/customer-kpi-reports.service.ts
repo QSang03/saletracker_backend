@@ -378,7 +378,9 @@ export class CustomerKpiReportsService {
 
   /**
    * Thông tin sale cần cho báo cáo: tên hiển thị, trạng thái Zalo, MÃ NHÂN VIÊN
-   * (để nối bảng tra NKM) và phòng ban (để gom nhóm QL Nhóm / QL KD).
+   * (để nối bảng tra NKM) và phòng ban (để gom nhóm QL Nhóm / QL KD). Chỉ trả
+   * phòng ban CÓ server_ip — phòng không có IP không quét KPI được nên không
+   * thuộc báo cáo này.
    */
   private async loadSaleInfos(saleIds: number[]): Promise<
     Map<
@@ -412,17 +414,21 @@ export class CustomerKpiReportsService {
         'user.zaloLinkStatus',
         'user.employeeCode',
       ])
-      .addSelect(['dept.id', 'dept.slug', 'dept.name'])
+      .addSelect(['dept.id', 'dept.slug', 'dept.name', 'dept.server_ip'])
       .getMany();
     for (const user of users) {
       result.set(user.id, {
         fullName: user.fullName ?? `User #${user.id}`,
         zaloLinked: Number(user.zaloLinkStatus) === 1,
         employeeCode: user.employeeCode ?? null,
-        departments: (user.departments ?? []).map((dept: any) => ({
-          slug: dept.slug,
-          name: dept.name,
-        })),
+        // Chỉ giữ phòng ban có server_ip — phòng không có IP (vd "Chiến
+        // dịch") không phải phòng KPI, xuất hiện trong response chỉ gây thừa
+        departments: (user.departments ?? [])
+          .filter((dept: any) => !!dept.server_ip)
+          .map((dept: any) => ({
+            slug: dept.slug,
+            name: dept.name,
+          })),
       });
     }
     return result;
