@@ -44,6 +44,11 @@ export interface KpiReportCustomer {
     orders: number;
     revenue: number;
   };
+  /**
+   * 'has_revenue' khi khách có phát sinh NKM trong kỳ (≥1 phiếu); 'no_revenue'
+   * khi khách thật sự không mua; 'no_data' khi sale chưa tra được mã NKM.
+   */
+  revenueStatus: 'has_revenue' | 'no_revenue' | 'no_data';
 }
 
 /** Bộ lọc đã chuẩn hoá (boolean/number, không còn chuỗi query). */

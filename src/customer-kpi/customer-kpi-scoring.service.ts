@@ -142,6 +142,8 @@ export interface CustomerCriterion {
   quantity?: number;
   /** Doanh số của khách trong kỳ (`LineTotal`, chưa VAT). */
   lineTotal?: number;
+  /** Khách có phát sinh trong kỳ (≥1 phiếu) — chỉ tiêu chí doanh số trả. */
+  hasRevenue?: boolean;
 }
 
 /** Kết luận theo LOẠI KHÁCH (thiết kế §5.3) — lớp tổng hợp trên các tiêu chí. */
@@ -472,6 +474,7 @@ export class CustomerKpiScoringService {
       actualValue: occurred ? 1 : 0,
       quantity: revenue.quantity,
       lineTotal: revenue.lineTotal,
+      hasRevenue: occurred,
     };
   }
 

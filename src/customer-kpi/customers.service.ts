@@ -16,6 +16,8 @@ import { CustomerZaloScanResult } from './customer-zalo-scan-result.entity';
 import { ZaloPythonApiClient } from './zalo-python-api.client';
 import { CustomerResponseDaily } from './customer-response-daily.entity';
 import { CustomerActivityDaily } from './customer-activity-daily.entity';
+import { CustomerRevenueDaily } from './customer-revenue-daily.entity';
+import { NkmSaleMap } from './nkm-sale-map.entity';
 import { CustomerRole } from './customer.entity';
 import { CustomerQueryDto } from './dto/customer-query.dto';
 import { UpdateCustomerDto } from './dto/update-customer.dto';
@@ -75,6 +77,10 @@ export class CustomersService {
     private readonly responseRepo: Repository<CustomerResponseDaily>,
     @InjectRepository(CustomerActivityDaily)
     private readonly activityRepo: Repository<CustomerActivityDaily>,
+    @InjectRepository(CustomerRevenueDaily)
+    private readonly revenueDailyRepo: Repository<CustomerRevenueDaily>,
+    @InjectRepository(NkmSaleMap)
+    private readonly nkmSaleMapRepo: Repository<NkmSaleMap>,
     @InjectRepository(User)
     private readonly userRepo: Repository<User>,
     @InjectRepository(Department)
@@ -700,7 +706,7 @@ export class CustomersService {
     to: string,
     user: any,
   ) {
-    await this.findOne(assignmentId, user); // kiểm tra tồn tại + phạm vi
+    const detail = await this.findOne(assignmentId, user); // kiểm tra tồn tại + phạm vi
 
     const [responseDaily, activityDaily] = await Promise.all([
       this.responseRepo
@@ -717,7 +723,88 @@ export class CustomersService {
         .getMany(),
     ]);
 
-    return { assignmentId, from, to, responseDaily, activityDaily };
+    // Doanh số NKM của khách trong khoảng — customer_activity_daily.revenue là
+    // rollup của hệ thống cũ (luôn 0), nguồn thật là customer_revenue_daily.
+    const { revenueDaily, revenueTotal } = await this.loadNkmRevenue(
+      detail.customer.customerCode,
+      detail.sale?.employeeCode ?? null,
+      from,
+      to,
+    );
+
+    return {
+      assignmentId,
+      from,
+      to,
+      responseDaily,
+      activityDaily,
+      revenueDaily,
+      revenueTotal,
+    };
+  }
+
+  /**
+   * Doanh số NKM của MỘT khách trong khoảng [from, to], gộp theo ngày — nguồn
+   * customer_revenue_daily (job đồng bộ API NKM ghi). Nối qua nkm_sale_map để
+   * ra slp_code của sale; nhiều slp thì cộng gộp.
+   * `revenueTotal.mapped = false` = sale chưa tra được mã NKM — KHÔNG phải
+   * "khách không mua gì", FE hiện "Chưa tra mã" thay vì 0.
+   */
+  private async loadNkmRevenue(
+    customerCode: string,
+    employeeCode: string | null,
+    from: string,
+    to: string,
+  ): Promise<{
+    revenueDaily: { statDate: string; quantity: number; lineTotal: number }[];
+    revenueTotal: { quantity: number; lineTotal: number; mapped: boolean };
+  }> {
+    const saleMapRows = employeeCode
+      ? await this.nkmSaleMapRepo.find({
+          where: { employee_code: employeeCode, is_active: true },
+          select: ['slp_code'],
+        })
+      : [];
+    if (saleMapRows.length === 0) {
+      return {
+        revenueDaily: [],
+        revenueTotal: { quantity: 0, lineTotal: 0, mapped: false },
+      };
+    }
+    const rows = await this.revenueDailyRepo
+      .createQueryBuilder('r')
+      .select('r.stat_date', 'statDate')
+      .addSelect('SUM(r.quantity)', 'quantity')
+      .addSelect('SUM(r.line_total)', 'lineTotal')
+      .where('r.customer_code = :customerCode', { customerCode })
+      .andWhere('r.slp_code IN (:...slp)', {
+        slp: saleMapRows.map((row) => row.slp_code),
+      })
+      .andWhere('r.stat_date >= :from', { from })
+      .andWhere('r.stat_date <= :to', { to })
+      .groupBy('r.stat_date')
+      .orderBy('r.stat_date', 'ASC')
+      .getRawMany<{
+        statDate: string | Date;
+        quantity: string;
+        lineTotal: string;
+      }>();
+    const revenueDaily = rows.map((row) => ({
+      statDate:
+        row.statDate instanceof Date
+          ? row.statDate.toISOString().slice(0, 10)
+          : String(row.statDate).slice(0, 10),
+      quantity: Number(row.quantity) || 0,
+      lineTotal: Number(row.lineTotal) || 0,
+    }));
+    return {
+      revenueDaily,
+      revenueTotal: {
+        quantity: revenueDaily.reduce((sum, day) => sum + day.quantity, 0),
+        lineTotal: revenueDaily.reduce((sum, day) => sum + day.lineTotal, 0),
+        mapped: true,
+      },
+    };
   }
 
   /** Chi tiết một cặp khớp Zalo (customer_zalo.id). */

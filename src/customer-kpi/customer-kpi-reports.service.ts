@@ -126,12 +126,14 @@ export interface SaleRevenueRow {
 
 /**
  * Dữ liệu doanh thu của một khách để nạp adapter. `undefined` (chưa đồng bộ được
- * dữ liệu NKM) KHÁC với "khách không mua gì": adapter sẽ trả no_data kèm lý do
- * thay vì kết luận trượt oan.
+ * dữ liệu NKM, hoặc sale chưa tra được mã) KHÁC với "khách không mua gì":
+ * adapter sẽ trả no_data kèm lý do thay vì kết luận trượt oan.
  */
 const revenueData = (
   loaded: { bySale: Map<number, RevenueCustomerInput[]> } | undefined,
-  customer: { tier: string | null; quantity: number; lineTotal: number },
+  customer:
+    | { tier: string | null; quantity: number; lineTotal: number }
+    | undefined,
 ) => (loaded ? customer : undefined);
 
 /**
@@ -929,6 +931,8 @@ export class CustomerKpiReportsService {
             orders: number;
             revenue: number;
           };
+          /** 'has_revenue' khi khách có phát sinh NKM trong kỳ (≥1 phiếu). */
+          revenueStatus: 'has_revenue' | 'no_revenue' | 'no_data';
         }[];
       }
     >();
@@ -947,9 +951,16 @@ export class CustomerKpiReportsService {
           orders: number;
           revenue: number;
         };
+        revenueStatus: 'has_revenue' | 'no_revenue' | 'no_data';
       }[] = [];
       const revenueCustomers = revenue?.bySale.get(saleId) ?? [];
       const revenueFor = (row: AssignmentRow) => {
+        // Sale chưa tra được mã nhân viên NKM → KHÔNG chấm doanh số cho khách
+        // (no_data), khác với "khách không mua gì" (fail) — cùng luật với
+        // salesWithoutMapping cấp sale bên dưới.
+        if (revenue && revenue.salesWithoutMapping.has(row.saleId)) {
+          return undefined;
+        }
         const found = revenue?.byAssignment.get(row.assignmentId);
         return {
           tier: row.customerTier,
@@ -1068,6 +1079,10 @@ export class CustomerKpiReportsService {
 
       for (const row of saleCustomers) {
         const days = activity.get(row.assignmentId) ?? [];
+        // Doanh số NKM của khách trong kỳ — cùng nguồn với tiêu chí doanh số.
+        // customer_activity_daily.revenue là rollup của hệ thống cũ (luôn 0) nên
+        // totals.revenue phải lấy từ customer_revenue_daily đã nạp sẵn ở trên.
+        const revenueRow = revenueFor(row);
         const criteria = definitions.map((definition) => {
           const customerTarget = this.scoring.resolveCustomerTarget(
             definition,
@@ -1081,7 +1096,7 @@ export class CustomerKpiReportsService {
             customerTarget,
             fromDate,
             debtBalances.get(row.customerId) ?? null,
-            revenueData(revenue, revenueFor(row)),
+            revenueData(revenue, revenueRow),
           );
           // Cùng luật ghi đè với vòng chấm cấp sale: ghi đè cả sale ép mọi ô
           // khách, ghi đè từng khách chỉ hạ ô của khách đó
@@ -1116,15 +1131,26 @@ export class CustomerKpiReportsService {
             row.customerTier,
           ),
           criteria,
-          totals: days.reduce(
-            (acc, day) => ({
-              inbound: acc.inbound + day.inbound_count,
-              outbound: acc.outbound + day.outbound_count,
-              orders: acc.orders + day.order_count,
-              revenue: acc.revenue + day.revenue,
-            }),
-            { inbound: 0, outbound: 0, orders: 0, revenue: 0 },
-          ),
+          totals: {
+            ...days.reduce(
+              (acc, day) => ({
+                inbound: acc.inbound + day.inbound_count,
+                outbound: acc.outbound + day.outbound_count,
+                orders: acc.orders + day.order_count,
+                revenue: acc.revenue + day.revenue,
+              }),
+              { inbound: 0, outbound: 0, orders: 0, revenue: 0 },
+            ),
+            // Doanh số thật theo đồng bộ NKM — xem ghi chú revenueRow đầu vòng
+            revenue: revenueRow?.lineTotal ?? 0,
+          },
+          // FE cột "Doanh số" đọc trạng thái này: có phát sinh = ≥1 phiếu trong
+          // kỳ; no_data = sale chưa tra được mã NKM (KHÔNG kết luận trượt).
+          revenueStatus: !revenueRow
+            ? 'no_data'
+            : revenueRow.quantity > 0
+              ? 'has_revenue'
+              : 'no_revenue',
         });
       }
 
@@ -1692,6 +1718,8 @@ export class CustomerKpiReportsService {
         tierSummary: customer.tierSummary,
         totals: customer.totals,
         criteria: customer.criteria,
+        // 'has_revenue' khi khách có phát sinh NKM trong kỳ (≥1 phiếu)
+        revenueStatus: customer.revenueStatus,
       }));
 
     return {
@@ -2157,7 +2185,6 @@ export class CustomerKpiReportsService {
       'Tin vào',
       'Tin ra',
       'Số đơn',
-      'Doanh thu',
       'Số phiếu NKM',
       'Doanh số NKM',
       'Kết luận loại khách',
@@ -2174,7 +2201,6 @@ export class CustomerKpiReportsService {
           customer.totals.inbound,
           customer.totals.outbound,
           customer.totals.orders,
-          customer.totals.revenue,
           this.occurrenceCell(customer.criteria),
           this.occurrenceRevenueCell(customer.criteria),
           this.tierCell(customer.tierSummary),
