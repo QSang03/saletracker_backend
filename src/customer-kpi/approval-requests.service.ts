@@ -392,7 +392,7 @@ export class ApprovalRequestsService {
             sap_code: item.sap_code ?? '',
             customer_name: nd.customer_name ?? item.customer_name ?? null,
             customer_role: nd.customer_role ?? null,
-            debt_limit: nd.debt_limit ?? null,
+            credit_days: nd.credit_days ?? null,
             status: CustomerStatus.ACTIVE,
           }),
         );
@@ -442,7 +442,7 @@ export class ApprovalRequestsService {
       }
       if (nd.customer_role) target.customer_role = nd.customer_role;
       if (nd.customer_name) target.customer_name = nd.customer_name;
-      if (nd.debt_limit != null) target.debt_limit = nd.debt_limit;
+      if (nd.credit_days != null) target.credit_days = nd.credit_days;
       await this.customerRepo.save(target);
       applied++;
     }

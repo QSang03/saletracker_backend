@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsIn, IsNumber, IsOptional, IsString } from 'class-validator';
+import { IsIn, IsInt, IsNumber, IsOptional, IsString, Min } from 'class-validator';
 
 /**
  * Sửa thông tin một dòng "khách hàng của tôi".
@@ -25,8 +25,10 @@ export class UpdateCustomerDto {
   @IsString()
   customer_name?: string;
 
+  /** Số ngày công nợ (cột HẠN MỨC của Excel) — KHÔNG phải hạn mức tiền. */
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
-  debt_limit?: number;
+  @IsInt()
+  @Min(0)
+  credit_days?: number;
 }

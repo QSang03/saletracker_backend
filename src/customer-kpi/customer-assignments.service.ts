@@ -325,11 +325,11 @@ export class CustomerAssignmentsService {
           newFields.customer_role = p.customer_role;
         }
         if (
-          p.debt_limit != null &&
-          Number(dbCustomer.debt_limit) !== p.debt_limit
+          p.credit_days != null &&
+          Number(dbCustomer.credit_days) !== p.credit_days
         ) {
-          oldFields.debt_limit = dbCustomer.debt_limit;
-          newFields.debt_limit = p.debt_limit;
+          oldFields.credit_days = dbCustomer.credit_days;
+          newFields.credit_days = p.credit_days;
         }
         if (Object.keys(newFields).length) {
           drafts.push({
@@ -376,7 +376,7 @@ export class CustomerAssignmentsService {
                     customer_code: p.customer_code,
                     sap_code: p.sap_code,
                     customer_role: p.customer_role,
-                    debt_limit: p.debt_limit,
+                    credit_days: p.credit_days,
                   },
             },
             error,
@@ -603,7 +603,7 @@ export class CustomerAssignmentsService {
                   customer_code: change.customer_code,
                   sap_code: change.sap_code,
                   customer_role: nd.customer?.customer_role ?? null,
-                  debt_limit: nd.customer?.debt_limit ?? null,
+                  credit_days: nd.customer?.credit_days ?? null,
                   status: CustomerStatus.ACTIVE,
                 }),
               );
@@ -682,7 +682,7 @@ export class CustomerAssignmentsService {
                       id: customer.id,
                       status: customer.status,
                       customer_role: customer.customer_role,
-                      debt_limit: customer.debt_limit,
+                      credit_days: customer.credit_days,
                     },
                   },
                   action_type: 'UPDATE',
@@ -692,7 +692,7 @@ export class CustomerAssignmentsService {
               const nd = change.new_data || {};
               if (nd.status) customer.status = nd.status;
               if (nd.customer_role) customer.customer_role = nd.customer_role;
-              if (nd.debt_limit != null) customer.debt_limit = nd.debt_limit;
+              if (nd.credit_days != null) customer.credit_days = nd.credit_days;
               await em.save(customer);
               applied++;
             } else {
@@ -921,7 +921,7 @@ export class CustomerAssignmentsService {
               }
               customer.status = od.customer.status;
               customer.customer_role = od.customer.customer_role;
-              customer.debt_limit = od.customer.debt_limit;
+              customer.credit_days = od.customer.credit_days;
               await em.save(customer);
               restored++;
             } else if (od.assignment) {

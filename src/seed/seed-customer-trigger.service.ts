@@ -107,7 +107,7 @@ export class SeedCustomerTriggerService {
             'sap_code', NEW.sap_code,
             'customer_name', NEW.customer_name,
             'customer_role', NEW.customer_role,
-            'debt_limit', NEW.debt_limit,
+            'credit_days', NEW.credit_days,
             'status', NEW.status,
             'import_session_id', NEW.import_session_id,
             'created_at', NEW.created_at,
@@ -137,9 +137,9 @@ export class SeedCustomerTriggerService {
           SET changed_fields = JSON_ARRAY_APPEND(changed_fields, '$', 'customer_role');
         END IF;
 
-        -- debt_limit: nullable decimal
-        IF OLD.debt_limit != NEW.debt_limit OR (OLD.debt_limit IS NULL AND NEW.debt_limit IS NOT NULL) OR (OLD.debt_limit IS NOT NULL AND NEW.debt_limit IS NULL) THEN
-          SET changed_fields = JSON_ARRAY_APPEND(changed_fields, '$', 'debt_limit');
+        -- credit_days: nullable int — số ngày công nợ (cột HẠN MỨC), không phải tiền
+        IF OLD.credit_days != NEW.credit_days OR (OLD.credit_days IS NULL AND NEW.credit_days IS NOT NULL) OR (OLD.credit_days IS NOT NULL AND NEW.credit_days IS NULL) THEN
+          SET changed_fields = JSON_ARRAY_APPEND(changed_fields, '$', 'credit_days');
         END IF;
 
         -- status: active/inactive/deleted — xoá mềm cũng hiện trong nhật ký
@@ -161,7 +161,7 @@ export class SeedCustomerTriggerService {
               'sap_code', OLD.sap_code,
               'customer_name', OLD.customer_name,
               'customer_role', OLD.customer_role,
-              'debt_limit', OLD.debt_limit,
+              'credit_days', OLD.credit_days,
               'status', OLD.status,
               'created_at', OLD.created_at,
               'updated_at', OLD.updated_at
@@ -172,7 +172,7 @@ export class SeedCustomerTriggerService {
               'sap_code', NEW.sap_code,
               'customer_name', NEW.customer_name,
               'customer_role', NEW.customer_role,
-              'debt_limit', NEW.debt_limit,
+              'credit_days', NEW.credit_days,
               'status', NEW.status,
               'created_at', NEW.created_at,
               'updated_at', NEW.updated_at

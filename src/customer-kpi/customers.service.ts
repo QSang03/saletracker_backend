@@ -398,7 +398,7 @@ export class CustomersService {
           customerName: a.customer.customer_name,
           sapCode: a.customer.sap_code,
           customerRole: a.customer.customer_role,
-          debtLimit: a.customer.debt_limit,
+          creditDays: a.customer.credit_days,
           status: a.customer.status,
         },
       };
@@ -442,7 +442,7 @@ export class CustomersService {
         customerName: assignment.customer.customer_name,
         sapCode: assignment.customer.sap_code,
         customerRole: assignment.customer.customer_role,
-        debtLimit: assignment.customer.debt_limit,
+        creditDays: assignment.customer.credit_days,
         status: assignment.customer.status,
       },
       sale: sale
@@ -963,7 +963,7 @@ export class CustomersService {
             sap_code: dto.sap_code ?? '',
             customer_name: dto.customer_name ?? null,
             customer_role: dto.customer_role ?? null,
-            debt_limit: dto.debt_limit ?? null,
+            credit_days: dto.credit_days ?? null,
             department_slug: dto.department_slug,
             customer_tier: dto.customer_tier,
           },
@@ -993,7 +993,7 @@ export class CustomersService {
           customer_name: dto.customer_name ?? null,
           sap_code: dto.sap_code ?? '',
           customer_role: (dto.customer_role ?? null) as CustomerRole | null,
-          debt_limit: dto.debt_limit ?? null,
+          credit_days: dto.credit_days ?? null,
           status: CustomerStatus.ACTIVE,
         }),
       );
@@ -1233,7 +1233,7 @@ export class CustomersService {
       !dto.customer_tier &&
       !dto.customer_role &&
       dto.customer_name === undefined &&
-      dto.debt_limit === undefined
+      dto.credit_days === undefined
     ) {
       throw new BadRequestException('Cần ít nhất một trường để sửa');
     }
@@ -1256,14 +1256,14 @@ export class CustomersService {
       customer_tier: assignment.customer_tier,
       customer_role: assignment.customer.customer_role,
       customer_name: assignment.customer.customer_name,
-      debt_limit: assignment.customer.debt_limit,
+      credit_days: assignment.customer.credit_days,
     };
     const newData: any = {};
     if (dto.customer_tier) newData.customer_tier = dto.customer_tier;
     if (dto.customer_role) newData.customer_role = dto.customer_role;
     if (dto.customer_name !== undefined)
       newData.customer_name = dto.customer_name;
-    if (dto.debt_limit !== undefined) newData.debt_limit = dto.debt_limit;
+    if (dto.credit_days !== undefined) newData.credit_days = dto.credit_days;
 
     const roles = this.lowerRoles(user);
     const isManagerOrAdmin =
@@ -1304,8 +1304,8 @@ export class CustomersService {
       customer.customer_role = newData.customer_role as CustomerRole;
     if (newData.customer_name !== undefined)
       customer.customer_name = newData.customer_name;
-    if (newData.debt_limit !== undefined)
-      customer.debt_limit = newData.debt_limit;
+    if (newData.credit_days !== undefined)
+      customer.credit_days = newData.credit_days;
     await this.customerRepo.save(customer);
 
     return {
@@ -1317,7 +1317,7 @@ export class CustomersService {
         customerCode: customer.customer_code,
         customerName: customer.customer_name,
         customerRole: customer.customer_role,
-        debtLimit: customer.debt_limit,
+        creditDays: customer.credit_days,
       },
     };
   }

@@ -62,9 +62,13 @@ export class Customer {
   @Column({ type: 'enum', enum: CustomerRole, nullable: true })
   customer_role: CustomerRole | null;
 
-  /** Hạn mức công nợ (cột `hạn mức`, nguồn sheet CNO). */
-  @Column({ type: 'decimal', precision: 18, scale: 2, nullable: true })
-  debt_limit: number | null;
+  /**
+   * Số ngày công nợ (cột `HẠN MỨC` sheet "File Chi Tiết" — đã đối chiếu: khớp
+   * cột `Số ngày công nợ` của sheet CNO ẩn, KHÔNG phải hạn mức tiền). Sheet CNO
+   * có thêm cột "Hạn mức công nợ" (tiền) nhưng import cố tình không đọc.
+   */
+  @Column({ type: 'int', nullable: true })
+  credit_days: number | null;
 
   @Column({
     type: 'enum',

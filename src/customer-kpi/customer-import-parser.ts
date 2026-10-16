@@ -16,7 +16,7 @@ export interface ParsedCustomerRow {
   customer_code: string;
   sap_code: string;
   customer_role: CustomerRoleValue | null;
-  debt_limit: number | null;
+  credit_days: number | null;
   assignments: ParsedAssignment[];
   /** Lỗi dòng — apply sẽ bỏ qua các change mang lỗi này, người nhập sửa file rồi nạp lại. */
   errors: string[];
@@ -201,7 +201,8 @@ export async function parseImportWorkbook(
     else if (roleRaw === 'PHU') customer_role = 'PHU';
     else errors.push('LOẠI MÃ trống hoặc sai giá trị');
 
-    const debt_limit = cols.hanMuc
+    // Cột HẠN MỨC = Số ngày công nợ (đã đối chiếu với sheet CNO), không phải tiền
+    const credit_days = cols.hanMuc
       ? cellNumber(row.getCell(cols.hanMuc))
       : null;
 
@@ -263,7 +264,7 @@ export async function parseImportWorkbook(
       customer_code: code,
       sap_code: sap,
       customer_role,
-      debt_limit,
+      credit_days,
       assignments,
       errors,
       invalid_depts: invalidDepts,

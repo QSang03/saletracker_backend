@@ -40,10 +40,12 @@ export class CreateCustomerDto {
   @IsIn(['CHINH', 'PHU'])
   customer_role?: 'CHINH' | 'PHU';
 
+  /** Số ngày công nợ (cột HẠN MỨC của Excel) — KHÔNG phải hạn mức tiền. */
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
-  debt_limit?: number;
+  @IsInt()
+  @Min(0)
+  credit_days?: number;
 
   /** may-in | pc | linh-kien | laptop | ptkh1 | ptkh2 */
   @IsIn(['may-in', 'pc', 'linh-kien', 'laptop', 'ptkh1', 'ptkh2'])
