@@ -33,6 +33,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { guardOrExit, inspectTarget, readEnvKey } from './dev-guard.mjs';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const backendRoot = path.resolve(scriptDir, '..');
@@ -61,6 +62,28 @@ const SKIP_TARGETS = !!flags['skip-targets'];
 const RESET_ACTIVITY = !!flags['reset-activity'];
 
 const FIXTURE_PATH = path.join(backendRoot, 'test-fixtures', 'DSKH KDS_CHÍNH PHỤ_KEY NON.xlsx');
+
+// ---------------------------------------------------------------------------
+// Chốt an toàn: script này TẠO DỮ LIỆU GIẢ (40 user kpi_emp_*, khách, phân
+// công, hoạt động; cờ --reset-activity còn XOÁ dữ liệu activity/response) qua
+// API của backend đang chạy. Chạy nhầm vào production là trộn dữ liệu giả vào
+// DB thật.
+//
+// scripts/dev-guard.mjs tự dừng (exit 2) khi phát hiện: URL đích trỏ IP/host
+// production hoặc không phải máy local, máy đang chạy chính là server
+// production, hoặc DB trong .env là schema production. Có --force-prod để bỏ qua.
+// ---------------------------------------------------------------------------
+guardOrExit(
+  inspectTarget({
+    baseUrl: BASE,
+    extraUrls: [readEnvKey(path.join(backendRoot, '.env'), 'PYTHON_API_URL')],
+    envFiles: [
+      { label: 'backend .env', file: path.join(backendRoot, '.env'), keys: ['DB_NAME'] },
+      { label: 'python .env', file: path.join(backendRoot, '..', 'core-python-backend', '.env'), keys: ['DB_NAME', 'ZALO_DB_NAME'] },
+    ],
+  }),
+  { scriptName: 'seed-customer-kpi-dev.mjs' },
+);
 
 let adminToken = null;
 let pass = 0;

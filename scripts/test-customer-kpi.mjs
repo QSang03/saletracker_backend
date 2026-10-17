@@ -20,12 +20,41 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
+import { guardOrExit, inspectTarget, readEnvKey } from './dev-guard.mjs';
 
-const BASE = (process.argv[2] || process.env.BASE_URL || 'http://localhost:4000').replace(/\/$/, '');
-const ADMIN_USER = process.argv[3] || process.env.ADMIN_USER || 'admin';
-const ADMIN_PASS = process.argv[4] || process.env.ADMIN_PASS || 'admin';
+// Tham số vị trí: [BASE_URL] [ADMIN_USER] [ADMIN_PASS] — bỏ qua các cờ --xxx
+// (ví dụ --force-prod) để không bị nhận nhầm làm BASE_URL.
+const positional = process.argv.slice(2).filter((a) => !a.startsWith('--'));
+const BASE = (positional[0] || process.env.BASE_URL || 'http://localhost:4000').replace(/\/$/, '');
+const ADMIN_USER = positional[1] || process.env.ADMIN_USER || 'admin';
+const ADMIN_PASS = positional[2] || process.env.ADMIN_PASS || 'admin';
 const TEST_USER = process.env.TEST_USER;
 const TEST_PASS = process.env.TEST_PASS;
+
+// ============================================================================
+// CHỐT AN TOÀN — bộ test này TẠO và XOÁ dữ liệu: tạo user/kpi_test_auto khách
+// test qua API, và phần soi trực tiếp DB (nhóm K/L/M) có xoá cứng dòng ở main
+// DB lẫn DB Zalo (zalo_accounts, zalo_contacts, zalo_conversations,
+// zalo_messages, orders, order_details, customer_zalo...). Chạy nhầm vào
+// production là đụng dữ liệu thật.
+//
+// scripts/dev-guard.mjs tự dừng (exit 2) khi phát hiện: URL đích trỏ IP/host
+// production hoặc không phải máy local, máy đang chạy chính là server
+// production, hoặc DB trong .env là schema production. Có --force-prod để bỏ qua.
+// ============================================================================
+const backendRootDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+const pyEnvFile = path.join(backendRootDir, '..', 'core-python-backend', '.env');
+guardOrExit(
+  inspectTarget({
+    baseUrl: BASE,
+    extraUrls: [readEnvKey(path.join(backendRootDir, '.env'), 'PYTHON_API_URL')],
+    envFiles: [
+      { label: 'backend .env', file: path.join(backendRootDir, '.env'), keys: ['DB_NAME'] },
+      { label: 'python .env', file: pyEnvFile, keys: ['DB_NAME', 'ZALO_DB_NAME'] },
+    ],
+  }),
+  { scriptName: 'test-customer-kpi.mjs' },
+);
 
 // ===== ĐỒNG HỒ: in thời gian mỗi nhóm (kỹ thuật: bọc console.log, mỗi lần
 // gặp tiêu đề nhóm "-- X. ..." thì in khoảng cách từ tiêu đề trước) =====
