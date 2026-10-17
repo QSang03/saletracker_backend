@@ -26,6 +26,9 @@ export enum ReminderStatus {
 @Index('idx_debt_config_id', ['debt_config_id'])
 @Index('idx_remind_status', ['remind_status'])
 @Index('idx_send_at', ['send_at'])
+// Bộ đo thời gian phản hồi (core-python-backend, response_time/automated_messages.py)
+// quét debt_logs theo first_remind_at / second_remind_at mỗi vòng đo.
+@Index('idx_debt_logs_remind_at', ['first_remind_at', 'second_remind_at'])
 export class DebtLogs {
   @PrimaryGeneratedColumn()
   id: number;

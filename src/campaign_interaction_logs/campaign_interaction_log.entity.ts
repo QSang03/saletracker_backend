@@ -22,6 +22,9 @@ export enum LogStatus {
 }
 
 @Entity('campaign_interaction_logs')
+// Bộ đo thời gian phản hồi (core-python-backend, response_time/automated_messages.py)
+// quét bảng này theo khoảng thời gian mỗi vòng đo — index dưới đây để không full scan.
+@Index('idx_cil_sent_at', ['sent_at'])
 export class CampaignInteractionLog {
   @PrimaryGeneratedColumn('increment', { type: 'bigint' })
   id: string;
