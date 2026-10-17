@@ -27,7 +27,10 @@ export enum DebtStatus {
 @Index('idx_debt_stats_customer_date', ['customer_code', 'statistic_date'])
 @Index('idx_debt_stats_due_date', ['due_date', 'status'])
 @Index('idx_debt_stats_pay_later', ['pay_later', 'status'])
-// @Index('uniq_stat_date_debt', ['statistic_date', 'original_debt_id'], { unique: true })
+// BẮT BUỘC giữ: cron 22:30 chạy INSERT ... ON DUPLICATE KEY UPDATE
+// (debt_statistic.service.ts) chỉ idempotent được nhờ unique key này — bỏ đi
+// thì mỗi lần chạy lặp trong ngày sẽ nhân bản dòng của ngày đó.
+@Index('uniq_stat_date_debt', ['statistic_date', 'original_debt_id'], { unique: true })
 export class DebtStatistic {
   @PrimaryGeneratedColumn()
   id: number;

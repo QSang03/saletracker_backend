@@ -22,8 +22,10 @@ import { User } from '../users/user.entity';
  * archive sau 30 ngày, nên drill-down quá khứ xa sẽ không còn dữ liệu.
  */
 @Entity('sale_work_activity_daily')
+// KHÔNG khai thêm @Index(['stat_date']) ở đây: nó trùng tên với @Index() trên
+// property stat_date (custom naming strategy sinh idx_<table>_stat_date) làm
+// MySQL báo "Duplicate key name" khi tạo bảng mới (dev có bảng sẵn nên không lộ).
 @Index(['user_id', 'stat_date'], { unique: true })
-@Index(['stat_date'])
 export class SaleWorkActivityDaily {
   @PrimaryGeneratedColumn('increment', { type: 'bigint' })
   id: number;
