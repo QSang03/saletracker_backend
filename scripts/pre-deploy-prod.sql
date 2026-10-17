@@ -20,12 +20,21 @@ USE `autozalo_v2_main`;
 -- code hiện tại dùng `auto_greeting_customer_message_history`).
 --
 -- Kiểm tra trước: FK còn tồn tại thì mới cần chạy ALTER bên dưới.
---   SELECT CONSTRAINT_NAME FROM information_schema.TABLE_CONSTRAINTS
---   WHERE TABLE_SCHEMA='autozalo_v2_main' AND TABLE_NAME='customer_message_history'
---     AND CONSTRAINT_TYPE='FOREIGN KEY';
+-- (Câu lệnh dưới đây tự kiểm tra nên chạy lại nhiều lần đều an toàn.)
 -- ----------------------------------------------------------------------------
-ALTER TABLE `customer_message_history`
-  DROP FOREIGN KEY `FK_7154b8a3bc8a3964b9702c55f47`;
+SET @fk_exists := (
+  SELECT COUNT(*) FROM information_schema.TABLE_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'customer_message_history'
+    AND CONSTRAINT_TYPE = 'FOREIGN KEY'
+    AND CONSTRAINT_NAME = 'FK_7154b8a3bc8a3964b9702c55f47'
+);
+SET @ddl := IF(@fk_exists > 0,
+  'ALTER TABLE `customer_message_history` DROP FOREIGN KEY `FK_7154b8a3bc8a3964b9702c55f47`',
+  'DO 0');
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
 
 -- ----------------------------------------------------------------------------
 -- BƯỚC 2 (NÊN CHẠY): bổ sung dòng typeorm_metadata còn thiếu cho
