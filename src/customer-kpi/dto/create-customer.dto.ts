@@ -85,6 +85,16 @@ export class BulkUpdateCustomersDto {
 
 /** Tham số tra cứu liên hệ Zalo của tài khoản — phục vụ chọn tay cặp khớp. */
 export class ZaloContactQueryDto {
+  /**
+   * Dòng phân công đang ghép tay — màn hình 5-5 luôn truyền trường này.
+   * Có `assignmentId` thì phạm vi tra cứu khoá vào tài khoản Zalo của sale
+   * phụ trách dòng đó (không phụ thuộc người xem là admin/PM hay sale).
+   */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  assignmentId?: number;
+
   /** Bỏ trống = tra mọi tài khoản Zalo thuộc phạm vi của bạn. */
   @IsOptional()
   @Type(() => Number)

@@ -13,7 +13,10 @@ import { Customer, CustomerStatus } from './customer.entity';
 import { CustomerAssignment, CustomerTier } from './customer-assignment.entity';
 import { CustomerZalo, MatchMethod } from './customer-zalo.entity';
 import { CustomerZaloScanResult } from './customer-zalo-scan-result.entity';
-import { ZaloPythonApiClient } from './zalo-python-api.client';
+import {
+  PythonZaloAccount,
+  ZaloPythonApiClient,
+} from './zalo-python-api.client';
 import { CustomerResponseDaily } from './customer-response-daily.entity';
 import { CustomerActivityDaily } from './customer-activity-daily.entity';
 import { CustomerRevenueDaily } from './customer-revenue-daily.entity';
@@ -839,6 +842,42 @@ export class CustomersService {
     return hit ? { display_name: hit.displayName } : null;
   }
 
+  /**
+   * Chặn gắn/sửa cặp khớp sang tài khoản Zalo của NGƯỜI KHÁC.
+   *
+   * Luật nghiệp vụ: cặp khớp Zalo của một dòng phân công chỉ nằm trên tài khoản
+   * Zalo của chính sale phụ trách dòng đó — job tự khớp cũng chỉ ghép trong
+   * `accounts_by_sale[sale_id]`. Thiếu chốt này thì admin (phạm vi toàn công ty)
+   * tra ra liên hệ của sale khác rồi gắn được, và vì bản ghi mang
+   * `match_method = 'manual'` nên job không sửa lại — khách bị liên kết vĩnh
+   * viễn sang Zalo của người không phụ trách.
+   */
+  private async assertZaloAccountOfSale(accountId: number, saleId: number) {
+    const accounts = await this.pythonApi.getAccounts(200);
+    const account = accounts.find((a) => a.accountId === Number(accountId));
+    if (!account) {
+      throw new BadRequestException('Không tìm thấy tài khoản Zalo này');
+    }
+    if (account.userId === saleId) return;
+
+    const owner = account.userId
+      ? await this.userRepo.findOne({
+          where: { id: account.userId },
+          select: ['id', 'fullName'],
+        })
+      : null;
+    const sale = await this.userRepo.findOne({
+      where: { id: saleId },
+      select: ['id', 'fullName'],
+    });
+    throw new BadRequestException(
+      `Tài khoản Zalo #${account.accountId} thuộc ${owner?.fullName ?? 'nhân viên khác'}, ` +
+        `không phải sale phụ trách khách hàng (${sale?.fullName ?? `#${saleId}`}). ` +
+        'Chỉ gắn được liên hệ nằm trên tài khoản Zalo của sale phụ trách — nếu chưa có, ' +
+        'hãy nhắc sale đặt tên liên hệ Zalo theo mã khách hàng.',
+    );
+  }
+
   private toZaloLinkDto(link: CustomerZalo) {
     return {
       id: link.id,
@@ -892,6 +931,13 @@ export class CustomersService {
       if (dto.zalo_contact_id === '') {
         throw new BadRequestException('zalo_contact_id không được rỗng');
       }
+      // Đổi liên hệ/tài khoản = gắn lại cặp khớp → phải cùng tài khoản của sale
+      // phụ trách. Sửa tên hoặc ngừng kích hoạt cặp khớp cũ (kể cả cặp sai còn
+      // sót lại) vẫn làm được vì không đi qua nhánh này.
+      await this.assertZaloAccountOfSale(
+        Number(targetAccountId),
+        link.assignment.sale_id,
+      );
       const contact = await this.fetchZaloContact(
         Number(targetAccountId),
         targetContactId,
@@ -964,6 +1010,7 @@ export class CustomersService {
         'Sale chưa có tài khoản Zalo để gắn liên hệ',
       );
     }
+    await this.assertZaloAccountOfSale(Number(accountId), assignment.sale_id);
 
     const contactId = dto.zalo_contact_id.trim();
     const contact = await this.fetchZaloContact(Number(accountId), contactId);
@@ -1230,10 +1277,40 @@ export class CustomersService {
   }
 
   /**
+   * Tài khoản Zalo của sale phụ trách một dòng phân công.
+   *
+   * Vì sao cần: cặp khớp Zalo chỉ hợp lệ trong tài khoản của CHÍNH sale phụ
+   * trách dòng phân công (job tự khớp cũng chỉ ghép trong `accounts_by_sale`
+   * như vậy). Tra cứu tràn sang tài khoản của sale khác sẽ dẫn tới gắn sai —
+   * mà `match_method = 'manual'` thì job không ghi đè lại được.
+   */
+  private async saleZaloAccounts(
+    assignmentId: number,
+    userIds: number[] | undefined,
+    accounts: PythonZaloAccount[],
+  ): Promise<PythonZaloAccount[]> {
+    const assignment = await this.assignmentRepo.findOne({
+      where: { id: assignmentId },
+      select: ['id', 'sale_id'],
+    });
+    if (!assignment) {
+      throw new NotFoundException('Không tìm thấy dòng phân công');
+    }
+    if (userIds !== undefined && !userIds.includes(assignment.sale_id)) {
+      throw new ForbiddenException('Khách hàng không thuộc phạm vi của bạn');
+    }
+    return accounts.filter((a) => a.userId === assignment.sale_id);
+  }
+
+  /**
    * Tra cứu liên hệ Zalo để chọn tay khi sửa cặp khớp (Mục 3, màn hình 5-5).
    * KHÔNG đọc DB Zalo — hỏi qua API Python (zalo_entities_api). Phạm vi:
    * admin/PM/view tra mọi tài khoản; manager tra tài khoản của người trong
    * phòng; nhân viên chỉ tài khoản của chính mình.
+   *
+   * `assignmentId` (màn ghép tay): khoá hẳn vào tài khoản Zalo của sale phụ
+   * trách dòng phân công — người xem có phạm vi rộng (admin/PM) cũng không
+   * thấy liên hệ của sale khác để chọn nhầm.
    */
   async zaloContacts(query: ZaloContactQueryDto, user: any) {
     const limit = Math.min(query.limit ?? 50, 200);
@@ -1260,8 +1337,29 @@ export class CustomersService {
     if (userIds !== undefined && allowedAccounts.length === 0)
       return { data: [] };
 
+    const saleAccounts = query.assignmentId
+      ? await this.saleZaloAccounts(query.assignmentId, userIds, accounts)
+      : null;
+
     let rows;
-    if (query.accountId) {
+    if (saleAccounts) {
+      if (saleAccounts.length === 0) return { data: [] };
+      const saleAccountIds = new Set(saleAccounts.map((a) => a.accountId));
+      rows =
+        saleAccounts.length === 1
+          ? await this.pythonApi.getContacts({
+              userId: saleAccounts[0].userId ?? undefined,
+              search: query.search,
+              limit: 200,
+              page,
+            })
+          : await this.pythonApi.getContacts({
+              search: query.search,
+              limit: 200,
+              page,
+            });
+      rows = rows.filter((r) => saleAccountIds.has(r.accountId));
+    } else if (query.accountId) {
       const account = accounts.find((a) => a.accountId === query.accountId);
       rows = await this.pythonApi.getContacts({
         userId: account?.userId ?? undefined,
