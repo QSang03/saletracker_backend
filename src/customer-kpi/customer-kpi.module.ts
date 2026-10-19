@@ -29,6 +29,8 @@ import { CustomerRevenueDaily } from './customer-revenue-daily.entity';
 import { SaleRevenueTarget } from './sale-revenue-target.entity';
 import { DeptRevenueTarget } from './dept-revenue-target.entity';
 import { SystemConfig } from '../system_config/system_config.entity';
+import { OrderDetail } from '../order-details/order-detail.entity';
+import { Order } from '../orders/order.entity';
 import { CustomersController } from './customers.controller';
 import { CustomerAssignmentsController } from './customer-assignments.controller';
 import { CustomerKpiReportsController } from './customer-kpi-reports.controller';
@@ -87,6 +89,11 @@ import { NkmSyncCronjob } from './nkm-sync.cronjob';
       SaleRevenueTarget,
       DeptRevenueTarget,
       SystemConfig,
+      // Đơn Zalo (Sale Tracker) — CHỈ ĐỌC cho tiêu chí 6 "Gợi ý đơn hàng".
+      // Entity đã có metadata từ OrderModule/OrderDetailModule; khai báo lại ở
+      // đây để module khách hàng tự inject repository, không import chéo module.
+      OrderDetail,
+      Order,
       User,
       Department,
       Debt,

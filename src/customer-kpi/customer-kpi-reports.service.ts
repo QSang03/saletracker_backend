@@ -10,7 +10,13 @@ import { User } from '../users/user.entity';
 import { Debt, DebtStatus } from '../debts/debt.entity';
 import { Customer } from './customer.entity';
 import { CustomerAssignment } from './customer-assignment.entity';
+import { CustomerZalo } from './customer-zalo.entity';
 import { CustomerActivityDaily } from './customer-activity-daily.entity';
+import {
+  OrderDetail,
+  OrderDetailStatus,
+} from '../order-details/order-detail.entity';
+import { Order } from '../orders/order.entity';
 import { CustomerMovementReport } from './customer-movement-report.entity';
 import { CustomerRevenueDaily } from './customer-revenue-daily.entity';
 import { DeptRevenueTarget } from './dept-revenue-target.entity';
@@ -25,10 +31,14 @@ import {
   ActivityDayRow,
   CustomerCriterion,
   CustomerKpiScoringService,
+  CustomerOrderSuggestion,
   CustomerTierSummary,
+  ORDER_SUGGESTION_METRIC,
+  ORDER_SUGGESTION_WINDOW_DAYS,
   REVENUE_METRICS,
   RevenueCustomerInput,
   SaleCriterion,
+  SaleOrderSuggestion,
   SUGGESTION_GAP_DAYS,
   roundTo,
 } from './customer-kpi-scoring.service';
@@ -74,6 +84,21 @@ interface MovementEventRow {
   user_id: number;
   customer_code: string;
   sent_at: Date | string;
+}
+
+/** Số liệu gợi ý đơn hàng đã gộp — theo từng khách (phân công) và từng sale. */
+interface OrderSuggestionBundle {
+  byAssignment: Map<number, CustomerOrderSuggestion>;
+  bySale: Map<number, SaleOrderSuggestion>;
+}
+
+/** Bucket cộng dồn trong lúc quét đơn chưa chốt của một sale. */
+interface SaleSuggestionBucket {
+  count: number;
+  totalValue: number;
+  orderIds: Set<number>;
+  assignmentIds: Set<number>;
+  latest: string | null;
 }
 
 /**
@@ -132,8 +157,7 @@ export interface SaleRevenueRow {
 const revenueData = (
   loaded: { bySale: Map<number, RevenueCustomerInput[]> } | undefined,
   customer:
-    | { tier: string | null; quantity: number; lineTotal: number }
-    | undefined,
+    { tier: string | null; quantity: number; lineTotal: number } | undefined,
 ) => (loaded ? customer : undefined);
 
 /**
@@ -160,6 +184,12 @@ export class CustomerKpiReportsService {
     private readonly assignmentRepo: Repository<CustomerAssignment>,
     @InjectRepository(Customer)
     private readonly customerRepo: Repository<Customer>,
+    @InjectRepository(CustomerZalo)
+    private readonly customerZaloRepo: Repository<CustomerZalo>,
+    // Đơn Zalo (DB chính) cho tiêu chí gợi ý đơn hàng — CHỈ ĐỌC, cùng tiền lệ
+    // các bảng rollup khác; module khách hàng không sửa đơn của Sale Tracker.
+    @InjectRepository(OrderDetail)
+    private readonly orderDetailRepo: Repository<OrderDetail>,
     @InjectRepository(User)
     private readonly userRepo: Repository<User>,
     @InjectRepository(Debt)
@@ -257,13 +287,18 @@ export class CustomerKpiReportsService {
    * mysql2 trả cột DATE là Date object (nửa đêm LOCAL) — String(date) cho ra
    * chuỗi locale ("Mon Oct 06...") làm vỡ mọi so sánh/sort theo ngày. Ép về
    * YYYY-MM-DD theo múi giờ local.
+   *
+   * Cột DATETIME đọc thô (`getRawMany`) lại về dạng chuỗi
+   * `YYYY-MM-DD HH:mm:ss.ffffff` — cắt còn phần ngày để so sánh được với các
+   * mốc `YYYY-MM-DD` (dùng cho ngày tạo đơn của tiêu chí gợi ý đơn hàng).
    */
   private fmtDate(value: unknown): string {
     if (value instanceof Date) {
       const p = (n: number) => String(n).padStart(2, '0');
       return `${value.getFullYear()}-${p(value.getMonth() + 1)}-${p(value.getDate())}`;
     }
-    return String(value ?? '');
+    const text = String(value ?? '');
+    return /^\d{4}-\d{2}-\d{2}/.test(text) ? text.slice(0, 10) : text;
   }
 
   /** Hoạt động theo ngày cho từng phân công, chunked để không nổ IN (). */
@@ -376,6 +411,190 @@ export class CustomerKpiReportsService {
       days.sort((a, b) => a.stat_date.localeCompare(b.stat_date));
       activity.set(row.assignmentId, days);
     }
+  }
+
+  // ------------------------------------------- gợi ý đơn hàng (tiêu chí 6)
+
+  /**
+   * Đơn CHƯA CHỐT trên Zalo của sale × khách trong danh sách của chính sale đó,
+   * tạo trong ORDER_SUGGESTION_WINDOW_DAYS ngày gần nhất — nguồn cho tiêu chí 6
+   * "Gợi ý đơn hàng" (nhắc sale đốc chốt, kèm tổng giá trị).
+   *
+   * Liên kết theo ĐÚNG đường của job rollup (`_load_order_counts`):
+   * `customer_assignments.sale_id` → `customer_zalo` (is_active, còn account)
+   * → `order_details.meta_customer_id`, và đơn phải thuộc chính sale đang xét
+   * (`orders.sale_by`) — cột đó là chủ hội thoại/đơn trên Sale Tracker.
+   *
+   * Loại khỏi danh sách: đơn đã chốt (`completed`), đơn đã xoá (`deleted_at`),
+   * đơn sale tự ẩn (`hidden_at` — không còn là việc phải làm) và chat nhóm
+   * (`meta_is_group = 0`).
+   *
+   * Cửa sổ neo vào HÔM NAY (giờ VN) chứ không theo khoảng xem: khoảng quý có
+   * `to` là ngày cuối quý (tương lai) nên neo vào đó sẽ ra danh sách rỗng.
+   * Chỉ được gọi khi có tiêu chí dùng metric này (`ORDER_SUGGESTION_METRIC`).
+   */
+  private async loadOrderSuggestions(
+    assignments: AssignmentRow[],
+  ): Promise<OrderSuggestionBundle> {
+    const byAssignment = new Map<number, CustomerOrderSuggestion>();
+    const bySale = new Map<number, SaleOrderSuggestion>();
+    if (assignments.length === 0) return { byAssignment, bySale };
+
+    const today = this.today();
+    const windowFrom = this.shiftDate(
+      today,
+      -(ORDER_SUGGESTION_WINDOW_DAYS - 1),
+    );
+    const toExclusive = `${this.shiftDate(today, 1)} 00:00:00`;
+
+    // Mọi sale trong phạm vi đều có ô số liệu (kể cả 0 đơn) — thiếu ô sẽ bị
+    // hiểu là "chưa nạp dữ liệu" và trả no_data oan.
+    const totalCustomersBySale = new Map<number, number>();
+    for (const row of assignments) {
+      totalCustomersBySale.set(
+        row.saleId,
+        (totalCustomersBySale.get(row.saleId) ?? 0) + 1,
+      );
+    }
+    const buckets = new Map<number, SaleSuggestionBucket>();
+    for (const saleId of totalCustomersBySale.keys()) {
+      buckets.set(saleId, {
+        count: 0,
+        totalValue: 0,
+        orderIds: new Set(),
+        assignmentIds: new Set(),
+        latest: null,
+      });
+    }
+
+    // Khách ↔ liên hệ Zalo. Khoá theo (sale, contact) vì zalo_contact_id chỉ
+    // duy nhất trong phạm vi một tài khoản Zalo; contact trùng giữa hai dòng
+    // phân công của CÙNG sale thì gán về dòng id nhỏ nhất để không đếm 2 lần.
+    const assignmentByContact = new Map<string, number>();
+    for (let i = 0; i < assignments.length; i += 1000) {
+      const chunk = assignments.slice(i, i + 1000);
+      const saleOfAssignment = new Map(
+        chunk.map((row) => [row.assignmentId, row.saleId]),
+      );
+      const links = await this.customerZaloRepo.find({
+        where: {
+          assignment_id: In(chunk.map((row) => row.assignmentId)),
+          is_active: true,
+        },
+        select: ['assignment_id', 'zalo_contact_id'],
+      });
+      for (const link of links) {
+        const saleId = saleOfAssignment.get(link.assignment_id);
+        const contact = String(link.zalo_contact_id ?? '').trim();
+        if (saleId === undefined || !contact) continue;
+        const key = `${saleId}|${contact}`;
+        const current = assignmentByContact.get(key);
+        if (current === undefined || link.assignment_id < current) {
+          assignmentByContact.set(key, link.assignment_id);
+        }
+      }
+    }
+    if (assignmentByContact.size === 0) {
+      return {
+        byAssignment,
+        bySale: this.finalizeSaleSuggestions(buckets, totalCustomersBySale),
+      };
+    }
+
+    // Đơn chưa chốt trong cửa sổ của các sale trong phạm vi — mỗi dòng
+    // order_details là một gợi ý (một sản phẩm khách đang chờ chốt). Gom nhiều
+    // sale vào một query (25 sale/lần) thay vì 1 query/sale: báo cáo toàn công
+    // ty không bắn hàng chục query; dòng của liên hệ không thuộc danh sách
+    // khách bị bỏ ở bước ghép bên dưới.
+    const saleIds = [...totalCustomersBySale.keys()];
+    for (let i = 0; i < saleIds.length; i += 25) {
+      const chunk = saleIds.slice(i, i + 25);
+      const rows = await this.orderDetailRepo
+        .createQueryBuilder('od')
+        .innerJoin(Order, 'o', 'o.id = od.order_id')
+        .select('o.id', 'orderId')
+        .addSelect('o.sale_by', 'saleId')
+        .addSelect('od.meta_customer_id', 'contactId')
+        .addSelect('od.unit_price', 'unitPrice')
+        .addSelect('od.quantity', 'quantity')
+        .addSelect('od.created_at', 'createdAt')
+        .where('o.sale_by IN (:...saleIds)', { saleIds: chunk })
+        .andWhere('od.meta_customer_id IS NOT NULL')
+        .andWhere('od.deleted_at IS NULL')
+        .andWhere('od.hidden_at IS NULL')
+        .andWhere('od.meta_is_group = 0')
+        .andWhere('od.status <> :completed', {
+          completed: OrderDetailStatus.COMPLETED,
+        })
+        .andWhere('od.created_at >= :windowFrom', {
+          windowFrom: `${windowFrom} 00:00:00`,
+        })
+        .andWhere('od.created_at < :toExclusive', { toExclusive })
+        .getRawMany();
+
+      for (const row of rows) {
+        const saleId = Number(row.saleId);
+        const contact = String(row.contactId ?? '').trim();
+        const assignmentId = assignmentByContact.get(`${saleId}|${contact}`);
+        // Đơn của liên hệ không nằm trong danh sách khách của sale → bỏ (không
+        // phải "khách của sale đó").
+        if (assignmentId === undefined) continue;
+        const value =
+          (Number(row.unitPrice) || 0) * (Number(row.quantity) || 0);
+        const day = this.fmtDate(row.createdAt);
+
+        const bucket = buckets.get(saleId) ?? {
+          count: 0,
+          totalValue: 0,
+          orderIds: new Set<number>(),
+          assignmentIds: new Set<number>(),
+          latest: null,
+        };
+        buckets.set(saleId, bucket);
+        bucket.count += 1;
+        bucket.totalValue += value;
+        bucket.orderIds.add(Number(row.orderId));
+        bucket.assignmentIds.add(assignmentId);
+        if (!bucket.latest || day > bucket.latest) bucket.latest = day;
+
+        const perCustomer = byAssignment.get(assignmentId) ?? {
+          count: 0,
+          totalValue: 0,
+          latestOrderDate: null,
+        };
+        perCustomer.count += 1;
+        perCustomer.totalValue += value;
+        if (!perCustomer.latestOrderDate || day > perCustomer.latestOrderDate) {
+          perCustomer.latestOrderDate = day;
+        }
+        byAssignment.set(assignmentId, perCustomer);
+      }
+    }
+
+    return {
+      byAssignment,
+      bySale: this.finalizeSaleSuggestions(buckets, totalCustomersBySale),
+    };
+  }
+
+  /** Đóng gói bucket thô thành payload trả cho FE (thêm số đơn/khách + cửa sổ). */
+  private finalizeSaleSuggestions(
+    buckets: Map<number, SaleSuggestionBucket>,
+    totalCustomersBySale: Map<number, number>,
+  ): Map<number, SaleOrderSuggestion> {
+    const bySale = new Map<number, SaleOrderSuggestion>();
+    for (const [saleId, bucket] of buckets) {
+      bySale.set(saleId, {
+        count: bucket.count,
+        totalValue: roundTo(bucket.totalValue, 2),
+        latestOrderDate: bucket.latest,
+        orderCount: bucket.orderIds.size,
+        customersWithOrders: bucket.assignmentIds.size,
+        totalCustomers: totalCustomersBySale.get(saleId) ?? 0,
+        windowDays: ORDER_SUGGESTION_WINDOW_DAYS,
+      });
+    }
+    return bySale;
   }
 
   /**
@@ -904,6 +1123,7 @@ export class CustomerKpiReportsService {
       /** Sale chưa tra được mã nhân viên NKM. */
       salesWithoutMapping: Set<number>;
     },
+    orderSuggestions?: OrderSuggestionBundle,
   ) {
     const customersBySale = new Map<number, AssignmentRow[]>();
     for (const row of assignments) {
@@ -993,6 +1213,7 @@ export class CustomerKpiReportsService {
               fromDate,
               debtBalances.get(row.customerId) ?? null,
               revenueData(revenue, revenueFor(row)),
+              orderSuggestions?.byAssignment.get(row.assignmentId) ?? null,
             ),
           };
         });
@@ -1033,6 +1254,8 @@ export class CustomerKpiReportsService {
                   mapped: !revenue.salesWithoutMapping.has(saleId),
                 }
               : undefined,
+            // Tiêu chí gợi ý đơn hàng cần tổng hợp đơn chưa chốt của sale.
+            orderSuggestions?.bySale.get(saleId) ?? null,
           ),
         );
 
@@ -1100,6 +1323,7 @@ export class CustomerKpiReportsService {
             fromDate,
             debtBalances.get(row.customerId) ?? null,
             revenueData(revenue, revenueRow),
+            orderSuggestions?.byAssignment.get(row.assignmentId) ?? null,
           );
           // Cùng luật ghi đè với vòng chấm cấp sale: ghi đè cả sale ép mọi ô
           // khách, ghi đè từng khách chỉ hạ ô của khách đó
@@ -1248,6 +1472,14 @@ export class CustomerKpiReportsService {
       quarter,
     );
 
+    // Gợi ý đơn hàng chỉ nạp khi có tiêu chí dùng metric này — tính năng tắt
+    // thì báo cáo không tốn query nào.
+    const orderSuggestions = definitions.some(
+      (definition) => definition.metric === ORDER_SUGGESTION_METRIC,
+    )
+      ? await this.loadOrderSuggestions(assignments)
+      : undefined;
+
     return {
       scored: this.buildScoredData(
         assignments,
@@ -1260,6 +1492,7 @@ export class CustomerKpiReportsService {
         debtBalances,
         overrides,
         revenue,
+        orderSuggestions,
       ),
       definitions,
       debtBalances,
@@ -2227,6 +2460,8 @@ export class CustomerKpiReportsService {
   private criterionCell(c: SaleCriterion): string {
     if (c.overridden) return 'Không đạt (ghi đè)';
     if (c.status === 'no_data') return 'Thiếu dữ liệu';
+    // Tiêu chí gợi ý đơn hàng: hiện đúng hai số lead cần — số gợi ý + giá trị
+    if (c.orderSuggestion) return this.orderSuggestionText(c.orderSuggestion);
     if (c.scoringMode === 'ratio') {
       const num = c.passedCriteria ?? c.numerator ?? 0;
       const den = c.totalCriteria ?? c.denominatorValue ?? 0;
@@ -2237,9 +2472,24 @@ export class CustomerKpiReportsService {
       : `Không đạt (${c.passedCriteria ?? 0}/${c.totalCriteria ?? 0})`;
   }
 
+  /** "12 đơn · 340.500.000đ (5/379 khách)" — số gợi ý và tổng giá trị. */
+  private orderSuggestionText(detail: SaleOrderSuggestion): string {
+    return `${detail.count} gợi ý · ${this.moneyText(detail.totalValue)} (${detail.customersWithOrders}/${detail.totalCustomers} khách)`;
+  }
+
+  private moneyText(value: number): string {
+    return `${Math.round(value).toLocaleString('vi-VN')}đ`;
+  }
+
   private customerCell(c: CustomerCriterion): string {
     if (c.overridden) return 'Không đạt (ghi đè)';
     if (c.status === 'no_data') return '—';
+    // Khách của tiêu chí gợi ý đơn hàng: số đơn chưa chốt + giá trị
+    if (c.openOrderCount !== undefined) {
+      return c.openOrderCount > 0
+        ? `${c.openOrderCount} đơn · ${this.moneyText(c.openOrderValue ?? 0)}`
+        : '—';
+    }
     if (c.status === 'pass') return 'Đạt';
     if (c.status === 'fail') return 'Không đạt';
     return `${c.actualValue}%`;

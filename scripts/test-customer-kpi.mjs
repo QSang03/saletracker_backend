@@ -154,10 +154,11 @@ await expect('GET definitions → 200', 200, async () => (await call('GET', '/cu
 {
   const r = await call('GET', '/customer-kpi-definitions', H());
   const data = r.json?.data || [];
-  assert(r.status === 200 && data.length >= 5, `chỉ có ${data.length} tiêu chí`);
+  assert(r.status === 200 && data.length >= 6, `chỉ có ${data.length} tiêu chí`);
   assert(data.some((d) => d.key === 'doanh_so_key'), 'thiếu tiêu chí doanh_so_key');
   assert(data.some((d) => d.key === 'goi_y_thuc_hien'), 'thiếu tiêu chí goi_y_thuc_hien');
-  ok(`Seed đủ ≥5 tiêu chí mặc định (thấy ${data.length})`);
+  assert(data.some((d) => d.key === 'goi_y_don_hang'), 'thiếu tiêu chí goi_y_don_hang (TC6)');
+  ok(`Seed đủ ≥6 tiêu chí mặc định (thấy ${data.length})`);
 }
 
 const TEST_KEY = 'kpi_test_auto';
@@ -1908,6 +1909,13 @@ console.log('\n-- M. Mục 4: rollup Python → engine KPI → chỉ tiêu → g
         "INSERT INTO order_details (order_id, metadata, unit_price, quantity, status, created_at, updated_at) VALUES (?, ?, 100000, 2, 'completed', ?, NOW())",
         [orderIds[0], JSON.stringify({ customer_id: CONTACTS.key, conversation_info: { is_group: 'false' } }), `${TODAY} 11:00:00`],
       );
+      // tiêu chí 6 (gợi ý đơn hàng): 1 dòng đơn CHƯA CHỐT ('quoted') của đúng
+      // khách KEY, cùng đơn trên → order_count/revenue của rollup không đổi
+      // (rollup đếm DISTINCT orders và chỉ cộng tiền dòng 'completed')
+      await mainConn.query(
+        "INSERT INTO order_details (order_id, metadata, unit_price, quantity, status, created_at, updated_at) VALUES (?, ?, 500000, 1, 'quoted', ?, NOW())",
+        [orderIds[0], JSON.stringify({ customer_id: CONTACTS.key, conversation_info: { is_group: 'false' } }), `${TODAY} 12:00:00`],
+      );
       // khoảng chờ phản hồi: 2 responded (60s, 180s) hôm nay + 1 no_reply hôm qua
       const msgBase = 9100000000 + (Date.now() % 100000000);
       await mainConn.query(
@@ -2012,6 +2020,17 @@ console.log('\n-- M. Mục 4: rollup Python → engine KPI → chỉ tiêu → g
         assert(reply && reply.status === 'pass' && reply.numerator === 1 && reply.denominatorValue === 2, JSON.stringify(reply));
         const ack = byKey.get('goi_y_thuc_hien');
         assert(ack && ack.status === 'pass' && ack.passedCriteria === 1 && ack.totalCriteria === 2, JSON.stringify(ack));
+        // Tiêu chí 6: 1 dòng đơn 'quoted' của khách KEY → 1 gợi ý, giá trị 500000
+        const suggest = byKey.get('goi_y_don_hang');
+        assert(suggest && suggest.status === 'pass' && suggest.numerator === 1, JSON.stringify(suggest));
+        assert(
+          suggest.orderSuggestion && suggest.orderSuggestion.totalValue === 500000 && suggest.orderSuggestion.windowDays === 4,
+          `orderSuggestion sai: ${JSON.stringify(suggest.orderSuggestion)}`,
+        );
+        assert(
+          suggest.orderSuggestion.customersWithOrders === 1 && suggest.orderSuggestion.totalCustomers === 2,
+          `x/y khách có đơn chưa chốt sai: ${JSON.stringify(suggest.orderSuggestion)}`,
+        );
         // v1.6: tiêu chí doanh số đọc API NKM. Sale test chưa có employee_code
         // khớp bảng tra mã → no_data kèm lý do rõ ràng (chứ không phải "trượt").
         const rev = byKey.get('doanh_so_key');
@@ -2041,7 +2060,10 @@ console.log('\n-- M. Mục 4: rollup Python → engine KPI → chỉ tiêu → g
         assert(key, 'không thấy khách KEY');
         const non = sale.customers.find((c) => c.customerCode === CODES.non);
         assert(non, 'không thấy khách NON');
-        assert(key.totals.inbound === 2 && key.totals.outbound === 3 && key.totals.orders === 1 && key.totals.revenue === 200000, JSON.stringify(key.totals));
+        // totals.revenue = doanh số NKM (customer_revenue_daily), KHÔNG phải
+        // tiền đơn Zalo của rollup — nhóm này chưa seed NKM nên bằng 0; doanh
+        // thu NKM được kiểm ở mục 7c (Cách B).
+        assert(key.totals.inbound === 2 && key.totals.outbound === 3 && key.totals.orders === 1 && key.totals.revenue === 0, JSON.stringify(key.totals));
         assert(key.zaloLinked === true, 'khách KEY phải zaloLinked');
         const ackKey = key.criteria.find((c) => c.key === 'goi_y_thuc_hien');
         assert(ackKey && ackKey.status === 'pass', JSON.stringify(ackKey));
@@ -2055,6 +2077,18 @@ console.log('\n-- M. Mục 4: rollup Python → engine KPI → chỉ tiêu → g
         assert(nonTc3 && nonTc3.status === 'fail', JSON.stringify(nonTc3));
         const nonTc4 = non.criteria.find((c) => c.key === 'lien_lac_phan_hoi');
         assert(nonTc4 && nonTc4.status === 'fail', JSON.stringify(nonTc4));
+        // Tiêu chí 6 cấp khách: KEY có 1 đơn chưa chốt (500000đ), NON không có
+        const keySuggest = key.criteria.find((c) => c.key === 'goi_y_don_hang');
+        assert(keySuggest && keySuggest.status === 'pass', JSON.stringify(keySuggest));
+        assert(
+          keySuggest.openOrderCount === 1 && keySuggest.openOrderValue === 500000 && keySuggest.openOrderDate === TODAY,
+          `ô gợi ý đơn hàng của KEY sai: ${JSON.stringify(keySuggest)}`,
+        );
+        const nonSuggest = non.criteria.find((c) => c.key === 'goi_y_don_hang');
+        assert(
+          nonSuggest && nonSuggest.status === 'fail' && nonSuggest.openOrderCount === 0,
+          `ô gợi ý đơn hàng của NON sai: ${JSON.stringify(nonSuggest)}`,
+        );
         return r.status;
       });
 
@@ -2955,18 +2989,29 @@ console.log('\n-- N. Hồi quy so khớp: vắng mặt / tier sai / template --'
       const nonCell = customer.criteria.find((c) => c.key === 'doanh_so_non');
       if (tier === 'KEY') {
         assert(keyCell && keyCell.notApplicable !== true, `khách KEY bị bỏ qua ô doanh_so_key: ${JSON.stringify(keyCell)}`);
-        assert(nonCell && nonCell.notApplicable === true, `khách KEY KHÔNG được chấm doanh_so_non: ${JSON.stringify(nonCell)}`);
+        // Ô của loại khách còn lại phải KHÔNG được chấm: notApplicable khi đã
+        // nạp được dữ liệu doanh thu; sale chưa tra được mã NKM thì ô trả
+        // no_data "chưa có dữ liệu" (hành vi có từ trước, không phải lỗi TC6).
+        assert(
+          nonCell && (nonCell.notApplicable === true || nonCell.status === 'no_data'),
+          `khách KEY KHÔNG được chấm doanh_so_non: ${JSON.stringify(nonCell)}`,
+        );
         assert(summary.verdict === 'pass' || summary.verdict === 'fail', `khách KEY phải có kết luận: ${JSON.stringify(summary)}`);
-        assert(summary.applicable === 4, `khách KEY phải chấm 4 tiêu chí: ${JSON.stringify(summary)}`);
+        assert(summary.applicable === 5, `khách KEY phải chấm 5 tiêu chí (thêm TC6 gợi ý đơn hàng): ${JSON.stringify(summary)}`);
       } else if (tier === 'NON') {
         assert(nonCell && nonCell.notApplicable !== true, `khách NON bị bỏ qua ô doanh_so_non: ${JSON.stringify(nonCell)}`);
-        assert(keyCell && keyCell.notApplicable === true, `khách NON KHÔNG được chấm doanh_so_key: ${JSON.stringify(keyCell)}`);
+        assert(
+          keyCell && (keyCell.notApplicable === true || keyCell.status === 'no_data'),
+          `khách NON KHÔNG được chấm doanh_so_key: ${JSON.stringify(keyCell)}`,
+        );
         assert(summary.verdict === null, `khách NON không được kết luận: ${JSON.stringify(summary)}`);
-        assert(summary.applicable === 4, `khách NON phải chấm 4 tiêu chí: ${JSON.stringify(summary)}`);
+        assert(summary.applicable === 5, `khách NON phải chấm 5 tiêu chí (thêm TC6 gợi ý đơn hàng): ${JSON.stringify(summary)}`);
       }
-      // Ô đúng loại phải có số phiếu/doanh số (kể cả 0)
+      // Ô đúng loại phải có số phiếu/doanh số (kể cả 0) — trừ khi sale chưa
+      // tra được mã nhân viên NKM: ô trả no_data "chưa có dữ liệu doanh thu"
+      // (hành vi có từ trước, không phải lỗi của tiêu chí 6)
       const cell = tier === 'KEY' ? keyCell : nonCell;
-      if (cell && cell.notApplicable !== true) {
+      if (cell && cell.notApplicable !== true && cell.status !== 'no_data') {
         assert(typeof cell.quantity === 'number' && typeof cell.lineTotal === 'number', `thiếu quantity/lineTotal: ${JSON.stringify(cell)}`);
       }
     }

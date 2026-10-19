@@ -92,6 +92,52 @@ export const THRESHOLD_METRICS = ['order_count', 'debt_balance'];
  */
 export const REVENUE_METRICS = ['revenue_key', 'revenue_non'];
 
+/**
+ * Metric GỢI Ý ĐƠN HÀNG (tiêu chí 6) — "khách còn đơn CHƯA CHỐT trên Zalo tạo
+ * trong 4 ngày gần nhất thì nhắc sale đốc chốt". Nguồn: `order_details` +
+ * `orders` (DB chính, báo cáo nạp sẵn ở `loadOrderSuggestions`), khớp khách
+ * qua `customer_zalo.zalo_contact_id = order_details.meta_customer_id` — đúng
+ * đường liên kết mà job rollup dùng cho cột `order_count`.
+ *
+ * Hai con số nghiệp vụ yêu cầu: TỔNG SỐ GỢI Ý (số dòng đơn chưa chốt) và
+ * TỔNG GIÁ TRỊ (`unit_price × quantity`, chưa VAT) — trả đủ ở
+ * `orderSuggestion` cấp sale, và `openOrderCount`/`openOrderValue` cấp khách.
+ *
+ * Cửa sổ neo vào NGÀY HÔM NAY (giờ VN), KHÔNG theo khoảng xem của báo cáo:
+ * khoảng quý có `to` là ngày cuối quý (tương lai) nên neo vào đó sẽ ra rỗng.
+ *
+ * Mặc định đạt khi có ≥1 gợi ý (target_value = 1, so `gte`) — nghĩa "có đơn
+ * cần đốc chốt". Muốn nghĩa ngược lại (đạt = không còn đơn tồn) thì đổi
+ * `comparison` sang `lte` + target 0 ở màn hình cấu hình tiêu chí, không cần
+ * sửa code.
+ */
+export const ORDER_SUGGESTION_METRIC = 'open_order_suggestion';
+
+/** Số ngày "gần nhất" của tiêu chí gợi ý đơn hàng. */
+export const ORDER_SUGGESTION_WINDOW_DAYS = 4;
+
+/** Số liệu gợi ý đơn hàng của MỘT khách (tiêu chí 6). */
+export interface CustomerOrderSuggestion {
+  /** Số dòng đơn chưa chốt trong cửa sổ. */
+  count: number;
+  /** Tổng giá trị các dòng đó (`unit_price × quantity`, chưa VAT). */
+  totalValue: number;
+  /** Ngày tạo đơn chưa chốt gần nhất (`YYYY-MM-DD`), `null` khi không có đơn. */
+  latestOrderDate: string | null;
+}
+
+/** Số liệu gợi ý đơn hàng của MỘT sale (tiêu chí 6, cấp sale). */
+export interface SaleOrderSuggestion extends CustomerOrderSuggestion {
+  /** Số đơn khác nhau (`orders.id`) — một đơn có thể nhiều dòng sản phẩm. */
+  orderCount: number;
+  /** Số khách đang có đơn chưa chốt. */
+  customersWithOrders: number;
+  /** Tổng số khách trong danh sách của sale (mẫu số của "x/y khách"). */
+  totalCustomers: number;
+  /** Cửa sổ nhìn lại (ngày) — để FE ghi chú "trong N ngày gần nhất". */
+  windowDays: number;
+}
+
 const thresholdValueOf = (
   metric: string,
   windowed: ActivityDayRow[],
@@ -144,6 +190,12 @@ export interface CustomerCriterion {
   lineTotal?: number;
   /** Khách có phát sinh trong kỳ (≥1 phiếu) — chỉ tiêu chí doanh số trả. */
   hasRevenue?: boolean;
+  /** Tiêu chí gợi ý đơn hàng: số dòng đơn chưa chốt trong cửa sổ. */
+  openOrderCount?: number;
+  /** Tiêu chí gợi ý đơn hàng: tổng giá trị các đơn chưa chốt (chưa VAT). */
+  openOrderValue?: number;
+  /** Tiêu chí gợi ý đơn hàng: ngày tạo đơn chưa chốt gần nhất. */
+  openOrderDate?: string | null;
 }
 
 /** Kết luận theo LOẠI KHÁCH (thiết kế §5.3) — lớp tổng hợp trên các tiêu chí. */
@@ -238,6 +290,8 @@ export interface SaleCriterion {
   overrideReason?: string | null;
   /** Số liệu doanh số đầy đủ (chỉ tiêu chí doanh số cấp sale). */
   revenue?: SaleRevenueDetail;
+  /** Số liệu gợi ý đơn hàng đầy đủ (chỉ tiêu chí gợi ý đơn hàng cấp sale). */
+  orderSuggestion?: SaleOrderSuggestion;
 }
 
 const pct = (num: number, den: number): number =>
@@ -335,6 +389,8 @@ export class CustomerKpiScoringService {
    * của khách (báo cáo nạp sẵn từ bảng `debts`).
    * `revenue`: chỉ cần cho tiêu chí doanh số — số phiếu + doanh số của khách
    * trong kỳ (báo cáo nạp sẵn từ `customer_revenue_daily`).
+   * `openOrders`: chỉ cần cho tiêu chí gợi ý đơn hàng — số dòng đơn CHƯA CHỐT
+   * trong N ngày gần nhất + tổng giá trị (báo cáo nạp sẵn từ `order_details`).
    */
   scoreCustomer(
     definition: KpiDefinition,
@@ -343,6 +399,7 @@ export class CustomerKpiScoringService {
     fromDate: string,
     debtBalance?: number | null,
     revenue?: { tier: string | null; quantity: number; lineTotal: number },
+    openOrders?: CustomerOrderSuggestion | null,
   ): CustomerCriterion {
     const base: CustomerCriterion = {
       key: definition.key,
@@ -354,6 +411,13 @@ export class CustomerKpiScoringService {
 
     if (REVENUE_METRICS.includes(definition.metric)) {
       return this.scoreCustomerRevenue(definition, base, revenue);
+    }
+
+    // Tiêu chí 6 đọc bảng đơn ở DB chính (orders/order_details) — không phụ
+    // thuộc việc khớp liên hệ Zalo nên chấm TRƯỚC nhánh lọc ngày đo được, cùng
+    // chỗ đứng với movement_report và tiêu chí doanh số.
+    if (definition.metric === ORDER_SUGGESTION_METRIC) {
+      return this.scoreCustomerOrderSuggestion(definition, base, openOrders);
     }
 
     // Tiêu chí 3 KHÔNG gate zalo_linked: báo cáo di chuyển tồn tại độc lập với
@@ -475,6 +539,71 @@ export class CustomerKpiScoringService {
       quantity: revenue.quantity,
       lineTotal: revenue.lineTotal,
       hasRevenue: occurred,
+    };
+  }
+
+  /**
+   * Cấp KHÁCH của tiêu chí gợi ý đơn hàng: khách "đạt" khi có ≥1 dòng đơn CHƯA
+   * CHỐT tạo trong cửa sổ N ngày gần nhất (mặc định 4) — tức CÓ việc để sale
+   * đốc chốt, kèm tổng giá trị. Ngưỡng lấy từ cấu hình (`target_value`, mặc
+   * định 1) nên đổi luật chỉ cần sửa ở màn hình cấu hình tiêu chí.
+   *
+   * Khách không khớp được liên hệ Zalo nào thì không có `openOrders` → 0 gợi ý
+   * (fail), KHÔNG phải no_data: "khách không có đơn chưa chốt" là sự thật kiểm
+   * chứng được, khác với "thiếu nguồn dữ liệu".
+   */
+  private scoreCustomerOrderSuggestion(
+    definition: KpiDefinition,
+    base: CustomerCriterion,
+    openOrders?: CustomerOrderSuggestion | null,
+  ): CustomerCriterion {
+    const count = openOrders?.count ?? 0;
+    const target = base.targetValue ?? definition.target_value ?? 1;
+    return {
+      ...base,
+      status: this.compareValue(count, Number(target), definition.comparison)
+        ? 'pass'
+        : 'fail',
+      actualValue: count,
+      openOrderCount: count,
+      openOrderValue: openOrders?.totalValue ?? 0,
+      openOrderDate: openOrders?.latestOrderDate ?? null,
+    };
+  }
+
+  /**
+   * Cấp SALE của tiêu chí gợi ý đơn hàng — hai con số lead cần nhìn: TỔNG SỐ
+   * GỢI Ý (số dòng đơn chưa chốt) và TỔNG GIÁ TRỊ đang nằm ở đó. `numerator`
+   * giữ tổng số gợi ý; `passedCriteria/totalCriteria` là "x/y khách đang có
+   * đơn chưa chốt" cho đồng bộ với các tiêu chí binary khác.
+   *
+   * `detail` là `undefined` khi báo cáo không nạp dữ liệu đơn (không có tiêu
+   * chí này đang bật) — khi đó trả no_data kèm lý do thay vì kết luận trượt oan.
+   */
+  private scoreSaleOrderSuggestion(
+    definition: KpiDefinition,
+    base: SaleCriterion,
+    saleTargetValue: number | null,
+    detail?: SaleOrderSuggestion | null,
+  ): SaleCriterion {
+    if (!detail) {
+      return { ...base, reason: REASON_NO_CUSTOMERS };
+    }
+    const target = saleTargetValue ?? definition.target_value ?? 1;
+    return {
+      ...base,
+      status: this.compareValue(
+        detail.count,
+        Number(target),
+        definition.comparison,
+      )
+        ? 'pass'
+        : 'fail',
+      actualValue: detail.count,
+      numerator: detail.count,
+      totalCriteria: detail.totalCustomers,
+      passedCriteria: detail.customersWithOrders,
+      orderSuggestion: detail,
     };
   }
 
@@ -678,6 +807,8 @@ export class CustomerKpiScoringService {
    * riêng (nếu có) — đã lọc khách thuộc sale.
    * `revenue`: chỉ cần cho tiêu chí doanh số — doanh thu từng khách + chỉ tiêu
    * quý của sale.
+   * `orderSuggestions`: chỉ cần cho tiêu chí gợi ý đơn hàng — tổng hợp đơn
+   * CHƯA CHỐT trong N ngày gần nhất của sale (báo cáo nạp sẵn).
    */
   scoreSale(
     definition: KpiDefinition,
@@ -690,6 +821,7 @@ export class CustomerKpiScoringService {
     saleOnline: boolean,
     fromDate: string,
     revenue?: RevenueSaleInput,
+    orderSuggestions?: SaleOrderSuggestion | null,
   ): SaleCriterion {
     const base: SaleCriterion = {
       key: definition.key,
@@ -707,6 +839,15 @@ export class CustomerKpiScoringService {
 
     if (REVENUE_METRICS.includes(definition.metric)) {
       return this.scoreSaleRevenue(definition, base, revenue);
+    }
+
+    if (definition.metric === ORDER_SUGGESTION_METRIC) {
+      return this.scoreSaleOrderSuggestion(
+        definition,
+        base,
+        saleTargetValue,
+        orderSuggestions,
+      );
     }
 
     // Chỉ những ngày >= fromDate được tính vào kết quả — ngày lookback (trước

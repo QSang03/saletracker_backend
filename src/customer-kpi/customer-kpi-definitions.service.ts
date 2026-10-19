@@ -97,6 +97,19 @@ const DEFAULT_KPI_DEFINITIONS: Array<Partial<KpiDefinition>> = [
     sort_order: 5,
     description: 'Tổng hợp từ hoạt động: đã xử lý gợi ý hay chưa',
   },
+  {
+    team_group: 'kinh-doanh',
+    key: 'goi_y_don_hang',
+    name: 'Gợi ý đơn hàng',
+    metric: 'open_order_suggestion',
+    scoring_mode: ScoringMode.BINARY,
+    comparison: KpiComparison.GTE,
+    period: KpiPeriod.DAY,
+    target_value: 1,
+    sort_order: 6,
+    description:
+      'Tiêu chí 6: đơn CHƯA CHỐT trên Zalo tạo trong 4 ngày gần nhất của sale × khách trong danh sách (orders.sale_by + order_details.meta_customer_id khớp customer_zalo) — đếm số gợi ý và tổng giá trị (unit_price × quantity, chưa VAT) để đốc chốt. Đạt = có ≥1 đơn cần chốt; đổi `comparison` sang lte + target 0 nếu muốn nghĩa "đạt = hết đơn tồn"',
+  },
 ];
 
 /** CRUD cấu hình tiêu chí KPI — làm đủ hôm nay (bảng + seed mặc định). */
@@ -123,6 +136,32 @@ export class CustomerKpiDefinitionsService implements OnModuleInit {
     }
     await this.upgradeBehaviorCriteria();
     await this.upgradeRevenueCriteria();
+    await this.ensureDefaultCriteria();
+  }
+
+  /**
+   * Bù các tiêu chí mặc định còn THIẾU cho môi trường đã seed trước đó (nhánh
+   * `count === 0` không chạy lại được) — ví dụ tiêu chí 6 "Gợi ý đơn hàng" thêm
+   * sau khi bộ 5 tiêu chí đã nằm trong DB.
+   *
+   * Chỉ THÊM dòng thiếu, không đụng dòng đã có: admin đã sửa ngưỡng/thuật toán
+   * hay tắt (`is_active = 0`) thì giữ nguyên quyết định đó.
+   */
+  private async ensureDefaultCriteria() {
+    const rows = await this.definitionRepo.find({
+      where: { team_group: 'kinh-doanh' },
+    });
+    const existing = new Set(rows.map((row) => row.key));
+    const missing = DEFAULT_KPI_DEFINITIONS.filter(
+      (definition) => !existing.has(String(definition.key)),
+    );
+    if (missing.length === 0) return;
+    await this.definitionRepo.save(this.definitionRepo.create(missing));
+    this.logger.log(
+      `Đã bổ sung tiêu chí mặc định còn thiếu: ${missing
+        .map((definition) => definition.key)
+        .join(', ')}`,
+    );
   }
 
   /**

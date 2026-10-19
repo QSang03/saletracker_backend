@@ -12,6 +12,8 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import {
   CustomerKpiScoringService,
+  ORDER_SUGGESTION_METRIC,
+  ORDER_SUGGESTION_WINDOW_DAYS,
   REASON_NO_REVENUE_DATA,
   REASON_NO_ZALO_LINK,
   REASON_SALE_OFFLINE,
@@ -1002,6 +1004,133 @@ check(
   `${employeeCodeOfLabel('NKDS33-NGUYỄN CHÍ ĐẠO')}-${saleNameOfLabel('NKDS33-NGUYỄN CHÍ ĐẠO')}` === 'NKDS33-NGUYỄN CHÍ ĐẠO',
 );
 
+console.log(
+  '\n[S] Tiêu chí 6 — open_order_suggestion (đơn chưa chốt 4 ngày gần nhất)',
+);
+const suggestDef = (o = {}) =>
+  def({
+    key: 'goi_y_don_hang',
+    metric: ORDER_SUGGESTION_METRIC,
+    scoring_mode: 'binary',
+    comparison: 'gte',
+    target_value: 1,
+    period: 'day',
+    ...o,
+  });
+const OPEN = { count: 3, totalValue: 99800000, latestOrderDate: '2026-10-15' };
+const LINKED_DAY = { ...day('2026-10-15') };
+
+r = engine.scoreCustomer(suggestDef(), [LINKED_DAY], 1, FROM, null, undefined, OPEN);
+check(
+  'khách có đơn chưa chốt → pass, actualValue = số gợi ý',
+  r.status === 'pass' && r.actualValue === 3,
+  r,
+);
+check(
+  'trả kèm số gợi ý + tổng giá trị + ngày đơn gần nhất',
+  r.openOrderCount === 3 &&
+    r.openOrderValue === 99800000 &&
+    r.openOrderDate === '2026-10-15',
+  r,
+);
+
+r = engine.scoreCustomer(suggestDef(), [LINKED_DAY], 1, FROM, null, undefined, null);
+check(
+  'khách không có đơn chưa chốt → fail (KHÔNG phải no_data)',
+  r.status === 'fail' && r.actualValue === 0 && r.openOrderValue === 0,
+  r,
+);
+
+r = engine.scoreCustomer(
+  suggestDef({ comparison: 'lte', target_value: 0 }),
+  [LINKED_DAY],
+  0,
+  FROM,
+  null,
+  undefined,
+  null,
+);
+check(
+  'đổi comparison sang lte + target 0 → đạt khi hết đơn tồn',
+  r.status === 'pass',
+  r,
+);
+
+r = engine.scoreCustomer(
+  suggestDef(),
+  [{ ...day('2026-10-15', { linked: false }) }],
+  1,
+  FROM,
+  null,
+  undefined,
+  OPEN,
+);
+check(
+  'đơn ở DB chính nên không gate zalo_linked (khách chưa khớp vẫn chấm)',
+  r.status === 'pass',
+  r,
+);
+
+// Cấp sale: hai số lead cần — tổng số gợi ý và tổng giá trị
+const saleSuggestion = {
+  count: 5,
+  totalValue: 168800000,
+  latestOrderDate: '2026-10-15',
+  orderCount: 3,
+  customersWithOrders: 2,
+  totalCustomers: 9,
+  windowDays: ORDER_SUGGESTION_WINDOW_DAYS,
+};
+r = engine.scoreSale(
+  suggestDef(),
+  [custA, custB],
+  null,
+  true,
+  FROM,
+  undefined,
+  saleSuggestion,
+);
+check('sale có đơn chưa chốt → pass', r.status === 'pass', r);
+check(
+  'numerator = TỔNG SỐ GỢI Ý, orderSuggestion giữ tổng giá trị',
+  r.numerator === 5 && r.orderSuggestion?.totalValue === 168800000,
+  r,
+);
+check(
+  'x/y khách có đơn chưa chốt + cửa sổ 4 ngày',
+  r.passedCriteria === 2 &&
+    r.totalCriteria === 9 &&
+    r.orderSuggestion?.windowDays === 4,
+  r,
+);
+
+r = engine.scoreSale(
+  suggestDef(),
+  [custA, custB],
+  null,
+  true,
+  FROM,
+  undefined,
+  {
+    ...saleSuggestion,
+    count: 0,
+    totalValue: 0,
+    orderCount: 0,
+    customersWithOrders: 0,
+  },
+);
+check(
+  'sale không có đơn chưa chốt → fail, x = 0',
+  r.status === 'fail' && r.numerator === 0,
+  r,
+);
+
+r = engine.scoreSale(suggestDef(), [custA], null, true, FROM, undefined, undefined);
+check(
+  'chưa nạp dữ liệu đơn → no_data kèm lý do (không kết luận trượt)',
+  r.status === 'no_data' && r.reason === REASON_NO_CUSTOMERS,
+  r,
+);
 
 console.log(`
 ===== ${pass} pass, ${fail} fail =====`);
