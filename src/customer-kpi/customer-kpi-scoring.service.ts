@@ -92,6 +92,9 @@ export const THRESHOLD_METRICS = ['order_count', 'debt_balance'];
  */
 export const REVENUE_METRICS = ['revenue_key', 'revenue_non'];
 
+/** Metric của tiêu chí "Gợi ý thực hiện" (TC5) — dùng chung khoá với báo cáo. */
+export const SUGGESTION_ACK_METRIC = 'suggestion_ack';
+
 /**
  * Metric GỢI Ý ĐƠN HÀNG (tiêu chí 6) — "khách còn đơn CHƯA CHỐT trên Zalo tạo
  * trong 4 ngày gần nhất thì nhắc sale đốc chốt". Nguồn: `order_details` +
@@ -115,6 +118,28 @@ export const ORDER_SUGGESTION_METRIC = 'open_order_suggestion';
 
 /** Số ngày "gần nhất" của tiêu chí gợi ý đơn hàng. */
 export const ORDER_SUGGESTION_WINDOW_DAYS = 4;
+
+/**
+ * Gợi ý hiện tại của MỘT khách (mục 5.4) — CHÍNH là phần tử của
+ * `GET /customer-kpi-reports/suggestions`. Gắn thẳng vào ô tiêu chí của khách
+ * trong `by-sale` để FE hiện câu gợi ý ngay trên dòng, và để hai nơi không bao
+ * giờ lệch nhau (cùng một hàm tính).
+ */
+export interface CustomerSuggestion {
+  assignmentId: number;
+  customerId: number;
+  customerCode: string;
+  customerName: string;
+  customerTier: string | null;
+  /** Mã nhóm gợi ý: `chua_phan_hoi` | `key_chua_lien_lac` | `non_don_moi_chua_cham`. */
+  reason: string;
+  /** Câu gợi ý tiếng Việt để FE hiện thẳng. */
+  reasonText: string;
+  /** Ngày mốc của gợi ý (ngày khách nhắn / ngày đơn / ngày liên lạc cuối). */
+  contextDate: string | null;
+  /** Ngày sale liên lạc gần nhất — `null` = chưa từng. */
+  lastContactDate: string | null;
+}
 
 /** Số liệu gợi ý đơn hàng của MỘT khách (tiêu chí 6). */
 export interface CustomerOrderSuggestion {
@@ -207,6 +232,12 @@ export interface CustomerCriterion {
   openOrderValue?: number;
   /** Tiêu chí gợi ý đơn hàng: ngày tạo đơn chưa chốt gần nhất. */
   openOrderDate?: string | null;
+  /**
+   * Tiêu chí "Gợi ý thực hiện": gợi ý ĐANG chờ của khách (`null` = hôm nay
+   * không có việc gì với khách này). Cùng nguồn với
+   * `GET /customer-kpi-reports/suggestions`.
+   */
+  suggestion?: CustomerSuggestion | null;
 }
 
 /** Kết luận theo LOẠI KHÁCH (thiết kế §5.3) — lớp tổng hợp trên các tiêu chí. */
@@ -332,6 +363,12 @@ export interface SaleCriterion {
    * "khách đạt" (ratio trên giá trị tuyệt đối).
    */
   byTier?: SaleTierBreakdown;
+  /**
+   * Tiêu chí "Gợi ý thực hiện": số khách ĐANG có gợi ý chờ xử lý — KHÁC
+   * `passedCriteria` (số khách đã xử lý xong). Chỉ có khi khoảng xem chạm tới
+   * hôm nay (gợi ý luôn tính theo ngày hiện tại).
+   */
+  customersWithSuggestion?: number;
 }
 
 const pct = (num: number, den: number): number =>
@@ -551,7 +588,7 @@ export class CustomerKpiScoringService {
       };
     }
 
-    if (definition.metric === 'suggestion_ack') {
+    if (definition.metric === SUGGESTION_ACK_METRIC) {
       const passed = this.countSuggestionHandled(days, fromDate);
       return {
         ...base,
@@ -1140,7 +1177,7 @@ export class CustomerKpiScoringService {
       };
     }
 
-    if (definition.metric === 'suggestion_ack') {
+    if (definition.metric === SUGGESTION_ACK_METRIC) {
       // Khách "được đánh giá" = có ngày đo được TRONG khoảng xem; nhưng bài
       // test "bị bỏ bê ≥7 ngày rồi nhắn lại" cần LỊCH SỬ TRƯỚC fromDate —
       // countSuggestionHandled tự chỉ tính ngày >= fromDate trên mảng đầy đủ

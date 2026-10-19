@@ -32,10 +32,12 @@ import {
   CustomerCriterion,
   CustomerKpiScoringService,
   CustomerOrderSuggestion,
+  CustomerSuggestion,
   CustomerTierSummary,
   ORDER_SUGGESTION_METRIC,
   ORDER_SUGGESTION_WINDOW_DAYS,
   OrderSuggestionTierSlice,
+  SUGGESTION_ACK_METRIC,
   REVENUE_METRICS,
   RevenueCustomerInput,
   SaleCriterion,
@@ -1198,6 +1200,8 @@ export class CustomerKpiReportsService {
       }
     >,
     fromDate: string,
+    /** Ngày cuối khoảng xem — dùng để biết khoảng xem có chạm tới hôm nay. */
+    toDate: string,
     months: string[],
     debtBalances: Map<number, number | null>,
     overrides: Map<string, KpiCriterionOverride>,
@@ -1247,6 +1251,27 @@ export class CustomerKpiReportsService {
     for (const [saleId, saleCustomers] of customersBySale) {
       const saleInfo = saleInfos.get(saleId);
       const saleCriteria: SaleCriterion[] = [];
+      // Gợi ý "hôm nay nên liên lạc khách nào" (TC5) gắn thẳng vào ô của từng
+      // khách để FE hiện câu gợi ý trên dòng, khỏi gọi thêm /suggestions. Chỉ
+      // tính khi khoảng xem CHẠM TỚI HÔM NAY: gợi ý luôn neo theo ngày hiện tại,
+      // gắn vào một khoảng xem trong quá khứ sẽ sai (báo cáo tuần cũ hiện việc
+      // của hôm nay). Khoá theo assignmentId — cùng quy tắc với cả báo cáo.
+      const pendingSuggestions =
+        toDate >= this.today() &&
+        definitions.some(
+          (definition) => definition.metric === SUGGESTION_ACK_METRIC,
+        )
+          ? new Map<number, CustomerSuggestion | null>(
+              saleCustomers.map((row) => [
+                row.assignmentId,
+                this.suggestForCustomer(
+                  row,
+                  activity.get(row.assignmentId) ?? [],
+                  this.today(),
+                ),
+              ]),
+            )
+          : undefined;
       const customerRows: {
         row: AssignmentRow;
         zaloLinked: boolean;
@@ -1348,6 +1373,14 @@ export class CustomerKpiReportsService {
           ),
         );
 
+        // Đầu bảng TC5: đếm số khách ĐANG có gợi ý chờ xử lý — khác
+        // `passedCriteria` (số khách đã xử lý xong trong khoảng xem).
+        if (pendingSuggestions && definition.metric === SUGGESTION_ACK_METRIC) {
+          saleCriteria[saleCriteria.length - 1].customersWithSuggestion = [
+            ...pendingSuggestions.values(),
+          ].filter((item) => item !== null).length;
+        }
+
         // ── Ghi đè thủ công (trưởng phòng cùng phòng / admin) ──
         // Ghi đè cả sale mạnh nhất: cả tiêu chí tháng đó không đạt cho mọi khách.
         const saleOverride = this.findOverride(
@@ -1440,6 +1473,15 @@ export class CustomerKpiReportsService {
               ),
             Boolean(saleOverride),
           );
+          // TC5: gắn câu gợi ý của khách vào chính ô tiêu chí (null = hôm nay
+          // không có việc gì với khách này).
+          if (
+            pendingSuggestions &&
+            definition.metric === SUGGESTION_ACK_METRIC
+          ) {
+            criterion.suggestion =
+              pendingSuggestions.get(row.assignmentId) ?? null;
+          }
           return criterion;
         });
         const latest = days[days.length - 1];
@@ -1582,6 +1624,7 @@ export class CustomerKpiReportsService {
         definitions,
         saleInfos,
         from,
+        to,
         months,
         debtBalances,
         overrides,
@@ -2382,7 +2425,7 @@ export class CustomerKpiReportsService {
     reason: string,
     contextDate: string | null,
     lastContactDate: string | null,
-  ) {
+  ): CustomerSuggestion {
     return {
       assignmentId: row.assignmentId,
       customerId: row.customerId,

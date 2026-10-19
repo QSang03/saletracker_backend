@@ -2020,6 +2020,8 @@ console.log('\n-- M. Mục 4: rollup Python → engine KPI → chỉ tiêu → g
         assert(reply && reply.status === 'pass' && reply.numerator === 1 && reply.denominatorValue === 2, JSON.stringify(reply));
         const ack = byKey.get('goi_y_thuc_hien');
         assert(ack && ack.status === 'pass' && ack.passedCriteria === 1 && ack.totalCriteria === 2, JSON.stringify(ack));
+        // Đầu bảng TC5 đếm số khách ĐANG có gợi ý chờ xử lý (khác "đã xử lý")
+        assert(ack.customersWithSuggestion === 1, `customersWithSuggestion sai: ${JSON.stringify(ack)}`);
         // Tiêu chí 6: 1 dòng đơn 'quoted' của khách KEY → 1 gợi ý, giá trị 500000
         const suggest = byKey.get('goi_y_don_hang');
         assert(suggest && suggest.status === 'pass' && suggest.numerator === 1, JSON.stringify(suggest));
@@ -2113,6 +2115,23 @@ console.log('\n-- M. Mục 4: rollup Python → engine KPI → chỉ tiêu → g
         assert(
           nonSuggest && nonSuggest.status === 'fail' && nonSuggest.openOrderCount === 0,
           `ô gợi ý đơn hàng của NON sai: ${JSON.stringify(nonSuggest)}`,
+        );
+        // Câu gợi ý gắn thẳng vào ô TC5 của từng khách — cùng nguồn với
+        // /suggestions (đã kiểm ở nhóm M: NON chờ phản hồi, KEY vừa liên lạc)
+        const keyAck = key.criteria.find((c) => c.key === 'goi_y_thuc_hien');
+        assert(
+          keyAck && keyAck.suggestion === null,
+          `KEY vừa liên lạc không được có gợi ý: ${JSON.stringify(keyAck?.suggestion)}`,
+        );
+        const nonAck = non.criteria.find((c) => c.key === 'goi_y_thuc_hien');
+        assert(
+          nonAck && nonAck.suggestion && nonAck.suggestion.reason === 'chua_phan_hoi',
+          `ô TC5 của NON phải kèm câu gợi ý: ${JSON.stringify(nonAck?.suggestion)}`,
+        );
+        assert(
+          nonAck.suggestion.reasonText === 'Khách nhắn tin chưa được phản hồi' &&
+            nonAck.suggestion.customerCode === CODES.non,
+          `câu gợi ý sai nội dung: ${JSON.stringify(nonAck.suggestion)}`,
         );
         return r.status;
       });
