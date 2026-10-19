@@ -21,6 +21,12 @@ export interface PythonZaloContact {
   displayName: string | null;
 }
 
+/**
+ * Timeout mỗi request — API Python có endpoint chậm (query contacts quét toàn
+ * bảng tin nhắn, đo thực tế 7–20s) nên để dài hơn API NKM mới đủ.
+ */
+const REQUEST_TIMEOUT_MS = 60000;
+
 @Injectable()
 export class ZaloPythonApiClient {
   private readonly baseUrl = (
@@ -38,7 +44,7 @@ export class ZaloPythonApiClient {
     try {
       res = await fetch(`${this.baseUrl}${path}`, {
         headers: { 'x-master-key': this.masterKey },
-        signal: AbortSignal.timeout(10000),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
     } catch (error: any) {
       throw new ServiceUnavailableException(
