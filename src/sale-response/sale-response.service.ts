@@ -332,7 +332,12 @@ export class SaleResponseService {
 
     const qb = this.intervalRepo
       .createQueryBuilder('i')
-      .leftJoin('i.user', 'user')
+      // leftJoinAndSelect chứ không phải leftJoin: FE hiển thị tên sale ở cột
+      // "Nhân viên tiếp nhận" (item.user.full_name) và lọc theo tên đó, mà
+      // leftJoin chỉ thêm JOIN để lọc chứ không nạp dữ liệu relation.
+      // Lưu ý: select() nhận tên property (fullName), không phải tên cột.
+      .leftJoinAndSelect('i.user', 'user')
+      .select(['i', 'user.id', 'user.fullName', 'user.employeeCode'])
       .where('DATE(i.started_at) BETWEEN :dateFrom AND :dateTo', {
         dateFrom,
         dateTo,
@@ -352,7 +357,24 @@ export class SaleResponseService {
       .take(pageSize)
       .getManyAndCount();
 
-    return { page, pageSize, total, items };
+    // Payload của endpoint này là entity nên mọi key đều snake_case, và FE đọc
+    // item.user.full_name. Vì vậy trả object user dạng snake_case thay vì để
+    // entity User lộ ra fullName/employeeCode (và kéo theo cả chục cột khác).
+    return {
+      page,
+      pageSize,
+      total,
+      items: items.map((item) => ({
+        ...item,
+        user: item.user
+          ? {
+              id: item.user.id,
+              full_name: item.user.fullName ?? null,
+              employee_code: item.user.employeeCode ?? null,
+            }
+          : null,
+      })),
+    };
   }
 
   /** Tổng quan để dựng KPI ở đầu trang. */
