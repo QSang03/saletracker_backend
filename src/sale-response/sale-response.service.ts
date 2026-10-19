@@ -5,6 +5,7 @@ import { SaleResponseInterval, ResponseIntervalStatus } from './sale-response-in
 import { SaleResponseDaily } from './sale-response-daily.entity';
 import { SaleWorkActivityDaily } from './sale-work-activity-daily.entity';
 import { User } from '../users/user.entity';
+import { Department } from '../departments/department.entity';
 import { OrderService } from '../orders/order.service';
 
 export interface ResponseTimeFilters {
@@ -152,7 +153,10 @@ export class SaleResponseService {
   async bySale(query: ResponseTimeFilters) {
     const rows = await this.buildFilter(query, 'd')
       .leftJoin('d.user', 'user')
-      .leftJoin('d.department', 'dept')
+      // Nối thẳng vào departments theo department_id đã chốt trong bảng ngày.
+      // Không nối qua user.departments (quan hệ nhiều-nhiều): một sale thuộc 2
+      // phòng ban sẽ nhân đôi dòng và làm SUM ở dưới bị sai.
+      .leftJoin(Department, 'dept', 'dept.id = d.department_id')
       .select([
         'd.user_id AS "userId"',
         'user.full_name AS "fullName"',
@@ -184,8 +188,15 @@ export class SaleResponseService {
            ORDER BY d3.total_intervals DESC LIMIT 1)`,
         'p90Seconds',
       )
-      .orderBy('"respondedCount"', 'DESC')
-      .addOrderBy('"p50Seconds"', 'ASC')
+      // MySQL đang bật only_full_group_by: mọi cột không bọc hàm tổng hợp đều
+      // phải có trong GROUP BY.
+      .groupBy('d.user_id')
+      .addGroupBy('d.department_id')
+      .addGroupBy('user.full_name')
+      .addGroupBy('user.employee_code')
+      .addGroupBy('dept.name')
+      .orderBy('`respondedCount`', 'DESC')
+      .addOrderBy('`p50Seconds`', 'ASC')
       .setParameters({
         dateFrom: this.normalizeDate(
           query.dateFrom,
@@ -247,7 +258,10 @@ export class SaleResponseService {
         'MAX(d.p50_seconds) AS "p50Seconds"',
         'MAX(d.p90_seconds) AS "p90Seconds"',
       ])
-      .orderBy('"statDate"', 'ASC')
+      .groupBy('d.stat_date')
+      .addGroupBy('d.user_id')
+      .addGroupBy('user.full_name')
+      .orderBy('`statDate`', 'ASC')
       .addOrderBy('user.full_name', 'ASC')
       .getRawMany();
   }
@@ -263,7 +277,9 @@ export class SaleResponseService {
     const qb = this.workRepo
       .createQueryBuilder('w')
       .leftJoin('w.user', 'user')
-      .leftJoin('w.department', 'dept')
+      // Xem chú thích ở bySale: join theo cột department_id của bảng ngày, không
+      // join qua user.departments để tránh nhân dòng.
+      .leftJoin(Department, 'dept', 'dept.id = w.department_id')
       .where('w.stat_date BETWEEN :dateFrom AND :dateTo', {
         dateFrom,
         dateTo,
@@ -290,7 +306,11 @@ export class SaleResponseService {
         'SUM(w.out_of_hours_span_minutes)',
         'outOfHoursSpanMinutes',
       )
-      .orderBy('"outOfHoursMsgCount"', 'DESC')
+      .groupBy('w.user_id')
+      .addGroupBy('w.department_id')
+      .addGroupBy('user.full_name')
+      .addGroupBy('dept.name')
+      .orderBy('`outOfHoursMsgCount`', 'DESC')
       .getRawMany();
   }
 
@@ -344,16 +364,10 @@ export class SaleResponseService {
     const dateTo = this.normalizeDate(query.dateTo, new Date());
 
     const counts = await this.buildFilter(query, 'd')
-      .select([
-        'SUM(d.total_intervals)',
-        'totalIntervals',
-        'SUM(d.responded_count)',
-        'respondedCount',
-        'SUM(d.no_reply_count)',
-        'noReplyCount',
-        'SUM(d.pending_count)',
-        'pendingCount',
-      ])
+      .select('SUM(d.total_intervals)', 'totalIntervals')
+      .addSelect('SUM(d.responded_count)', 'respondedCount')
+      .addSelect('SUM(d.no_reply_count)', 'noReplyCount')
+      .addSelect('SUM(d.pending_count)', 'pendingCount')
       .addSelect('SUM(d.over_cap_count)', 'overCapCount')
       .addSelect('COUNT(DISTINCT d.user_id)', 'saleCount')
       .setParameters({ dateFrom, dateTo })
