@@ -126,6 +126,15 @@ export interface CustomerOrderSuggestion {
   latestOrderDate: string | null;
 }
 
+/** Số liệu gợi ý đơn hàng của MỘT nhóm khách (KEY hoặc NON). */
+export interface OrderSuggestionTierSlice extends CustomerOrderSuggestion {
+  /** Số đơn khác nhau (`orders.id`) của nhóm này. */
+  orderCount: number;
+  /** Số khách nhóm này đang có đơn chưa chốt / tổng khách của nhóm. */
+  customersWithOrders: number;
+  totalCustomers: number;
+}
+
 /** Số liệu gợi ý đơn hàng của MỘT sale (tiêu chí 6, cấp sale). */
 export interface SaleOrderSuggestion extends CustomerOrderSuggestion {
   /** Số đơn khác nhau (`orders.id`) — một đơn có thể nhiều dòng sản phẩm. */
@@ -136,6 +145,8 @@ export interface SaleOrderSuggestion extends CustomerOrderSuggestion {
   totalCustomers: number;
   /** Cửa sổ nhìn lại (ngày) — để FE ghi chú "trong N ngày gần nhất". */
   windowDays: number;
+  /** Chia theo loại khách: số gợi ý + giá trị + "x/y khách" của KEY và NON. */
+  byTier: { key: OrderSuggestionTierSlice; non: OrderSuggestionTierSlice };
 }
 
 const thresholdValueOf = (
@@ -271,6 +282,29 @@ export interface SaleRevenueDetail {
   isWholeQuarter: boolean;
 }
 
+/**
+ * Tiến độ của một nhóm khách trong MỘT tiêu chí: "đạt bao nhiêu trên tổng".
+ * Dùng cho khối `byTier` để FE hiện 3 dòng (tổng / KEY / NON) mà không phải
+ * tự đếm lại từ danh sách khách.
+ */
+export interface TierProgress {
+  /** Số khách đạt tiêu chí trong nhóm này. */
+  passed: number;
+  /** Tổng khách của nhóm này trong ĐÚNG mẫu số của tiêu chí. */
+  total: number;
+}
+
+/**
+ * Tiến độ tách theo loại khách (KEY / NON) của một tiêu chí cấp sale.
+ * Khách chưa xác định loại (tier rỗng/khác KEY-NON) không nằm trong cả hai ô,
+ * nên `key.total + non.total` có thể nhỏ hơn `totalCriteria` — dòng tổng vẫn
+ * đọc theo `totalCriteria/passedCriteria` như hiện tại.
+ */
+export interface SaleTierBreakdown {
+  key: TierProgress;
+  non: TierProgress;
+}
+
 /** Kết quả chấm MỘT tiêu chí cho MỘT sale (overview / đầu trang by-sale). */
 export interface SaleCriterion {
   key: string;
@@ -292,6 +326,12 @@ export interface SaleCriterion {
   revenue?: SaleRevenueDetail;
   /** Số liệu gợi ý đơn hàng đầy đủ (chỉ tiêu chí gợi ý đơn hàng cấp sale). */
   orderSuggestion?: SaleOrderSuggestion;
+  /**
+   * "Đạt bao nhiêu trên tổng" tách theo loại khách — có ở mọi tiêu chí đếm
+   * khách (binary) và tiêu chí doanh số. Vắng ở tiêu chí không có khái niệm
+   * "khách đạt" (ratio trên giá trị tuyệt đối).
+   */
+  byTier?: SaleTierBreakdown;
 }
 
 const pct = (num: number, den: number): number =>
@@ -301,6 +341,41 @@ const pct = (num: number, den: number): number =>
 export const roundTo = (value: number, digits: number): number => {
   const factor = 10 ** digits;
   return Math.round(value * factor) / factor;
+};
+
+/** Chuẩn hoá loại khách: chỉ `KEY` / `NON` được tính, còn lại coi như chưa rõ. */
+export const normalizedTier = (
+  tier: string | null | undefined,
+): 'KEY' | 'NON' | null => {
+  const upper = (tier ?? '').toUpperCase();
+  return upper === 'KEY' ? 'KEY' : upper === 'NON' ? 'NON' : null;
+};
+
+/**
+ * "Đạt bao nhiêu trên tổng" tách theo KEY/NON trên MỘT tập khách — dùng chung
+ * cho mọi tiêu chí cấp sale (kể cả doanh số) nên ba dòng tổng / KEY / NON luôn
+ * tính trên cùng một mẫu số với `totalCriteria/passedCriteria`.
+ *
+ * Khách chưa xác định loại không vào ô nào (giữ đúng hành vi của bảng phân phối
+ * doanh số — `rollupRevenue` cũng bỏ qua nhóm không rõ KEY/NON).
+ */
+export const tierBreakdown = <T>(
+  rows: T[],
+  tierOf: (row: T) => string | null | undefined,
+  passedOf: (row: T) => boolean,
+): SaleTierBreakdown => {
+  const result: SaleTierBreakdown = {
+    key: { passed: 0, total: 0 },
+    non: { passed: 0, total: 0 },
+  };
+  for (const row of rows) {
+    const tier = normalizedTier(tierOf(row));
+    if (!tier) continue;
+    const bucket = tier === 'KEY' ? result.key : result.non;
+    bucket.total += 1;
+    if (passedOf(row)) bucket.passed += 1;
+  }
+  return result;
 };
 
 /**
@@ -604,7 +679,29 @@ export class CustomerKpiScoringService {
       totalCriteria: detail.totalCustomers,
       passedCriteria: detail.customersWithOrders,
       orderSuggestion: detail,
+      // "x/y khách" tách KEY/NON — FE hiện kèm số gợi ý + giá trị của từng loại
+      byTier: this.orderSuggestionTierBreakdown(detail),
     };
+  }
+
+  /**
+   * "Đạt x/y" tách KEY/NON của tiêu chí gợi ý đơn hàng. Dữ liệu chi tiết có thể
+   * đến từ nơi gọi tự dựng (thiếu `byTier`) — lùi về 0/0 thay vì ném lỗi làm
+   * hỏng cả báo cáo; có `byTier` thì lấy đúng "số khách có đơn / tổng khách".
+   */
+  private orderSuggestionTierBreakdown(
+    detail: SaleOrderSuggestion,
+  ): SaleTierBreakdown {
+    const progress = (tier: 'key' | 'non'): TierProgress => {
+      const slice = detail.byTier?.[tier];
+      return slice
+        ? {
+            passed: slice.customersWithOrders,
+            total: slice.totalCustomers,
+          }
+        : { passed: 0, total: 0 };
+    };
+    return { key: progress('key'), non: progress('non') };
   }
 
   /**
@@ -671,6 +768,7 @@ export class CustomerKpiScoringService {
         status: 'no_data',
         reason: REASON_NO_QUARTER_TARGET,
         revenue: detail,
+        byTier: this.revenueTierBreakdown(detail),
       };
     }
 
@@ -685,6 +783,24 @@ export class CustomerKpiScoringService {
       denominatorValue: total,
       targetValue: revenue.quarterTarget,
       revenue: detail,
+      byTier: this.revenueTierBreakdown(detail),
+    };
+  }
+
+  /**
+   * "Khách có phát sinh" tách KEY/NON của tiêu chí doanh số — dùng lại đúng số
+   * của bảng phân phối (`keyCustomers`/`nonCustomers`) nên hai chỗ không lệch.
+   */
+  private revenueTierBreakdown(detail: SaleRevenueDetail): SaleTierBreakdown {
+    return {
+      key: {
+        passed: detail.keyCustomers.reached,
+        total: detail.keyCustomers.total,
+      },
+      non: {
+        passed: detail.nonCustomers.reached,
+        total: detail.nonCustomers.total,
+      },
     };
   }
 
@@ -816,6 +932,8 @@ export class CustomerKpiScoringService {
       days: ActivityDayRow[];
       targetValue?: number | null;
       debtBalance?: number | null;
+      /** `KEY` | `NON` (từ dòng phân công) — để tách "đạt x/y" theo loại khách. */
+      tier?: string | null;
     }[],
     saleTargetValue: number | null,
     saleOnline: boolean,
@@ -849,7 +967,6 @@ export class CustomerKpiScoringService {
         orderSuggestions,
       );
     }
-
     // Chỉ những ngày >= fromDate được tính vào kết quả — ngày lookback (trước
     // khoảng xem) chỉ phục vụ chấm gợi ý, KHÔNG được đếm vào support/phản hồi
     const windowedCustomers = customers.map((c) => ({
@@ -880,21 +997,21 @@ export class CustomerKpiScoringService {
         return { ...base, reason: emptyPoolReason };
       }
       const perCustomer = pool.map((c) => ({
+        row: c,
         value: thresholdValueOf(definition.metric, c.days, c.debtBalance),
         target: c.targetValue ?? saleTargetValue,
       }));
+      const passesThreshold = (pc: (typeof perCustomer)[number]): boolean =>
+        pc.value != null &&
+        pc.target != null &&
+        this.compareValue(pc.value, pc.target, definition.comparison);
 
       if (definition.scoring_mode === ScoringMode.BINARY) {
         // Không ai có ngưỡng/chi tiêu → chưa cấu hình xong, không kết luật fail
         if (perCustomer.every((pc) => pc.target == null)) {
           return { ...base, reason: 'Chưa cấu hình ngưỡng cho tiêu chí.' };
         }
-        const passed = perCustomer.filter(
-          (pc) =>
-            pc.value != null &&
-            pc.target != null &&
-            this.compareValue(pc.value, pc.target, definition.comparison),
-        );
+        const passed = perCustomer.filter(passesThreshold);
         return {
           ...base,
           status: passed.length > 0 ? 'pass' : 'fail',
@@ -903,6 +1020,11 @@ export class CustomerKpiScoringService {
           passedCriteria: passed.length,
           numerator: passed.length,
           denominatorValue: pool.length,
+          byTier: tierBreakdown(
+            perCustomer,
+            (pc) => pc.row.tier,
+            passesThreshold,
+          ),
         };
       }
       if (definition.denominator !== KpiDenominator.TARGET_VALUE) {
@@ -926,15 +1048,15 @@ export class CustomerKpiScoringService {
 
     if (definition.metric === 'contacted_customers') {
       const pool = reachable(windowedCustomers);
-      const passed = pool.filter((c) =>
-        c.days.some((row) => row.zalo_linked && isOutbound(row)),
-      );
       if (pool.length === 0) {
         return {
           ...base,
           reason: emptyPoolReason,
         };
       }
+      const touched = (c: (typeof pool)[number]) =>
+        c.days.some((row) => row.zalo_linked && isOutbound(row));
+      const passed = pool.filter(touched);
       return {
         ...base,
         status: 'ratio',
@@ -943,20 +1065,21 @@ export class CustomerKpiScoringService {
         denominatorValue: pool.length,
         totalCriteria: pool.length,
         passedCriteria: passed.length,
+        byTier: tierBreakdown(pool, (c) => c.tier, touched),
       };
     }
 
     if (definition.metric === 'responded_customers') {
       const pool = reachable(windowedCustomers);
-      const passed = pool.filter((c) =>
-        c.days.some((row) => row.zalo_linked && isTwoWay(row)),
-      );
       if (pool.length === 0) {
         return {
           ...base,
           reason: emptyPoolReason,
         };
       }
+      const replied = (c: (typeof pool)[number]) =>
+        c.days.some((row) => row.zalo_linked && isTwoWay(row));
+      const passed = pool.filter(replied);
       return {
         ...base,
         status: 'ratio',
@@ -965,6 +1088,7 @@ export class CustomerKpiScoringService {
         denominatorValue: pool.length,
         totalCriteria: pool.length,
         passedCriteria: passed.length,
+        byTier: tierBreakdown(pool, (c) => c.tier, replied),
       };
     }
 
@@ -975,11 +1099,11 @@ export class CustomerKpiScoringService {
       if (pool.length === 0) {
         return { ...base, reason: REASON_NO_CUSTOMERS };
       }
-      const passed = pool.filter((c) =>
+      const reported = (c: (typeof pool)[number]) =>
         c.days.some(
           (row) => (row.movement_count ?? 0) > 0 && row.stat_date >= fromDate,
-        ),
-      );
+        );
+      const passed = pool.filter(reported);
       return {
         ...base,
         status: passed.length > 0 ? 'pass' : 'fail',
@@ -988,6 +1112,7 @@ export class CustomerKpiScoringService {
         denominatorValue: pool.length,
         totalCriteria: pool.length,
         passedCriteria: passed.length,
+        byTier: tierBreakdown(pool, (c) => c.tier, reported),
       };
     }
 
@@ -1000,9 +1125,9 @@ export class CustomerKpiScoringService {
           reason: emptyPoolReason,
         };
       }
-      const passed = pool.filter((c) =>
-        c.days.some((row) => row.zalo_linked && isOutbound(row)),
-      );
+      const touched = (c: (typeof pool)[number]) =>
+        c.days.some((row) => row.zalo_linked && isOutbound(row));
+      const passed = pool.filter(touched);
       return {
         ...base,
         status: passed.length > 0 ? 'pass' : 'fail',
@@ -1011,6 +1136,7 @@ export class CustomerKpiScoringService {
         denominatorValue: pool.length,
         totalCriteria: pool.length,
         passedCriteria: passed.length,
+        byTier: tierBreakdown(pool, (c) => c.tier, touched),
       };
     }
 
@@ -1027,9 +1153,9 @@ export class CustomerKpiScoringService {
           reason: saleOnline ? REASON_NO_ZALO_LINK : REASON_SALE_OFFLINE,
         };
       }
-      const passed = evaluated.filter(
-        (c) => this.countSuggestionHandled(c.days, fromDate) > 0,
-      );
+      const handled = (c: (typeof evaluated)[number]) =>
+        this.countSuggestionHandled(c.days, fromDate) > 0;
+      const passed = evaluated.filter(handled);
       return {
         ...base,
         status: passed.length > 0 ? 'pass' : 'fail',
@@ -1038,6 +1164,7 @@ export class CustomerKpiScoringService {
         passedCriteria: passed.length,
         numerator: passed.length,
         denominatorValue: evaluated.length,
+        byTier: tierBreakdown(evaluated, (c) => c.tier, handled),
       };
     }
 

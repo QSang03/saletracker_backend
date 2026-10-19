@@ -1080,6 +1080,24 @@ const saleSuggestion = {
   customersWithOrders: 2,
   totalCustomers: 9,
   windowDays: ORDER_SUGGESTION_WINDOW_DAYS,
+  byTier: {
+    key: {
+      count: 3,
+      totalValue: 120000000,
+      latestOrderDate: '2026-10-15',
+      orderCount: 2,
+      customersWithOrders: 1,
+      totalCustomers: 4,
+    },
+    non: {
+      count: 2,
+      totalValue: 48800000,
+      latestOrderDate: '2026-10-14',
+      orderCount: 1,
+      customersWithOrders: 1,
+      totalCustomers: 5,
+    },
+  },
 };
 r = engine.scoreSale(
   suggestDef(),
@@ -1102,6 +1120,22 @@ check(
     r.totalCriteria === 9 &&
     r.orderSuggestion?.windowDays === 4,
   r,
+);
+check(
+  'byTier: KEY 1/4 · NON 1/5 (khớp số khách có đơn từng loại)',
+  r.byTier?.key.passed === 1 &&
+    r.byTier?.key.total === 4 &&
+    r.byTier?.non.passed === 1 &&
+    r.byTier?.non.total === 5,
+  r.byTier,
+);
+check(
+  'orderSuggestion.byTier giữ số gợi ý + giá trị của từng loại',
+  r.orderSuggestion?.byTier.key.count === 3 &&
+    r.orderSuggestion?.byTier.key.totalValue === 120000000 &&
+    r.orderSuggestion?.byTier.non.count === 2 &&
+    r.orderSuggestion?.byTier.non.totalValue === 48800000,
+  r.orderSuggestion?.byTier,
 );
 
 r = engine.scoreSale(
@@ -1129,6 +1163,80 @@ r = engine.scoreSale(suggestDef(), [custA], null, true, FROM, undefined, undefin
 check(
   'chưa nạp dữ liệu đơn → no_data kèm lý do (không kết luận trượt)',
   r.status === 'no_data' && r.reason === REASON_NO_CUSTOMERS,
+  r,
+);
+
+console.log(
+  '\n[T] byTier — "đạt x/y" tách KEY/NON cho FE hiện 3 dòng',
+);
+
+// TC3: mẫu số = TOÀN BỘ khách của sale, khách chưa rõ loại không vào ô nào
+r = engine.scoreSale(
+  def({
+    metric: 'movement_report',
+    scoring_mode: 'binary',
+    target_value: 1,
+    period: 'month',
+  }),
+  [
+    { days: [mvDay('2026-10-12', 1)], tier: 'KEY' },
+    { days: [mvDay('2026-10-12', 0)], tier: 'KEY' },
+    { days: [mvDay('2026-10-12', 2)], tier: 'NON' },
+    { days: [mvDay('2026-10-12', 1)] },
+  ],
+  1,
+  false,
+  FROM,
+);
+check(
+  'TC3 byTier: KEY 1/2 · NON 1/1',
+  r.byTier?.key.passed === 1 &&
+    r.byTier?.key.total === 2 &&
+    r.byTier?.non.passed === 1 &&
+    r.byTier?.non.total === 1,
+  r.byTier,
+);
+check(
+  'dòng tổng vẫn tính cả khách chưa rõ loại (4 khách, 3 đạt)',
+  r.totalCriteria === 4 && r.passedCriteria === 3,
+  r,
+);
+
+// TC4: mẫu số = khách ĐO ĐƯỢC — khách offline không vào cả dòng tổng lẫn ô loại
+r = engine.scoreSale(
+  def({ metric: 'monthly_contact', scoring_mode: 'binary', target_value: 1 }),
+  [
+    { days: [day('2026-10-01', { ob: 1 })], tier: 'KEY' },
+    { days: [day('2026-10-01', { linked: false })], tier: 'KEY' },
+  ],
+  1,
+  true,
+  FROM,
+);
+check(
+  'TC4 byTier theo mẫu số reachable: KEY 1/1 (khách offline bị loại)',
+  r.byTier?.key.passed === 1 && r.byTier?.key.total === 1,
+  r.byTier,
+);
+check(
+  'dòng tổng cũng chỉ 1 khách (khách offline không vào mẫu số)',
+  r.totalCriteria === 1 && r.denominatorValue === 1,
+  r,
+);
+
+// Tiêu chí doanh số: byTier lấy đúng số của bảng phân phối
+r = engine.scoreSale(KEY_DEF(), [], null, true, FROM_Q, PIVOT_INPUT);
+check(
+  'doanh số byTier: KEY 2/3 · NON 0/2 (khớp keyCustomers/nonCustomers)',
+  r.byTier?.key.passed === 2 &&
+    r.byTier?.key.total === 3 &&
+    r.byTier?.non.passed === 0 &&
+    r.byTier?.non.total === 2,
+  r.byTier,
+);
+check(
+  'doanh số chưa có chỉ tiêu quý (no_data) vẫn trả byTier',
+  r.status === 'no_data' || r.byTier !== undefined,
   r,
 );
 

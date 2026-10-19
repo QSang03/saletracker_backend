@@ -35,11 +35,13 @@ import {
   CustomerTierSummary,
   ORDER_SUGGESTION_METRIC,
   ORDER_SUGGESTION_WINDOW_DAYS,
+  OrderSuggestionTierSlice,
   REVENUE_METRICS,
   RevenueCustomerInput,
   SaleCriterion,
   SaleOrderSuggestion,
   SUGGESTION_GAP_DAYS,
+  normalizedTier,
   roundTo,
 } from './customer-kpi-scoring.service';
 import {
@@ -92,13 +94,33 @@ interface OrderSuggestionBundle {
   bySale: Map<number, SaleOrderSuggestion>;
 }
 
-/** Bucket cộng dồn trong lúc quét đơn chưa chốt của một sale. */
-interface SaleSuggestionBucket {
+/** Bucket cộng dồn trong lúc quét đơn chưa chốt (dùng cho cả sale và từng loại khách). */
+interface SuggestionBucket {
   count: number;
   totalValue: number;
   orderIds: Set<number>;
   assignmentIds: Set<number>;
   latest: string | null;
+}
+
+/** Bucket của một sale: tổng + tách riêng KEY / NON. */
+interface SaleSuggestionBucket extends SuggestionBucket {
+  key: SuggestionBucket;
+  non: SuggestionBucket;
+}
+
+const emptySuggestionBucket = (): SuggestionBucket => ({
+  count: 0,
+  totalValue: 0,
+  orderIds: new Set<number>(),
+  assignmentIds: new Set<number>(),
+  latest: null,
+});
+
+/** Khách của một sale tách theo loại — mẫu số của "x/y khách" từng nhóm. */
+interface SaleTierTotals {
+  key: number;
+  non: number;
 }
 
 /**
@@ -448,22 +470,29 @@ export class CustomerKpiReportsService {
     const toExclusive = `${this.shiftDate(today, 1)} 00:00:00`;
 
     // Mọi sale trong phạm vi đều có ô số liệu (kể cả 0 đơn) — thiếu ô sẽ bị
-    // hiểu là "chưa nạp dữ liệu" và trả no_data oan.
+    // hiểu là "chưa nạp dữ liệu" và trả no_data oan. Đếm luôn tổng khách theo
+    // loại để FE hiện "KEY x/y · NON x/y".
     const totalCustomersBySale = new Map<number, number>();
+    const totalBySaleTier = new Map<number, SaleTierTotals>();
+    const tierByAssignment = new Map<number, string | null>();
     for (const row of assignments) {
       totalCustomersBySale.set(
         row.saleId,
         (totalCustomersBySale.get(row.saleId) ?? 0) + 1,
       );
+      tierByAssignment.set(row.assignmentId, row.customerTier);
+      const totals = totalBySaleTier.get(row.saleId) ?? { key: 0, non: 0 };
+      const tier = normalizedTier(row.customerTier);
+      if (tier === 'KEY') totals.key += 1;
+      else if (tier === 'NON') totals.non += 1;
+      totalBySaleTier.set(row.saleId, totals);
     }
     const buckets = new Map<number, SaleSuggestionBucket>();
     for (const saleId of totalCustomersBySale.keys()) {
       buckets.set(saleId, {
-        count: 0,
-        totalValue: 0,
-        orderIds: new Set(),
-        assignmentIds: new Set(),
-        latest: null,
+        ...emptySuggestionBucket(),
+        key: emptySuggestionBucket(),
+        non: emptySuggestionBucket(),
       });
     }
 
@@ -497,7 +526,11 @@ export class CustomerKpiReportsService {
     if (assignmentByContact.size === 0) {
       return {
         byAssignment,
-        bySale: this.finalizeSaleSuggestions(buckets, totalCustomersBySale),
+        bySale: this.finalizeSaleSuggestions(
+          buckets,
+          totalCustomersBySale,
+          totalBySaleTier,
+        ),
       };
     }
 
@@ -544,18 +577,28 @@ export class CustomerKpiReportsService {
         const day = this.fmtDate(row.createdAt);
 
         const bucket = buckets.get(saleId) ?? {
-          count: 0,
-          totalValue: 0,
-          orderIds: new Set<number>(),
-          assignmentIds: new Set<number>(),
-          latest: null,
+          ...emptySuggestionBucket(),
+          key: emptySuggestionBucket(),
+          non: emptySuggestionBucket(),
         };
         buckets.set(saleId, bucket);
-        bucket.count += 1;
-        bucket.totalValue += value;
-        bucket.orderIds.add(Number(row.orderId));
-        bucket.assignmentIds.add(assignmentId);
-        if (!bucket.latest || day > bucket.latest) bucket.latest = day;
+        // Cộng vào ô tổng VÀ ô loại khách của dòng phân công đã ghép được.
+        // Khách chưa xác định loại chỉ vào ô tổng — cùng luật với `tierBreakdown`
+        // của engine (không đoán bừa thành NON).
+        const tier = normalizedTier(tierByAssignment.get(assignmentId));
+        const targets =
+          tier === 'KEY'
+            ? [bucket, bucket.key]
+            : tier === 'NON'
+              ? [bucket, bucket.non]
+              : [bucket];
+        for (const target of targets) {
+          target.count += 1;
+          target.totalValue += value;
+          target.orderIds.add(Number(row.orderId));
+          target.assignmentIds.add(assignmentId);
+          if (!target.latest || day > target.latest) target.latest = day;
+        }
 
         const perCustomer = byAssignment.get(assignmentId) ?? {
           count: 0,
@@ -573,17 +616,38 @@ export class CustomerKpiReportsService {
 
     return {
       byAssignment,
-      bySale: this.finalizeSaleSuggestions(buckets, totalCustomersBySale),
+      bySale: this.finalizeSaleSuggestions(
+        buckets,
+        totalCustomersBySale,
+        totalBySaleTier,
+      ),
     };
   }
 
-  /** Đóng gói bucket thô thành payload trả cho FE (thêm số đơn/khách + cửa sổ). */
+  /**
+   * Đóng gói bucket thô thành payload trả cho FE: hai con số quản lý cần (tổng
+   * số gợi ý + tổng giá trị) kèm "x/y khách", tách thêm KEY / NON để FE hiện
+   * ba dòng như các tiêu chí khác.
+   */
   private finalizeSaleSuggestions(
     buckets: Map<number, SaleSuggestionBucket>,
     totalCustomersBySale: Map<number, number>,
+    totalBySaleTier: Map<number, SaleTierTotals>,
   ): Map<number, SaleOrderSuggestion> {
+    const sliceOf = (
+      bucket: SuggestionBucket,
+      totalCustomers: number,
+    ): OrderSuggestionTierSlice => ({
+      count: bucket.count,
+      totalValue: roundTo(bucket.totalValue, 2),
+      latestOrderDate: bucket.latest,
+      orderCount: bucket.orderIds.size,
+      customersWithOrders: bucket.assignmentIds.size,
+      totalCustomers,
+    });
     const bySale = new Map<number, SaleOrderSuggestion>();
     for (const [saleId, bucket] of buckets) {
+      const tierTotals = totalBySaleTier.get(saleId) ?? { key: 0, non: 0 };
       bySale.set(saleId, {
         count: bucket.count,
         totalValue: roundTo(bucket.totalValue, 2),
@@ -592,6 +656,10 @@ export class CustomerKpiReportsService {
         customersWithOrders: bucket.assignmentIds.size,
         totalCustomers: totalCustomersBySale.get(saleId) ?? 0,
         windowDays: ORDER_SUGGESTION_WINDOW_DAYS,
+        byTier: {
+          key: sliceOf(bucket.key, tierTotals.key),
+          non: sliceOf(bucket.non, tierTotals.non),
+        },
       });
     }
     return bySale;
@@ -1090,10 +1158,29 @@ export class CustomerKpiReportsService {
     criterion.status = 'fail';
     criterion.numerator = 0;
     criterion.passedCriteria = 0;
+    // Ô "đạt x/y" tách KEY/NON phải hạ theo, nếu không FE hiện ba dòng mâu
+    // thuẫn nhau. Số liệu thô (đếm/tiền) giữ nguyên — ghi đè là kết luận
+    // đạt/không đạt, không phải xoá dữ liệu.
+    if (criterion.byTier) {
+      criterion.byTier.key.passed = 0;
+      criterion.byTier.non.passed = 0;
+    }
     if (changed) {
       criterion.overridden = true;
       criterion.overrideReason = override.reason;
     }
+  }
+
+  /** Ghi đè làm hạ MỘT khách: trừ vào ô "đạt" của đúng loại khách đó. */
+  private demoteTierProgress(
+    criterion: SaleCriterion,
+    tier: string | null | undefined,
+  ): void {
+    const normalized = normalizedTier(tier);
+    if (!normalized || !criterion.byTier) return;
+    const bucket =
+      normalized === 'KEY' ? criterion.byTier.key : criterion.byTier.non;
+    bucket.passed = Math.max(0, bucket.passed - 1);
   }
 
   private buildScoredData(
@@ -1237,6 +1324,8 @@ export class CustomerKpiReportsService {
               days: c.days,
               targetValue: c.targetValue,
               debtBalance: c.debtBalance,
+              // Loại khách của dòng phân công — để tách "đạt x/y" theo KEY/NON
+              tier: c.row.customerTier,
             })),
             saleTarget,
             saleInfo?.zaloLinked ?? false,
@@ -1288,6 +1377,11 @@ export class CustomerKpiReportsService {
             );
             if (this.applyCustomerOverride(pc.criterion, customerOverride)) {
               demoted += 1;
+              // Hạ luôn ô "đạt" của đúng loại khách, không chỉ dòng tổng
+              this.demoteTierProgress(
+                saleCriteria[saleCriteria.length - 1],
+                pc.row.customerTier,
+              );
             }
           }
           if (demoted > 0) {

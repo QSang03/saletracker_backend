@@ -2031,6 +2031,31 @@ console.log('\n-- M. Mục 4: rollup Python → engine KPI → chỉ tiêu → g
           suggest.orderSuggestion.customersWithOrders === 1 && suggest.orderSuggestion.totalCustomers === 2,
           `x/y khách có đơn chưa chốt sai: ${JSON.stringify(suggest.orderSuggestion)}`,
         );
+        // byTier: FE hiện "đạt x/y" tách KEY/NON — KEY có báo cáo/đơn, NON không
+        assert(
+          support.byTier && support.byTier.key.total === 1 && support.byTier.non.total === 1,
+          `byTier TC3 sai: ${JSON.stringify(support.byTier)}`,
+        );
+        assert(
+          support.byTier.key.passed === 1 && support.byTier.non.passed === 0,
+          `byTier TC3 đạt sai: ${JSON.stringify(support.byTier)}`,
+        );
+        assert(
+          reply.byTier && reply.byTier.key.passed === 1 && reply.byTier.key.total === 1,
+          `byTier TC4 sai: ${JSON.stringify(reply.byTier)}`,
+        );
+        assert(
+          suggest.byTier && suggest.byTier.key.passed === 1 && suggest.byTier.key.total === 1 && suggest.byTier.non.total === 1,
+          `byTier TC6 sai: ${JSON.stringify(suggest.byTier)}`,
+        );
+        assert(
+          suggest.orderSuggestion.byTier.key.count === 1 &&
+            suggest.orderSuggestion.byTier.key.totalValue === 500000 &&
+            suggest.orderSuggestion.byTier.key.customersWithOrders === 1 &&
+            suggest.orderSuggestion.byTier.non.count === 0 &&
+            suggest.orderSuggestion.byTier.non.totalValue === 0,
+          `orderSuggestion.byTier sai: ${JSON.stringify(suggest.orderSuggestion.byTier)}`,
+        );
         // v1.6: tiêu chí doanh số đọc API NKM. Sale test chưa có employee_code
         // khớp bảng tra mã → no_data kèm lý do rõ ràng (chứ không phải "trượt").
         const rev = byKey.get('doanh_so_key');
