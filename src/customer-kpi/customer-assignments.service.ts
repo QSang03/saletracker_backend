@@ -383,6 +383,14 @@ export class CustomerAssignmentsService {
         if (p.customer_role && p.customer_role !== dbCustomer.customer_role) {
           oldFields.customer_role = dbCustomer.customer_role;
           newFields.customer_role = p.customer_role;
+        } else if (
+          p.customer_role == null &&
+          dbCustomer.customer_role == null
+        ) {
+          // File không nói LOẠI MÃ (cột vắng/ô trống) và DB cũng chưa có role
+          // → đề xuất gán mặc định CHÍNH. Có role cũ thì GIỮ NGUYÊN (không đụng).
+          oldFields.customer_role = dbCustomer.customer_role;
+          newFields.customer_role = CustomerRole.CHINH;
         }
         if (
           p.credit_days != null &&
@@ -435,7 +443,8 @@ export class CustomerAssignmentsService {
                 : {
                     customer_code: p.customer_code,
                     sap_code: p.sap_code,
-                    customer_role: p.customer_role,
+                    // File thiếu LOẠI MÃ / để trống → khách mới mặc định là CHÍNH
+                    customer_role: p.customer_role ?? CustomerRole.CHINH,
                     credit_days: p.credit_days,
                   },
             },
@@ -662,7 +671,10 @@ export class CustomerAssignmentsService {
                 em.create(Customer, {
                   customer_code: change.customer_code,
                   sap_code: change.sap_code,
-                  customer_role: nd.customer?.customer_role ?? null,
+                  // Tạo khách mới không nói role → mặc định CHÍNH (khớp bước
+                  // so khớp đã đề xuất; chặn case nạp lại session cũ thiếu case)
+                  customer_role:
+                    nd.customer?.customer_role ?? CustomerRole.CHINH,
                   credit_days: nd.customer?.credit_days ?? null,
                   status: CustomerStatus.ACTIVE,
                 }),
@@ -1241,7 +1253,11 @@ export class CustomerAssignmentsService {
     for (const a of assignments) {
       const group = byCustomer.get(a.customer_id);
       if (group) group.assignments.push(a);
-      else byCustomer.set(a.customer_id, { customer: a.customer, assignments: [a] });
+      else
+        byCustomer.set(a.customer_id, {
+          customer: a.customer,
+          assignments: [a],
+        });
     }
 
     const buffer = await this.writeAssignmentsWorkbook(ExcelJS, byCustomer);

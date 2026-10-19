@@ -15,6 +15,12 @@ export interface ParsedCustomerRow {
   row_num: number;
   customer_code: string;
   sap_code: string;
+  /**
+   * Role đọc từ cột "LOẠI MÃ" — CHINH/PHU, hoặc null khi cột vắng trong file
+   * (tùy chọn) hoặc ô dòng đó để trống. Null KHÔNG phải lỗi: bước sinh diff
+   * tự quyết — tạo mới khách → mặc định CHINH; cập nhật → giữ role cũ, cũ
+   * null mới đề xuất gán CHINH.
+   */
   customer_role: CustomerRoleValue | null;
   credit_days: number | null;
   assignments: ParsedAssignment[];
@@ -106,6 +112,10 @@ function cellNumber(cell: ExcelJS.Cell): number | null {
  *   6 phòng ban (nhân viên + tier Key/Non).
  * Cố ý KHÔNG đọc sheet ẩn BCBH/CNO (doanh thu + master SAP) — thiết kế mục 4.4.
  *
+ * Cột "LOẠI MÃ" tùy chọn: file cũ thiếu cột này, hoặc dòng nào để trống, đều
+ * đọc được — customer_role = null, không báo lỗi (quy tắc mặc định nằm ở bước
+ * sinh diff/apply). Sai giá trị (non-empty lạ) mới là lỗi của dòng.
+ *
  * Gộp trùng: 2 dòng cùng (mã, SAP) → một khách, phòng nào chưa có thì nhận thêm,
  * trùng phòng nhưng khác nhân viên → giữ dòng ĐẦU + ghi cảnh báo.
  */
@@ -140,15 +150,16 @@ export async function parseImportWorkbook(
     ws.getRow(i).eachCell({ includeEmpty: false }, (c) =>
       texts.push(norm(c.value)),
     );
-    if (texts.includes('MA KH') && texts.includes('LOAI MA')) {
+    // Cột "LOẠI MÃ" KHÔNG bắt buộc để dò dòng tiêu đề nữa — file thiếu nó
+    // vẫn nạp được (role trống → middleware xử lý theo quy tắc mặc định ở
+    // bước sinh diff/apply, xem customer-assignments.service.ts).
+    if (texts.includes('MA KH')) {
       headerRowNum = i;
       break;
     }
   }
   if (headerRowNum < 0) {
-    throw new Error(
-      'Không tìm thấy dòng tiêu đề (cần cột "MÃ KH" và "LOẠI MÃ")',
-    );
+    throw new Error('Không tìm thấy dòng tiêu đề (cần cột "MÃ KH")');
   }
 
   // Ghép cột theo header
@@ -176,7 +187,9 @@ export async function parseImportWorkbook(
   const missing: string[] = [];
   if (!cols.code) missing.push('"MÃ KH"');
   if (!cols.sap) missing.push('"MÃ ĐỐI TÁC SAP"');
-  if (!cols.loai) missing.push('"LOẠI MÃ"');
+  // "LOẠI MÃ" TÙY CHỌN: thiếu cột (hoặc ô trống) → customer_role = null,
+  // apply tự quyết — tạo mới → mặc định CHÍNH, cập nhật → giữ giá trị cũ
+  // (cũ là null thì mới gán CHÍNH). Chỉ sai giá trị (non-empty lạ) mới là lỗi.
   if (tierCols.length !== 6) missing.push('6 cột phân loại KEY/NON');
   if (empCols.length !== 6) missing.push('6 cột nhân viên S1-*');
   if (missing.length) {
@@ -195,11 +208,16 @@ export async function parseImportWorkbook(
 
     const sap = cols.sap ? cellText(row.getCell(cols.sap)) : '';
     const errors: string[] = [];
+    // LOẠI MÃ: cột vắng (cols.loai = 0) hoặc ô trống → null, KHÔNG báo lỗi —
+    // giá trị mặc định do bước sinh diff/apply quyết (tạo mới → CHÍNH,
+    // cập nhật → giữ cũ, cũ null mới gán CHÍNH). Sai giá trị vẫn là lỗi.
     let customer_role: CustomerRoleValue | null = null;
-    const roleRaw = norm(cellText(row.getCell(cols.loai)));
+    const roleRaw = norm(cols.loai ? cellText(row.getCell(cols.loai)) : '');
     if (roleRaw === 'CHINH') customer_role = 'CHINH';
     else if (roleRaw === 'PHU') customer_role = 'PHU';
-    else errors.push('LOẠI MÃ trống hoặc sai giá trị');
+    else if (roleRaw) {
+      errors.push(`LOẠI MÃ sai giá trị "${roleRaw}" (chỉ nhận CHINH/PHU)`);
+    }
 
     // Cột HẠN MỨC = Số ngày công nợ (đã đối chiếu với sheet CNO), không phải tiền
     const credit_days = cols.hanMuc
