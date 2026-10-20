@@ -29,6 +29,8 @@ export interface KpiReportCustomer {
     customerId: number;
     customerCode: string;
     customerName: string | null;
+    /** Từng tên liên hệ Zalo của khách với sale này (khách có thể nhiều). */
+    zaloNames?: string[];
     customerTier: string | null;
     customerRole: string | null;
     departmentSlug: string;

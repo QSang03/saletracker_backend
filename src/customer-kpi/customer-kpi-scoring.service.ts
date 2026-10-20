@@ -25,9 +25,11 @@ import { FiscalQuarter } from './nkm-fiscal';
  *   monthly_contact: tháng đạt khi có ≥1 tin SALE nhắn đi tới khách
  *   (outbound > 0, không cần khách trả lời). (Trước đây là ratio 2 chiều.)
  * - goi_y_thuc_hien: binary. "Được gợi ý ngày D" = khách Key/Non không được
- *   liên lạc bằng tin đi trong SUGGESTION_GAP_DAYS ngày trước đó (bị bỏ bê);
+ *   liên lạc bằng tin đi trong ngưỡng bỏ bê của loại khách đó (bị bỏ bê);
  *   "đã xử lý" = ngày D sale nhắn lại ≥1 tin → tự nhận từ tin nhắn, không cần
  *   bảng gợi ý hay nút bấm (đúng chữ "Tổng hợp từ hoạt động" của thiết kế).
+ *   Lưu ý: khoảng im lặng được đo bằng SỐ NGÀY ĐO ĐƯỢC (zalo_linked) không
+ *   có tin đi — ngày sale offline không bị tính là "bỏ bê" oan.
  * - order_count / debt_balance: metric kiểu NGƯỠNG (giá trị tuyệt đối) — chấm
  *   binary so ngưỡng hoặc ratio so chỉ tiêu (chỉ mẫu số target_value; mẫu số
  *   đếm khách không có nghĩa với giá trị tuyệt đối).
@@ -42,11 +44,28 @@ import { FiscalQuarter } from './nkm-fiscal';
  *   binary = "x/y khách đạt" trong khoảng xem.
  */
 
-/** Số ngày không được liên lạc thì khách rơi vào danh sách gợi ý (mục 5.4). */
-export const SUGGESTION_GAP_DAYS = 7;
+/**
+ * Ngưỡng "bị bỏ bê" — số ngày ĐO ĐƯỢC không có tin đi thì khách rơi vào
+ * danh sách gợi ý (mục 5.4). Tách theo loại khách vì nhịp chăm sóc khác nhau:
+ * KEY là khách trọng điểm nên phải gọi sớm, NON bơm thường xuyên hơn nên
+ * chờ lâu hơn cũng được.
+ *
+ * Ngày sale OFFLINE (không đo được dữ liệu Zalo) KHÔNG tính vào khoảng im
+ * lặng — nếu tính thì sale đăng nhập muộn 3 ngày sẽ bị báo "bỏ bê" oan.
+ */
+export const SUGGESTION_KEY_GAP_DAYS = 3;
+export const SUGGESTION_NON_GAP_DAYS = 7;
+
+/**
+ * Ngưỡng chấm tiêu chí "Gợi ý chăm sóc đã thực hiện": sale nhắn lại sau
+ * ≥ SUGGESTION_ACK_GAP_DAYS ngày im lặng = đã xử lý gợi ý. Bằng ngưỡng bỏ bê
+ * của KEY để gợi ý và tiêu chí nói chuyện với nhau (gợi ý bật sau 3 ngày
+ * thì nhắn lại sau 3 ngày cũng phải được tính là xử lý).
+ */
+export const SUGGESTION_ACK_GAP_DAYS = 3;
 
 /** Nhìn lại bao nhiêu ngày hoạt động để chấm gợi ý ở đầu khoảng xem. */
-export const SUGGESTION_LOOKBACK_DAYS = SUGGESTION_GAP_DAYS;
+export const SUGGESTION_LOOKBACK_DAYS = SUGGESTION_NON_GAP_DAYS;
 
 export const REASON_NO_REVENUE_DATA =
   'Chưa có dữ liệu doanh thu cho khách hàng này.';
@@ -139,6 +158,10 @@ export interface CustomerSuggestion {
   contextDate: string | null;
   /** Ngày sale liên lạc gần nhất — `null` = chưa từng. */
   lastContactDate: string | null;
+  /** Doanh số kỳ hiện tại của khách (chưa VAT) — `null` = không có dữ liệu. */
+  revenueCurrent?: number | null;
+  /** Doanh số kỳ trước của khách — `null` = không có dữ liệu. */
+  revenuePrevious?: number | null;
 }
 
 /** Số liệu gợi ý đơn hàng của MỘT khách (tiêu chí 6). */
@@ -889,10 +912,18 @@ export class CustomerKpiScoringService {
       const day = sorted[i];
       if (day.stat_date < fromDate) continue;
       if (!day.zalo_linked || !isOutbound(day)) continue;
-      const historyStart = Math.max(0, i - SUGGESTION_GAP_DAYS);
-      const history = sorted.slice(historyStart, i);
+      // Khoảng im lặng tính bằng SỐ NGÀY ĐO ĐƯỢC ngay trước ngày này — ngày
+      // sale offline (không đo được dữ liệu Zalo) không phải là "bỏ bê".
+      const history: ActivityDayRow[] = [];
+      for (
+        let j = i - 1;
+        j >= 0 && history.length < SUGGESTION_ACK_GAP_DAYS;
+        j -= 1
+      ) {
+        if (sorted[j].zalo_linked) history.push(sorted[j]);
+      }
       const stale =
-        history.length >= SUGGESTION_GAP_DAYS &&
+        history.length >= SUGGESTION_ACK_GAP_DAYS &&
         history.every((row) => !isOutbound(row));
       if (stale) handled += 1;
     }

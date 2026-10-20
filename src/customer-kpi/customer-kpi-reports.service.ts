@@ -42,7 +42,9 @@ import {
   RevenueCustomerInput,
   SaleCriterion,
   SaleOrderSuggestion,
-  SUGGESTION_GAP_DAYS,
+  SUGGESTION_KEY_GAP_DAYS,
+  SUGGESTION_LOOKBACK_DAYS,
+  SUGGESTION_NON_GAP_DAYS,
   normalizedTier,
   roundTo,
 } from './customer-kpi-scoring.service';
@@ -68,6 +70,8 @@ const SUGGESTION_REASONS: Record<string, string> = {
   chua_phan_hoi: 'Khách nhắn tin chưa được phản hồi',
   key_chua_lien_lac: 'Khách KEY đã lâu không được liên lạc',
   non_don_moi_chua_cham: 'Khách NON có đơn mới nhưng chưa được chăm sóc',
+  key_rut_doanh_so: 'Khách KEY rơi doanh số so với kỳ trước',
+  key_chua_co_doanh_so: 'Khách KEY chưa có doanh số',
 };
 
 /**
@@ -79,9 +83,21 @@ const SUGGESTION_REASON_PRIORITY: Record<string, number> = {
   chua_phan_hoi: 1,
   key_chua_lien_lac: 2,
   non_don_moi_chua_cham: 3,
+  key_rut_doanh_so: 4,
+  key_chua_co_doanh_so: 5,
 };
 
-const SUGGESTION_LIMIT_PER_SALE = 20;
+/**
+ * Doanh số của khách dùng cho gợi ý: kỳ hiện tại + kỳ trước.
+ *
+ * `current`/`previous` = doanh thu (chưa VAT) của khách trong kỳ. `null` =
+ * KHÔNG có dữ liệu doanh số (ví dụ sale chưa nạp được mã nhân viên NKM) →
+ * tuyệt đối không sinh gợi ý "chưa có doanh số" trong trường hợp này.
+ */
+interface SuggestionRevenueContext {
+  current: number | null;
+  previous: number | null;
+}
 
 /** Một sự kiện báo cáo di chuyển thô, đọc từ customer_movement_reports. */
 interface MovementEventRow {
@@ -148,7 +164,14 @@ interface AssignmentRow {
   saleId: number;
   customerId: number;
   customerCode: string;
+  /**
+   * Tên khách theo góc nhìn của SALE: tên liên hệ Zalo của khách với sale
+   * đó (mỗi sale một tên riêng). Không có tên Zalo → rơi về tên trong bảng
+   * `customers`.
+   */
   customerName: string;
+  /** Từng tên liên hệ Zalo của khách với sale này (một khách có thể nhiều). */
+  zaloNames: string[];
   customerTier: string | null;
   customerRole: string | null;
   departmentSlug: string;
@@ -293,18 +316,93 @@ export class CustomerKpiReportsService {
       qb.andWhere('a.sale_id IN (:...userIds)', { userIds });
     }
     const rows = await qb.getMany();
-    return rows.map((row) => ({
-      assignmentId: row.id,
-      saleId: row.sale_id,
-      customerId: row.customer_id,
-      customerCode: row.customer?.customer_code ?? '',
-      customerName: row.customer?.customer_name ?? '',
-      // Key/Non theo TỪNG PHÒNG BAN nên nằm trên dòng phân công, không phải khách
-      customerTier: row.customer_tier ?? null,
-      customerRole: row.customer?.customer_role ?? null,
-      departmentSlug: row.department_slug ?? '',
-      sapCode: row.customer?.sap_code ?? '',
-    }));
+    const zaloNames = await this.loadZaloNames(
+      rows.map((row) => ({
+        assignmentId: row.id,
+        customerCode: row.customer?.customer_code ?? '',
+      })),
+    );
+    return rows.map((row) => {
+      const names = zaloNames.get(row.id) ?? [];
+      return {
+        assignmentId: row.id,
+        saleId: row.sale_id,
+        customerId: row.customer_id,
+        customerCode: row.customer?.customer_code ?? '',
+        // Tên Zalo là nguồn chính: cùng một khách ở sale A và sale B có thể
+        // mang tên khác nhau — đúng thứ tên mà sale đó gọi khách.
+        customerName:
+          names.length > 0
+            ? names.join(', ')
+            : (row.customer?.customer_name ?? ''),
+        zaloNames: names,
+        // Key/Non theo TỪNG PHÒNG BAN nên nằm trên dòng phân công, không phải khách
+        customerTier: row.customer_tier ?? null,
+        customerRole: row.customer?.customer_role ?? null,
+        departmentSlug: row.department_slug ?? '',
+        sapCode: row.customer?.sap_code ?? '',
+      };
+    });
+  }
+
+  /**
+   * Tên liên hệ Zalo của từng khách theo SALE — nguồn `customer_zalo.matched_name`
+   * (job matcher Python ghi mỗi 5' từ tên hiển thị thật trên Zalo, nên luôn
+   * mới). Bảng khoá theo DÒNG PHÂN CÔNG nên cùng một khách ở sale A và sale B
+   * ra hai tên khác nhau — đúng ý "mỗi sale mỗi khác".
+   *
+   * Backend không đọc DB Zalo (zalo_automation): bảng này nằm trong main DB,
+   * job Python bổ sung vào — đúng quy tắc kiến trúc mục 3.
+   */
+  private async loadZaloNames(
+    assignments: { assignmentId: number; customerCode: string }[],
+  ): Promise<Map<number, string[]>> {
+    const result = new Map<number, string[]>();
+    if (assignments.length === 0) return result;
+    const codeOf = new Map(
+      assignments.map((row) => [row.assignmentId, row.customerCode]),
+    );
+    for (let i = 0; i < assignments.length; i += 1000) {
+      const chunk = assignments.slice(i, i + 1000);
+      const links = await this.customerZaloRepo.find({
+        where: {
+          assignment_id: In(chunk.map((row) => row.assignmentId)),
+          is_active: true,
+        },
+        select: ['assignment_id', 'matched_name'],
+        order: { id: 'ASC' },
+      });
+      for (const link of links) {
+        const raw = (link.matched_name ?? '').trim();
+        if (!raw) continue;
+        const name = this.stripZaloCustomerCode(
+          raw,
+          codeOf.get(link.assignment_id) ?? '',
+        );
+        const list = result.get(link.assignment_id) ?? [];
+        // Nhiều contact có thể trùng tên → chỉ giữ một lần.
+        if (!list.includes(name)) list.push(name);
+        result.set(link.assignment_id, list);
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Tên Zalo hay ghi kèm mã khách ("HQC_PNH_TH_CONECT-E Ngọc 0842 05 02 01").
+   * Cột Mã khách đã hiện mã rồi nên bỏ tiền tố mã, chỉ giữ phần tên/SĐT.
+   * Tên CHỈ có mã ("only") thì giữ nguyên — không có tên người để hiện.
+   */
+  private stripZaloCustomerCode(name: string, customerCode: string): string {
+    const code = (customerCode ?? '').trim();
+    if (!code) return name;
+    const idx = name.toUpperCase().indexOf(code.toUpperCase());
+    if (idx === -1) return name;
+    const stripped = (name.slice(0, idx) + name.slice(idx + code.length))
+      .replace(/^[\s\-_.,:;|]+/, '')
+      .replace(/[\s\-_.,:;|]+$/, '')
+      .trim();
+    return stripped || name;
   }
 
   /**
@@ -964,28 +1062,11 @@ export class CustomerKpiReportsService {
       return { byAssignment, bySale, salesWithoutMapping };
     }
 
-    const saleMap = await this.saleMapRepo.find({
-      where: { is_active: true },
-      select: ['slp_code', 'employee_code'],
-    });
-    const slpByEmployeeCode = new Map<string, number[]>();
-    for (const row of saleMap) {
-      const list = slpByEmployeeCode.get(row.employee_code) ?? [];
-      list.push(row.slp_code);
-      slpByEmployeeCode.set(row.employee_code, list);
-    }
-
-    const slpCodesOf = new Map<number, number[]>();
-    const allSlp = new Set<number>();
-    for (const row of assignments) {
-      const employeeCode = saleInfos.get(row.saleId)?.employeeCode ?? null;
-      const codes = employeeCode
-        ? (slpByEmployeeCode.get(employeeCode) ?? [])
-        : [];
-      slpCodesOf.set(row.saleId, codes);
-      codes.forEach((code) => allSlp.add(code));
-      if (codes.length === 0) salesWithoutMapping.add(row.saleId);
-    }
+    const { slpCodesOf, allSlp } = await this.resolveSlpCodes(
+      assignments,
+      saleInfos,
+      salesWithoutMapping,
+    );
 
     // (slp_code|mã khách) → tổng phiếu + doanh số trong kỳ
     const totals = new Map<string, CustomerRevenueAmount>();
@@ -1039,6 +1120,130 @@ export class CustomerKpiReportsService {
       bySale.set(row.saleId, list);
     }
     return { byAssignment, bySale, salesWithoutMapping };
+  }
+
+  /**
+   * Tra cặp (sale → slp_code) từ bảng tra mã NKM. Tách riêng để nạp doanh
+   * số nhiều kỳ (kỳ hiện tại + kỳ trước) chỉ tra bảng tra mã MỘT lần.
+   */
+  private async resolveSlpCodes(
+    assignments: AssignmentRow[],
+    saleInfos: Map<number, { employeeCode: string | null }>,
+    salesWithoutMapping: Set<number>,
+  ): Promise<{
+    slpCodesOf: Map<number, number[]>;
+    allSlp: Set<number>;
+  }> {
+    const saleMap = await this.saleMapRepo.find({
+      where: { is_active: true },
+      select: ['slp_code', 'employee_code'],
+    });
+    const slpByEmployeeCode = new Map<string, number[]>();
+    for (const row of saleMap) {
+      const list = slpByEmployeeCode.get(row.employee_code) ?? [];
+      list.push(row.slp_code);
+      slpByEmployeeCode.set(row.employee_code, list);
+    }
+
+    const slpCodesOf = new Map<number, number[]>();
+    const allSlp = new Set<number>();
+    for (const row of assignments) {
+      const employeeCode = saleInfos.get(row.saleId)?.employeeCode ?? null;
+      const codes = employeeCode
+        ? (slpByEmployeeCode.get(employeeCode) ?? [])
+        : [];
+      slpCodesOf.set(row.saleId, codes);
+      codes.forEach((code) => allSlp.add(code));
+      if (codes.length === 0) salesWithoutMapping.add(row.saleId);
+    }
+    return { slpCodesOf, allSlp };
+  }
+
+  /**
+   * Doanh số kỳ hiện tại + kỳ trước cho từng khách — nguồn của nhóm gợi ý
+   * doanh số (rơi doanh số / chưa có doanh số).
+   *
+   * Trả `null` cho khách thuộc sale CHƯA tra được mã nhân viên NKM: không có
+   * dữ liệu ≠ doanh số bằng 0, tuyệt đối không báo "chưa có doanh số" oan.
+   */
+  private async loadSuggestionRevenue(
+    assignments: AssignmentRow[],
+    saleInfos: Map<number, { employeeCode: string | null }>,
+    currentFrom: string,
+    currentTo: string,
+    previousFrom: string,
+    previousTo: string,
+  ): Promise<Map<number, SuggestionRevenueContext>> {
+    const result = new Map<number, SuggestionRevenueContext>();
+    if (assignments.length === 0) return result;
+    const salesWithoutMapping = new Set<number>();
+    const { slpCodesOf, allSlp } = await this.resolveSlpCodes(
+      assignments,
+      saleInfos,
+      salesWithoutMapping,
+    );
+    const load = async (from: string, to: string) => {
+      const totals = new Map<string, CustomerRevenueAmount>();
+      const codes = [...allSlp];
+      for (let i = 0; i < codes.length; i += 200) {
+        const chunk = codes.slice(i, i + 200);
+        const rows = await this.revenueRepo
+          .createQueryBuilder('r')
+          .select('r.slp_code', 'slpCode')
+          .addSelect('r.customer_code', 'customerCode')
+          .addSelect('SUM(r.line_total)', 'lineTotal')
+          .where('r.slp_code IN (:...slp)', { slp: chunk })
+          .andWhere('r.stat_date >= :from', { from })
+          .andWhere('r.stat_date <= :to', { to })
+          .groupBy('r.slp_code')
+          .addGroupBy('r.customer_code')
+          .getRawMany<{
+            slpCode: number;
+            customerCode: string;
+            lineTotal: string;
+          }>();
+        for (const row of rows) {
+          totals.set(`${row.slpCode}|${String(row.customerCode)}`, {
+            quantity: 0,
+            lineTotal: Number(row.lineTotal) || 0,
+          });
+        }
+      }
+      return totals;
+    };
+    const [currentTotals, previousTotals] = await Promise.all([
+      load(currentFrom, currentTo),
+      load(previousFrom, previousTo),
+    ]);
+    for (const row of assignments) {
+      if (salesWithoutMapping.has(row.saleId)) {
+        result.set(row.assignmentId, { current: null, previous: null });
+        continue;
+      }
+      const codes = slpCodesOf.get(row.saleId) ?? [];
+      let current = 0;
+      let previous = 0;
+      for (const slp of codes) {
+        current += currentTotals.get(`${slp}|${row.customerCode}`)?.lineTotal ?? 0;
+        previous +=
+          previousTotals.get(`${slp}|${row.customerCode}`)?.lineTotal ?? 0;
+      }
+      result.set(row.assignmentId, { current, previous });
+    }
+    return result;
+  }
+
+  /** Ngày dữ liệu hoạt động mới nhất trong tập đã nạp — độ tươi dữ liệu. */
+  private lastActivityDate(
+    activity: Map<number, ActivityDayRow[]>,
+  ): string | null {
+    let latest: string | null = null;
+    for (const [, days] of activity) {
+      for (const day of days) {
+        if (!latest || day.stat_date > latest) latest = day.stat_date;
+      }
+    }
+    return latest;
   }
 
   /** Chỉ tiêu quý của từng sale — cả hai tiêu chí doanh số dùng chung. */
@@ -1215,6 +1420,8 @@ export class CustomerKpiReportsService {
       salesWithoutMapping: Set<number>;
     },
     orderSuggestions?: OrderSuggestionBundle,
+    /** Doanh số kỳ hiện tại + kỳ trước — nguồn cho nhóm gợi ý doanh số. */
+    suggestionRevenue?: Map<number, SuggestionRevenueContext>,
   ) {
     const customersBySale = new Map<number, AssignmentRow[]>();
     for (const row of assignments) {
@@ -1268,6 +1475,7 @@ export class CustomerKpiReportsService {
                   row,
                   activity.get(row.assignmentId) ?? [],
                   this.today(),
+                  suggestionRevenue?.get(row.assignmentId),
                 ),
               ]),
             )
@@ -1572,7 +1780,7 @@ export class CustomerKpiReportsService {
     if (saleId !== undefined) {
       this.assertSaleInScope(saleId, userIds);
     }
-    const lookbackFrom = this.shiftDate(from, -SUGGESTION_GAP_DAYS);
+    const lookbackFrom = this.shiftDate(from, -SUGGESTION_LOOKBACK_DAYS);
     const assignments = await this.loadAssignments(userIds, saleId);
     const saleIds = assignments.map((row) => row.saleId);
     const activity = await this.loadActivity(
@@ -1616,6 +1824,24 @@ export class CustomerKpiReportsService {
       ? await this.loadOrderSuggestions(assignments)
       : undefined;
 
+    // Doanh số cho NHÓM GỢI Ý DOANH SỐ: kỳ hiện tại (khoảng xem) + kỳ trước
+    // cùng độ dài. Chỉ nạp khi khoảng xem chạm tới hôm nay (gợi ý luôn neo
+    // theo ngày hiện tại) và có tiêu chí gợi ý đang bật.
+    const suggestionRevenue =
+      to >= this.today() &&
+      definitions.some(
+        (definition) => definition.metric === SUGGESTION_ACK_METRIC,
+      )
+        ? await this.loadSuggestionRevenue(
+            assignments,
+            saleInfos,
+            from,
+            to,
+            this.shiftDate(from, -(this.diffDays(from, to) + 1)),
+            this.shiftDate(from, -1),
+          )
+        : undefined;
+
     return {
       scored: this.buildScoredData(
         assignments,
@@ -1630,10 +1856,12 @@ export class CustomerKpiReportsService {
         overrides,
         revenue,
         orderSuggestions,
+        suggestionRevenue,
       ),
       definitions,
       debtBalances,
       revenue,
+      dataThrough: this.lastActivityDate(activity),
       lastOutboundByAssignment: this.lastOutboundByAssignment(activity),
     };
   }
@@ -1725,13 +1953,14 @@ export class CustomerKpiReportsService {
 
   async overview(query: any, user: any) {
     const window = this.resolveWindow(query);
-    const { scored, definitions, revenue } = await this.buildScoredFor(
-      query.saleId,
-      window.from,
-      window.to,
-      user,
-      window.quarter,
-    );
+    const { scored, definitions, revenue, dataThrough } =
+      await this.buildScoredFor(
+        query.saleId,
+        window.from,
+        window.to,
+        user,
+        window.quarter,
+      );
 
     // search = lọc theo TÊN SALE (dataset là các sale trong phạm vi — khách
     // hàng không nằm trong response của overview)
@@ -1773,6 +2002,8 @@ export class CustomerKpiReportsService {
       isWholeQuarter: window.isWholeQuarter,
       // Ngày chưa chốt (hôm nay) — FE hiện kèm nhãn "tạm tính"
       provisionalDates: revenue?.provisionalDates ?? [],
+      // Ngày dữ liệu hoạt động mới nhất — FE hiện độ tươi dữ liệu
+      dataThrough: dataThrough ?? null,
       summary,
       sales: filterKpiSales(inView, filters),
       groups,
@@ -2024,17 +2255,22 @@ export class CustomerKpiReportsService {
       filters.hasDebt !== undefined ||
       filters.sortBy === 'debtBalance';
     const window = this.resolveWindow(query);
-    const { scored, debtBalances, lastOutboundByAssignment, revenue } =
-      await this.buildScoredFor(
-        query.saleId,
-        window.from,
-        window.to,
-        user,
-        window.quarter,
-        {
-          loadDebt: needsDebt,
-        },
-      );
+    const {
+      scored,
+      debtBalances,
+      lastOutboundByAssignment,
+      revenue,
+      dataThrough,
+    } = await this.buildScoredFor(
+      query.saleId,
+      window.from,
+      window.to,
+      user,
+      window.quarter,
+      {
+        loadDebt: needsDebt,
+      },
+    );
 
     const entry = scored.get(query.saleId);
     if (!entry) {
@@ -2044,6 +2280,7 @@ export class CustomerKpiReportsService {
         quarter: window.quarter,
         isWholeQuarter: window.isWholeQuarter,
         provisionalDates: revenue?.provisionalDates ?? [],
+        dataThrough: dataThrough ?? null,
         page,
         pageSize,
         total: 0,
@@ -2089,6 +2326,10 @@ export class CustomerKpiReportsService {
         customerId: customer.row.customerId,
         customerCode: customer.row.customerCode,
         customerName: customer.row.customerName,
+        // Từng tên liên hệ Zalo của khách với sale này (khách có thể có
+        // nhiều người: mua hàng, kế toán, GĐ...) — FE hiện danh sách.
+        zaloNames: customer.row.zaloNames ?? [],
+        zaloContactCount: (customer.row.zaloNames ?? []).length,
         customerTier: customer.row.customerTier,
         customerRole: customer.row.customerRole,
         zaloLinked: customer.zaloLinked,
@@ -2106,6 +2347,8 @@ export class CustomerKpiReportsService {
       quarter: window.quarter,
       isWholeQuarter: window.isWholeQuarter,
       provisionalDates: revenue?.provisionalDates ?? [],
+      // Ngày dữ liệu hoạt động mới nhất — FE hiện độ tươi dữ liệu
+      dataThrough: dataThrough ?? null,
       page,
       pageSize,
       total,
@@ -2300,7 +2543,7 @@ export class CustomerKpiReportsService {
     userIds: number[] | undefined,
   ) {
     if (userIds !== undefined && userIds.length === 0) {
-      return { date: this.today(), sales: [] };
+      return { date: this.today(), dataThrough: null, sales: [] };
     }
     if (saleId !== undefined) {
       this.assertSaleInScope(saleId, userIds);
@@ -2317,6 +2560,18 @@ export class CustomerKpiReportsService {
     const saleInfos = await this.loadSaleInfos([
       ...new Set(assignments.map((row) => row.saleId)),
     ]);
+    // Doanh số kỳ hiện tại (tháng này) + kỳ trước (tháng trước) — nguồn cho
+    // nhóm gợi ý doanh số (rơi doanh số / chưa có doanh số).
+    const monthStart = `${today.slice(0, 7)}-01`;
+    const previousMonth = this.previousMonthRange(today);
+    const suggestionRevenue = await this.loadSuggestionRevenue(
+      assignments,
+      saleInfos,
+      monthStart,
+      today,
+      previousMonth.from,
+      previousMonth.to,
+    );
 
     const bySale = new Map<number, AssignmentRow[]>();
     for (const row of assignments) {
@@ -2329,21 +2584,20 @@ export class CustomerKpiReportsService {
       .sort((a, b) => a[0] - b[0])
       .map(([sale, rows]) => {
         const items = rows
-          .map((row) => {
-            const suggestion = this.suggestForCustomer(
+          .map((row) =>
+            this.suggestForCustomer(
               row,
               activity.get(row.assignmentId) ?? [],
               today,
-            );
-            return suggestion;
-          })
+              suggestionRevenue.get(row.assignmentId),
+            ),
+          )
           .filter((item): item is NonNullable<typeof item> => item !== null)
           .sort(
             (a, b) =>
               (SUGGESTION_REASON_PRIORITY[a.reason] ?? 99) -
               (SUGGESTION_REASON_PRIORITY[b.reason] ?? 99),
-          )
-          .slice(0, SUGGESTION_LIMIT_PER_SALE);
+          );
         return {
           saleId: sale,
           saleName: saleInfos.get(sale)?.fullName ?? `Sale #${sale}`,
@@ -2352,17 +2606,46 @@ export class CustomerKpiReportsService {
       })
       .filter((entry) => entry.suggestions.length > 0);
 
-    return { date: today, sales };
+    return {
+      date: today,
+      dataThrough: this.lastActivityDate(activity),
+      sales,
+    };
   }
 
+  /**
+   * Khoảng của THÁNG TRƯỚC so với ngày đưa vào (tháng 1 → tháng 12 năm
+   * trước). Dùng cho nhóm gợi ý doanh số.
+   */
+  private previousMonthRange(date: string): { from: string; to: string } {
+    const [year, month] = date.split('-').map(Number);
+    const prevYear = month === 1 ? year - 1 : year;
+    const prevMonth = month === 1 ? 12 : month - 1;
+    const lastDay = new Date(Date.UTC(prevYear, prevMonth, 0)).getUTCDate();
+    return {
+      from: `${prevYear}-${String(prevMonth).padStart(2, '0')}-01`,
+      to: `${prevYear}-${String(prevMonth).padStart(2, '0')}-${lastDay}`,
+    };
+  }
+
+  /**
+   * Gợi ý chăm sóc cho MỘT khách (mục 5.4).
+   *
+   * `revenue`: doanh số kỳ hiện tại + kỳ trước của khách, để sinh thêm nhóm
+   * gợi ý kiểu doanh số (rơi doanh số / chưa có doanh số). `undefined` =
+   * chưa nạp được dữ liệu doanh số → bỏ qua các nhánh doanh số (không báo
+   * "chưa có doanh số" oan cho sale chưa có mã NKM).
+   */
   private suggestForCustomer(
     row: AssignmentRow,
     days: ActivityDayRow[],
     today: string,
+    revenue?: SuggestionRevenueContext | null,
   ) {
     const linked = days.filter((day) => day.zalo_linked);
     // khách chưa đo được dữ liệu Zalo nào → không gợi ý (đề xuất không gửi được)
     if (linked.length === 0) return null;
+    const tier = (row.customerTier ?? '').toUpperCase();
     const lastOutboundDay = this.lastDayWhere(
       days,
       (day) => day.outbound_count > 0,
@@ -2372,12 +2655,16 @@ export class CustomerKpiReportsService {
       (day) => day.inbound_count > 0,
     );
     const lastOrderDay = this.lastDayWhere(days, (day) => day.order_count > 0);
-    const daysSinceOutbound = lastOutboundDay
-      ? this.diffDays(lastOutboundDay, today)
-      : Number.POSITIVE_INFINITY;
     const daysSinceOrder = lastOrderDay
       ? this.diffDays(lastOrderDay, today)
       : Number.POSITIVE_INFINITY;
+    // Số ngày ĐO ĐƯỢC không có tin đi kể từ lần nhắn gần nhất — ngày sale
+    // offline (không đo được dữ liệu) không tính, không biết thì không kết
+    // luận là "bỏ bê".
+    const silentDays = this.measuredSilentDays(days);
+    const hasRevenue = revenue && revenue.current !== null;
+    const revenueNow = revenue?.current ?? 0;
+    const revenueBefore = revenue?.previous ?? 0;
 
     // 1. Khách nhắn mà sale chưa trả lời (kể cả hôm qua) — khẩn nhất
     if (
@@ -2390,34 +2677,84 @@ export class CustomerKpiReportsService {
         'chua_phan_hoi',
         lastInboundDay,
         lastOutboundDay,
+        revenue,
       );
     }
-    // 2. Khách KEY lâu không được liên lạc (mục 5.4)
-    if (
-      (row.customerTier ?? '').toUpperCase() === 'KEY' &&
-      daysSinceOutbound >= SUGGESTION_GAP_DAYS
-    ) {
+    // 2. Khách KEY lâu không được liên lạc (mục 5.4) — ngưỡng 3 ngày
+    if (tier === 'KEY' && silentDays >= SUGGESTION_KEY_GAP_DAYS) {
       return this.suggestion(
         row,
         'key_chua_lien_lac',
         lastOutboundDay,
         lastOutboundDay,
+        revenue,
+        silentDays,
       );
     }
-    // 3. Khách NON có đơn gần đây nhưng bị bỏ bê
+    // 3. Khách NON có đơn gần đây nhưng bị bỏ bê — ngưỡng 7 ngày
     if (
-      (row.customerTier ?? '').toUpperCase() === 'NON' &&
+      tier === 'NON' &&
       daysSinceOrder <= 30 &&
-      daysSinceOutbound >= SUGGESTION_GAP_DAYS
+      silentDays >= SUGGESTION_NON_GAP_DAYS
     ) {
       return this.suggestion(
         row,
         'non_don_moi_chua_cham',
         lastOrderDay,
         lastOutboundDay,
+        revenue,
+        silentDays,
+      );
+    }
+    // 4. Khách KEY rơi doanh số: kỳ trước có, kỳ này không còn
+    if (
+      tier === 'KEY' &&
+      hasRevenue &&
+      revenueBefore > 0 &&
+      revenueNow === 0
+    ) {
+      return this.suggestion(
+        row,
+        'key_rut_doanh_so',
+        null,
+        lastOutboundDay,
+        revenue,
+      );
+    }
+    // 5. Khách KEY chưa từng có doanh số (cả kỳ trước lẫn kỳ này)
+    if (tier === 'KEY' && hasRevenue && revenueBefore === 0 && revenueNow === 0) {
+      return this.suggestion(
+        row,
+        'key_chua_co_doanh_so',
+        null,
+        lastOutboundDay,
+        revenue,
       );
     }
     return null;
+  }
+
+  /**
+   * Số ngày ĐO ĐƯỢC không có tin đi kể từ lần nhắn gần nhất (chưa từng nhắn
+   * thì = tổng số ngày đo được). Ngày sale offline (zalo_linked = false) bị
+   * bỏ qua — không đo được dữ liệu thì không kết luận là "bỏ bê".
+   */
+  private measuredSilentDays(days: ActivityDayRow[]): number {
+    const sorted = [...days].sort((a, b) =>
+      a.stat_date.localeCompare(b.stat_date),
+    );
+    let lastOutbound = -1;
+    for (let i = sorted.length - 1; i >= 0; i -= 1) {
+      if ((sorted[i].outbound_count ?? 0) > 0) {
+        lastOutbound = i;
+        break;
+      }
+    }
+    let silent = 0;
+    for (let i = lastOutbound + 1; i < sorted.length; i += 1) {
+      if (sorted[i].zalo_linked) silent += 1;
+    }
+    return silent;
   }
 
   private suggestion(
@@ -2425,7 +2762,10 @@ export class CustomerKpiReportsService {
     reason: string,
     contextDate: string | null,
     lastContactDate: string | null,
+    revenue?: SuggestionRevenueContext | null,
+    silentDays?: number,
   ): CustomerSuggestion {
+    const reasonText = this.suggestionText(reason, revenue, silentDays);
     return {
       assignmentId: row.assignmentId,
       customerId: row.customerId,
@@ -2433,10 +2773,55 @@ export class CustomerKpiReportsService {
       customerName: row.customerName,
       customerTier: row.customerTier,
       reason,
-      reasonText: SUGGESTION_REASONS[reason] ?? reason,
+      reasonText,
       contextDate,
       lastContactDate,
+      revenueCurrent: revenue?.current ?? null,
+      revenuePrevious: revenue?.previous ?? null,
     };
+  }
+
+  /**
+   * Câu gợi ý hiển thị. Nhóm "bị bỏ bê" kèm thêm tình trạng doanh số của
+   * khách (chưa có / rơi) để sale biết cần liên lạc gì, không chỉ "gọi đi".
+   */
+  private suggestionText(
+    reason: string,
+    revenue?: SuggestionRevenueContext | null,
+    silentDays?: number,
+  ): string {
+    const base = SUGGESTION_REASONS[reason] ?? reason;
+    if (reason === 'key_chua_lien_lac' && silentDays !== undefined) {
+      const days = Math.max(silentDays, SUGGESTION_KEY_GAP_DAYS);
+      const baseText = `Khách KEY đã ${days} ngày không được liên lạc`;
+      if (!revenue || revenue.current === null) return baseText;
+      if (revenue.previous !== null && revenue.previous > 0 && revenue.current === 0) {
+        return `${baseText} · rơi doanh số (kỳ trước ${this.formatMoney(revenue.previous)}, kỳ này 0)`;
+      }
+      if (revenue.current === 0) {
+        return `${baseText} · chưa có doanh số trong kỳ`;
+      }
+      return baseText;
+    }
+    if (reason === 'key_rut_doanh_so' && revenue) {
+      return `${base} (kỳ trước ${this.formatMoney(revenue.previous ?? 0)}, kỳ này 0)`;
+    }
+    return base;
+  }
+
+  /** Định dạng tiền cho câu gợi ý — gọn (triệu/đồng) để vừa ô tooltip. */
+  private formatMoney(value: number): string {
+    if (!Number.isFinite(value)) return '0';
+    if (value >= 1_000_000_000) {
+      return `${(value / 1_000_000_000).toFixed(1).replace(/\.0$/, '')} tỷ`;
+    }
+    if (value >= 1_000_000) {
+      return `${(value / 1_000_000).toFixed(1).replace(/\.0$/, '')} tr`;
+    }
+    if (value >= 1_000) {
+      return `${(value / 1_000).toFixed(0)}k`;
+    }
+    return `${Math.round(value)}`;
   }
 
   // ------------------------------------------------------------- export
