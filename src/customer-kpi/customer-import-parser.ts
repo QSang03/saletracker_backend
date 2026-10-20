@@ -37,6 +37,7 @@ export interface ParsedCustomerRow {
 }
 
 export interface ParseResult {
+  /** Tiêu chí đọc được từ sheet "TIÊU CHÍ" (rỗng nếu file không có sheet này). */
   criteria: string[];
   customers: ParsedCustomerRow[];
   /** Số dòng dữ liệu có mã khách. */
@@ -57,6 +58,23 @@ const norm = (v: unknown): string =>
     .replace(/\s+/g, ' ')
     .trim()
     .toUpperCase();
+
+/**
+ * Tìm sheet theo tên, KHÔNG phân biệt hoa thường (và bỏ khoảng trắng thừa).
+ *
+ * exceljs `getWorksheet(name)` so khớp tên sheet CÓ phân biệt hoa thường: file
+ * có sheet "FILE CHI TIẾT" (một số bản export Excel viết in hoa toàn bộ) sẽ
+ * không match "File Chi Tiết" và bị báo thiếu sheet oan.
+ */
+function findSheet(
+  wb: ExcelJS.Workbook,
+  name: string,
+): ExcelJS.Worksheet | undefined {
+  const exact = wb.getWorksheet(name);
+  if (exact) return exact;
+  const target = norm(name);
+  return wb.worksheets.find((s) => norm(s.name) === target);
+}
 
 /** Cột phân loại KEY/NON → slug phòng ban (Phụ lục A.4). */
 const DEPT_BY_TIER_HEADER: Record<string, string> = {
@@ -107,9 +125,10 @@ function cellNumber(cell: ExcelJS.Cell): number | null {
 
 /**
  * Đọc file Excel phân bổ khách hàng theo mẫu `DSKH KDS_CHÍNH PHỤ_KEY NON`:
- * - Sheet "TIÊU CHÍ": danh sách 5 tiêu chí (chỉ đọc để đối chiếu).
- * - Sheet "File Chi Tiết": mỗi dòng → khách hàng (mã, SAP) + phân công tối đa
- *   6 phòng ban (nhân viên + tier Key/Non).
+ * - Sheet "File Chi Tiết" (BẮT BUỘC, không phân biệt hoa thường): mỗi dòng →
+ *   khách hàng (mã, SAP) + phân công tối đa 6 phòng ban (nhân viên + tier Key/Non).
+ * - Sheet "TIÊU CHÍ": chỉ BẮT BUỘC khi hệ thống chưa có tiêu chí nào trong DB
+ *   (xem `requireCriteria`); đã có tiêu chí thì thiếu sheet này vẫn nạp được.
  * Cố ý KHÔNG đọc sheet ẩn BCBH/CNO (doanh thu + master SAP) — thiết kế mục 4.4.
  *
  * Cột "LOẠI MÃ" tùy chọn: file cũ thiếu cột này, hoặc dòng nào để trống, đều
@@ -121,25 +140,34 @@ function cellNumber(cell: ExcelJS.Cell): number | null {
  */
 export async function parseImportWorkbook(
   buffer: Buffer,
+  options: { requireCriteria?: boolean } = {},
 ): Promise<ParseResult> {
   const wb = new ExcelJS.Workbook();
   // exceljs khai báo kiểu Buffer riêng — cast để khớp
   await wb.xlsx.load(buffer as any);
 
-  const ws = wb.getWorksheet('File Chi Tiết');
-  if (!ws) throw new Error('Thiếu sheet "File Chi Tiết"');
+  const ws = findSheet(wb, 'File Chi Tiết');
+  if (!ws) {
+    const have = wb.worksheets.map((s) => s.name).join(', ') || '(rỗng)';
+    throw new Error(
+      `Thiếu sheet "File Chi Tiết" (tên sheet không phân biệt hoa thường). Các sheet trong file: ${have}`,
+    );
+  }
 
+  // Sheet "TIÊU CHÍ" chỉ cần khi hệ thống CHƯA có tiêu chí nào (options.requireCriteria
+  // do service tra DB truyền vào). Đã có tiêu chí rồi thì thiếu sheet này không
+  // sao — vẫn đọc thử nếu có, để đối chiếu/hiển thị.
   const criteria: string[] = [];
-  const tc = wb.getWorksheet('TIÊU CHÍ');
+  const tc = findSheet(wb, 'TIÊU CHÍ');
   if (tc) {
     tc.eachRow((row) => {
       const t = cellText(row.getCell(1)).trim();
       if (t) criteria.push(t);
     });
   }
-  if (criteria.length < 5) {
+  if (options.requireCriteria && criteria.length < 5) {
     throw new Error(
-      'Sheet "TIÊU CHÍ" không đúng mẫu (cần ít nhất 5 dòng tiêu chí)',
+      'Hệ thống chưa có tiêu chí nào — file phải có sheet "TIÊU CHÍ" với ít nhất 5 dòng tiêu chí',
     );
   }
 

@@ -30,6 +30,7 @@ import {
   parseImportWorkbook,
   ParsedCustomerRow,
 } from './customer-import-parser';
+import { KpiDefinition } from './kpi-definition.entity';
 
 /**
  * Quy tắc kiến trúc: KHÔNG tra DB Zalo khi import — zalo_account_id để trống,
@@ -134,6 +135,8 @@ export class CustomerAssignmentsService {
     private readonly userRepo: Repository<User>,
     @InjectRepository(CustomerImportBackup)
     private readonly backupRepo: Repository<CustomerImportBackup>,
+    @InjectRepository(KpiDefinition)
+    private readonly definitionRepo: Repository<KpiDefinition>,
     @InjectDataSource()
     private readonly dataSource: DataSource,
   ) {}
@@ -286,7 +289,14 @@ export class CustomerAssignmentsService {
     }
 
     const buffer: Buffer = file.buffer ?? fs.readFileSync(file.path);
-    const parsed = await parseImportWorkbook(buffer);
+    // Sheet "TIÊU CHÍ" trong file chỉ BẮT BUỘC khi hệ thống chưa có tiêu chí
+    // nào trong DB — đã có tiêu chí thì file nạp chỉ cần sheet "File Chi Tiết".
+    const criteriaCount = await this.definitionRepo.count({
+      where: { team_group: 'kinh-doanh' },
+    });
+    const parsed = await parseImportWorkbook(buffer, {
+      requireCriteria: criteriaCount === 0,
+    });
 
     // 1) Mã nhân viên trong file -> users.id (không tự tạo user)
     const empCodes = [
