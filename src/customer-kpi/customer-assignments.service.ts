@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
-import { DataSource, In, Repository } from 'typeorm';
+import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import * as fs from 'fs';
 import { User } from '../users/user.entity';
 import { Customer, CustomerRole, CustomerStatus } from './customer.entity';
@@ -31,6 +31,10 @@ import {
   ParsedCustomerRow,
 } from './customer-import-parser';
 import { KpiDefinition } from './kpi-definition.entity';
+import { CustomerZalo } from './customer-zalo.entity';
+import { CustomerZaloScanResult } from './customer-zalo-scan-result.entity';
+import { CustomerActivityDaily } from './customer-activity-daily.entity';
+import { CustomerResponseDaily } from './customer-response-daily.entity';
 
 /**
  * Quy tắc kiến trúc: KHÔNG tra DB Zalo khi import — zalo_account_id để trống,
@@ -137,6 +141,14 @@ export class CustomerAssignmentsService {
     private readonly backupRepo: Repository<CustomerImportBackup>,
     @InjectRepository(KpiDefinition)
     private readonly definitionRepo: Repository<KpiDefinition>,
+    @InjectRepository(CustomerActivityDaily)
+    private readonly activityDailyRepo: Repository<CustomerActivityDaily>,
+    @InjectRepository(CustomerResponseDaily)
+    private readonly responseDailyRepo: Repository<CustomerResponseDaily>,
+    @InjectRepository(CustomerZalo)
+    private readonly customerZaloRepo: Repository<CustomerZalo>,
+    @InjectRepository(CustomerZaloScanResult)
+    private readonly zaloScanResultRepo: Repository<CustomerZaloScanResult>,
     @InjectDataSource()
     private readonly dataSource: DataSource,
   ) {}
@@ -606,15 +618,36 @@ export class CustomerAssignmentsService {
   }
 
   /**
+   * Gỡ các bảng con tham chiếu một dòng phân công.
+   *
+   * FK của chúng không có ON DELETE CASCADE nên Postgres chặn DELETE dòng phân
+   * công khi còn dữ liệu tham chiếu:
+   * - customer_activity_daily / customer_response_daily: rollup KPI theo quan hệ
+   *   sale-khách. Quan hệ đã chết thì số liệu vô nghĩa, và rollup Python tự
+   *   sinh lại cho phân công còn sống.
+   * - customer_zalo: liên kết liên hệ Zalo. KHÔNG chuyển sang phân công mới —
+   *   cron Python tự khớp lại và tạo bản ghi mới cho phân công còn tồn tại.
+   * - customer_zalo_scan_results: cache trạng thái lần quét gần nhất.
+   */
+  private async detachAssignmentChildren(em: EntityManager, assignmentId: number) {
+    await em.delete(CustomerActivityDaily, { assignment_id: assignmentId });
+    await em.delete(CustomerResponseDaily, { assignment_id: assignmentId });
+    await em.delete(CustomerZalo, { assignment_id: assignmentId });
+    await em.delete(CustomerZaloScanResult, { assignment_id: assignmentId });
+  }
+
+  /**
    * Ghi các thay đổi đã chọn vào dữ liệu thật (Mục 2, cv 4).
    * - decision 'pending' = theo đề xuất hệ thống (áp dụng); 'skip' = bỏ qua.
    * - Change có `error` (dòng dữ liệu bẩn) bị bỏ qua cho đến khi sửa file nạp lại.
    * - CREATE/UPDATE/DELETE đều ghi backup trước khi đụng dữ liệu → rollback được.
    * - DELETE: xoá cứng dòng phân công (backup giữ nguyên trạng thái để khôi phục
    *   cả id); nếu khách không còn phân công nào → đặt customers.status='deleted'.
-   *   Phân công bị FK giữ lại (còn dữ liệu KPI/Zalo tham chiếu) thì KHÔNG xoá
-   *   cứng được: giữ nguyên dòng, vẫn loại khỏi danh sách hiện hành, ẩn khách
-   *   nếu hết phân công, và báo lại qua conflicts (không bỏ qua im lặng).
+   *   Bảng con tham chiếu dòng phân công được gỡ trước (xem
+   *   detachAssignmentChildren) vì FK không có ON DELETE CASCADE. Phân công bị
+   *   bảng khác giữ lại thì KHÔNG xoá cứng được: giữ nguyên dòng, vẫn loại khỏi
+   *   danh sách hiện hành, ẩn khách nếu hết phân công, và báo lại qua conflicts
+   *   (không bỏ qua im lặng).
    */
   async applySession(sessionId: number, user: any) {
     const session = await this.sessionRepo.findOne({
@@ -849,15 +882,16 @@ export class CustomerAssignmentsService {
                 user_id: user?.id ?? null,
               }),
             );
+            // Xoá cứng dòng phân công — phải gỡ hết bảng con TRƯỚC, vì FK của
+            // chúng không có ON DELETE CASCADE nên Postgres sẽ chặn DELETE.
+            await this.detachAssignmentChildren(em, assignment.id);
             let hardDeleted = true;
             try {
               await em.delete(CustomerAssignment, assignment.id);
             } catch {
-              // FK chặn: customer_zalo / customer_activity_daily /
-              // customer_response_daily còn tham chiếu dòng phân công →
-              // KHÔNG xoá cứng được (xoá tay các bảng đó = mất dữ liệu KPI).
-              // Giữ nguyên dòng, đánh dấu vào backup để rollback biết mà
-              // khôi phục lại status của khách (apply sẽ ẩn khách bên dưới).
+              // Còn bảng khác chưa biết tham chiếu dòng phân công → giữ dòng,
+              // đánh dấu vào backup để rollback biết mà khôi phục lại status
+              // của khách (apply sẽ ẩn khách bên dưới).
               hardDeleted = false;
               backup.original_data = {
                 ...backup.original_data,
@@ -893,7 +927,7 @@ export class CustomerAssignmentsService {
               conflicts.push({
                 changeId: change.id,
                 reason:
-                  `phân công #${assignment.id} (${change.customer_code}|${change.sap_code} – ${change.department_slug}) còn dữ liệu KPI/Zalo tham chiếu nên không xoá cứng được — ` +
+                  `phân công #${assignment.id} (${change.customer_code}|${change.sap_code} – ${change.department_slug}) còn bảng khác tham chiếu nên không xoá cứng được — ` +
                   (customerHidden
                     ? 'giữ nguyên dòng phân công và ẩn khách hàng (status=deleted)'
                     : 'giữ nguyên dòng phân công') +
@@ -981,6 +1015,9 @@ export class CustomerAssignmentsService {
               });
               continue;
             }
+            // Phân công tạo ra có thể đã được cron Python gắn liên kết Zalo
+            // và đã có rollup KPI → gỡ bảng con trước, nếu không FK sẽ chặn.
+            await this.detachAssignmentChildren(em, assignment.id);
             await em.delete(CustomerAssignment, assignment.id);
             if (od.customer_created && od.customer_id) {
               const customer = await em.findOne(Customer, {
@@ -1038,17 +1075,40 @@ export class CustomerAssignmentsService {
             }
             let didRestore = false;
             if (!existed) {
-              await em.save(
-                em.create(CustomerAssignment, {
-                  id: backup.assignment_id,
-                  customer_id: odA.customer_id,
-                  sale_id: odA.sale_id,
-                  department_slug: odA.department_slug,
-                  customer_tier: odA.customer_tier,
-                  zalo_account_id: odA.zalo_account_id ?? null,
-                }),
-              );
-              didRestore = true;
+              // Apply đã xoá cứng dòng phân công nên phải dựng lại. Nhưng
+              // nếu sau đó có lượt nạp khác đã dựng lại đúng cặp
+              // (khách, sale, phòng) thì UNIQUE (customer_id, sale_id,
+              // department_slug) sẽ chặn lần chèn này — và một lệnh hỏng là
+              // hỏng cả transaction rollback. Giữ dòng đang có thay vì chèn.
+              const twin =
+                odA.customer_id && odA.sale_id && odA.department_slug
+                  ? await em.findOne(CustomerAssignment, {
+                      where: {
+                        customer_id: odA.customer_id,
+                        sale_id: odA.sale_id,
+                        department_slug: odA.department_slug,
+                      },
+                    })
+                  : null;
+              if (twin) {
+                skipped.push({
+                  assignmentId: backup.assignment_id,
+                  reason:
+                    'đã có phân công khác cho cùng khách/sale/phòng — giữ dòng đang có',
+                });
+              } else {
+                await em.save(
+                  em.create(CustomerAssignment, {
+                    id: backup.assignment_id,
+                    customer_id: odA.customer_id,
+                    sale_id: odA.sale_id,
+                    department_slug: odA.department_slug,
+                    customer_tier: odA.customer_tier,
+                    zalo_account_id: odA.zalo_account_id ?? null,
+                  }),
+                );
+                didRestore = true;
+              }
             }
             // Trạng thái khách phải trả lại CẢ KHI dòng phân công không xoá
             // được (apply đã ẩn khách bằng status='deleted') — nếu không,
