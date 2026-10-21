@@ -125,6 +125,19 @@ const toId = (value: unknown): number | null => {
 };
 
 /**
+ * Chuẩn hoá mã nhân viên để so khớp file ↔ DB: bỏ MỌI khoảng trắng (kể cả
+ * tab/newline thừa ở cuối) và không phân biệt hoa thường.
+ *
+ * Lý do: dữ liệu users cũ có mã kiểu 'NKDS33\t' (tab cuối) — truy vấn
+ * `employee_code IN ('NKDS33')` KHÔNG khớp (collation không bỏ tab), khiến
+ * dòng Excel gắn sale đó bị bỏ qua khi áp dụng mà không báo lỗi rõ ràng.
+ */
+const normalizeEmployeeCode = (value: unknown): string =>
+  String(value ?? '')
+    .replace(/\s+/g, '')
+    .toUpperCase();
+
+/**
  * Nhóm API nạp danh sách khách hàng từ Excel: upload -> so khớp (diff) ->
  * người dùng chọn Giữ/Bỏ từng thay đổi -> apply (có rollback).
  *
@@ -431,23 +444,42 @@ export class CustomerAssignmentsService {
       requireCriteria: criteriaCount === 0,
     });
 
-    // 1) Mã nhân viên trong file -> users.id (không tự tạo user)
+    // 1) Mã nhân viên trong file -> users.id (không tự tạo user).
+    // So khớp trên mã ĐÃ CHUẨN HOÁ (bỏ khoảng trắng thừa, không phân biệt
+    // hoa thường) — dữ liệu cũ có mã kiểu 'NKDS33\t' sẽ không khớp
+    // 'NKDS33' của file nếu so thẳng, khiến dòng bị bỏ qua khi áp dụng.
     const empCodes = [
       ...new Set(
         parsed.customers.flatMap((c) =>
-          c.assignments.map((a) => a.employee_code),
+          c.assignments.map((a) =>
+            normalizeEmployeeCode(a.employee_code),
+          ),
         ),
       ),
     ];
     const users = empCodes.length
-      ? await this.userRepo.find({
-          where: { employeeCode: In(empCodes) },
-          select: ['id', 'employeeCode'],
-        })
+      ? await this.userRepo
+          .createQueryBuilder('u')
+          .select(['u.id', 'u.employeeCode', 'u.status'])
+          .where(
+            "REPLACE(REPLACE(REPLACE(UPPER(TRIM(u.employee_code)), ' ', ''), '\\t', ''), '\\n', '') IN (:...codes)",
+            { codes: empCodes },
+          )
+          .orderBy('u.id', 'ASC')
+          .getMany()
       : [];
-    const userIdByEmp = new Map(
-      users.map((u) => [u.employeeCode as string, u.id]),
+    // Gán id theo mã chuẩn hoá — ưu tiên user đang hoạt động, rồi id nhỏ trước
+    const userIdByEmp = new Map<string, number>();
+    const activeFirst = [...users].sort(
+      (a, b) =>
+        Number(b.status === 'active') - Number(a.status === 'active') ||
+        a.id - b.id,
     );
+    for (const u of activeFirst) {
+      const key = normalizeEmployeeCode(u.employeeCode);
+      if (!key || userIdByEmp.has(key)) continue;
+      userIdByEmp.set(key, u.id);
+    }
 
     // 2) (đã bỏ) tra tài khoản Zalo của sale — chuyển sang job Python
 
@@ -492,9 +524,10 @@ export class CustomerAssignmentsService {
     const changeErrorFor = (
       p: ParsedCustomerRow,
       saleId?: number,
+      rowExtraErrors: string[] = [],
     ): string | null => {
-      const parts = [...p.errors];
-      if (!saleId)
+      const parts = [...p.errors, ...rowExtraErrors];
+      if (!saleId && !rowExtraErrors.length)
         parts.push(
           'Không tìm thấy nhân viên trong hệ thống theo mã trong file',
         );
@@ -508,9 +541,23 @@ export class CustomerAssignmentsService {
       const parsedDeptSlugs = new Set(
         p.assignments.map((a) => a.department_slug),
       );
-      if (p.errors.length) {
-        summary.errorRows++;
-        rowErrors.push({ row_num: p.row_num, errors: p.errors });
+      // Lỗi "không tìm thấy nhân viên" chỉ lộ ra ở bước tra users — dò trước
+      // để áp cho MỌI change của dòng này, và để cả bước 2 (danh sách lỗi)
+      // lẫn bước 3 (dòng bị bỏ qua) đều hiện được dòng lỗi cụ thể.
+      const rowExtraErrors: string[] = [];
+      const saleIdByAssignment = new Map<string, number | null>();
+      for (const a of p.assignments) {
+        const saleId =
+          userIdByEmp.get(normalizeEmployeeCode(a.employee_code)) ?? null;
+        saleIdByAssignment.set(
+          `${a.department_slug}|${a.employee_code}`,
+          saleId,
+        );
+        if (!saleId) {
+          rowExtraErrors.push(
+            `Phòng ${a.department_slug}: không tìm thấy nhân viên "${a.employee_code}" trong hệ thống`,
+          );
+        }
       }
       for (const w of p.warnings) warnings.push(w);
 
@@ -551,14 +598,19 @@ export class CustomerAssignmentsService {
             action: ImportChangeAction.UPDATE,
             old_data: oldFields,
             new_data: newFields,
-            error: p.errors.join('; ').slice(0, 255) || null,
+            error: [...p.errors, ...rowExtraErrors]
+              .join('; ')
+              .slice(0, 255) || null,
           });
         }
       }
 
       // 4b. Phân công: tạo mới / cập nhật (đổi sale, đổi tier)
       for (const a of p.assignments) {
-        const saleId = userIdByEmp.get(a.employee_code) ?? null;
+        const saleId =
+          saleIdByAssignment.get(
+            `${a.department_slug}|${a.employee_code}`,
+          ) ?? null;
         const existing = dbCustomer
           ? (assignmentsByCustomer.get(dbCustomer.id) || []).find(
               (x) => x.department_slug === a.department_slug,
@@ -569,7 +621,7 @@ export class CustomerAssignmentsService {
           customer_tier: a.tier,
           zalo_account_id: null, // job Python tự gắn ≤ 5 phút sau khi apply
         };
-        const error = changeErrorFor(p, saleId ?? undefined);
+        const error = changeErrorFor(p, saleId ?? undefined, rowExtraErrors);
 
         if (!existing) {
           drafts.push({
@@ -630,6 +682,14 @@ export class CustomerAssignmentsService {
             error: null,
           });
         }
+      }
+
+      // Gom lỗi của dòng (lỗi parse + lỗi không tìm thấy nhân viên) — báo lên
+      // API ngay khi upload để người dùng thấy ngay dòng nào bị bỏ qua.
+      const allRowErrors = [...p.errors, ...rowExtraErrors];
+      if (allRowErrors.length) {
+        summary.errorRows++;
+        rowErrors.push({ row_num: p.row_num, errors: allRowErrors });
       }
 
       // 4c. Phòng có phân công trong DB nhưng trống trong file → xoá dòng phân công
@@ -792,6 +852,9 @@ export class CustomerAssignmentsService {
     });
 
     const conflicts: Array<{ changeId: number; reason: string }> = [];
+    // Dòng bị BỎ QUA do lỗi — trả về chi tiết (mã KH, phòng, lý do) để màn
+    // hình bước 3 liệt kê được, thay vì chỉ báo một con số.
+    const skipped: Array<{ changeId: number; reason: string }> = [];
     let applied = 0;
     let skippedErrors = 0;
 
@@ -819,6 +882,7 @@ export class CustomerAssignmentsService {
         }
         if (change.error) {
           skippedErrors++;
+          skipped.push({ changeId: change.id, reason: change.error });
           continue;
         }
 
@@ -1078,17 +1142,19 @@ export class CustomerAssignmentsService {
       sessionId,
       applied,
       skippedErrors,
-      conflicts: await this.decorateConflicts(conflicts, changes),
+      skipped: await this.decorateRows(skipped, changes),
+      conflicts: await this.decorateRows(conflicts, changes),
       status: session.status,
     };
   }
 
   /**
-   * Bổ sung ngữ cảnh cho danh sách dòng xung đột của apply — trước đây chỉ có
-   * `changeId` + `reason`, màn hình không biết dòng đó là khách nào, sale nào.
-   * Chỉ tra những dòng thực sự xung đột (thường rất ít) nên không tốn query.
+   * Bổ sung ngữ cảnh cho danh sách dòng xung đột / dòng bị bỏ qua của apply —
+   * trước đây chỉ có `changeId` + `reason`, màn hình không biết dòng đó là
+   * khách nào, sale nào. Chỉ tra những dòng thực sự cần (thường rất ít) nên
+   * không tốn query.
    */
-  private async decorateConflicts(
+  private async decorateRows(
     conflicts: Array<{ changeId: number; reason: string }>,
     changes: CustomerImportChange[],
   ) {
@@ -1104,6 +1170,7 @@ export class CustomerAssignmentsService {
       return {
         ...c,
         action: row?.action ?? null,
+        rowNum: row?.row_num ?? null,
         customerCode: row?.customer_code ?? null,
         sapCode: row?.sap_code ?? null,
         customerName: row?.customer_name ?? null,
