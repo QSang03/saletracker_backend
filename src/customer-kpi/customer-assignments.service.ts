@@ -116,6 +116,15 @@ const isAdmin = (user: any) =>
   );
 
 /**
+ * Đọc một id lưu trong JSON (old_data/new_data) — JSON có thể mang số, chuỗi
+ * hoặc null; trả về null nếu không phải id hợp lệ.
+ */
+const toId = (value: unknown): number | null => {
+  const n = Number(value);
+  return Number.isInteger(n) && n > 0 ? n : null;
+};
+
+/**
  * Nhóm API nạp danh sách khách hàng từ Excel: upload -> so khớp (diff) ->
  * người dùng chọn Giữ/Bỏ từng thay đổi -> apply (có rollback).
  *
@@ -197,9 +206,13 @@ export class CustomerAssignmentsService {
     sessionId: number,
     query: { action?: string; page?: number; pageSize?: number },
   ) {
-    const session = await this.sessionRepo.findOne({
-      where: { id: sessionId },
-    });
+    const session = await this.sessionRepo
+      .createQueryBuilder('s')
+      .leftJoin('s.uploaded_by', 'u')
+      // Chỉ lấy vài cột của người upload — không bê nguyên bản ghi users ra API
+      .addSelect(['u.id', 'u.fullName'])
+      .where('s.id = :id', { id: sessionId })
+      .getOne();
     if (!session) throw new NotFoundException('Không tìm thấy session import');
 
     const page = query.page && query.page > 0 ? query.page : 1;
@@ -225,11 +238,117 @@ export class CustomerAssignmentsService {
         delete: session.delete_count,
         unchanged: session.unchanged_count,
       },
-      data: changes,
+      data: await this.decorateChanges(changes),
       total,
       page,
       pageSize,
     };
+  }
+
+  /**
+   * Bổ sung "nhãn" cho các dòng thay đổi trước khi trả về cho FE.
+   *
+   * DB chỉ lưu sale_id (và decided_by) nên API trả về id trần — màn hình so
+   * khớp không hiển thị được "ai" là nhân viên nào. Ở đây tra tên theo lô
+   * (2 câu query cho cả trang, không N+1) rồi gắn vào:
+   * - sale_name / sale_employee_code: sale của dòng (ưu tiên dữ liệu MỚI)
+   * - old_sale_name / new_sale_name: tên sale TRƯỚC và SAU để vẽ mũi tên đổi
+   * - decided_by_name: người đã quyết định dòng này
+   * - customer_name: tên khách (tra theo cặp mã|SAP)
+   *
+   * Giá trị gốc trong DB KHÔNG bị đụng tới — chỉ mở rộng khi trả về.
+   */
+  private async decorateChanges(changes: CustomerImportChange[]) {
+    if (!changes.length) return [];
+
+    // Gom id cần tra: sale (cũ + mới) và người quyết định
+    const userIds = new Set<number>();
+    for (const ch of changes) {
+      for (const id of [
+        toId(ch.old_data?.sale_id),
+        toId(ch.new_data?.sale_id),
+        toId(ch.decided_by),
+      ]) {
+        if (id) userIds.add(id);
+      }
+    }
+
+    const users = userIds.size
+      ? await this.userRepo.find({
+          where: { id: In([...userIds]) },
+          select: ['id', 'fullName', 'employeeCode'],
+        })
+      : [];
+    const userMap = new Map(users.map((u) => [u.id, u]));
+
+    // Tên khách tra theo cặp (mã|SAP) — dòng "create" của khách mới chưa có
+    // trong DB thì để trống (null), không phải lỗi.
+    const customerKeys = [
+      ...new Set(
+        changes.map((ch) => `${ch.customer_code}|${ch.sap_code ?? ''}`),
+      ),
+    ];
+    const customers = customerKeys.length
+      ? await this.customerRepo.find({
+          where: customerKeys.map((key) => {
+            const [customer_code, sap_code] = key.split('|');
+            return { customer_code, sap_code };
+          }),
+          select: ['id', 'customer_code', 'sap_code', 'customer_name'],
+        })
+      : [];
+    const customerNameMap = new Map(
+      customers.map((c) => [
+        `${c.customer_code}|${c.sap_code}`,
+        c.customer_name,
+      ]),
+    );
+
+    return changes.map((ch) => {
+      const oldSaleId = toId(ch.old_data?.sale_id);
+      const newSaleId = toId(ch.new_data?.sale_id);
+      const oldSale = oldSaleId ? userMap.get(oldSaleId) : undefined;
+      const newSale = newSaleId ? userMap.get(newSaleId) : undefined;
+      // Sale "hiện tại" của dòng: ưu tiên dữ liệu MỚI (sau khi áp dụng).
+      // Tên PHẢI khớp đúng id — nhân viên đã bị xoá khỏi bảng users thì id còn
+      // trong JSON nhưng không còn tên → trả null, KHÔNG lấy nhầm tên sale cũ.
+      const currentSaleId = newSaleId ?? oldSaleId ?? null;
+      const currentSale = currentSaleId
+        ? userMap.get(currentSaleId)
+        : undefined;
+      const deciderId = toId(ch.decided_by);
+      const decider = deciderId ? userMap.get(deciderId) : undefined;
+
+      return {
+        ...ch,
+        // old_data/new_data giữ nguyên mọi trường cũ, chỉ thêm nhãn sale
+        old_data: ch.old_data
+          ? {
+              ...ch.old_data,
+              sale_name: oldSale?.fullName ?? null,
+              sale_employee_code: oldSale?.employeeCode ?? null,
+            }
+          : null,
+        new_data: ch.new_data
+          ? {
+              ...ch.new_data,
+              sale_name: newSale?.fullName ?? null,
+              sale_employee_code: newSale?.employeeCode ?? null,
+            }
+          : null,
+        customer_name:
+          customerNameMap.get(`${ch.customer_code}|${ch.sap_code ?? ''}`) ??
+          null,
+        sale_id: currentSaleId,
+        sale_name: currentSale?.fullName ?? null,
+        sale_employee_code: currentSale?.employeeCode ?? null,
+        old_sale_id: oldSaleId,
+        old_sale_name: oldSale?.fullName ?? null,
+        new_sale_id: newSaleId,
+        new_sale_name: newSale?.fullName ?? null,
+        decided_by_name: decider?.fullName ?? null,
+      };
+    });
   }
 
   async setChangeDecision(
@@ -262,7 +381,9 @@ export class CustomerAssignmentsService {
     change.decided_by = user.id;
     change.decided_at = new Date();
     await this.changeRepo.save(change);
-    return change;
+    // Trả kèm nhãn sale/tên người quyết định — FE cập nhật dòng ngay trong
+    // bảng so khớp mà không cần gọi lại preview.
+    return (await this.decorateChanges([change]))[0];
   }
 
   /**
@@ -957,9 +1078,40 @@ export class CustomerAssignmentsService {
       sessionId,
       applied,
       skippedErrors,
-      conflicts,
+      conflicts: await this.decorateConflicts(conflicts, changes),
       status: session.status,
     };
+  }
+
+  /**
+   * Bổ sung ngữ cảnh cho danh sách dòng xung đột của apply — trước đây chỉ có
+   * `changeId` + `reason`, màn hình không biết dòng đó là khách nào, sale nào.
+   * Chỉ tra những dòng thực sự xung đột (thường rất ít) nên không tốn query.
+   */
+  private async decorateConflicts(
+    conflicts: Array<{ changeId: number; reason: string }>,
+    changes: CustomerImportChange[],
+  ) {
+    if (!conflicts.length) return conflicts;
+    const conflictIds = new Set(conflicts.map((c) => c.changeId));
+    const rows = await this.decorateChanges(
+      changes.filter((c) => conflictIds.has(c.id)),
+    );
+    const byId = new Map(rows.map((r: any) => [r.id, r]));
+
+    return conflicts.map((c) => {
+      const row: any = byId.get(c.changeId);
+      return {
+        ...c,
+        action: row?.action ?? null,
+        customerCode: row?.customer_code ?? null,
+        sapCode: row?.sap_code ?? null,
+        customerName: row?.customer_name ?? null,
+        departmentSlug: row?.department_slug ?? null,
+        saleId: row?.sale_id ?? null,
+        saleName: row?.sale_name ?? null,
+      };
+    });
   }
 
   /** Khách của một change: tra theo key (mã|SAP) trong bộ đệm của lượt apply.
