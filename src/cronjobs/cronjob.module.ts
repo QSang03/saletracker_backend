@@ -31,6 +31,8 @@ import { SystemConfig } from 'src/system_config/system_config.entity';
 import { ZaloLinkMonitorCronjob } from './zalo-link-monitor.cronjob';
 import { User } from '../users/user.entity';
 import { UserModule } from '../users/user.module';
+import { ActivityLog } from '../activity-logs/activity-log.entity';
+import { ActivityLogCleanupCronjobService } from './activity-log-cleanup.cronjob.service';
 
 @Module({
   imports: [
@@ -57,6 +59,7 @@ import { UserModule } from '../users/user.module';
       OrderDetail, // Entity cho order details
       SystemConfig,
       User, // Thêm User entity
+      ActivityLog, // Lịch sử thao tác người dùng trên UI
     ]),
   ],
   providers: [
@@ -70,6 +73,7 @@ import { UserModule } from '../users/user.module';
     ProductV2CronjobService,
     ZaloLinkMonitorCronjob, // Thêm cronjob monitor Zalo link
     CampaignCleanupCronjobService,
+    ActivityLogCleanupCronjobService,
   ],
   exports: [
     CronjobService,
@@ -81,6 +85,7 @@ import { UserModule } from '../users/user.module';
     ProductV2CronjobService,
     ZaloLinkMonitorCronjob,
     CampaignCleanupCronjobService,
+    ActivityLogCleanupCronjobService,
   ],
 })
 export class CronjobModule {}

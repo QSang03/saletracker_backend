@@ -39,6 +39,7 @@ const FIELDS = [
   'end_date',
   'start_time',
   'end_time',
+  'occurred_at',
 ];
 
 function convertDates(obj: any, seen = new WeakSet<any>()): any {

@@ -17,6 +17,8 @@
     "test:nkm-fiscal": "node scripts/test-nkm-fiscal.mjs",
     "test:customer-kpi-scoring": "node scripts/test-customer-kpi-scoring.mjs",
     "test:kpi-report-filter": "ts-node --transpile-only -r tsconfig-paths/register scripts/test-kpi-report-filter.ts",
+    "test:activity-log": "node scripts/test-activity-log.mjs",
+    "test:activity-log-cleanup": "node scripts/test-activity-log-cleanup.mjs",
     "seed:customer-kpi-dev": "node scripts/seed-customer-kpi-dev.mjs",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix"
   },
