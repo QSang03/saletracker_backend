@@ -117,6 +117,21 @@ export class SaleResponseService {
     qb.andWhere(`${alias}.user_id IN (:...userIds)`, { userIds });
   }
 
+  /**
+   * Loại các khoảng chờ mà chính sale sở hữu khoảng đó đã blacklist khách.
+   *
+   * order_blacklist khoá theo cặp (user_id, zalo_contact_id) nên phải so đúng
+   * cặp. Không lọc toàn cục theo zalo_contact_id: cùng một khách vẫn có thể là
+   * khách thật của sale khác.
+   */
+  private blacklistExclusion(alias: string): string {
+    return `NOT EXISTS (
+      SELECT 1 FROM order_blacklist bl
+      WHERE bl.user_id = ${alias}.user_id
+        AND bl.zalo_contact_id = ${alias}.zalo_contact_id
+    )`;
+  }
+
   private normalizeDate(value: string | undefined, fallback: Date): string {
     if (!value) return fallback.toISOString().slice(0, 10);
     // Chỉ nhận YYYY-MM-DD để tránh lệch ngày do timezone của client
@@ -347,6 +362,7 @@ export class SaleResponseService {
       qb.andWhere('i.user_id = :userId', { userId: query.userId });
     }
     this.applyUserScope(qb, 'i', query.userIds);
+    qb.andWhere(this.blacklistExclusion('i'));
     if (query.status) {
       qb.andWhere('i.status = :status', { status: query.status });
     }
@@ -411,6 +427,9 @@ export class SaleResponseService {
       );
     }
 
+    // Các cột đếm phía trên đọc từ sale_response_daily, nên blacklist đã được
+    // loại ở bước rollup. Phần thời lượng dưới đây đọc thẳng intervals nên phải
+    // loại blacklist tại đây để khớp với số đếm.
     const durations = await this.intervalRepo
       .createQueryBuilder('i')
       .select('AVG(i.duration_seconds)', 'avgSeconds')
@@ -419,6 +438,7 @@ export class SaleResponseService {
       .where('i.status = :status', { status: ResponseIntervalStatus.RESPONDED })
       .andWhere('i.duration_seconds IS NOT NULL')
       .andWhere(`(${scope.join(' AND ')})`)
+      .andWhere(this.blacklistExclusion('i'))
       .setParameters({ dateFrom, dateTo, userIds: query.userIds ?? [] })
       .getRawOne();
 
