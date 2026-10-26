@@ -99,6 +99,7 @@ export class SaleResponseService {
       .leftJoin('user.departments', 'dept')
       .where('dept.id IN (:...departmentIds)', { departmentIds })
       .andWhere('user.deletedAt IS NULL')
+      .andWhere('user.isBlock = :isBlock', { isBlock: false })
       .getMany();
     return { userIds: users.map((u) => u.id) };
   }
@@ -196,6 +197,22 @@ export class SaleResponseService {
     )`;
   }
 
+  /**
+   * Loại sale đã bị khóa hoặc đã xóa khỏi báo cáo.
+   *
+   * `is_block` là cờ khóa tài khoản trên trang quản lý user; `deleted_at`
+   * là xóa mềm. Không lọc theo `status` vì sale offline/inactive vẫn có thể
+   * là nhân viên còn làm việc, chỉ khác trạng thái đăng nhập.
+   */
+  private activeUserExclusion(alias: string): string {
+    return `EXISTS (
+      SELECT 1 FROM users u
+      WHERE u.id = ${alias}.user_id
+        AND u.deleted_at IS NULL
+        AND u.is_block = 0
+    )`;
+  }
+
   private normalizeDate(value: string | undefined, fallback: Date): string {
     if (!value) return fallback.toISOString().slice(0, 10);
     // Chỉ nhận YYYY-MM-DD để tránh lệch ngày do timezone của client
@@ -218,6 +235,9 @@ export class SaleResponseService {
         dateFrom,
         dateTo,
       });
+
+    // Không tính sale đã bị khóa/xóa vào báo cáo.
+    qb.andWhere(this.activeUserExclusion(alias));
 
     this.applyUserScope(qb, alias, query.userIds);
     if (query.departmentIds?.length) {
@@ -365,6 +385,7 @@ export class SaleResponseService {
       });
 
     this.applyUserScope(qb, 'w', query.userIds);
+    qb.andWhere(this.activeUserExclusion('w'));
     if (query.departmentIds?.length) {
       qb.andWhere('w.department_id IN (:...departmentIds)', {
         departmentIds: query.departmentIds,
@@ -427,6 +448,7 @@ export class SaleResponseService {
     }
     this.applyUserScope(qb, 'i', query.userIds);
     qb.andWhere(this.blacklistExclusion('i'));
+    qb.andWhere(this.activeUserExclusion('i'));
     if (query.status) {
       qb.andWhere('i.status = :status', { status: query.status });
     }
@@ -503,6 +525,7 @@ export class SaleResponseService {
       .andWhere('i.duration_seconds IS NOT NULL')
       .andWhere(`(${scope.join(' AND ')})`)
       .andWhere(this.blacklistExclusion('i'))
+      .andWhere(this.activeUserExclusion('i'))
       .setParameters({ dateFrom, dateTo, userIds: query.userIds ?? [] })
       .getRawOne();
 
