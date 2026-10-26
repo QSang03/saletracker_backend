@@ -104,16 +104,12 @@ export class SaleResponseService {
   }
 
   /**
-   * Chặn khách khỏi thống kê thời gian phản hồi của một sale.
+   * Chặn khách khỏi thống kê thời gian phản hồi của chính sale đang đăng nhập.
    *
    * Dùng chung bảng order_blacklist với trang quản lý blacklist, nhưng không
    * đi qua order_detail: khách có thể mới nhắn tin, chưa phát sinh đơn.
-   * Quyền:
-   *   admin            -> chặn cho bất kỳ sale nào
-   *   manager+analysis -> chỉ sale trong phòng ban mình quản lý (đúng scope
-   *                       của trang response-time)
-   *   user+analysis    -> chỉ chính mình
-   *   view             -> không được ghi
+   * Chỉ chủ sở hữu khoảng chờ được chặn; admin/manager cũng không được chặn hộ.
+   * Role view là chỉ đọc, không được ghi.
    */
   async blacklistContact(
     user: any,
@@ -132,23 +128,10 @@ export class SaleResponseService {
       throw new ForbiddenException('Bạn không có quyền thêm blacklist');
     }
 
-    if (!has('admin')) {
-      if (!has('analysis')) {
-        throw new ForbiddenException(
-          'Bạn không có quyền thêm blacklist cho trang này',
-        );
-      }
-
-      if (has('manager')) {
-        const scope = await this.resolveScope(user);
-        if (!scope.userIds || !scope.userIds.includes(dto.userId)) {
-          throw new ForbiddenException(
-            'Sale này không thuộc phạm vi quản lý của bạn',
-          );
-        }
-      } else if (dto.userId !== user.id) {
-        throw new ForbiddenException('Chỉ được chặn khách cho chính mình');
-      }
+    if (dto.userId !== user.id) {
+      throw new ForbiddenException(
+        'Chỉ chủ sở hữu khoảng chờ mới được chặn khách',
+      );
     }
 
     // Chỉ cho chặn khi thực sự có khoảng chờ của cặp sale/khách này, tránh
