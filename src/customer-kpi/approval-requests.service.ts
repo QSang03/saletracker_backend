@@ -60,8 +60,8 @@ export class ApprovalRequestsService {
 
   /**
    * Phạm vi nhìn hàng chờ duyệt: admin/view/pm-khach-hang toàn công ty; manager
-   * thấy đề xuất CỦA người trong phòng mình (để duyệt); còn lại chỉ của mình.
-   * Role 'pm' đơn lẻ không tự động thấy toàn công ty.
+   * thấy đề xuất CỦA người trong phòng ban CÓ server_ip của mình (để duyệt);
+   * còn lại chỉ của mình. Role 'pm' đơn lẻ không tự động thấy toàn công ty.
    */
   private async visibleUserIds(user: any): Promise<number[] | undefined> {
     const roles = (user?.roles || []).map((r: any) =>
@@ -76,6 +76,9 @@ export class ApprovalRequestsService {
     }
     if (roles.some((r) => r.startsWith('manager-'))) {
       const departmentIds = (user?.departments || [])
+        .filter(
+          (d: any) => d?.server_ip && String(d.server_ip).trim() !== '',
+        )
         .map((d: any) => d?.id)
         .filter(Boolean);
       if (!departmentIds.length) return [];
@@ -237,12 +240,15 @@ export class ApprovalRequestsService {
     };
   }
 
-  /** Caller và sale bị tác động có chung phòng ban không? */
+  /** Caller và sale bị tác động có chung phòng ban CÓ server_ip không? */
   private async sharesDepartmentWith(
     user: any,
     targetUserId: number,
   ): Promise<boolean> {
     const callerDeptIds = (user?.departments || [])
+      .filter(
+        (d: any) => d?.server_ip && String(d.server_ip).trim() !== '',
+      )
       .map((d: any) => d?.id)
       .filter(Boolean);
     if (!callerDeptIds.length) return false;

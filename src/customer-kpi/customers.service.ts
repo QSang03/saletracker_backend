@@ -244,7 +244,8 @@ export class CustomersService {
 
   /**
    * Caller có được ghi trực tiếp vào danh sách của saleId không?
-   * admin: bất kỳ; manager-<phòng>: sale thuộc phòng ban của caller.
+   * admin: bất kỳ; manager-<phòng>: sale thuộc phòng ban CÓ server_ip của
+   * caller (phòng không có IP như "Chiến dịch" không tính).
    * (nhân viên -> false; lần ghi đó được chuyển thành đề xuất chờ duyệt)
    */
   private async canManageSale(user: any, saleId: number): Promise<boolean> {
@@ -252,6 +253,9 @@ export class CustomersService {
     if (roles.includes('admin')) return true;
     if (!roles.some((r) => r.startsWith('manager-'))) return false;
     const callerDeptIds = (user.departments || [])
+      .filter(
+        (d: any) => d?.server_ip && String(d.server_ip).trim() !== '',
+      )
       .map((d: any) => d?.id)
       .filter(Boolean);
     if (callerDeptIds.length === 0) return false;
@@ -270,12 +274,14 @@ export class CustomersService {
    * trong khi danh sách khách hàng theo vai trò của chính module (đã được
    * PermissionGuard chặn ở tầng route):
    *   admin / view / pm-khach-hang       -> toàn công ty (undefined)
-   *   manager-<phòng>                    -> người trong các phòng ban của mình
+   *   manager-<phòng>                    -> người trong các phòng ban CÓ
+   *                                         server_ip của mình (phòng không
+   *                                         có IP như "Chiến dịch" không tính)
    *   còn lại (user-khach-hang...)       -> chỉ của chính mình
    * Role 'pm' đơn lẻ (hoặc pm-<phòng khác>) KHÔNG tự động thấy toàn công ty:
    * muốn xem full phải được cấp đúng role 'pm-khach-hang'.
-   * Manager KHÔNG lọc phòng có server_ip như sale-response: dữ liệu phân bổ
-   * khách hàng không phụ thuộc server Zalo.
+   * Manager chỉ tính phòng ban CÓ server_ip như sale-response: phòng không có
+   * IP không quét KPI được nên không thuộc phạm vi quản lý của module này.
    */
   private async scopeUserIds(user: any): Promise<number[] | undefined> {
     if (!user?.id)
@@ -293,6 +299,9 @@ export class CustomersService {
     }
     if (lower.some((r) => r.startsWith('manager-'))) {
       const departmentIds = (user.departments || [])
+        .filter(
+          (d: any) => d?.server_ip && String(d.server_ip).trim() !== '',
+        )
         .map((d: any) => d?.id)
         .filter(Boolean);
       if (departmentIds.length === 0) return [];
@@ -618,8 +627,10 @@ export class CustomersService {
    * bị 401 và dropdown rỗng (mục C — lỗi tích hợp). Endpoint này nằm trong
    * namespace quyền `khach-hang`, phân phạm vi đúng luật của module.
    *
-   * Phạm vi: admin/view/pm-khach-hang toàn công ty; manager/user theo phòng
-   * ban của mình. Role 'pm' đơn lẻ hoặc pm-<phòng khác> không được full.
+   * Phạm vi: admin/view/pm-khach-hang toàn công ty; manager chỉ thấy phòng ban
+   * CÓ server_ip của mình (phòng không có IP như "Chiến dịch" không tính);
+   * user thường theo phòng ban của mình. Role 'pm' đơn lẻ hoặc pm-<phòng khác>
+   * không được full.
    */
   async filterDepartments(user: any) {
     const roles = this.lowerRoles(user);
@@ -627,6 +638,7 @@ export class CustomersService {
       roles.includes('admin') ||
       roles.includes('view') ||
       roles.includes('pm-khach-hang');
+    const isManager = roles.some((r) => r.startsWith('manager-'));
 
     const qb = this.departmentRepo
       .createQueryBuilder('d')
@@ -634,7 +646,14 @@ export class CustomersService {
       .orderBy('d.name', 'ASC');
 
     if (!isCompanyWide) {
+      // Manager chỉ thao tác trên phòng ban có server_ip — dropdown cũng phải
+      // khớp phạm vi dữ liệu, nếu không sẽ hiện phòng không bao giờ có số liệu.
       const departmentIds = (user.departments || [])
+        .filter(
+          (d: any) =>
+            !isManager ||
+            (d?.server_ip && String(d.server_ip).trim() !== ''),
+        )
         .map((d: any) => d?.id)
         .filter(Boolean);
       if (departmentIds.length === 0) return { data: [] };

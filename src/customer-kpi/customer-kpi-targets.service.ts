@@ -81,9 +81,15 @@ export class CustomerKpiTargetsService {
     return [user.id];
   }
 
-  /** Các sale thuộc phòng ban của trưởng phòng (phục vụ gán + duyệt). */
+  /**
+   * Các sale thuộc phòng ban CÓ server_ip của trưởng phòng (phục vụ gán +
+   * duyệt). Phòng không có IP như "Chiến dịch" không thuộc phạm vi quản lý.
+   */
   private async managerScopeSaleIds(user: any): Promise<number[]> {
     const departmentIds = (user.departments || [])
+      .filter(
+        (d: any) => d?.server_ip && String(d.server_ip).trim() !== '',
+      )
       .map((d: any) => d?.id)
       .filter(Boolean);
     if (departmentIds.length === 0) return [];

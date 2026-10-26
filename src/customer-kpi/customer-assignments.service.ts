@@ -1431,7 +1431,9 @@ export class CustomerAssignmentsService {
    * Phạm vi xem theo vai trò của MODULE KHÁCH HÀNG — CÙNG luật
    * `scopeUserIds` ở customers.service (bản chuẩn, xem chú thích bên đó):
    *   admin / view / pm-khach-hang       -> toàn công ty
-   *   manager-<phòng>                    -> người trong các phòng ban của mình
+   *   manager-<phòng>                    -> người trong các phòng ban CÓ
+   *                                         server_ip của mình (phòng không có
+   *                                         IP như "Chiến dịch" không tính)
    *   còn lại                            -> chỉ của chính mình
    * Role 'pm' đơn lẻ (hoặc pm-<phòng khác>) KHÔNG tự động thấy toàn công ty:
    * muốn xem full phải được cấp đúng role 'pm-khach-hang'.
@@ -1453,6 +1455,9 @@ export class CustomerAssignmentsService {
     }
     if (lower.some((r) => r.startsWith('manager-'))) {
       const departmentIds = (user.departments || [])
+        .filter(
+          (d: any) => d?.server_ip && String(d.server_ip).trim() !== '',
+        )
         .map((d: any) => d?.id)
         .filter(Boolean);
       if (departmentIds.length === 0) return [];

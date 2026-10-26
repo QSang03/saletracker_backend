@@ -156,6 +156,9 @@ export class KpiCriterionOverridesService {
     }
     if (roles.includes('admin')) return;
     const departmentIds = (user.departments || [])
+      .filter(
+        (d: any) => d?.server_ip && String(d.server_ip).trim() !== '',
+      )
       .map((d: any) => d?.id)
       .filter(Boolean);
     if (departmentIds.length === 0) {
@@ -185,6 +188,9 @@ export class KpiCriterionOverridesService {
 
   private async userIdsInDepartments(user: any): Promise<number[]> {
     const departmentIds = (user.departments || [])
+      .filter(
+        (d: any) => d?.server_ip && String(d.server_ip).trim() !== '',
+      )
       .map((d: any) => d?.id)
       .filter(Boolean);
     if (departmentIds.length === 0) return [];

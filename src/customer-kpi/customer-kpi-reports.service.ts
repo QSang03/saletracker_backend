@@ -259,7 +259,10 @@ export class CustomerKpiReportsService {
   /**
    * Phạm vi xem báo cáo — cùng luật với scopeUserIds của CustomersService:
    *   admin / view / pm-khach-hang -> toàn công ty
-   *   manager-<phòng>              -> người trong các phòng ban của mình
+   *   manager-<phòng>              -> người trong các phòng ban CÓ server_ip
+   *                                   của mình (phòng không có IP như
+   *                                   "Chiến dịch" không tính — không quét
+   *                                   KPI được)
    *   còn lại                      -> chỉ của chính mình
    * Role 'pm' đơn lẻ (hoặc pm-<phòng khác>) KHÔNG tự động thấy toàn công ty:
    * muốn xem full phải được cấp đúng role 'pm-khach-hang'. Khác resolveScope
@@ -281,6 +284,9 @@ export class CustomerKpiReportsService {
     }
     if (lower.some((r) => r.startsWith('manager-'))) {
       const departmentIds = (user.departments || [])
+        .filter(
+          (d: any) => d?.server_ip && String(d.server_ip).trim() !== '',
+        )
         .map((d: any) => d?.id)
         .filter(Boolean);
       if (departmentIds.length === 0) return [];
