@@ -15,6 +15,7 @@ import {
 import { OrderDetail } from '../order-details/order-detail.entity';
 import { User } from '../users/user.entity';
 import { Department } from '../departments/department.entity';
+import { ZaloPythonApiClient } from '../customer-kpi/zalo-python-api.client';
 
 @Injectable()
 export class OrderBlacklistService {
@@ -25,6 +26,14 @@ export class OrderBlacklistService {
   private cacheExpiry = new Map<string, number>();
   private readonly CACHE_TTL = 5 * 60 * 1000; // 5 phút
 
+  // Khi API Python lỗi/chậm, tạm bỏ qua gọi lại trong 60s để mỗi lần load
+  // trang blacklist không phải chờ timeout.
+  private zaloNameLookupFailedUntil = 0;
+
+  // Contact không có display_name bên Zalo: tạm nhớ 5 phút để không gọi lại
+  // Python ở mỗi lần load trang.
+  private zaloNameMissUntil = new Map<string, number>();
+
   constructor(
     @InjectRepository(OrderBlacklist)
     private readonly orderBlacklistRepository: Repository<OrderBlacklist>,
@@ -34,6 +43,7 @@ export class OrderBlacklistService {
     private readonly userRepository: Repository<User>,
     @InjectRepository(Department)
     private readonly departmentRepository: Repository<Department>,
+    private readonly pythonApi: ZaloPythonApiClient,
   ) {}
 
   // ✅ Thêm method để quản lý cache
@@ -490,6 +500,58 @@ export class OrderBlacklistService {
           const customerId = this.extractCustomerIdFromMetadata(od.metadata);
           if (customerId && od.customer_name) {
             customerNamesMap.set(customerId, od.customer_name);
+          }
+        }
+
+        // Khách mới nhắn, chưa phát sinh đơn: order_details không có metadata
+        // để lấy tên. Lấy tên hiển thị từ DB Zalo qua Python API (Nest không
+        // đọc trực tiếp DB zalo_automation).
+        const missingIds = zaloContactIds.filter(
+          (id) => !customerNamesMap.has(id),
+        );
+        if (missingIds.length > 0) {
+          // Dùng cache 5 phút để không gọi Python lại ở mỗi lần load/trang.
+          const now = Date.now();
+          const uncached: string[] = [];
+          for (const id of missingIds) {
+            const cached = this.getCachedCustomerName(id);
+            if (cached) {
+              customerNamesMap.set(id, cached);
+              continue;
+            }
+            const missUntil = this.zaloNameMissUntil.get(id) ?? 0;
+            if (missUntil > now) {
+              continue;
+            }
+            if (missUntil) this.zaloNameMissUntil.delete(id);
+            uncached.push(id);
+          }
+
+          if (uncached.length > 0 && now >= this.zaloNameLookupFailedUntil) {
+            try {
+              const zaloNames = await this.pythonApi.getContactNamesByIds(
+                uncached,
+                // Endpoint batch chỉ query theo index; 5s là quá đủ. Nếu
+                // Python down/slow thì bỏ qua nhanh thay vì treo 60s.
+                { timeoutMs: 5000 },
+              );
+              for (const id of uncached) {
+                const name = zaloNames.get(id);
+                if (name) {
+                  customerNamesMap.set(id, name);
+                  this.setCachedCustomerName(id, name);
+                } else {
+                  this.zaloNameMissUntil.set(id, Date.now() + this.CACHE_TTL);
+                }
+              }
+            } catch (error) {
+              // Tránh mỗi lần load đều chờ timeout khi API đang lỗi.
+              this.zaloNameLookupFailedUntil = Date.now() + 60_000;
+              this.logger.warn(
+                'Cannot load contact names from Python Zalo API',
+                error,
+              );
+            }
           }
         }
       }

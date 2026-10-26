@@ -6,13 +6,14 @@ import { OrderBlacklist } from './order-blacklist.entity';
 import { OrderDetail } from '../order-details/order-detail.entity';
 import { User } from '../users/user.entity';
 import { Department } from '../departments/department.entity';
+import { ZaloPythonApiClient } from '../customer-kpi/zalo-python-api.client';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([OrderBlacklist, OrderDetail, User, Department]),
   ],
   controllers: [OrderBlacklistController],
-  providers: [OrderBlacklistService],
+  providers: [OrderBlacklistService, ZaloPythonApiClient],
   exports: [OrderBlacklistService],
 })
 export class OrderBlacklistModule {}

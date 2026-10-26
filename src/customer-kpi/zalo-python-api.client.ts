@@ -34,7 +34,10 @@ export class ZaloPythonApiClient {
   ).replace(/\/$/, '');
   private readonly masterKey = process.env.MASTER_KEY || '';
 
-  private async getData(path: string): Promise<any[]> {
+  private async getData(
+    path: string,
+    timeoutMs: number = REQUEST_TIMEOUT_MS,
+  ): Promise<any[]> {
     if (!this.masterKey) {
       throw new ServiceUnavailableException(
         'Chưa cấu hình MASTER_KEY — không gọi được API Python (zalo_entities_api)',
@@ -44,7 +47,7 @@ export class ZaloPythonApiClient {
     try {
       res = await fetch(`${this.baseUrl}${path}`, {
         headers: { 'x-master-key': this.masterKey },
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (error: any) {
       throw new ServiceUnavailableException(
@@ -99,5 +102,43 @@ export class ZaloPythonApiClient {
         displayName: r.display_name ?? null,
       }))
       .filter((r) => r.zaloContactId && r.zaloContactId !== '0');
+  }
+
+  /**
+   * Tên hiển thị của nhiều contact theo zalo_contact_id.
+   *
+   * Dùng endpoint batch `/web/contacts/by-ids` (tối đa 200 id/lần) thay vì
+   * gọi search từng contact — search có thể mất 7–20s mỗi lần.
+   */
+  async getContactNamesByIds(
+    zaloContactIds: string[],
+    opts?: { timeoutMs?: number },
+  ): Promise<Map<string, string>> {
+    const ids = [
+      ...new Set(
+        zaloContactIds
+          .map((id) => String(id).trim())
+          .filter((id) => Boolean(id) && id !== '0'),
+      ),
+    ];
+    const names = new Map<string, string>();
+    const timeoutMs = opts?.timeoutMs ?? REQUEST_TIMEOUT_MS;
+
+    for (let i = 0; i < ids.length; i += 200) {
+      const chunk = ids.slice(i, i + 200);
+      const rows = await this.getData(
+        `/web/contacts/by-ids?ids=${encodeURIComponent(chunk.join(','))}`,
+        timeoutMs,
+      );
+      for (const row of rows) {
+        const contactId = String(row.zalo_contact_id ?? '').trim();
+        const displayName = row.display_name;
+        if (contactId && displayName && !names.has(contactId)) {
+          names.set(contactId, String(displayName));
+        }
+      }
+    }
+
+    return names;
   }
 }

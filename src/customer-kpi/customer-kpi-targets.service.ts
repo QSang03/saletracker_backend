@@ -64,13 +64,16 @@ export class CustomerKpiTargetsService {
   ) {}
 
   /**
-   * Phạm vi xem chỉ tiêu: admin/PM xem hết; manager xem người trong phòng
-   * mình; user chỉ xem của mình. KHÔNG dùng resolveScope ở đây vì quy tắc
-   * 'analysis' của trang báo cáo không áp dụng cho màn hình quản trị chỉ tiêu.
+   * Phạm vi xem chỉ tiêu: admin/pm-khach-hang xem hết; manager xem người trong
+   * phòng mình; user chỉ xem của mình. Role 'pm' đơn lẻ không tự động thấy
+   * toàn công ty. KHÔNG dùng resolveScope ở đây vì quy tắc 'analysis' của
+   * trang báo cáo không áp dụng cho màn hình quản trị chỉ tiêu.
    */
   private async scopeUserIds(user: any): Promise<number[] | undefined> {
     const roles = roleNames(user);
-    if (roles.includes('admin') || roles.includes('pm')) return undefined;
+    if (roles.includes('admin') || roles.includes('pm-khach-hang')) {
+      return undefined;
+    }
 
     if (roles.some((r) => r.startsWith('manager-'))) {
       return this.managerScopeSaleIds(user);

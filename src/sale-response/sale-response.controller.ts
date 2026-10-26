@@ -1,5 +1,16 @@
-import { Controller, Get, Query, UseGuards, Request } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Post,
+  Query,
+  UseGuards,
+  Request,
+} from '@nestjs/common';
 import { SaleResponseService } from './sale-response.service';
+import { BlacklistIntervalDto } from './dto/blacklist-interval.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
 
@@ -55,5 +66,18 @@ export class SaleResponseController {
   @Get('statuses')
   statuses() {
     return this.saleResponseService.statuses();
+  }
+
+  /**
+   * Chặn khách khỏi thống kê thời gian phản hồi của sale.
+   * Dùng chung bảng order_blacklist, không cần khách đã phát sinh đơn.
+   */
+  @Post('blacklist')
+  @HttpCode(HttpStatus.CREATED)
+  async blacklist(
+    @Body() dto: BlacklistIntervalDto,
+    @Request() req: any,
+  ) {
+    return this.saleResponseService.blacklistContact(req.user, dto);
   }
 }

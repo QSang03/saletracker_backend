@@ -257,10 +257,14 @@ export class CustomerKpiReportsService {
   ) {}
 
   /**
-   * Phạm vi xem báo cáo — cùng luật với scopeUserIds của CustomersService
-   * (admin/PM/view toàn công ty, manager theo phòng, user chỉ mình). Khác
-   * resolveScope của sale-response: trang khách hàng không yêu cầu role
-   * 'analysis' (quyết định ghi ở CustomerKpiModule).
+   * Phạm vi xem báo cáo — cùng luật với scopeUserIds của CustomersService:
+   *   admin / view / pm-khach-hang -> toàn công ty
+   *   manager-<phòng>              -> người trong các phòng ban của mình
+   *   còn lại                      -> chỉ của chính mình
+   * Role 'pm' đơn lẻ (hoặc pm-<phòng khác>) KHÔNG tự động thấy toàn công ty:
+   * muốn xem full phải được cấp đúng role 'pm-khach-hang'. Khác resolveScope
+   * của sale-response: trang khách hàng không yêu cầu role 'analysis'
+   * (quyết định ghi ở CustomerKpiModule).
    */
   private async scopeUserIds(user: any): Promise<number[] | undefined> {
     if (!user?.id)
@@ -270,9 +274,8 @@ export class CustomerKpiReportsService {
     );
     if (
       lower.includes('admin') ||
-      lower.includes('pm') ||
       lower.includes('view') ||
-      lower.some((r) => r.startsWith('pm-'))
+      lower.includes('pm-khach-hang')
     ) {
       return undefined;
     }
@@ -2068,8 +2071,8 @@ export class CustomerKpiReportsService {
   /**
    * Báo cáo 3 cấp: `groups` = mỗi phòng kinh doanh một hàng tổng, `company` =
    * hàng tổng công ty. Phạm vi tự nhiên đã đúng 3 cấp qua `scopeUserIds`
-   * (sale = mình, trưởng phòng = phòng mình, admin/pm = cả công ty) nên QL Nhóm
-   * chỉ nhận đúng nhóm của mình trong `groups`.
+   * (sale = mình, trưởng phòng = phòng mình, admin/view/pm-khach-hang = cả
+   * công ty) nên QL Nhóm chỉ nhận đúng nhóm của mình trong `groups`.
    *
    * Chỉ tiêu cấp nhóm: có dòng trong `dept_revenue_target` thì dùng dòng đó,
    * không thì TỔNG chỉ tiêu quý của các sale trong nhóm (API quý chỉ có target

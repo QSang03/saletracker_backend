@@ -128,9 +128,8 @@ export class KpiCriterionOverridesService {
     const roles = this.roleNames(user);
     if (
       roles.includes('admin') ||
-      roles.includes('pm') ||
       roles.includes('view') ||
-      roles.some((r) => r.startsWith('pm-'))
+      roles.includes('pm-khach-hang')
     ) {
       return undefined;
     }

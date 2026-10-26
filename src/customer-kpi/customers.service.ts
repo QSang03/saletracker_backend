@@ -269,9 +269,11 @@ export class CustomersService {
    * sale-response: trang đó yêu cầu role 'analysis' vì là báo cáo dữ liệu Zalo,
    * trong khi danh sách khách hàng theo vai trò của chính module (đã được
    * PermissionGuard chặn ở tầng route):
-   *   admin / PM / pm-khach-hang / view  -> toàn công ty (undefined)
+   *   admin / view / pm-khach-hang       -> toàn công ty (undefined)
    *   manager-<phòng>                    -> người trong các phòng ban của mình
    *   còn lại (user-khach-hang...)       -> chỉ của chính mình
+   * Role 'pm' đơn lẻ (hoặc pm-<phòng khác>) KHÔNG tự động thấy toàn công ty:
+   * muốn xem full phải được cấp đúng role 'pm-khach-hang'.
    * Manager KHÔNG lọc phòng có server_ip như sale-response: dữ liệu phân bổ
    * khách hàng không phụ thuộc server Zalo.
    */
@@ -284,9 +286,8 @@ export class CustomersService {
     const lower = roleNames.map((r) => r.toLowerCase());
     if (
       lower.includes('admin') ||
-      lower.includes('pm') ||
       lower.includes('view') ||
-      lower.some((r) => r.startsWith('pm-'))
+      lower.includes('pm-khach-hang')
     ) {
       return undefined;
     }
@@ -617,15 +618,15 @@ export class CustomersService {
    * bị 401 và dropdown rỗng (mục C — lỗi tích hợp). Endpoint này nằm trong
    * namespace quyền `khach-hang`, phân phạm vi đúng luật của module.
    *
-   * Phạm vi: admin/PM/view toàn công ty; manager/user theo phòng ban của mình.
+   * Phạm vi: admin/view/pm-khach-hang toàn công ty; manager/user theo phòng
+   * ban của mình. Role 'pm' đơn lẻ hoặc pm-<phòng khác> không được full.
    */
   async filterDepartments(user: any) {
     const roles = this.lowerRoles(user);
     const isCompanyWide =
       roles.includes('admin') ||
-      roles.includes('pm') ||
       roles.includes('view') ||
-      roles.some((r) => r.startsWith('pm-'));
+      roles.includes('pm-khach-hang');
 
     const qb = this.departmentRepo
       .createQueryBuilder('d')

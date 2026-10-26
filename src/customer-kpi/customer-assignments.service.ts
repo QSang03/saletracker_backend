@@ -1430,9 +1430,11 @@ export class CustomerAssignmentsService {
   /**
    * Phạm vi xem theo vai trò của MODULE KHÁCH HÀNG — CÙNG luật
    * `scopeUserIds` ở customers.service (bản chuẩn, xem chú thích bên đó):
-   *   admin / PM / pm-khach-hang / view  -> toàn công ty
+   *   admin / view / pm-khach-hang       -> toàn công ty
    *   manager-<phòng>                    -> người trong các phòng ban của mình
    *   còn lại                            -> chỉ của chính mình
+   * Role 'pm' đơn lẻ (hoặc pm-<phòng khác>) KHÔNG tự động thấy toàn công ty:
+   * muốn xem full phải được cấp đúng role 'pm-khach-hang'.
    * Trả undefined = không giới hạn. Xuất file KHÔNG được mở rộng phạm vi.
    */
   private async scopeUserIds(user: any): Promise<number[] | undefined> {
@@ -1444,9 +1446,8 @@ export class CustomerAssignmentsService {
     const lower = roleNames.map((r) => r.toLowerCase());
     if (
       lower.includes('admin') ||
-      lower.includes('pm') ||
       lower.includes('view') ||
-      lower.some((r) => r.startsWith('pm-'))
+      lower.includes('pm-khach-hang')
     ) {
       return undefined;
     }

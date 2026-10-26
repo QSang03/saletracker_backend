@@ -59,8 +59,9 @@ export class ApprovalRequestsService {
   ) {}
 
   /**
-   * Phạm vi nhìn hàng chờ duyệt: admin/PM/view toàn công ty; manager thấy
-   * đề xuất CỦA người trong phòng mình (để duyệt); còn lại chỉ của mình.
+   * Phạm vi nhìn hàng chờ duyệt: admin/view/pm-khach-hang toàn công ty; manager
+   * thấy đề xuất CỦA người trong phòng mình (để duyệt); còn lại chỉ của mình.
+   * Role 'pm' đơn lẻ không tự động thấy toàn công ty.
    */
   private async visibleUserIds(user: any): Promise<number[] | undefined> {
     const roles = (user?.roles || []).map((r: any) =>
@@ -68,9 +69,8 @@ export class ApprovalRequestsService {
     );
     if (
       roles.includes('admin') ||
-      roles.includes('pm') ||
       roles.includes('view') ||
-      roles.some((r) => r.startsWith('pm-'))
+      roles.includes('pm-khach-hang')
     ) {
       return undefined;
     }

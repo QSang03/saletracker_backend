@@ -1,4 +1,8 @@
-import { ForbiddenException, Injectable } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { SaleResponseInterval, ResponseIntervalStatus } from './sale-response-interval.entity';
@@ -7,6 +11,7 @@ import { SaleWorkActivityDaily } from './sale-work-activity-daily.entity';
 import { User } from '../users/user.entity';
 import { Department } from '../departments/department.entity';
 import { OrderService } from '../orders/order.service';
+import { OrderBlacklistService } from '../order-blacklist/order-blacklist.service';
 
 export interface ResponseTimeFilters {
   dateFrom?: string;
@@ -39,6 +44,7 @@ export class SaleResponseService {
     @InjectRepository(User)
     private readonly userRepo: Repository<User>,
     private readonly orderService: OrderService,
+    private readonly orderBlacklistService: OrderBlacklistService,
   ) {}
 
   /**
@@ -95,6 +101,81 @@ export class SaleResponseService {
       .andWhere('user.deletedAt IS NULL')
       .getMany();
     return { userIds: users.map((u) => u.id) };
+  }
+
+  /**
+   * Chặn khách khỏi thống kê thời gian phản hồi của một sale.
+   *
+   * Dùng chung bảng order_blacklist với trang quản lý blacklist, nhưng không
+   * đi qua order_detail: khách có thể mới nhắn tin, chưa phát sinh đơn.
+   * Quyền:
+   *   admin            -> chặn cho bất kỳ sale nào
+   *   manager+analysis -> chỉ sale trong phòng ban mình quản lý (đúng scope
+   *                       của trang response-time)
+   *   user+analysis    -> chỉ chính mình
+   *   view             -> không được ghi
+   */
+  async blacklistContact(
+    user: any,
+    dto: { userId: number; zaloContactId: string; reason?: string },
+  ) {
+    if (!user?.id) {
+      throw new ForbiddenException('Không xác định được người dùng');
+    }
+
+    const roleNames: string[] = (user.roles || []).map((r: any) =>
+      typeof r === 'string' ? r.toLowerCase() : (r?.name || '').toLowerCase(),
+    );
+    const has = (role: string) => roleNames.includes(role);
+
+    if (has('view') && !has('admin')) {
+      throw new ForbiddenException('Bạn không có quyền thêm blacklist');
+    }
+
+    if (!has('admin')) {
+      if (!has('analysis')) {
+        throw new ForbiddenException(
+          'Bạn không có quyền thêm blacklist cho trang này',
+        );
+      }
+
+      if (has('manager')) {
+        const scope = await this.resolveScope(user);
+        if (!scope.userIds || !scope.userIds.includes(dto.userId)) {
+          throw new ForbiddenException(
+            'Sale này không thuộc phạm vi quản lý của bạn',
+          );
+        }
+      } else if (dto.userId !== user.id) {
+        throw new ForbiddenException('Chỉ được chặn khách cho chính mình');
+      }
+    }
+
+    // Chỉ cho chặn khi thực sự có khoảng chờ của cặp sale/khách này, tránh
+    // client gửi contact bất kỳ và tạo blacklist rác.
+    const intervalCount = await this.intervalRepo.count({
+      where: {
+        user_id: dto.userId,
+        zalo_contact_id: dto.zaloContactId,
+      },
+    });
+    if (intervalCount === 0) {
+      throw new NotFoundException(
+        'Không tìm thấy khoảng chờ của khách này với sale đã chọn',
+      );
+    }
+
+    const entry = await this.orderBlacklistService.create({
+      userId: dto.userId,
+      zaloContactId: dto.zaloContactId,
+      reason:
+        dto.reason?.trim() || 'Chặn từ báo cáo thời gian phản hồi',
+    });
+
+    return {
+      message: 'Đã thêm khách vào blacklist',
+      blacklistEntry: entry,
+    };
   }
 
   /**
