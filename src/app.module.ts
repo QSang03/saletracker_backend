@@ -46,6 +46,7 @@ import { CommonModule } from './common/common.module';
 import { SendHistoryModule } from './send_history/send_history.module';
 import { CustomerKpiModule } from './customer-kpi/customer-kpi.module';
 import { ActivityLogModule } from './activity-logs/activity-log.module';
+import { SaleQuoteModule } from './sale-quotes/sale-quote.module';
 
 @Module({
   imports: [
@@ -100,6 +101,7 @@ import { ActivityLogModule } from './activity-logs/activity-log.module';
     CommonModule,
     CustomerKpiModule,
     ActivityLogModule,
+    SaleQuoteModule,
   ],
 })
 export class AppModule {}

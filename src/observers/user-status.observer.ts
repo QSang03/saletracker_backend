@@ -122,25 +122,26 @@ export class UserStatusObserver {
       // ENFORCE: never send notifications before 08:00 VN timezone
       try {
         const now = new Date();
-        const vnTimeString = now.toLocaleString('en-US', {
+        const parts = new Intl.DateTimeFormat('en-US', {
           timeZone: 'Asia/Ho_Chi_Minh',
-          hour12: false,
+          hourCycle: 'h23',
           hour: '2-digit',
           minute: '2-digit',
-          second: '2-digit',
-        });
-        const timePart = vnTimeString.split(', ')[1]; // "HH:MM:SS"
-        const hour = parseInt(timePart.split(':')[0], 10);
+        }).formatToParts(now);
+        const hourValue = parts.find((p) => p.type === 'hour')?.value;
+        const minuteValue = parts.find((p) => p.type === 'minute')?.value;
+        const hour = parseInt(hourValue ?? '', 10);
         if (!isNaN(hour) && hour < 8) {
+          const vnTime = `${(hourValue ?? '00').padStart(2, '0')}:${(minuteValue ?? '00').padStart(2, '0')}`;
           this.logger.log(
-            `⏰ Bỏ qua gửi notification đến Python API cho user ${event.userId} — ngoài giờ (trước 08:00 VN). Giờ VN hiện tại: ${timePart.substring(0, 5)}`,
+            `⏰ Bỏ qua gửi notification đến Python API cho user ${event.userId} — ngoài giờ (trước 08:00 VN). Giờ VN hiện tại: ${vnTime}`,
           );
           return;
         }
       } catch (tzErr) {
-        // If timezone parsing fails, conservative approach: allow send (or you may choose to skip)
+        // Fail-open: if the VN time cannot be determined, still allow the notification.
         this.logger.warn(
-          `⚠️ Không thể xác định giờ VN trước khi gửi (để an toàn có thể cân nhắc bỏ qua): ${tzErr?.message || tzErr}`,
+          `⚠️ Không thể xác định giờ VN trước khi gửi, vẫn tiếp tục gửi: ${tzErr?.message || tzErr}`,
         );
       }
       // Kiểm tra user đã được xử lý gần đây chưa (trong vòng 5 phút)
