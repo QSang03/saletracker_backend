@@ -3,8 +3,7 @@ import { Cron } from '@nestjs/schedule';
 import { HttpService } from '@nestjs/axios';
 import { lastValueFrom } from 'rxjs';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { NKCProduct } from '../nkc_products/nkc_product.entity';
+import { In, Repository } from 'typeorm';
 import { Product } from '../products/product.entity';
 import { Brand } from '../brands/brand.entity';
 import { Category } from '../categories/category.entity';
@@ -12,9 +11,42 @@ import { PermissionService } from '../permissions/permission.service';
 import slugify from 'slugify';
 import { WinstonLogger } from '../common/winston.logger';
 
+interface ApiProduct {
+  MaHH?: string | null;
+  Name?: string | null;
+  Description?: string | null;
+  Price?: number | string | null;
+  Stock?: boolean | number | string | null;
+  SLCoTheXuat?: number | string | null;
+  Brand?: string | null;
+  ProductGroup?: string | null;
+  properties?: unknown[];
+}
+
+interface ApiResponse {
+  status?: boolean;
+  message?: string;
+  data?: {
+    items?: ApiProduct[];
+    pagination?: {
+      total?: number;
+      perPage?: number;
+      currentPage?: number;
+      lastPage?: number;
+    };
+  };
+}
+
+interface PageStats {
+  created: number;
+  updated: number;
+  unchanged: number;
+}
+
 @Injectable()
 export class ProductV2CronjobService {
   private readonly logger = new WinstonLogger(ProductV2CronjobService.name);
+  private isRunning = false;
 
   constructor(
     private readonly httpService: HttpService,
@@ -27,15 +59,22 @@ export class ProductV2CronjobService {
     private readonly permissionService: PermissionService,
   ) {}
 
-  @Cron(process.env.CRON_PRODUCT_TIME || '0 22 * * *')
+  @Cron(process.env.CRON_PRODUCT_TIME || '0 */6 * * *', {
+    timeZone: 'Asia/Ho_Chi_Minh',
+  })
   async syncProductsV2() {
-    // Temporary toggle: if this env var is set to 'true', skip the cronjob execution.
+    if (this.isRunning) {
+      this.logger.warn('Previous product sync is still running - skipping');
+      return;
+    }
+
     if (process.env.DISABLE_CRON_PRODUCT_V2 === 'true') {
       this.logger.warn(
         'product-v2 cronjob temporarily disabled via DISABLE_CRON_PRODUCT_V2',
       );
       return;
     }
+
     const apiUrl = process.env.VNK_API_PRODUCT_URL_V2;
     const token = process.env.VNK_API_TOKEN;
 
@@ -46,337 +85,458 @@ export class ProductV2CronjobService {
       return;
     }
 
-    if (!token) {
-      this.logger.warn(
-        'VNK_API_TOKEN not configured - skipping product-v2 cron',
-      );
-      return;
-    }
+    this.isRunning = true;
+    // Truncate to seconds because products.synced_at is DATETIME(0).
+    const runStartedAt = new Date(Math.floor(Date.now() / 1000) * 1000);
+    const pageSize = this.getIntEnv('PRODUCT_SYNC_PAGE_SIZE', 500);
+    const delayMs = this.getIntEnv('PRODUCT_SYNC_DELAY_MS', 1000);
+    const maxRetries = this.getIntEnv('PRODUCT_SYNC_MAX_RETRIES', 5);
+    const deactivateMissing =
+      (process.env.PRODUCT_SYNC_DEACTIVATE_MISSING || 'false') === 'true';
 
-    this.logger.log(`Start sync products from V2 API: ${apiUrl}`);
+    let page = 1;
+    let lastPage = 1;
+    let totalFetched = 0;
+    let created = 0;
+    let updated = 0;
+    let unchanged = 0;
+
+    this.logger.log(
+      `Start product sync from: ${apiUrl} (pageSize=${pageSize})`,
+    );
 
     try {
-      // Start from page 1 and iterate until last_page
-      let page = 1;
-      while (true) {
-        const url = `${apiUrl}?page=${page}`;
-        this.logger.log(`Fetching page ${page} -> ${url}`);
+      const brandCache = new Map<string, Brand>();
+      const categoryCache = new Map<string, Category>();
+      await this.loadBrandCategoryCache(brandCache, categoryCache);
 
-        const response$ = this.httpService.get(url, {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            Accept: 'application/json',
-          },
-          timeout: 30_000,
-        });
+      do {
+        const body = await this.fetchPage(
+          apiUrl,
+          token,
+          page,
+          pageSize,
+          maxRetries,
+        );
+        const items = body.data?.items ?? [];
+        const pagination = body.data?.pagination ?? {};
 
-        const resp = await lastValueFrom(response$);
-        const body = resp.data;
+        const apiLastPage = Number(pagination.lastPage);
+        if (Number.isFinite(apiLastPage) && apiLastPage > 0) {
+          lastPage = apiLastPage;
+        }
 
-        if (!body || !body.data) {
-          this.logger.warn(`Empty response or missing data on page ${page}`);
+        if (!Array.isArray(items) || items.length === 0) {
+          this.logger.warn(
+            `Page ${page}/${lastPage} returned no items - stopping pagination`,
+          );
           break;
         }
 
-        const items: any[] = body.data || [];
-        this.logger.log(`Page ${page} returned ${items.length} products`);
+        const stats = await this.upsertPage(
+          items,
+          runStartedAt,
+          brandCache,
+          categoryCache,
+        );
 
-        for (const item of items) {
-          try {
-            // Map fields: MaHH -> productCode, Description -> productName or description
-            const productCode = item.MaHH || item.mahh || item.code || null;
-            const productName = item.Name || item.ProductName || null;
-            const description = item.Description || null;
+        totalFetched += items.length;
+        created += stats.created;
+        updated += stats.updated;
+        unchanged += stats.unchanged;
 
-            // Resolve brand (create if missing) and category (attach if exists)
-            const brandName = item.Brand || null;
-            const categoryName = item.ProductGroup || null;
+        this.logger.log(
+          `Page ${page}/${lastPage}: ${items.length} items, ` +
+            `created=${stats.created}, updated=${stats.updated}, unchanged=${stats.unchanged}`,
+        );
 
-            let brand: Brand | undefined;
-            if (brandName) {
-              const foundBrand = await this.brandRepo.findOne({
-                where: { name: String(brandName) },
-              });
-              brand = foundBrand ?? undefined;
-              // Ensure existing brand has a proper slug; update if needed
-              if (brand) {
-                try {
-                  const expectedSlug = slugify(
-                    String(brandName).replace(/[đĐ]/g, 'd'),
-                    { lower: true, strict: true },
-                  ).slice(0, 255);
-                  if ((brand as any).slug !== expectedSlug) {
-                    // check slug conflict
-                    const conflict = await this.brandRepo.findOne({
-                      where: { slug: expectedSlug },
-                    });
-                    if (conflict && conflict.id !== brand.id) {
-                      this.logger.warn(
-                        `Slug conflict for brand '${brandName}': desired slug '${expectedSlug}' already used by id=${conflict.id}. Skipping slug update.`,
-                      );
-                    } else {
-                      const oldSlug = (brand as any).slug || '';
-                      await this.brandRepo.update(
-                        { id: brand.id },
-                        {
-                          slug: expectedSlug,
-                        },
-                      );
-                      // rename permission from old to new
-                      try {
-                        if (oldSlug) {
-                          await this.permissionService.updatePermissionNameBySlug(
-                            `pm_brand_${oldSlug}`,
-                            `pm_brand_${expectedSlug}`,
-                          );
-                        } else {
-                          // create permission if none existed for this brand
-                          await this.permissionService.createPermission({
-                            name: `pm_brand_${expectedSlug}`,
-                            action: 'scope',
-                          });
-                        }
-                      } catch (permErr) {
-                        this.logger.debug(
-                          `Failed to update/create permission for brand '${brandName}': ${permErr?.message || permErr}`,
-                        );
-                      }
-                      // refresh brand object
-                      brand =
-                        (await this.brandRepo.findOne({
-                          where: { id: brand.id },
-                        })) ?? undefined;
-                    }
-                  }
-                } catch (e) {
-                  this.logger.debug(
-                    `Failed to ensure slug for existing brand '${brandName}': ${e?.message || e}`,
-                  );
-                }
-                // Ensure permission exists for this brand (create if missing)
-                try {
-                  const ensuredSlug = slugify(
-                    String(brandName).replace(/[đĐ]/g, 'd'),
-                    { lower: true, strict: true },
-                  ).slice(0, 255);
-                  await this.permissionService.createPermission({
-                    name: `pm_brand_${ensuredSlug}`,
-                    action: 'scope',
-                  });
-                } catch (permErr) {
-                  this.logger.debug(
-                    `Failed to create/check permission for existing brand '${brandName}': ${permErr?.message || permErr}`,
-                  );
-                }
-              }
-              if (!brand) {
-                try {
-                  const slug = slugify(
-                    String(brandName).replace(/[đĐ]/g, 'd'),
-                    { lower: true, strict: true },
-                  ).slice(0, 255);
-                  brand = await this.brandRepo.save({
-                    name: String(brandName).slice(0, 255),
-                    slug,
-                  } as Brand);
-                  try {
-                    await this.permissionService.createPermission({
-                      name: `pm_brand_${slug}`,
-                      action: 'scope',
-                    });
-                  } catch (permErr) {
-                    this.logger.debug(
-                      `Failed to create permission for brand '${brandName}': ${permErr?.message || permErr}`,
-                    );
-                  }
-                } catch (e) {
-                  this.logger.debug(
-                    `Failed to create brand '${brandName}': ${e?.message || e}`,
-                  );
-                }
-              }
-            }
-
-            let category: Category | undefined;
-            if (categoryName) {
-              const foundCategory = await this.categoryRepo.findOne({
-                where: { catName: String(categoryName) },
-              });
-              category = foundCategory ?? undefined;
-              // Ensure existing category has a proper slug; update if needed
-              if (category) {
-                try {
-                  const expectedSlug = slugify(
-                    String(categoryName).replace(/[đĐ]/g, 'd'),
-                    { lower: true, strict: true },
-                  ).slice(0, 255);
-                  if ((category as any).slug !== expectedSlug) {
-                    const conflict = await this.categoryRepo.findOne({
-                      where: { slug: expectedSlug },
-                    });
-                    if (conflict && conflict.id !== category.id) {
-                      this.logger.warn(
-                        `Slug conflict for category '${categoryName}': desired slug '${expectedSlug}' already used by id=${conflict.id}. Skipping slug update.`,
-                      );
-                    } else {
-                      const oldSlug = (category as any).slug || '';
-                      await this.categoryRepo.update(
-                        { id: category.id },
-                        {
-                          slug: expectedSlug,
-                        },
-                      );
-                      try {
-                        if (oldSlug) {
-                          await this.permissionService.updatePermissionNameBySlug(
-                            `pm_cat_${oldSlug}`,
-                            `pm_cat_${expectedSlug}`,
-                          );
-                        } else {
-                          await this.permissionService.createPermission({
-                            name: `pm_cat_${expectedSlug}`,
-                            action: 'scope',
-                          });
-                        }
-                      } catch (permErr) {
-                        this.logger.debug(
-                          `Failed to update/create permission for category '${categoryName}': ${permErr?.message || permErr}`,
-                        );
-                      }
-                      category =
-                        (await this.categoryRepo.findOne({
-                          where: { id: category.id },
-                        })) ?? undefined;
-                    }
-                  }
-                } catch (e) {
-                  this.logger.debug(
-                    `Failed to ensure slug for existing category '${categoryName}': ${e?.message || e}`,
-                  );
-                }
-                // Ensure permission exists for this category (create if missing)
-                try {
-                  const ensuredSlug = slugify(
-                    String(categoryName).replace(/[đĐ]/g, 'd'),
-                    { lower: true, strict: true },
-                  ).slice(0, 255);
-                  await this.permissionService.createPermission({
-                    name: `pm_cat_${ensuredSlug}`,
-                    action: 'scope',
-                  });
-                } catch (permErr) {
-                  this.logger.debug(
-                    `Failed to create/check permission for existing category '${categoryName}': ${permErr?.message || permErr}`,
-                  );
-                }
-              }
-              if (!category) {
-                try {
-                  const slug = slugify(
-                    String(categoryName).replace(/[đĐ]/g, 'd'),
-                    { lower: true, strict: true },
-                  ).slice(0, 255);
-                  category = await this.categoryRepo.save({
-                    catName: String(categoryName).slice(0, 255),
-                    slug,
-                  } as Category);
-                  try {
-                    await this.permissionService.createPermission({
-                      name: `pm_cat_${slug}`,
-                      action: 'scope',
-                    });
-                  } catch (permErr) {
-                    this.logger.debug(
-                      `Failed to create permission for category '${categoryName}': ${permErr?.message || permErr}`,
-                    );
-                  }
-                } catch (e) {
-                  this.logger.debug(
-                    `Failed to create category '${categoryName}': ${e?.message || e}`,
-                  );
-                }
-              }
-            }
-
-            const payload: Partial<Product> = {
-              productCode: productCode,
-              // product_name column is NOT NULL in the DB: fallback to original name or 'Unknown Product'
-              productName: productName
-                ? String(productName)
-                : 'Unknown Product',
-              description: description ? String(description) : undefined,
-            };
-
-            if (!productCode) {
-              this.logger.debug('Skipping product without MaHH/product code');
-              continue;
-            }
-
-            const existing = await this.productRepo.findOne({
-              where: { productCode },
-              relations: ['brand', 'category'],
-            });
-
-            if (existing) {
-              // determine if any relevant field changed
-              const existingBrandId = (existing as any).brand
-                ? (existing as any).brand.id
-                : undefined;
-              const existingCategoryId = (existing as any).category
-                ? (existing as any).category.id
-                : undefined;
-              const newBrandId = brand ? (brand as any).id : undefined;
-              const newCategoryId = category ? (category as any).id : undefined;
-
-              const nameChanged =
-                (existing.productName || '') !== (payload.productName || '');
-              const descChanged =
-                (existing.description || '') !== (payload.description || '');
-              const brandChanged = existingBrandId !== newBrandId;
-              const categoryChanged = existingCategoryId !== newCategoryId;
-
-              if (
-                nameChanged ||
-                descChanged ||
-                brandChanged ||
-                categoryChanged
-              ) {
-                // apply changes and save
-                existing.productName = payload.productName as string;
-                existing.description = payload.description;
-                (existing as any).brand = brand ?? undefined;
-                (existing as any).category = category ?? undefined;
-                await this.productRepo.save(existing);
-              } else {
-                // nothing to update
-                this.logger.debug(
-                  `Product ${productCode} unchanged, skipping save`,
-                );
-              }
-            } else {
-              // new product
-              const toSave = Object.assign({}, payload, {
-                brand: brand ?? undefined,
-                category: category ?? undefined,
-              });
-              await this.productRepo.save(toSave as Product);
-            }
-          } catch (innerErr) {
-            this.logger.error('Error upserting product', innerErr);
-          }
+        if (page < lastPage && delayMs > 0) {
+          await this.sleep(delayMs);
         }
-
-        const meta = body.meta || {};
-        const currentPage = meta.current_page || page;
-        const lastPage = meta.last_page || currentPage;
-
-        if (currentPage >= lastPage) break;
         page += 1;
+      } while (page <= lastPage);
+
+      if (deactivateMissing) {
+        const result = await this.productRepo
+          .createQueryBuilder()
+          .update(Product)
+          .set({ isActive: false })
+          .where('synced_at IS NULL OR synced_at <> :runStartedAt', {
+            runStartedAt,
+          })
+          .execute();
+
+        this.logger.log(
+          `Deactivated ${result.affected ?? 0} products not present in this run`,
+        );
       }
 
-      this.logger.log('Finished sync products V2');
+      this.logger.log(
+        `Finished product sync: fetched=${totalFetched}, created=${created}, ` +
+          `updated=${updated}, unchanged=${unchanged}`,
+      );
     } catch (error) {
-      this.logger.error('Failed to sync products V2', error);
+      this.logger.error(
+        'Failed to sync products V2',
+        (error as any)?.stack || String(error),
+      );
+    } finally {
+      this.isRunning = false;
     }
+  }
+
+  private async fetchPage(
+    apiUrl: string,
+    token: string | undefined,
+    page: number,
+    pageSize: number,
+    maxRetries: number,
+  ): Promise<ApiResponse> {
+    let lastError: any;
+
+    for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
+      try {
+        const response$ = this.httpService.get<ApiResponse>(apiUrl, {
+          params: { perpage: pageSize, page },
+          headers: {
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            Accept: 'application/json',
+          },
+          timeout: 60_000,
+        });
+
+        const response = await lastValueFrom(response$);
+        const body = response.data;
+
+        if (!body?.status || !body.data || !Array.isArray(body.data.items)) {
+          throw new Error(
+            `Unexpected response shape on page ${page}: ${body?.message || 'missing data.items'}`,
+          );
+        }
+
+        return body;
+      } catch (error) {
+        lastError = error;
+        const status = (error as any)?.response?.status;
+        const waitMs = status === 429 ? 30_000 : Math.min(5_000 * attempt, 30_000);
+
+        this.logger.warn(
+          `Fetch page ${page} failed (attempt ${attempt}/${maxRetries}, ` +
+            `status=${status ?? 'n/a'}) - retrying in ${waitMs}ms`,
+        );
+
+        if (attempt < maxRetries) {
+          await this.sleep(waitMs);
+        }
+      }
+    }
+
+    throw lastError instanceof Error
+      ? lastError
+      : new Error(`Failed to fetch page ${page}`);
+  }
+
+  private async upsertPage(
+    items: ApiProduct[],
+    runStartedAt: Date,
+    brandCache: Map<string, Brand>,
+    categoryCache: Map<string, Category>,
+  ): Promise<PageStats> {
+    const codes = Array.from(
+      new Set(
+        items
+          .map((item) => item.MaHH?.trim())
+          .filter((code): code is string => Boolean(code)),
+      ),
+    );
+
+    if (codes.length === 0) {
+      return { created: 0, updated: 0, unchanged: 0 };
+    }
+
+    const existingRows = await this.productRepo.find({
+      where: { productCode: In(codes) },
+      relations: ['brand', 'category'],
+    });
+
+    const existingByCode = new Map<string, Product[]>();
+    for (const row of existingRows) {
+      const rows = existingByCode.get(row.productCode) ?? [];
+      rows.push(row);
+      existingByCode.set(row.productCode, rows);
+    }
+
+    let created = 0;
+    let updated = 0;
+    let unchanged = 0;
+    const toSave: Product[] = [];
+
+    for (const item of items) {
+      const code = item.MaHH?.trim();
+      if (!code) {
+        continue;
+      }
+
+      const name = item.Name?.trim() || 'Unknown Product';
+      const description = item.Description ? String(item.Description) : undefined;
+      const rawPrice = this.toNullableNumber(item.Price);
+      const price = rawPrice !== null && rawPrice > 0 ? rawPrice : null;
+      const stock = this.toStockQty(item);
+      const isInStock = this.toBoolean(item.Stock);
+
+      const brand = item.Brand
+        ? await this.getOrCreateBrand(String(item.Brand).trim(), brandCache)
+        : undefined;
+      const category = item.ProductGroup
+        ? await this.getOrCreateCategory(
+            String(item.ProductGroup).trim(),
+            categoryCache,
+          )
+        : undefined;
+
+      const rows = existingByCode.get(code);
+
+      if (!rows || rows.length === 0) {
+        const product = this.productRepo.create({
+          productCode: code,
+          productName: name,
+          description,
+          price,
+          stock,
+          isInStock,
+          syncedAt: runStartedAt,
+          isActive: true,
+          brand,
+          category,
+        });
+        toSave.push(product);
+        created += 1;
+        continue;
+      }
+
+      let businessChanged = false;
+      for (const product of rows) {
+        if (product.productName !== name) {
+          product.productName = name;
+          businessChanged = true;
+        }
+
+        if (description !== undefined && product.description !== description) {
+          product.description = description;
+          businessChanged = true;
+        }
+
+        if (product.price !== price) {
+          product.price = price;
+          businessChanged = true;
+        }
+
+        if (product.stock !== stock) {
+          product.stock = stock;
+          businessChanged = true;
+        }
+
+        if (product.isInStock !== isInStock) {
+          product.isInStock = isInStock;
+          businessChanged = true;
+        }
+
+        if (!product.isActive) {
+          product.isActive = true;
+          businessChanged = true;
+        }
+
+        if (brand && product.brand?.id !== brand.id) {
+          product.brand = brand;
+          businessChanged = true;
+        }
+
+        if (category && product.category?.id !== category.id) {
+          product.category = category;
+          businessChanged = true;
+        }
+
+        product.syncedAt = runStartedAt;
+      }
+
+      if (businessChanged) {
+        toSave.push(...rows);
+        updated += rows.length;
+      } else {
+        unchanged += rows.length;
+      }
+    }
+
+    if (toSave.length > 0) {
+      await this.productRepo.save(toSave, { chunk: 200 });
+    }
+
+    // Mark every product seen in this run, including rows whose business
+    // fields did not change, so a later cleanup can distinguish stale rows.
+    await this.productRepo
+      .createQueryBuilder()
+      .update(Product)
+      .set({ syncedAt: runStartedAt })
+      .where('product_code IN (:...codes)', { codes })
+      .execute();
+
+    return { created, updated, unchanged };
+  }
+
+  private async loadBrandCategoryCache(
+    brandCache: Map<string, Brand>,
+    categoryCache: Map<string, Category>,
+  ): Promise<void> {
+    const [brands, categories] = await Promise.all([
+      this.brandRepo.find(),
+      this.categoryRepo.find(),
+    ]);
+
+    for (const brand of brands) {
+      brandCache.set(this.normalizeKey(brand.name), brand);
+    }
+    for (const category of categories) {
+      categoryCache.set(this.normalizeKey(category.catName), category);
+    }
+  }
+
+  private async getOrCreateBrand(
+    name: string,
+    cache: Map<string, Brand>,
+  ): Promise<Brand | undefined> {
+    if (!name) {
+      return undefined;
+    }
+
+    const key = this.normalizeKey(name);
+    const cached = cache.get(key);
+    if (cached) {
+      return cached;
+    }
+
+    const existing = await this.brandRepo.findOne({ where: { name } });
+    if (existing) {
+      cache.set(key, existing);
+      return existing;
+    }
+
+    const slug = this.makeSlug(name);
+    const brand = await this.brandRepo.save(
+      this.brandRepo.create({
+        name: name.slice(0, 255),
+        slug,
+      }),
+    );
+    cache.set(key, brand);
+
+    await this.ensurePermission(`pm_brand_${slug}`);
+    return brand;
+  }
+
+  private async getOrCreateCategory(
+    name: string,
+    cache: Map<string, Category>,
+  ): Promise<Category | undefined> {
+    if (!name) {
+      return undefined;
+    }
+
+    const key = this.normalizeKey(name);
+    const cached = cache.get(key);
+    if (cached) {
+      return cached;
+    }
+
+    const existing = await this.categoryRepo.findOne({
+      where: { catName: name },
+    });
+    if (existing) {
+      cache.set(key, existing);
+      return existing;
+    }
+
+    const slug = this.makeSlug(name);
+    const category = await this.categoryRepo.save(
+      this.categoryRepo.create({
+        catName: name.slice(0, 255),
+        slug,
+      }),
+    );
+    cache.set(key, category);
+
+    await this.ensurePermission(`pm_cat_${slug}`);
+    return category;
+  }
+
+  private async ensurePermission(name: string): Promise<void> {
+    try {
+      await this.permissionService.createPermission({
+        name,
+        action: 'scope',
+      });
+    } catch (error) {
+      this.logger.debug(
+        `Permission '${name}' already exists or could not be created: ${
+          (error as any)?.message || error
+        }`,
+      );
+    }
+  }
+
+  private normalizeKey(value: string): string {
+    return value
+      .replace(/[đĐ]/g, 'd')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .trim();
+  }
+
+  private makeSlug(value: string): string {
+    return slugify(value.replace(/[đĐ]/g, 'd'), {
+      lower: true,
+      strict: true,
+    }).slice(0, 255);
+  }
+
+  private toNullableNumber(value: unknown): number | null {
+    if (value === null || value === undefined || value === '') {
+      return null;
+    }
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  private toStockQty(item: ApiProduct): number {
+    const qty = this.toNullableNumber(item.SLCoTheXuat);
+    if (qty !== null) {
+      return Math.max(0, Math.trunc(qty));
+    }
+    return this.toBoolean(item.Stock) ? 1 : 0;
+  }
+
+  private toBoolean(value: unknown): boolean {
+    if (typeof value === 'boolean') {
+      return value;
+    }
+    if (typeof value === 'number') {
+      return value !== 0;
+    }
+    if (typeof value === 'string') {
+      return ['1', 'true', 'yes'].includes(value.trim().toLowerCase());
+    }
+    return false;
+  }
+
+  private getIntEnv(name: string, fallback: number): number {
+    const raw = process.env[name];
+    const parsed = raw !== undefined ? Number(raw) : NaN;
+    return Number.isFinite(parsed) && parsed >= 0
+      ? Math.trunc(parsed)
+      : fallback;
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 }

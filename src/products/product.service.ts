@@ -35,7 +35,8 @@ export class ProductService {
     const qb = this.productRepository
       .createQueryBuilder('p')
       .leftJoinAndSelect('p.category', 'c')
-      .leftJoinAndSelect('p.brand', 'b');
+      .leftJoinAndSelect('p.brand', 'b')
+      .where('p.is_active = :isActive', { isActive: true });
 
     // PM scoping by explicit private permissions: pm_brand_<slug>, pm_cat_<slug>
     if (filter?.user) {

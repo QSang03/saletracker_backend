@@ -27,6 +27,31 @@ export class Product {
   description?: string;
 
   @Column({
+    name: 'price',
+    type: 'bigint',
+    nullable: true,
+    transformer: {
+      to: (value?: number | null) => value ?? null,
+      from: (value?: string | number | null) =>
+        value === null || value === undefined ? null : Number(value),
+    },
+  })
+  price?: number | null;
+
+  @Column({ name: 'stock', type: 'int', nullable: true })
+  stock?: number | null;
+
+  @Column({ name: 'is_in_stock', type: 'boolean', nullable: true })
+  isInStock?: boolean | null;
+
+  @Column({ name: 'synced_at', type: 'datetime', nullable: true })
+  syncedAt?: Date | null;
+
+  @Index('idx_products_active')
+  @Column({ name: 'is_active', type: 'boolean', default: true })
+  isActive: boolean;
+
+  @Column({
     name: 'created_at',
     type: 'timestamp',
     default: () => 'CURRENT_TIMESTAMP',
