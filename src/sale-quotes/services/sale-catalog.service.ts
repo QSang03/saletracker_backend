@@ -67,11 +67,11 @@ export class SaleCatalogService {
         qb.orderBy('p.stock', 'DESC');
         break;
       case 'updated_desc':
-        qb.orderBy('p.updated_at', 'DESC');
+        qb.orderBy('p.updatedAt', 'DESC');
         break;
       case 'name_asc':
       default:
-        qb.orderBy('p.product_name', 'ASC');
+        qb.orderBy('p.productName', 'ASC');
         break;
     }
     qb.addOrderBy('p.id', 'ASC');

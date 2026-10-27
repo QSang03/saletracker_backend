@@ -95,7 +95,7 @@ export class SaleQuoteService {
       .createQueryBuilder('q')
       .leftJoinAndSelect('q.saleUser', 'u')
       .loadRelationCountAndMap('q.itemCount', 'q.items')
-      .orderBy('q.created_at', 'DESC')
+      .orderBy('q.createdAt', 'DESC')
       .addOrderBy('q.id', 'DESC');
 
     const readAll = canReadAll(user);
@@ -145,7 +145,7 @@ export class SaleQuoteService {
       .leftJoinAndSelect('q.saleUser', 'u')
       .leftJoinAndSelect('q.items', 'i')
       .where('q.id = :id', { id })
-      .orderBy('i.sort_order', 'ASC')
+      .orderBy('i.sortOrder', 'ASC')
       .addOrderBy('i.id', 'ASC')
       .getOne();
 
@@ -218,7 +218,7 @@ export class SaleQuoteService {
       .createQueryBuilder('q')
       .leftJoinAndSelect('q.items', 'i')
       .where('q.id = :id', { id })
-      .orderBy('i.sort_order', 'ASC')
+      .orderBy('i.sortOrder', 'ASC')
       .getOne();
 
     if (!source) {

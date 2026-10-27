@@ -95,8 +95,8 @@ export class SaleBuildService {
       .createQueryBuilder('b')
       .leftJoinAndSelect('b.ownerUser', 'u')
       .loadRelationCountAndMap('b.itemCount', 'b.items')
-      .orderBy('b.sort_order', 'ASC')
-      .addOrderBy('b.created_at', 'DESC');
+      .orderBy('b.sortOrder', 'ASC')
+      .addOrderBy('b.createdAt', 'DESC');
 
     if (query.mine || (!readAll && query.includeShared === false)) {
       qb.andWhere('b.owner_user_id = :userId', { userId });
@@ -130,7 +130,7 @@ export class SaleBuildService {
       .leftJoinAndSelect('b.ownerUser', 'u')
       .leftJoinAndSelect('b.items', 'i')
       .where('b.id = :id', { id })
-      .orderBy('i.sort_order', 'ASC')
+      .orderBy('i.sortOrder', 'ASC')
       .addOrderBy('i.id', 'ASC')
       .getOne();
 
@@ -184,7 +184,7 @@ export class SaleBuildService {
       .createQueryBuilder('b')
       .leftJoinAndSelect('b.items', 'i')
       .where('b.id = :id', { id })
-      .orderBy('i.sort_order', 'ASC')
+      .orderBy('i.sortOrder', 'ASC')
       .getOne();
 
     if (!source) {

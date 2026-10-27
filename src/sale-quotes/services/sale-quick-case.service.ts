@@ -120,7 +120,7 @@ export class SaleQuickCaseService {
       .createQueryBuilder('c')
       .leftJoinAndSelect('c.ownerUser', 'u')
       .loadRelationCountAndMap('c.itemCount', 'c.items')
-      .orderBy('c.created_at', 'DESC')
+      .orderBy('c.createdAt', 'DESC')
       .addOrderBy('c.id', 'DESC');
 
     if (query.mine || !readAll) {
@@ -150,7 +150,7 @@ export class SaleQuickCaseService {
       .leftJoinAndSelect('c.ownerUser', 'u')
       .leftJoinAndSelect('c.items', 'i')
       .where('c.id = :id', { id })
-      .orderBy('i.sort_order', 'ASC')
+      .orderBy('i.sortOrder', 'ASC')
       .addOrderBy('i.id', 'ASC')
       .getOne();
 
@@ -204,7 +204,7 @@ export class SaleQuickCaseService {
       .createQueryBuilder('c')
       .leftJoinAndSelect('c.items', 'i')
       .where('c.id = :id', { id })
-      .orderBy('i.sort_order', 'ASC')
+      .orderBy('i.sortOrder', 'ASC')
       .getOne();
 
     if (!source) {
