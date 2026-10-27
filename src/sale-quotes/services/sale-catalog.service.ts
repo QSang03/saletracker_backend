@@ -8,6 +8,12 @@ import { SaleSettingsService } from './sale-settings.service';
 import { getUserId } from '../utils/entity-access.util';
 import { stripHtml } from '../utils/text.util';
 
+const MAX_SEARCH_TOKENS = 8;
+
+function escapeLikePattern(value: string): string {
+  return value.replace(/[\\%_]/g, (char) => `\\${char}`);
+}
+
 @Injectable()
 export class SaleCatalogService {
   constructor(
@@ -30,21 +36,47 @@ export class SaleCatalogService {
       .leftJoinAndSelect('p.category', 'c')
       .where('p.is_active = :active', { active: true });
 
-    if (query.search?.trim()) {
-      const keyword = `%${query.search.trim().toLowerCase()}%`;
-      qb.andWhere(
-        `(LOWER(p.product_code) LIKE :keyword
-          OR LOWER(p.product_name) LIKE :keyword
-          OR LOWER(p.description) LIKE :keyword
-          OR LOWER(b.name) LIKE :keyword
-          OR LOWER(c.cat_name) LIKE :keyword)`,
-        { keyword },
+    const searchPhrase = query.search?.trim().toLowerCase() ?? '';
+    const tokens = searchPhrase
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, MAX_SEARCH_TOKENS);
+
+    if (tokens.length > 0) {
+      const relevanceParts: string[] = [];
+      tokens.forEach((token, index) => {
+        const key = `keyword${index}`;
+        qb.andWhere(
+          `(LOWER(p.product_code) LIKE :${key}
+            OR LOWER(p.product_name) LIKE :${key})`,
+          { [key]: `%${escapeLikePattern(token)}%` },
+        );
+
+        relevanceParts.push(
+          `(CASE WHEN LOWER(p.product_name) LIKE :${key} THEN 10 ELSE 0 END)`,
+          `(CASE WHEN LOWER(p.product_code) LIKE :${key} THEN 8 ELSE 0 END)`,
+        );
+      });
+
+      const likePhrase = escapeLikePattern(searchPhrase);
+      relevanceParts.push(
+        '(CASE WHEN LOWER(p.product_name) = :phraseExact THEN 50 ELSE 0 END)',
+        '(CASE WHEN LOWER(p.product_code) = :phraseExact THEN 50 ELSE 0 END)',
+        '(CASE WHEN LOWER(p.product_name) LIKE :phrasePrefix THEN 20 ELSE 0 END)',
       );
+
+      qb.addSelect(
+        `(${relevanceParts.join(' + ')})`,
+        'relevance_score',
+      ).setParameters({
+        phraseExact: searchPhrase,
+        phrasePrefix: `${likePhrase}%`,
+      });
     }
 
     if (query.brand?.trim()) {
       qb.andWhere('LOWER(b.name) LIKE :brand', {
-        brand: `%${query.brand.trim().toLowerCase()}%`,
+        brand: `%${escapeLikePattern(query.brand.trim().toLowerCase())}%`,
       });
     }
 
@@ -56,23 +88,23 @@ export class SaleCatalogService {
       qb.andWhere('COALESCE(p.stock, 0) > 0');
     }
 
-    switch (query.sort) {
-      case 'price_asc':
-        qb.orderBy('p.price', 'ASC');
-        break;
-      case 'price_desc':
-        qb.orderBy('p.price', 'DESC');
-        break;
-      case 'stock_desc':
-        qb.orderBy('p.stock', 'DESC');
-        break;
-      case 'updated_desc':
-        qb.orderBy('p.updatedAt', 'DESC');
-        break;
-      case 'name_asc':
-      default:
-        qb.orderBy('p.productName', 'ASC');
-        break;
+    const sortOptions: Record<string, [string, 'ASC' | 'DESC']> = {
+      price_asc: ['p.price', 'ASC'],
+      price_desc: ['p.price', 'DESC'],
+      stock_desc: ['p.stock', 'DESC'],
+      updated_desc: ['p.updatedAt', 'DESC'],
+      name_asc: ['p.productName', 'ASC'],
+    };
+    const [sortColumn, sortDirection] = sortOptions[query.sort ?? ''] ?? [
+      'p.productName',
+      'ASC',
+    ];
+
+    if (tokens.length > 0) {
+      qb.orderBy('relevance_score', 'DESC');
+      qb.addOrderBy(sortColumn, sortDirection);
+    } else {
+      qb.orderBy(sortColumn, sortDirection);
     }
     qb.addOrderBy('p.id', 'ASC');
     qb.skip((page - 1) * pageSize).take(pageSize);
