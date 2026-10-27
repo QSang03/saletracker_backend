@@ -119,6 +119,7 @@ export class SaleQuickCaseService {
     const qb = this.caseRepo
       .createQueryBuilder('c')
       .leftJoinAndSelect('c.ownerUser', 'u')
+      .leftJoinAndSelect('c.items', 'i')
       .loadRelationCountAndMap('c.itemCount', 'c.items')
       .orderBy('c.createdAt', 'DESC')
       .addOrderBy('c.id', 'DESC');
@@ -140,8 +141,28 @@ export class SaleQuickCaseService {
     }
 
     qb.skip((page - 1) * pageSize).take(pageSize);
-    const [data, total] = await qb.getManyAndCount();
-    return { data, total, page, pageSize };
+    const [rows, total] = await qb.getManyAndCount();
+    const rules = await this.settingsService.getEffectiveRules(userId);
+
+    const data = rows.map((quickCase) => {
+      const items = [...(quickCase.items || [])].sort(
+        (a, b) => a.sortOrder - b.sortOrder || a.id - b.id,
+      );
+      return {
+        ...quickCase,
+        items: items.map((item) => ({
+          ...item,
+          customerPrice: this.pricingService.customerPrice(
+            item.salePrice,
+            rules,
+          ),
+        })),
+        itemCount: items.length,
+        pricingRules: rules,
+      };
+    });
+
+    return { data, total, page, pageSize, pricingRules: rules };
   }
 
   async findOne(id: number, user: any) {
