@@ -15,6 +15,7 @@ import { SeedCampaignTriggerService } from './seed-campaign-trigger.service';
 import { SeedUserTriggerService } from './seed-user-trigger.service';
 import { SeedCustomerPermissionService } from './seed-customer-permission.service';
 import { SeedCustomerTriggerService } from './seed-customer-trigger.service';
+import { SeedOrderStatusTriggerService } from './seed-order-status-trigger.service';
 
 @Module({
   imports: [
@@ -37,6 +38,7 @@ import { SeedCustomerTriggerService } from './seed-customer-trigger.service';
     SeedUserTriggerService,
     SeedCustomerPermissionService,
     SeedCustomerTriggerService,
+    SeedOrderStatusTriggerService,
   ],
 })
 export class SeedModule {}

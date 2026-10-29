@@ -12,12 +12,13 @@ import {
 import { Product } from '../products/product.entity';
 import { Order } from '../orders/order.entity';
 import { OrderInquiryPreset } from '../order_inquiry_presets/order_inquiry_preset.entity';
+import { User } from '../users/user.entity';
 export enum OrderDetailStatus {
-  PENDING = 'pending',
+  QUOTED = 'quoted',
+  CARED = 'cared',
   COMPLETED = 'completed',
   DEMAND = 'demand',
-  QUOTED = 'quoted',
-  CONFIRMED = 'confirmed',
+  REJECTED = 'rejected',
 }
 export enum ExtendReason {
   SYSTEM_SUNDAY_AUTO = 'hệ thống tự gia hạn vào chủ nhật hoặc nghỉ lễ',
@@ -53,6 +54,7 @@ export enum ExtendReason {
 @Index('idx_order_details_hidden_pagination', ['hidden_at', 'id'], {
   where: 'hidden_at IS NOT NULL',
 })
+@Index('idx_order_details_is_project', ['is_project', 'created_at'])
 // Generated columns for JSON extractions and calculations
 @Index('idx_order_details_meta_customer_id', ['meta_customer_id'])
 @Index('idx_order_details_meta_is_group', ['meta_is_group'])
@@ -90,7 +92,7 @@ export class OrderDetail {
   @Column({
     type: 'enum',
     enum: OrderDetailStatus,
-    default: OrderDetailStatus.PENDING,
+    default: OrderDetailStatus.QUOTED,
   })
   status: OrderDetailStatus;
 
@@ -185,6 +187,30 @@ export class OrderDetail {
 
   @Column('timestamp', { nullable: true })
   hidden_at: Date | null;
+
+  // Đơn hàng dự án: không bị cron 4 ngày ẩn tự động
+  @Column({ type: 'boolean', default: false })
+  is_project: boolean;
+
+  @Column({ type: 'timestamp', nullable: true, default: null })
+  projected_at: Date | null;
+
+  @ManyToOne(() => User, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'projected_by' })
+  projected_by_user: User | null;
+
+  @Column('int', { nullable: true })
+  projected_by: number | null;
+
+  // Số lần chăm sóc (quote đúng tin nhắn tạo đơn)
+  @Column('int', { default: 0 })
+  care_count: number;
+
+  @Column({ type: 'timestamp', nullable: true, default: null })
+  first_cared_at: Date | null;
+
+  @Column({ type: 'timestamp', nullable: true, default: null })
+  last_cared_at: Date | null;
 
   // Generated columns for optimized querying
   @Column({

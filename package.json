@@ -19,6 +19,9 @@
     "test:kpi-report-filter": "ts-node --transpile-only -r tsconfig-paths/register scripts/test-kpi-report-filter.ts",
     "test:activity-log": "node scripts/test-activity-log.mjs",
     "test:activity-log-cleanup": "node scripts/test-activity-log-cleanup.mjs",
+    "test:order-status": "node scripts/test-order-status.mjs",
+    "test:order-care-stats": "node scripts/test-order-care-stats-sql.mjs",
+    "test:order-care-helpers": "node scripts/test-order-care-helpers.mjs",
     "seed:customer-kpi-dev": "node scripts/seed-customer-kpi-dev.mjs",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix"
   },

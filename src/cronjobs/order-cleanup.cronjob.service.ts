@@ -284,6 +284,7 @@ export class OrderCleanupCronjobService {
           })
           .where('deleted_at IS NULL')
           .andWhere('hidden_at IS NULL')
+          .andWhere('is_project = 0')
           .andWhere(
             `(last_extended_at IS NULL OR DATE(CONVERT_TZ(last_extended_at, @@session.time_zone, 'Asia/Ho_Chi_Minh')) < :todayVN)`,
             { todayVN: todayVNStr },
@@ -584,6 +585,7 @@ export class OrderCleanupCronjobService {
       where: {
         deleted_at: IsNull(),
         hidden_at: IsNull(),
+        is_project: false,
       },
       select: ['id', 'created_at', 'extended'],
       order: { created_at: 'ASC' }, // Sắp xếp theo thời gian tạo

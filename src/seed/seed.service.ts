@@ -11,6 +11,7 @@ import { SeedCampaignTriggerService } from './seed-campaign-trigger.service';
 import { SeedUserTriggerService } from './seed-user-trigger.service';
 import { SeedCustomerPermissionService } from './seed-customer-permission.service';
 import { SeedCustomerTriggerService } from './seed-customer-trigger.service';
+import { SeedOrderStatusTriggerService } from './seed-order-status-trigger.service';
 
 @Injectable()
 export class SeedService implements OnModuleInit {
@@ -26,6 +27,7 @@ export class SeedService implements OnModuleInit {
     private readonly seedUserTriggerService: SeedUserTriggerService,
     private readonly seedCustomerPermissionService: SeedCustomerPermissionService,
     private readonly seedCustomerTriggerService: SeedCustomerTriggerService,
+    private readonly seedOrderStatusTriggerService: SeedOrderStatusTriggerService,
   ) {}
 
   async onModuleInit() {
@@ -34,6 +36,7 @@ export class SeedService implements OnModuleInit {
     await this.seedUserTriggerService.seedTriggers();
     await this.seedCustomerPermissionService.seedCustomerPermissions();
     await this.seedCustomerTriggerService.seedCustomerTriggers();
+    await this.seedOrderStatusTriggerService.seedTriggers();
 
     // Ensure default roles exist
     const defaultRoleNames = ['admin', 'user', 'manager', 'view'];

@@ -57,6 +57,10 @@ export class OrderController {
     @Query('conversationType') conversationType?: string,
     @Query('productCode') productCode?: string,
     @Query('includeHidden') includeHidden?: string,
+    @Query('isProject') isProject?: string,
+    @Query('careCountMin') careCountMin?: string,
+    @Query('careCountMax') careCountMax?: string,
+    @Query('cared') cared?: string,
     @Req() req?: any,
   ): Promise<{
     data: OrderDetail[];
@@ -100,6 +104,10 @@ export class OrderController {
       sortField: sortField || null,
       sortDirection: sortDirection || null,
       includeHidden,
+      isProject,
+      careCountMin,
+      careCountMax,
+      cared,
       user: req.user,
     });
   }
@@ -134,6 +142,10 @@ export class OrderController {
     @Query('hiddenOrdersDateRange') hiddenOrdersDateRange?: string, // Date range for filtering hidden orders
     @Query('pmCustomMode') pmCustomMode?: string, // Thêm parameter cho chế độ PM
     @Query('rolePermissions') rolePermissions?: string, // Thêm parameter cho thông tin từng role
+    @Query('isProject') isProject?: string,
+    @Query('careCountMin') careCountMin?: string,
+    @Query('careCountMax') careCountMax?: string,
+    @Query('cared') cared?: string,
     @Req() req?: any,
   ): Promise<{
     data: OrderDetail[];
@@ -180,6 +192,10 @@ export class OrderController {
       hiddenOrdersDateRange,
       pmCustomMode,
       rolePermissions, // Truyền chế độ PM
+      isProject,
+      careCountMin,
+      careCountMax,
+      cared,
       user: req.user,
     });
   }
@@ -213,6 +229,10 @@ export class OrderController {
     @Query('includeHidden') includeHidden?: string,
     @Query('pmCustomMode') pmCustomMode?: string,
     @Query('rolePermissions') rolePermissions?: string,
+    @Query('isProject') isProject?: string,
+    @Query('careCountMin') careCountMin?: string,
+    @Query('careCountMax') careCountMax?: string,
+    @Query('cared') cared?: string,
     @Req() req?: any,
   ): Promise<{
     data: OrderDetail[];
@@ -258,6 +278,10 @@ export class OrderController {
       includeHidden,
       pmCustomMode,
       rolePermissions,
+      isProject,
+      careCountMin,
+      careCountMax,
+      cared,
       user: req.user,
     });
   }

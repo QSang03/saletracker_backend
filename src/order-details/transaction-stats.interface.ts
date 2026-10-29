@@ -15,7 +15,11 @@ export interface SummaryStats {
   completed: number;
   quoted: number;
   demand: number;
+  cared: number;
+  rejected: number;
+  /** @deprecated pending/confirmed đã bị xóa — giữ key = 0 cho FE cũ 1 release */
   pending: number;
+  /** @deprecated */
   confirmed: number;
   totalRevenue: number;
   avgOrderValue: number;
@@ -31,6 +35,9 @@ export interface SummaryStats {
   prevCompleted: number;
   prevQuoted: number;
   prevDemand: number;
+  prevCared: number;
+  prevRejected: number;
+  /** @deprecated */
   prevPending: number;
   prevTotalRevenue: number;
   prevAvgOrderValue: number;
@@ -43,7 +50,11 @@ export interface ChartDataPoint {
   demand: number;
   completed: number;
   quoted: number;
+  cared: number;
+  rejected: number;
+  /** @deprecated */
   pending: number;
+  /** @deprecated */
   confirmed: number;
 }
 
@@ -52,6 +63,8 @@ export interface CustomerStat {
   total: number;
   completed: number;
   quoted: number;
+  cared: number;
+  rejected: number;
   pending: number;
   demand: number;
   confirmed: number;

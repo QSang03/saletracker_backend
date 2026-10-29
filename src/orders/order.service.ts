@@ -13,6 +13,7 @@ import { Product } from 'src/products/product.entity';
 import { Brand } from 'src/brands/brand.entity';
 import { Category } from 'src/categories/category.entity';
 import { OrderBlacklistService } from '../order-blacklist/order-blacklist.service';
+import { normalizeStatusCsv } from '../order-details/order-status.constants';
 import { Logger } from '@nestjs/common';
 import slugify from 'slugify';
 
@@ -50,6 +51,10 @@ interface OrderFilters {
   user?: any; // truyền cả user object
   includeHidden?: string; // '1' | 'true' to include hidden items (admin only)
   hiddenOrdersDateRange?: string; // JSON string with start/end dates for hidden orders filtering
+  isProject?: string; // '0' | '1' | 'all'
+  careCountMin?: string;
+  careCountMax?: string;
+  cared?: string; // '0' | '1'
 }
 
 @Injectable()
@@ -569,6 +574,38 @@ export class OrderService {
     return this.orderRepository.find({
       relations: ['details', 'sale_by', 'sale_by.departments'],
     });
+  }
+
+  private decorateOrderDetailRow(row: any): any {
+    let metadata = row?.metadata;
+    if (typeof metadata === 'string') {
+      try {
+        metadata = JSON.parse(metadata);
+      } catch {
+        metadata = {};
+      }
+    }
+    const rawSource =
+      metadata?.trigger_message_id ??
+      metadata?.unique_zalo_message_id ??
+      row?.zaloMessageId ??
+      row?.zalo_message_id;
+    const sourceMessageId = rawSource
+      ? String(rawSource).replace(/_product_\d+$/, '')
+      : null;
+    const customerId =
+      metadata?.customer_id ??
+      metadata?.conversation_info?.zalo_conversation_id ??
+      null;
+
+    row.source_message_id = sourceMessageId;
+    row.care_eligible =
+      !!sourceMessageId &&
+      !!customerId &&
+      ['quoted', 'cared'].includes(row?.status) &&
+      !row?.hidden_at &&
+      !row?.deleted_at;
+    return row;
   }
 
   // Helper method để lấy user IDs dựa trên role của user
@@ -2123,6 +2160,10 @@ export class OrderService {
       user,
       includeHidden,
       hiddenOrdersDateRange,
+      isProject,
+      careCountMin,
+      careCountMax,
+      cared,
     } = filters;
 
     const skip = (page - 1) * pageSize;
@@ -2622,14 +2663,33 @@ export class OrderService {
       }
     }
 
+    // Đơn dự án / chăm sóc
+    if (isProject === '1') {
+      qb.andWhere('details.is_project = 1');
+    } else if (isProject === '0') {
+      qb.andWhere('details.is_project = 0');
+    }
+    const careMin = careCountMin ? parseInt(careCountMin, 10) : NaN;
+    if (!isNaN(careMin)) {
+      qb.andWhere('details.care_count >= :careMin', { careMin });
+    }
+    const careMax = careCountMax ? parseInt(careCountMax, 10) : NaN;
+    if (!isNaN(careMax)) {
+      qb.andWhere('details.care_count <= :careMax', { careMax });
+    }
+    if (cared === '1') {
+      qb.andWhere('details.care_count > 0');
+    } else if (cared === '0') {
+      qb.andWhere('details.care_count = 0');
+    }
+
     // Apply status filter
     if (status && status.trim()) {
-      const statusList = status
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean);
+      const statusList = normalizeStatusCsv(status);
       if (statusList.length > 0) {
         qb.andWhere('details.status IN (:...statusList)', { statusList });
+      } else {
+        qb.andWhere('1 = 0');
       }
     }
 
@@ -2958,7 +3018,7 @@ export class OrderService {
           e.raw_item = display;
         }
       }
-      return e;
+      return this.decorateOrderDetailRow(e);
     });
 
     return { data: mappedData as any, total, page, pageSize };
@@ -2997,6 +3057,10 @@ export class OrderService {
       user,
       includeHidden,
       hiddenOrdersDateRange,
+      isProject,
+      careCountMin,
+      careCountMax,
+      cared,
     } = filters;
 
     const skip = (page - 1) * pageSize;
@@ -3229,18 +3293,32 @@ export class OrderService {
       }
     }
 
+    // Đơn dự án / chăm sóc
+    if (isProject === '1') {
+      qb.andWhere('details.is_project = 1');
+    } else if (isProject === '0') {
+      qb.andWhere('details.is_project = 0');
+    }
+    const careMin = careCountMin ? parseInt(careCountMin, 10) : NaN;
+    if (!isNaN(careMin)) {
+      qb.andWhere('details.care_count >= :careMin', { careMin });
+    }
+    const careMax = careCountMax ? parseInt(careCountMax, 10) : NaN;
+    if (!isNaN(careMax)) {
+      qb.andWhere('details.care_count <= :careMax', { careMax });
+    }
+    if (cared === '1') {
+      qb.andWhere('details.care_count > 0');
+    } else if (cared === '0') {
+      qb.andWhere('details.care_count = 0');
+    }
+
     if (status && status.trim()) {
-      if (status.includes(',')) {
-        const statusArray = status
-          .split(',')
-          .map((s) => s.trim())
-          .filter((s) => s);
-        if (statusArray.length > 0)
-          qb.andWhere('details.status IN (:...statuses)', {
-            statuses: statusArray,
-          });
+      const statusList = normalizeStatusCsv(status);
+      if (statusList.length > 0) {
+        qb.andWhere('details.status IN (:...statusList)', { statusList });
       } else {
-        qb.andWhere('details.status = :status', { status });
+        qb.andWhere('1 = 0');
       }
     }
 
@@ -3735,7 +3813,7 @@ export class OrderService {
           e.raw_item = display;
         }
       }
-      return e;
+      return this.decorateOrderDetailRow(e);
     });
 
     return { data: mappedData as any, total, page, pageSize };
@@ -3771,6 +3849,10 @@ export class OrderService {
       sortDirection,
       user,
       includeHidden,
+      isProject,
+      careCountMin,
+      careCountMax,
+      cared,
     } = filters;
 
     const skip = (page - 1) * pageSize;
@@ -3867,8 +3949,33 @@ export class OrderService {
       }
     }
 
+    // Đơn dự án / chăm sóc
+    if (isProject === '1') {
+      qb.andWhere('details.is_project = 1');
+    } else if (isProject === '0') {
+      qb.andWhere('details.is_project = 0');
+    }
+    const careMin = careCountMin ? parseInt(careCountMin, 10) : NaN;
+    if (!isNaN(careMin)) {
+      qb.andWhere('details.care_count >= :careMin', { careMin });
+    }
+    const careMax = careCountMax ? parseInt(careCountMax, 10) : NaN;
+    if (!isNaN(careMax)) {
+      qb.andWhere('details.care_count <= :careMax', { careMax });
+    }
+    if (cared === '1') {
+      qb.andWhere('details.care_count > 0');
+    } else if (cared === '0') {
+      qb.andWhere('details.care_count = 0');
+    }
+
     if (status) {
-      qb.andWhere('details.status = :status', { status });
+      const statusList = normalizeStatusCsv(status);
+      if (statusList.length > 0) {
+        qb.andWhere('details.status IN (:...statusList)', { statusList });
+      } else {
+        qb.andWhere('1 = 0');
+      }
     }
 
     if (date) {

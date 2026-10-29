@@ -482,7 +482,10 @@ export class OrderDetailController {
   async bulkUpdate(
     @Body() data: { ids: number[]; updates: Partial<OrderDetail> },
     @Req() req?: any,
-  ): Promise<{ updated: number }> {
+  ): Promise<{
+    updated: number;
+    skipped?: { id: number; reason: string }[];
+  }> {
     return this.orderDetailService.bulkUpdate(data.ids, data.updates, req.user);
   }
 

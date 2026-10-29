@@ -1,7 +1,19 @@
-import { Injectable, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  BadRequestException,
+  NotFoundException,
+  ForbiddenException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { ExtendReason, OrderDetail } from './order-detail.entity';
+import { ExtendReason, OrderDetail, OrderDetailStatus } from './order-detail.entity';
+import {
+  assertStatusTransition,
+  normalizeOrderStatus,
+  normalizeStatusCsv,
+} from './order-status.constants';
+import { OrderStatusContextService } from './order-status-context.service';
 import { Department } from 'src/departments/department.entity';
 import { User } from 'src/users/user.entity';
 import { Brand } from 'src/brands/brand.entity';
@@ -47,6 +59,7 @@ export class OrderDetailService {
     private categoryRepository: Repository<Category>,
     private orderBlacklistService: OrderBlacklistService,
     private transactionStatsService: TransactionStatsService,
+    private orderStatusContextService: OrderStatusContextService,
   ) {}
 
   // Normalize a date-only string (YYYY-MM-DD) into safe bounds for SQL comparisons.
@@ -450,6 +463,15 @@ export class OrderDetailService {
   }
 
   async create(orderDetailData: Partial<OrderDetail>): Promise<OrderDetail> {
+    if (orderDetailData.status !== undefined) {
+      const normalized = normalizeOrderStatus(orderDetailData.status);
+      if (normalized === OrderDetailStatus.CARED) {
+        throw new BadRequestException(
+          'Trạng thái "Đã thăm hỏi" chỉ được gán qua chức năng Chăm sóc đơn hàng',
+        );
+      }
+      orderDetailData.status = normalized;
+    }
     const orderDetail = this.orderDetailRepository.create(orderDetailData);
     return this.orderDetailRepository.save(orderDetail);
   }
@@ -464,6 +486,21 @@ export class OrderDetailService {
     // edit detection for many updates. Fetching here ensures any changed field
     // is compared to the current value and an edit_history entry is recorded.
     const currentOrderDetail = await this.findById(id);
+
+    // Chuẩn hóa status cũ (pending/confirmed) và chặn chuyển trạng thái sai.
+    // "cared" chỉ được gán bởi chức năng Chăm sóc, không cho sửa tay.
+    let statusChanged = false;
+    if (orderDetailData.status !== undefined) {
+      const normalizedStatus = assertStatusTransition(
+        currentOrderDetail?.status || OrderDetailStatus.QUOTED,
+        orderDetailData.status,
+        { allowCared: false },
+      );
+      statusChanged = normalizedStatus !== currentOrderDetail?.status;
+      orderDetailData.status = normalizedStatus;
+    }
+
+    const editNote = (orderDetailData as any).edit_note ?? null;
 
     // ✅ Xử lý đặc biệt cho trường extended - cộng thêm thay vì ghi đè
     if (orderDetailData.extended !== undefined && currentOrderDetail) {
@@ -489,6 +526,7 @@ export class OrderDetailService {
           'notes_history',
           'edit_history',
           'hidden_at',
+          'edit_note',
         ]);
 
         const changedFields: {
@@ -579,8 +617,26 @@ export class OrderDetailService {
       delete (updatePayload as any).edit_note;
     }
 
+    if (Object.keys(updatePayload).length === 0) {
+      return currentOrderDetail;
+    }
+
     // Perform update with combined payload
-    await this.orderDetailRepository.update(id, updatePayload);
+    if (statusChanged) {
+      await this.orderStatusContextService.runWithContext(
+        {
+          actorId: user?.id ?? null,
+          actorName: user?.fullName || user?.username || null,
+          source: 'manual',
+          note: editNote,
+        },
+        async (manager) => {
+          await manager.getRepository(OrderDetail).update(id, updatePayload);
+        },
+      );
+    } else {
+      await this.orderDetailRepository.update(id, updatePayload);
+    }
 
     // ✅ Ghi log xóa mã sản phẩm nếu product_id được set thành null
     if (
@@ -749,7 +805,10 @@ export class OrderDetailService {
     ids: number[],
     updates: Partial<OrderDetail>,
     user: any,
-  ): Promise<{ updated: number }> {
+  ): Promise<{
+    updated: number;
+    skipped?: { id: number; reason: string }[];
+  }> {
     // Chỉ cho phép cập nhật các order detail thuộc sở hữu của user hiện tại
     const orderDetails = await this.orderDetailRepository
       .createQueryBuilder('orderDetail')
@@ -760,14 +819,63 @@ export class OrderDetailService {
       .getMany();
 
     if (orderDetails.length === 0) {
-      return { updated: 0 };
+      return { updated: 0, skipped: [] };
     }
 
-    // Nếu có cập nhật notes, cần ghi lịch sử theo từng item
-    if (typeof updates.notes === 'string') {
-      for (const od of orderDetails) {
-        // only append notes history if value actually changed
-        const currentNotes = (od as any).notes;
+    let requestedStatus: OrderDetailStatus | undefined;
+    if (updates.status !== undefined) {
+      requestedStatus = normalizeOrderStatus(updates.status);
+      if (requestedStatus === OrderDetailStatus.CARED) {
+        return {
+          updated: 0,
+          skipped: orderDetails.map((od) => ({
+            id: od.id,
+            reason:
+              'Trạng thái "Đã thăm hỏi" chỉ được gán qua chức năng Chăm sóc đơn hàng',
+          })),
+        };
+      }
+    }
+
+    const skipKeys = new Set([
+      'created_at',
+      'updated_at',
+      'deleted_at',
+      'notes_history',
+      'edit_history',
+      'hidden_at',
+      'edit_note',
+    ]);
+
+    const prepared: { id: number; payload: any; statusChanged: boolean }[] = [];
+    const skipped: { id: number; reason: string }[] = [];
+
+    for (const od of orderDetails) {
+      let statusChanged = false;
+
+      if (requestedStatus !== undefined) {
+        const currentStatus = normalizeOrderStatus(od.status);
+        if (requestedStatus !== currentStatus) {
+          try {
+            assertStatusTransition(currentStatus, requestedStatus, {
+              allowCared: false,
+            });
+          } catch (error: any) {
+            skipped.push({
+              id: od.id,
+              reason: error?.message || 'Chuyển trạng thái không hợp lệ',
+            });
+            continue;
+          }
+          statusChanged = true;
+        }
+      }
+
+      const payload: any = { ...updates };
+      if (requestedStatus !== undefined) payload.status = requestedStatus;
+
+      // notes_history: chỉ ghi khi notes thực sự đổi
+      if (typeof updates.notes === 'string') {
         let history: any[] = [];
         const raw = (od as any).notes_history;
         try {
@@ -776,78 +884,34 @@ export class OrderDetailService {
         } catch {
           history = [];
         }
-        if (this.valuesDiffer(currentNotes, updates.notes)) {
+        if (this.valuesDiffer((od as any).notes, updates.notes)) {
           history.push({
             user_id: user?.id ?? null,
             content: updates.notes,
             changed_at: new Date().toISOString(),
           });
           if (history.length > 500) history = history.slice(-500);
+          payload.notes_history = history;
         }
-
-        // Also append edit_history for this notes change
-        let editHistory: any[] = [];
-        const rawEdit = (od as any).edit_history;
-        try {
-          if (Array.isArray(rawEdit)) editHistory = rawEdit;
-          else if (rawEdit && typeof rawEdit === 'string')
-            editHistory = JSON.parse(rawEdit);
-        } catch {
-          editHistory = [];
-        }
-        if (this.valuesDiffer((od as any).notes, updates.notes)) {
-          editHistory.push({
-            user_id: user?.id ?? null,
-            user_name: user?.fullName || user?.username || 'Unknown',
-            fields: [
-              {
-                field: 'notes',
-                old_value: (od as any).notes,
-                new_value: updates.notes,
-              },
-            ],
-            note: (updates as any).edit_note ?? null,
-            changed_at: new Date().toISOString(),
-          });
-        }
-        if (editHistory.length > 1000) editHistory = editHistory.slice(-1000);
-
-        await this.orderDetailRepository.update(od.id, {
-          ...updates,
-          notes_history: history,
-          edit_history: editHistory,
-        });
       }
-      return { updated: orderDetails.length };
-    }
 
-    // Không có cập nhật notes: có thể update hàng loạt
-    // But we need to record edit_history per item for changed fields
-    const skipKeys = new Set([
-      'created_at',
-      'updated_at',
-      'deleted_at',
-      'notes_history',
-      'edit_history',
-      'hidden_at',
-    ]);
-    for (const od of orderDetails) {
-      const changedFields: { field: string; old_value: any; new_value: any }[] =
-        [];
-      for (const key of Object.keys(updates)) {
+      // edit_history: ghi các field thực sự đổi (bao gồm status/notes)
+      const changedFields: {
+        field: string;
+        old_value: any;
+        new_value: any;
+      }[] = [];
+      for (const key of Object.keys(payload)) {
         if (skipKeys.has(key)) continue;
-        if ((updates as any)[key] === undefined) continue;
-        const oldVal = (od as any)[key];
-        const newVal = (updates as any)[key];
-        if (this.valuesDiffer(oldVal, newVal))
+        if (payload[key] === undefined) continue;
+        if (this.valuesDiffer((od as any)[key], payload[key])) {
           changedFields.push({
             field: key,
-            old_value: oldVal,
-            new_value: newVal,
+            old_value: (od as any)[key],
+            new_value: payload[key],
           });
+        }
       }
-
-      const payload: any = { ...updates };
       if (changedFields.length > 0) {
         let editHistory: any[] = [];
         const rawEdit = (od as any).edit_history;
@@ -869,13 +933,112 @@ export class OrderDetailService {
         payload.edit_history = editHistory;
       }
 
-      // remove edit_note transient
       if (payload.edit_note !== undefined) delete payload.edit_note;
-
-      await this.orderDetailRepository.update(od.id, payload);
+      if (Object.keys(payload).length === 0) continue;
+      prepared.push({ id: od.id, payload, statusChanged });
     }
 
-    return { updated: orderDetails.length };
+    if (prepared.length === 0) {
+      return { updated: 0, skipped };
+    }
+
+    const hasStatusChange = prepared.some((item) => item.statusChanged);
+    if (hasStatusChange) {
+      await this.orderStatusContextService.runWithContext(
+        {
+          actorId: user?.id ?? null,
+          actorName: user?.fullName || user?.username || null,
+          source: 'bulk_update',
+          note: (updates as any).edit_note ?? null,
+        },
+        async (manager) => {
+          const repo = manager.getRepository(OrderDetail);
+          for (const item of prepared) {
+            await repo.update(item.id, item.payload);
+          }
+        },
+      );
+    } else {
+      for (const item of prepared) {
+        await this.orderDetailRepository.update(item.id, item.payload);
+      }
+    }
+
+    return { updated: prepared.length, skipped };
+  }
+
+  async setProject(
+    id: number,
+    isProject: boolean,
+    user: any,
+  ): Promise<OrderDetail | null> {
+    const detail = await this.findById(id);
+    if (!detail) {
+      throw new NotFoundException('Order detail not found');
+    }
+    if (detail.deleted_at || detail.hidden_at) {
+      throw new BadRequestException(
+        'Chỉ có thể chuyển đơn đang hiển thị sang đơn hàng dự án',
+      );
+    }
+
+    const ownerId = detail.order?.sale_by?.id;
+    const roleNames = (user?.roles || []).map((r: any) =>
+      typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
+    );
+    const isOwner = ownerId === user?.id;
+    const isPM = roleNames.some(
+      (r: string) => r === 'pm' || r.startsWith('pm-'),
+    );
+    const isAdmin = roleNames.includes('admin');
+
+    if (!isOwner && !isPM && !isAdmin) {
+      throw new ForbiddenException(
+        'Bạn không có quyền chuyển đơn hàng sang dự án',
+      );
+    }
+
+    await this.orderDetailRepository.update(id, {
+      is_project: isProject,
+      projected_at: isProject ? new Date() : null,
+      projected_by: isProject ? (user?.id ?? null) : null,
+    });
+
+    return this.findById(id);
+  }
+
+  async bulkSetProject(
+    ids: number[],
+    isProject: boolean,
+    user: any,
+  ): Promise<{ updated: number }> {
+    if (!ids?.length) return { updated: 0 };
+
+    const orderDetails = await this.orderDetailRepository
+      .createQueryBuilder('orderDetail')
+      .leftJoinAndSelect('orderDetail.order', 'order')
+      .leftJoinAndSelect('order.sale_by', 'sale_by')
+      .where('orderDetail.id IN (:...ids)', { ids })
+      .andWhere('sale_by.id = :userId', { userId: user.id })
+      .andWhere('orderDetail.deleted_at IS NULL')
+      .andWhere('orderDetail.hidden_at IS NULL')
+      .getMany();
+
+    if (orderDetails.length === 0) return { updated: 0 };
+
+    const validIds = orderDetails.map((od) => od.id);
+    await this.orderDetailRepository
+      .createQueryBuilder()
+      .update(OrderDetail)
+      .set({
+        is_project: isProject,
+        projected_at: isProject ? () => 'NOW()' : null,
+        projected_by: isProject ? (user?.id ?? null) : null,
+      })
+      .where('id IN (:...validIds)', { validIds })
+      .execute();
+
+    return { updated: validIds.length };
   }
 
   async bulkExtend(ids: number[], user: any): Promise<{ updated: number }> {
@@ -1720,22 +1883,13 @@ export class OrderDetailService {
       }
     }
 
-    // ✅ Filter 3: Status (hỗ trợ multiple statuses)
+    // ✅ Filter 3: Status (hỗ trợ multiple statuses, map pending/confirmed cũ)
     if (options?.status && options.status.trim()) {
-      if (options.status.includes(',')) {
-        // Multiple statuses
-        const statusArray = options.status
-          .split(',')
-          .map((s) => s.trim())
-          .filter((s) => s);
-        if (statusArray.length > 0) {
-          qb.andWhere('details.status IN (:...statuses)', {
-            statuses: statusArray,
-          });
-        }
+      const statusList = normalizeStatusCsv(options.status);
+      if (statusList.length > 0) {
+        qb.andWhere('details.status IN (:...statusList)', { statusList });
       } else {
-        // Single status
-        qb.andWhere('details.status = :status', { status: options.status });
+        qb.andWhere('1 = 0');
       }
     }
 

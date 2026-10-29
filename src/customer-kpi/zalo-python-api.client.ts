@@ -30,9 +30,57 @@ const REQUEST_TIMEOUT_MS = 60000;
 @Injectable()
 export class ZaloPythonApiClient {
   private readonly baseUrl = (
-    process.env.PYTHON_API_URL || 'http://127.0.0.1:5555'
+    process.env.PYTHON_API_URL ||
+    process.env.CONTACTS_API_BASE_URL ||
+    'http://127.0.0.1:5555'
   ).replace(/\/$/, '');
   private readonly masterKey = process.env.MASTER_KEY || '';
+
+  async sendQuote(payload: {
+    user_id: number;
+    message_content: string;
+    zalo_customer_id: string;
+    customer_type: 'group' | 'private';
+    msg_id: string;
+    send_function?: string;
+    notes?: string;
+  }): Promise<{
+    success: boolean;
+    message?: string;
+    error?: string;
+    data?: any;
+  }> {
+    if (!this.masterKey) {
+      throw new ServiceUnavailableException(
+        'Chưa cấu hình MASTER_KEY — không gọi được API Python (zalo_entities_api)',
+      );
+    }
+
+    let res: Response;
+    try {
+      res = await fetch(`${this.baseUrl}/send-message/quote`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-master-key': this.masterKey,
+        },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+    } catch (error: any) {
+      throw new ServiceUnavailableException(
+        `Không kết nối được API Python (${this.baseUrl}): ${error?.message}`,
+      );
+    }
+
+    const json: any = await res.json().catch(() => null);
+    if (!res.ok) {
+      const detail =
+        json?.detail || json?.message || `API Python trả HTTP ${res.status}`;
+      throw new ServiceUnavailableException(String(detail));
+    }
+    return json;
+  }
 
   private async getData(
     path: string,
