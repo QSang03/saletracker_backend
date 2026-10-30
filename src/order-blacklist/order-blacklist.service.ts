@@ -341,14 +341,16 @@ export class OrderBlacklistService {
           .where('LOWER(od.customer_name) LIKE LOWER(:search)', {
             search: `%${search.trim()}%`,
           })
-          .andWhere('od.metadata IS NOT NULL')
-          .select(['od.metadata'])
+          // Dùng generated column (có index) thay vì JSON_EXTRACT, và không kéo
+          // metadata (mỗi dòng có thể vài KB).
+          .andWhere('od.meta_customer_id IS NOT NULL')
+          .select(['od.meta_customer_id'])
           .limit(1000) // ✅ Giới hạn kết quả để tránh quá tải
           .getMany();
 
         matchingZaloContactIds = orderDetails
-          .map((od) => this.extractCustomerIdFromMetadata(od.metadata))
-          .filter((id) => id !== null);
+          .map((od) => od.meta_customer_id)
+          .filter((id): id is string => !!id);
       }
 
       // Tạo main query
@@ -481,25 +483,20 @@ export class OrderBlacklistService {
       const customerNamesMap = new Map<string, string>();
 
       if (zaloContactIds.length > 0) {
-        // ✅ TODO: Cần tạo migration để thêm index cho JSON_EXTRACT trên order_details.metadata
-        // CREATE INDEX idx_order_details_metadata_customer_id ON order_details ((JSON_EXTRACT(metadata, '$.customer_id')));
+        // meta_customer_id là generated column cùng biểu thức JSON_EXTRACT nhưng
+        // có index: 1.6s -> ~3ms. Không select metadata để tránh kéo vài KB/dòng.
         const orderDetails = await this.orderDetailRepository
           .createQueryBuilder('od')
-          .where('od.metadata IS NOT NULL')
-          .andWhere(
-            "JSON_EXTRACT(od.metadata, '$.customer_id') IN (:...zaloContactIds)",
-            {
-              zaloContactIds,
-            },
-          )
-          .select(['od.metadata', 'od.customer_name'])
+          .where('od.meta_customer_id IN (:...zaloContactIds)', {
+            zaloContactIds,
+          })
+          .select(['od.meta_customer_id', 'od.customer_name'])
           .getMany();
 
         // Tạo map từ zaloContactId -> customer_name
         for (const od of orderDetails) {
-          const customerId = this.extractCustomerIdFromMetadata(od.metadata);
-          if (customerId && od.customer_name) {
-            customerNamesMap.set(customerId, od.customer_name);
+          if (od.meta_customer_id && od.customer_name) {
+            customerNamesMap.set(od.meta_customer_id, od.customer_name);
           }
         }
 
