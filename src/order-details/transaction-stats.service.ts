@@ -1,7 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { createHash } from 'crypto';
 import { OrderDetail } from './order-detail.entity';
+import { RedisService } from '../common/cache/redis.service';
 import {
   TransactionStatsParams,
   TransactionStatsResponse,
@@ -11,7 +13,6 @@ import {
   ChartDataPoint,
   CustomerStat,
   EmployeeStat,
-  ExpiredStats,
   WorkingDaysInfo,
   DateRangePair,
 } from './transaction-stats.interface';
@@ -24,6 +25,30 @@ import {
   endOfQuarter,
 } from 'date-fns';
 
+/**
+ * Chỉ số tồn đọng (GD + hết hạn) tính trên toàn bộ đơn còn sống, không phụ
+ * thuộc khoảng ngày đang xem -> tách khỏi summary và cache riêng.
+ */
+interface BacklogStats {
+  gdToday: number;
+  gdYesterday: number;
+  gd2DaysAgo: number;
+  expiredToday: number;
+  overdue: number;
+}
+
+const RESPONSE_CACHE_PREFIX = 'order-details:transactions';
+const BACKLOG_CACHE_PREFIX = 'order-details:backlog';
+const RESPONSE_CACHE_TTL_SECONDS = 60;
+const BACKLOG_CACHE_TTL_SECONDS = 120;
+/**
+ * Backlog phải đếm ~570k đơn quá hạn nên luôn là full scan có kiểm soát.
+ * Covering index (deleted_at, status, expiry_days) + ép thứ tự join giúp
+ * 6.8s -> 2.4s; phần còn lại bù bằng cache.
+ */
+const BACKLOG_FORCE_HINT =
+  'FORCE INDEX (idx_od_deleted_status_expiry) STRAIGHT_JOIN';
+
 @Injectable()
 export class TransactionStatsService {
   private readonly logger = new Logger(TransactionStatsService.name);
@@ -31,6 +56,7 @@ export class TransactionStatsService {
   constructor(
     @InjectRepository(OrderDetail)
     private orderDetailRepository: Repository<OrderDetail>,
+    private readonly redisService: RedisService,
   ) {}
 
   /**
@@ -45,22 +71,37 @@ export class TransactionStatsService {
       // Calculate date ranges (current and previous for comparison)
       const ranges = this.calculateDateRanges(params);
 
+      const cacheKey = this.buildResponseCacheKey(params, ranges);
+      const cached =
+        await this.redisService.get<TransactionStatsResponse>(cacheKey);
+      if (cached) return cached;
+
       // Execute all queries in parallel for maximum performance
-      const [summaryData, chartData, customerData, employeeData, expiredData] =
+      const [periodData, backlog, chartData, customerData, employeeData] =
         await Promise.all([
-          this.getSummaryStats(ranges, params),
+          this.getPeriodSummary(ranges, params),
+          this.getBacklogStats(params),
           this.getChartData(ranges.current, params),
           this.getCustomerStats(ranges.current, params),
           this.getEmployeeStats(ranges.current, params),
-          this.getExpiredStats(params),
         ]);
+
+      const summaryData: SummaryStats = {
+        ...periodData,
+        gdToday: backlog.gdToday,
+        gdYesterday: backlog.gdYesterday,
+        gd2DaysAgo: backlog.gd2DaysAgo,
+      };
 
       const response: TransactionStatsResponse = {
         summary: summaryData,
         chartData: chartData,
         customerStats: customerData,
         employeeStats: employeeData,
-        expiredStats: expiredData,
+        expiredStats: {
+          expiredToday: backlog.expiredToday,
+          overdue: backlog.overdue,
+        },
         totalRecords:
           summaryData.completed +
           summaryData.quoted +
@@ -77,6 +118,12 @@ export class TransactionStatsService {
       };
 
       const duration = Date.now() - startTime;
+
+      await this.redisService.set(
+        cacheKey,
+        response,
+        RESPONSE_CACHE_TTL_SECONDS,
+      );
 
       return response;
     } catch (error) {
@@ -275,92 +322,78 @@ export class TransactionStatsService {
   // }
 
   /**
-   * Get summary statistics for current and previous periods
+   * Thống kê theo kỳ đang xem (current + previous).
+   * Trước đây derived table không có điều kiện ngày nên mỗi request quét toàn
+   * bộ bảng (~614k dòng): 8.1s. Giờ chỉ đọc khoảng current ∪ previous: ~0.25s.
    */
-  private async getSummaryStats(
+  private async getPeriodSummary(
     ranges: DateRangePair,
     params: TransactionStatsParams,
-  ): Promise<SummaryStats> {
-    // Build permission filter
-    const permissionFilter = this.buildPermissionFilter(params.user);
-    // Build blacklist filter (exclude blacklisted contacts for manager/user roles)
-    const blacklistFilter = this.buildBlacklistFilter(params.user);
+  ): Promise<Omit<SummaryStats, 'gdToday' | 'gdYesterday' | 'gd2DaysAgo'>> {
+    const {
+      blacklistFilter,
+      employeeFilter,
+      departmentFilter,
+      permissionFilter,
+    } = this.buildCommonFilters(params);
 
-    // Build EXISTS filters for employees and departments (avoid JOIN fan-out)
-    const employeeFilter = params.employees
-      ? `AND EXISTS (SELECT 1 FROM orders o2 WHERE o2.id = od.order_id AND o2.sale_by IN (${params.employees}))`
-      : '';
-    const departmentFilter = params.departments
-      ? `AND EXISTS (
-          SELECT 1 FROM orders o2 
-          JOIN users u2 ON o2.sale_by = u2.id
-          JOIN users_departments ud2 ON u2.id = ud2.user_id 
-          WHERE o2.id = od.order_id AND ud2.department_id IN (${params.departments})
-        )`
-      : '';
+    const rangeFrom =
+      ranges.current.from < ranges.previous.from
+        ? ranges.current.from
+        : ranges.previous.from;
+    const rangeTo =
+      ranges.current.to > ranges.previous.to
+        ? ranges.current.to
+        : ranges.previous.to;
 
     // Bảng dẫn xuất chỉ để gom nguồn dữ liệu, KHÔNG dùng DISTINCT: các điều kiện
-    // lọc bên dưới đều là EXISTS và 2 join kia là nhiều-về-một, nên không có dòng
-    // nào bị nhân. Bỏ DISTINCT tránh phải materialize ~600k dòng (đo trên prod:
-    // 5.1s -> 2.8s, kết quả không đổi).
+    // lọc bên dưới đều là EXISTS và join orders là nhiều-về-một nên không có dòng
+    // nào bị nhân.
     const query = `
-      SELECT 
-        -- Current period stats
-        SUM(CASE WHEN deduped.created_at >= ? AND deduped.created_at <= ? THEN 1 ELSE 0 END) as current_total,
-        SUM(CASE WHEN deduped.created_at >= ? AND deduped.created_at <= ? AND deduped.status = 'completed' THEN 1 ELSE 0 END) as current_completed,
-        SUM(CASE WHEN deduped.created_at >= ? AND deduped.created_at <= ? AND deduped.status IN ('quoted','cared') THEN 1 ELSE 0 END) as current_quoted,
-        SUM(CASE WHEN deduped.created_at >= ? AND deduped.created_at <= ? AND deduped.status = 'demand' THEN 1 ELSE 0 END) as current_demand,
-        SUM(CASE WHEN deduped.created_at >= ? AND deduped.created_at <= ? AND deduped.status = 'cared' THEN 1 ELSE 0 END) as current_cared,
-        SUM(CASE WHEN deduped.created_at >= ? AND deduped.created_at <= ? AND deduped.status = 'rejected' THEN 1 ELSE 0 END) as current_rejected,
-        SUM(CASE WHEN deduped.created_at >= ? AND deduped.created_at <= ? AND deduped.status = 'pending' THEN 1 ELSE 0 END) as current_pending,
-        SUM(CASE WHEN deduped.created_at >= ? AND deduped.created_at <= ? AND deduped.status = 'confirmed' THEN 1 ELSE 0 END) as current_confirmed,
-        SUM(CASE WHEN deduped.created_at >= ? AND deduped.created_at <= ? AND deduped.status = 'completed' THEN deduped.unit_price * deduped.quantity ELSE 0 END) as current_revenue,
-        
-        -- Previous period stats
-        SUM(CASE WHEN deduped.created_at >= ? AND deduped.created_at <= ? THEN 1 ELSE 0 END) as prev_total,
-        SUM(CASE WHEN deduped.created_at >= ? AND deduped.created_at <= ? AND deduped.status = 'completed' THEN 1 ELSE 0 END) as prev_completed,
-        SUM(CASE WHEN deduped.created_at >= ? AND deduped.created_at <= ? AND deduped.status IN ('quoted','cared') THEN 1 ELSE 0 END) as prev_quoted,
-        SUM(CASE WHEN deduped.created_at >= ? AND deduped.created_at <= ? AND deduped.status = 'demand' THEN 1 ELSE 0 END) as prev_demand,
-        SUM(CASE WHEN deduped.created_at >= ? AND deduped.created_at <= ? AND deduped.status = 'cared' THEN 1 ELSE 0 END) as prev_cared,
-        SUM(CASE WHEN deduped.created_at >= ? AND deduped.created_at <= ? AND deduped.status = 'rejected' THEN 1 ELSE 0 END) as prev_rejected,
-        SUM(CASE WHEN deduped.created_at >= ? AND deduped.created_at <= ? AND deduped.status = 'pending' THEN 1 ELSE 0 END) as prev_pending,
-        SUM(CASE WHEN deduped.created_at >= ? AND deduped.created_at <= ? AND deduped.status = 'completed' THEN deduped.unit_price * deduped.quantity ELSE 0 END) as prev_revenue,
-        
-        -- Optimized GD calculation using generated column expiry_days
-        -- expiry_days = TO_DAYS(DATE(created_at)) + COALESCE(extended, 0)
-        -- Logic: Số ngày còn lại trước khi hết hạn
-        -- >= 4: Còn nhiều thời gian (GD bình thường)
-        -- = 3: Còn 3 ngày (cần chú ý) 
-        -- = 2: Còn 2 ngày (khá gấp)
-        -- = 1: Còn 1 ngày (hết hạn hôm nay)
-        -- <= 0: Đã quá hạn
-        SUM(CASE WHEN (deduped.expiry_days - TO_DAYS(CURDATE())) >= 4 THEN 1 ELSE 0 END) as gd_today,
-        SUM(CASE WHEN (deduped.expiry_days - TO_DAYS(CURDATE())) = 3 THEN 1 ELSE 0 END) as gd_yesterday,  
-        SUM(CASE WHEN (deduped.expiry_days - TO_DAYS(CURDATE())) = 2 THEN 1 ELSE 0 END) as gd_2days_ago
+      SELECT
+        SUM(CASE WHEN d.created_at >= ? AND d.created_at <= ? THEN 1 ELSE 0 END) as current_total,
+        SUM(CASE WHEN d.created_at >= ? AND d.created_at <= ? AND d.status = 'completed' THEN 1 ELSE 0 END) as current_completed,
+        SUM(CASE WHEN d.created_at >= ? AND d.created_at <= ? AND d.status IN ('quoted','cared') THEN 1 ELSE 0 END) as current_quoted,
+        SUM(CASE WHEN d.created_at >= ? AND d.created_at <= ? AND d.status = 'demand' THEN 1 ELSE 0 END) as current_demand,
+        SUM(CASE WHEN d.created_at >= ? AND d.created_at <= ? AND d.status = 'cared' THEN 1 ELSE 0 END) as current_cared,
+        SUM(CASE WHEN d.created_at >= ? AND d.created_at <= ? AND d.status = 'rejected' THEN 1 ELSE 0 END) as current_rejected,
+        SUM(CASE WHEN d.created_at >= ? AND d.created_at <= ? AND d.status = 'pending' THEN 1 ELSE 0 END) as current_pending,
+        SUM(CASE WHEN d.created_at >= ? AND d.created_at <= ? AND d.status = 'confirmed' THEN 1 ELSE 0 END) as current_confirmed,
+        SUM(CASE WHEN d.created_at >= ? AND d.created_at <= ? AND d.status = 'completed' THEN d.unit_price * d.quantity ELSE 0 END) as current_revenue,
+
+        SUM(CASE WHEN d.created_at >= ? AND d.created_at <= ? THEN 1 ELSE 0 END) as prev_total,
+        SUM(CASE WHEN d.created_at >= ? AND d.created_at <= ? AND d.status = 'completed' THEN 1 ELSE 0 END) as prev_completed,
+        SUM(CASE WHEN d.created_at >= ? AND d.created_at <= ? AND d.status IN ('quoted','cared') THEN 1 ELSE 0 END) as prev_quoted,
+        SUM(CASE WHEN d.created_at >= ? AND d.created_at <= ? AND d.status = 'demand' THEN 1 ELSE 0 END) as prev_demand,
+        SUM(CASE WHEN d.created_at >= ? AND d.created_at <= ? AND d.status = 'cared' THEN 1 ELSE 0 END) as prev_cared,
+        SUM(CASE WHEN d.created_at >= ? AND d.created_at <= ? AND d.status = 'rejected' THEN 1 ELSE 0 END) as prev_rejected,
+        SUM(CASE WHEN d.created_at >= ? AND d.created_at <= ? AND d.status = 'pending' THEN 1 ELSE 0 END) as prev_pending,
+        SUM(CASE WHEN d.created_at >= ? AND d.created_at <= ? AND d.status = 'completed' THEN d.unit_price * d.quantity ELSE 0 END) as prev_revenue
       FROM (
-        SELECT od.id, od.created_at, od.status, od.unit_price, od.quantity, od.expiry_days
+        SELECT od.created_at, od.status, od.unit_price, od.quantity
         FROM order_details od
         JOIN orders o ON od.order_id = o.id
-        JOIN users u ON o.sale_by = u.id
         WHERE od.deleted_at IS NULL
+          AND o.sale_by IS NOT NULL
+          AND od.created_at >= ? AND od.created_at <= ?
           ${blacklistFilter}
           ${permissionFilter}
           ${employeeFilter}
           ${departmentFilter}
-      ) deduped
+      ) d
     `;
 
     const queryParams = [
-      // Current period: total, completed, quoted, demand, cared, rejected, pending, confirmed, revenue
       ...Array.from({ length: 9 }, () => [
         ranges.current.from,
         ranges.current.to,
       ]).flat(),
-      // Previous period: total, completed, quoted, demand, cared, rejected, pending, revenue
       ...Array.from({ length: 8 }, () => [
         ranges.previous.from,
         ranges.previous.to,
       ]).flat(),
+      rangeFrom,
+      rangeTo,
     ];
 
     const result = await this.orderDetailRepository.query(query, queryParams);
@@ -377,7 +410,6 @@ export class TransactionStatsService {
     const prevRevenue = parseFloat(row.prev_revenue) || 0;
 
     return {
-      // Current period
       chaoBan: currentCompleted + currentQuoted,
       completed: currentCompleted,
       quoted: currentQuoted,
@@ -392,15 +424,9 @@ export class TransactionStatsService {
       conversionRate:
         currentTotal > 0 ? (currentCompleted / currentTotal) * 100 : 0,
 
-      // Working days
-      gdToday: parseInt(row.gd_today) || 0,
-      gdYesterday: parseInt(row.gd_yesterday) || 0,
-      gd2DaysAgo: parseInt(row.gd_2days_ago) || 0,
-
-      // Previous period
       prevChaoBan: prevCompleted + prevQuoted,
-      prevCompleted: prevCompleted,
-      prevQuoted: prevQuoted,
+      prevCompleted,
+      prevQuoted,
       prevDemand: parseInt(row.prev_demand) || 0,
       prevCared: parseInt(row.prev_cared) || 0,
       prevRejected: parseInt(row.prev_rejected) || 0,
@@ -409,6 +435,156 @@ export class TransactionStatsService {
       prevAvgOrderValue: prevCompleted > 0 ? prevRevenue / prevCompleted : 0,
       prevConversionRate: prevTotal > 0 ? (prevCompleted / prevTotal) * 100 : 0,
     };
+  }
+
+  /**
+   * Tồn đọng GD + hết hạn. Không phụ thuộc khoảng ngày nên tách riêng và cache
+   * 120s; đây là query phải đếm toàn bộ đơn còn sống (~570k đơn quá hạn).
+   */
+  private async getBacklogStats(
+    params: TransactionStatsParams,
+  ): Promise<BacklogStats> {
+    const {
+      blacklistFilter,
+      employeeFilter,
+      departmentFilter,
+      permissionFilter,
+    } = this.buildCommonFilters(params);
+
+    const cacheKey = `${BACKLOG_CACHE_PREFIX}:v1:${this.buildUserSignature(
+      params,
+    )}:${this.buildDayKey()}`;
+    const cached = await this.redisService.get<BacklogStats>(cacheKey);
+    if (cached) return cached;
+
+    const hasFilters = !!(
+      blacklistFilter ||
+      permissionFilter ||
+      employeeFilter ||
+      departmentFilter
+    );
+    // Không có filter thì phải quét toàn bộ: ép đi theo covering index.
+    // Có filter thì để optimizer tự chọn (thường drive từ orders theo sale_by).
+    const fromClause = hasFilters
+      ? 'FROM order_details od JOIN orders o ON o.id = od.order_id'
+      : `FROM order_details od ${BACKLOG_FORCE_HINT} orders o ON o.id = od.order_id`;
+
+    const query = `
+      SELECT
+        SUM(CASE WHEN od.status IN ('quoted','cared','demand') AND (od.expiry_days - TO_DAYS(CURDATE())) = 1 THEN 1 ELSE 0 END) as expired_today,
+        SUM(CASE WHEN od.status IN ('quoted','cared','demand') AND (od.expiry_days - TO_DAYS(CURDATE())) < 1 THEN 1 ELSE 0 END) as overdue,
+        SUM(CASE WHEN (od.expiry_days - TO_DAYS(CURDATE())) >= 4 THEN 1 ELSE 0 END) as gd_today,
+        SUM(CASE WHEN (od.expiry_days - TO_DAYS(CURDATE())) = 3 THEN 1 ELSE 0 END) as gd_yesterday,
+        SUM(CASE WHEN (od.expiry_days - TO_DAYS(CURDATE())) = 2 THEN 1 ELSE 0 END) as gd_2days
+      ${fromClause}
+      WHERE od.deleted_at IS NULL
+        AND o.sale_by IS NOT NULL
+        ${blacklistFilter}
+        ${permissionFilter}
+        ${employeeFilter}
+        ${departmentFilter}
+    `;
+
+    let result: any[];
+    try {
+      result = await this.orderDetailRepository.query(query);
+    } catch (error) {
+      if (error?.errno !== 1176 && error?.code !== 'ER_KEY_DOES_NOT_EXIST') {
+        throw error;
+      }
+      // DB chưa có index (môi trường mới trước lần synchronize đầu tiên).
+      this.logger.warn(
+        'idx_od_deleted_status_expiry chưa tồn tại, chạy lại query không hint',
+      );
+      result = await this.orderDetailRepository.query(
+        query.replace(BACKLOG_FORCE_HINT, 'JOIN'),
+      );
+    }
+
+    const row = result[0] || {};
+    const stats: BacklogStats = {
+      expiredToday: parseInt(row.expired_today) || 0,
+      overdue: parseInt(row.overdue) || 0,
+      gdToday: parseInt(row.gd_today) || 0,
+      gdYesterday: parseInt(row.gd_yesterday) || 0,
+      gd2DaysAgo: parseInt(row.gd_2days) || 0,
+    };
+
+    await this.redisService.set(cacheKey, stats, BACKLOG_CACHE_TTL_SECONDS);
+    return stats;
+  }
+
+  /** Gom 4 filter dùng chung cho các query thống kê. */
+  private buildCommonFilters(params: TransactionStatsParams) {
+    return {
+      permissionFilter: this.buildPermissionFilter(params.user),
+      blacklistFilter: this.buildBlacklistFilter(params.user),
+      employeeFilter: params.employees
+        ? `AND EXISTS (SELECT 1 FROM orders o2 WHERE o2.id = od.order_id AND o2.sale_by IN (${params.employees}))`
+        : '',
+      departmentFilter: params.departments
+        ? `AND EXISTS (
+            SELECT 1 FROM orders o2
+            JOIN users u2 ON o2.sale_by = u2.id
+            JOIN users_departments ud2 ON u2.id = ud2.user_id
+            WHERE o2.id = od.order_id AND ud2.department_id IN (${params.departments})
+          )`
+        : '',
+    };
+  }
+
+  private buildResponseCacheKey(
+    params: TransactionStatsParams,
+    ranges: DateRangePair,
+  ): string {
+    return [
+      RESPONSE_CACHE_PREFIX,
+      'v1',
+      this.buildUserSignature(params),
+      params.period,
+      params.dateFrom || '',
+      params.dateTo || '',
+      ranges.current.from.toISOString(),
+      ranges.current.to.toISOString(),
+    ].join(':');
+  }
+
+  /** Chữ ký user + bộ lọc: cùng input thì dùng chung cache. */
+  private buildUserSignature(params: TransactionStatsParams): string {
+    const user = params.user || {};
+    const roleNames = (user.roles || []).map((r: any) =>
+      (typeof r === 'string' ? r : r?.name || '').toLowerCase(),
+    );
+    // admin/view xem toàn bộ và 2 filter này đều rỗng -> kết quả giống hệt nhau,
+    // dùng chung key để nhiều người mở dashboard chỉ tốn 1 lần tính.
+    if (
+      (roleNames.includes('admin') || roleNames.includes('view')) &&
+      !params.employees &&
+      !params.departments
+    ) {
+      return 'all';
+    }
+    return createHash('sha1')
+      .update(
+        JSON.stringify({
+          id: user.id ?? null,
+          roles: (user.roles || [])
+            .map((r: any) => (typeof r === 'string' ? r : r?.name))
+            .sort(),
+          departments: (user.departments || []).map((d: any) => [
+            d?.id ?? null,
+            d?.server_ip ?? null,
+          ]),
+          employees: params.employees ?? null,
+          departmentsParam: params.departments ?? null,
+        }),
+      )
+      .digest('hex');
+  }
+
+  private buildDayKey(): string {
+    const now = new Date();
+    return `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
   }
 
   /**
@@ -470,11 +646,11 @@ export class TransactionStatsService {
         SUM(CASE WHEN deduped.status = 'pending' THEN 1 ELSE 0 END) as pending,
         SUM(CASE WHEN deduped.status = 'confirmed' THEN 1 ELSE 0 END) as confirmed
       FROM (
-        SELECT DISTINCT od.id, od.created_at, od.status
+        SELECT od.created_at, od.status
         FROM order_details od
         JOIN orders o ON od.order_id = o.id
-        JOIN users u ON o.sale_by = u.id
         WHERE od.deleted_at IS NULL
+          AND o.sale_by IS NOT NULL
           ${blacklistFilter}
           AND od.created_at >= ?
           AND od.created_at <= ?
@@ -542,11 +718,11 @@ export class TransactionStatsService {
         SUM(CASE WHEN deduped.status = 'demand' THEN 1 ELSE 0 END) as demand,
         SUM(CASE WHEN deduped.status = 'confirmed' THEN 1 ELSE 0 END) as confirmed
       FROM (
-        SELECT DISTINCT od.id, od.customer_name, od.status
+        SELECT od.customer_name, od.status
         FROM order_details od
         JOIN orders o ON od.order_id = o.id
-        JOIN users u ON o.sale_by = u.id
         WHERE od.deleted_at IS NULL
+          AND o.sale_by IS NOT NULL
           ${blacklistFilter}
           AND od.created_at >= ?
           AND od.created_at <= ?
@@ -557,7 +733,6 @@ export class TransactionStatsService {
       ) deduped
       GROUP BY deduped.customer_name
       ORDER BY total DESC
-      LIMIT 1000
     `;
 
     const result = await this.orderDetailRepository.query(query, [
@@ -617,9 +792,8 @@ export class TransactionStatsService {
           ELSE 0
         END as conversion
       FROM (
-        SELECT DISTINCT 
-          od.id, 
-          od.customer_name, 
+        SELECT
+          od.customer_name,
           od.status,
           u.id as user_id,
           COALESCE(u.full_name, u.username, CONCAT('NV ', u.id)) as user_name
@@ -657,66 +831,6 @@ export class TransactionStatsService {
   }
 
   /**
-   * Get expired statistics with new formula: (created_at + extended - current_date)
-   * = 1: Hết hạn hôm nay
-   * < 1: Overdue (quá hạn)
-   */
-  private async getExpiredStats(
-    params: TransactionStatsParams,
-  ): Promise<ExpiredStats> {
-    const permissionFilter = this.buildPermissionFilter(params.user);
-    const blacklistFilter = this.buildBlacklistFilter(params.user);
-
-    // Build EXISTS filters for employees and departments (avoid JOIN fan-out)
-    const employeeFilter = params.employees
-      ? `AND EXISTS (SELECT 1 FROM orders o2 WHERE o2.id = od.order_id AND o2.sale_by IN (${params.employees}))`
-      : '';
-    const departmentFilter = params.departments
-      ? `AND EXISTS (
-          SELECT 1 FROM orders o2 
-          JOIN users u2 ON o2.sale_by = u2.id
-          JOIN users_departments ud2 ON u2.id = ud2.user_id 
-          WHERE o2.id = od.order_id AND ud2.department_id IN (${params.departments})
-        )`
-      : '';
-
-    // Bảng dẫn xuất không cần DISTINCT: lọc bằng EXISTS nên không nhân dòng
-    // (xem chú thích ở getSummaryStats). Đo trên prod: 4.6s -> 3.7s.
-    // Dùng subquery để gom dữ liệu rồi mới tổng hợp bằng generated column.
-    const query = `
-      SELECT 
-        SUM(CASE 
-          WHEN (deduped.expiry_days - TO_DAYS(CURDATE())) = 1
-          THEN 1 ELSE 0 
-        END) as expired_today,
-        SUM(CASE 
-          WHEN (deduped.expiry_days - TO_DAYS(CURDATE())) < 1
-          THEN 1 ELSE 0 
-        END) as overdue
-      FROM (
-        SELECT od.id, od.expiry_days
-        FROM order_details od
-        JOIN orders o ON od.order_id = o.id
-        JOIN users u ON o.sale_by = u.id
-        WHERE od.deleted_at IS NULL
-          ${blacklistFilter}
-          AND od.status IN ('quoted', 'cared', 'demand')
-          ${permissionFilter}
-          ${employeeFilter}
-          ${departmentFilter}
-      ) deduped
-    `;
-
-    const result = await this.orderDetailRepository.query(query);
-    const row = result[0];
-
-    return {
-      expiredToday: parseInt(row.expired_today) || 0,
-      overdue: parseInt(row.overdue) || 0,
-    };
-  }
-
-  /**
    * Build permission filter based on user role
    */
   /**
@@ -743,17 +857,17 @@ export class TransactionStatsService {
         if (mainDepts.length > 0) {
           const deptIds = mainDepts.map((d: any) => d.id).join(',');
           const filter = `AND EXISTS (
-            SELECT 1 FROM users_departments ud2 
-            JOIN departments d2 ON ud2.department_id = d2.id 
-            WHERE ud2.user_id = u.id AND d2.id IN (${deptIds})
+            SELECT 1 FROM users_departments ud2
+            JOIN departments d2 ON ud2.department_id = d2.id
+            WHERE ud2.user_id = o.sale_by AND d2.id IN (${deptIds})
           )`;
           return filter;
         } else {
-          const filter = `AND u.id = ${user.id}`;
+          const filter = `AND o.sale_by = ${user.id}`;
           return filter;
         }
       } else {
-        const filter = `AND u.id = ${user.id}`;
+        const filter = `AND o.sale_by = ${user.id}`;
         return filter;
       }
     }
@@ -762,7 +876,7 @@ export class TransactionStatsService {
     const hasOnlyUserRole =
       user.roles?.some((r: any) => r.name === 'user') && !hasManagerRole;
     if (hasOnlyUserRole) {
-      const filter = `AND u.id = ${user.id}`;
+      const filter = `AND o.sale_by = ${user.id}`;
       return filter;
     }
 

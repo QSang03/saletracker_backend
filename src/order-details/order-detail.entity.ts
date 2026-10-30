@@ -81,6 +81,9 @@ export enum ExtendReason {
   'care_count',
   'is_project',
 ])
+// Covering index cho chỉ số tồn đọng (GD + hết hạn) của thống kê giao dịch:
+// quét theo deleted_at, đọc status/expiry_days ngay trong index.
+@Index('idx_od_deleted_status_expiry', ['deleted_at', 'status', 'expiry_days'])
 @Entity('order_details')
 export class OrderDetail {
   @PrimaryGeneratedColumn('increment', { type: 'bigint' })
