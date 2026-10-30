@@ -239,45 +239,44 @@ export class AnalysisBlockService {
     }
   }
 
-  // Lấy customer name từ order detail dựa vào zalo_contact_id
-  private async getCustomerNameByZaloContactId(
-    zaloContactId: string,
-  ): Promise<string | null> {
-    try {
-      // Kiểm tra cache trước
-      const cachedName = this.getCachedCustomerName(zaloContactId);
-      if (cachedName !== null) {
-        return cachedName;
-      }
+  // Lấy customer names cho một danh sách zalo_contact_id trong 1 query.
+  // Dùng meta_customer_id (generated column có index) thay vì JSON_EXTRACT
+  // (mỗi lần gọi cũ phải quét toàn bộ order_details).
+  private async getCustomerNamesByZaloContactIds(
+    zaloContactIds: string[],
+  ): Promise<Map<string, string>> {
+    const result = new Map<string, string>();
+    const uniqueIds = [
+      ...new Set(zaloContactIds.map((id) => String(id ?? '').trim())),
+    ].filter((id) => !!id);
 
-      // Query trực tiếp với điều kiện JSON
-      const orderDetail = await this.orderDetailRepository
-        .createQueryBuilder('od')
-        .where('od.metadata IS NOT NULL')
-        .andWhere(
-          "JSON_EXTRACT(od.metadata, '$.customer_id') = :zaloContactId",
-          {
-            zaloContactId,
-          },
-        )
-        .select(['od.customer_name'])
-        .getOne();
-
-      const customerName = orderDetail?.customer_name || null;
-
-      // Lưu vào cache nếu có kết quả
-      if (customerName) {
-        this.setCachedCustomerName(zaloContactId, customerName);
-      }
-
-      return customerName;
-    } catch (error) {
-      this.logger.error(
-        `Error getting customer name for contact ${zaloContactId}:`,
-        error,
-      );
-      return null;
+    const missing: string[] = [];
+    for (const id of uniqueIds) {
+      const cached = this.getCachedCustomerName(id);
+      if (cached !== null) result.set(id, cached);
+      else missing.push(id);
     }
+
+    if (missing.length > 0) {
+      try {
+        const orderDetails = await this.orderDetailRepository
+          .createQueryBuilder('od')
+          .where('od.meta_customer_id IN (:...ids)', { ids: missing })
+          .select(['od.meta_customer_id', 'od.customer_name'])
+          .getMany();
+
+        for (const od of orderDetails) {
+          if (od.meta_customer_id && od.customer_name) {
+            result.set(od.meta_customer_id, od.customer_name);
+            this.setCachedCustomerName(od.meta_customer_id, od.customer_name);
+          }
+        }
+      } catch (error) {
+        this.logger.error('Error batch loading customer names:', error);
+      }
+    }
+
+    return result;
   }
 
   // Lấy danh sách analysis blocks với phân quyền và thông tin customer
@@ -323,14 +322,15 @@ export class AnalysisBlockService {
           .where('LOWER(od.customer_name) LIKE LOWER(:search)', {
             search: `%${search.trim()}%`,
           })
-          .andWhere('od.metadata IS NOT NULL')
-          .select(['od.metadata'])
+          // meta_customer_id là generated column có index; không kéo metadata.
+          .andWhere('od.meta_customer_id IS NOT NULL')
+          .select(['od.meta_customer_id'])
           .limit(1000)
           .getMany();
 
         matchingZaloContactIds = orderDetails
-          .map((od) => this.extractCustomerIdFromMetadata(od.metadata))
-          .filter((id) => id !== null);
+          .map((od) => od.meta_customer_id)
+          .filter((id): id is string => !!id);
       }
 
       // Tạo main query
@@ -381,18 +381,15 @@ export class AnalysisBlockService {
 
       const analysisBlocks = await queryBuilder.getMany();
 
-      // Enrich với customer names
-      const enrichedData = await Promise.all(
-        analysisBlocks.map(async (block) => {
-          const customerName = await this.getCustomerNameByZaloContactId(
-            block.zaloContactId,
-          );
-          return {
-            ...block,
-            customerName,
-          };
-        }),
+      // Enrich với customer names — 1 query batch thay vì N+1 query JSON_EXTRACT
+      // (mỗi query cũ quét toàn bộ 609k dòng order_details).
+      const customerNameMap = await this.getCustomerNamesByZaloContactIds(
+        analysisBlocks.map((block) => block.zaloContactId),
       );
+      const enrichedData = analysisBlocks.map((block) => ({
+        ...block,
+        customerName: customerNameMap.get(block.zaloContactId) ?? null,
+      }));
 
       return { data: enrichedData, total };
     } catch (error) {
