@@ -88,6 +88,20 @@ export class SaleCatalogService {
       qb.andWhere('COALESCE(p.stock, 0) > 0');
     }
 
+    if (query.hasPrice === true) {
+      qb.andWhere('p.price IS NOT NULL AND p.price > 0');
+    } else if (query.hasPrice === false) {
+      qb.andWhere('(p.price IS NULL OR p.price <= 0)');
+    }
+
+    if (query.minPrice !== undefined) {
+      qb.andWhere('p.price >= :minPrice', { minPrice: query.minPrice });
+    }
+
+    if (query.maxPrice !== undefined) {
+      qb.andWhere('p.price <= :maxPrice', { maxPrice: query.maxPrice });
+    }
+
     const sortOptions: Record<string, [string, 'ASC' | 'DESC']> = {
       price_asc: ['p.price', 'ASC'],
       price_desc: ['p.price', 'DESC'],
