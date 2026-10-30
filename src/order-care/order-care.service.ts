@@ -98,7 +98,9 @@ export class OrderCareService {
       user,
       !!dto.include_hidden,
     );
-    const selectedMap = new Map(selected.map((item) => [Number(item.id), item]));
+    const selectedMap = new Map(
+      selected.map((item) => [Number(item.id), item]),
+    );
     const skipped: { order_id: number; reason: string }[] = [];
     const groups = new Map<string, CareGroupPlan>();
 
@@ -189,9 +191,10 @@ export class OrderCareService {
         (id) => !group.selected_order_ids.includes(id),
       );
       group.orders = [...group.selected_order_ids, ...group.expanded_order_ids]
-        .map((id) =>
-          siblings.find((item) => Number(item.id) === id) ||
-          selectedMap.get(id),
+        .map(
+          (id) =>
+            siblings.find((item) => Number(item.id) === id) ||
+            selectedMap.get(id),
         )
         .filter((item): item is OrderDetail => !!item)
         .map((item) => this.toOrderSummary(item));
@@ -363,7 +366,8 @@ export class OrderCareService {
       }
 
       if (batch.status === OrderCareBatchStatus.SENDING) {
-        const ageMs = Date.now() - new Date(batch.updated_at || batch.created_at).getTime();
+        const ageMs =
+          Date.now() - new Date(batch.updated_at || batch.created_at).getTime();
         if (ageMs < 2 * 60 * 1000) {
           return this.buildResult(group, batch, 'in_progress', []);
         }
@@ -374,10 +378,7 @@ export class OrderCareService {
         batch.status = OrderCareBatchStatus.FAILED;
       }
 
-      if (
-        batch.status === OrderCareBatchStatus.FAILED &&
-        !batch.sent_at
-      ) {
+      if (batch.status === OrderCareBatchStatus.FAILED && !batch.sent_at) {
         await this.careBatchRepository.update(batch.id, {
           status: OrderCareBatchStatus.SENDING,
           error_message: null,
@@ -569,7 +570,8 @@ export class OrderCareService {
         sent_at: (batch.sent_at || new Date()).toISOString(),
       };
     } catch (error: any) {
-      const message = error?.message || 'Gửi thành công nhưng ghi nhận thất bại';
+      const message =
+        error?.message || 'Gửi thành công nhưng ghi nhận thất bại';
       this.logger.error(
         `Care batch ${batch.id} record failed: ${message}`,
         error?.stack,
@@ -678,16 +680,17 @@ export class OrderCareService {
       ? OrderCareCustomerType.GROUP
       : OrderCareCustomerType.PRIVATE;
 
-    const messages = Array.isArray(metadata?.messages)
-      ? metadata.messages
-      : [];
+    const messages = Array.isArray(metadata?.messages) ? metadata.messages : [];
     const sourceMessage = messages.find(
       (message: any) =>
         String(message?.message_id) === String(sourceMessageId) ||
         String(message?.message_id) === String(detail.zaloMessageId),
     );
     let sourceContent = sourceMessage?.content ?? null;
-    if (typeof sourceContent === 'string' && sourceContent.trim().startsWith('{')) {
+    if (
+      typeof sourceContent === 'string' &&
+      sourceContent.trim().startsWith('{')
+    ) {
       try {
         const parsed = JSON.parse(sourceContent);
         if (typeof parsed?.text === 'string') {
@@ -704,9 +707,7 @@ export class OrderCareService {
       customerId: String(customerId),
       customerType,
       customerName:
-        detail.customer_name ||
-        conversationInfo?.conversation_name ||
-        null,
+        detail.customer_name || conversationInfo?.conversation_name || null,
       sourceContent: sourceContent ? String(sourceContent) : null,
     };
   }
@@ -772,7 +773,9 @@ export class OrderCareService {
         (max, item) => Math.max(max, Number(item.care_count_after || 0)),
         0,
       ),
-      sent_at: batch.sent_at ? new Date(batch.sent_at).toISOString() : undefined,
+      sent_at: batch.sent_at
+        ? new Date(batch.sent_at).toISOString()
+        : undefined,
     };
   }
 
@@ -797,7 +800,9 @@ export class OrderCareService {
         (id) => !orderIds.includes(id),
       ),
       care_count: 0,
-      sent_at: batch.sent_at ? new Date(batch.sent_at).toISOString() : undefined,
+      sent_at: batch.sent_at
+        ? new Date(batch.sent_at).toISOString()
+        : undefined,
       error,
     };
   }

@@ -10,7 +10,7 @@ function makeService(user, blacklist = new Map()) {
     },
   };
   const orderService = {
-    getUserIdsByRole: async () => (user?.allowed ?? null),
+    getUserIdsByRole: async () => user?.allowed ?? null,
   };
   const blacklistService = {
     getBlacklistedContactsForUsers: async () => blacklist,
@@ -56,7 +56,10 @@ for (const scope of ['created', 'all']) {
 }
 
 {
-  const { service, calls } = makeService(sale, new Map([['zalo-1', new Set(['c1', 'c2'])]]));
+  const { service, calls } = makeService(
+    sale,
+    new Map([['zalo-1', new Set(['c1', 'c2'])]]),
+  );
   await service.getOverview(sale, {
     period: 'week',
     isProject: '0',

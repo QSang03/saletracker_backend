@@ -545,7 +545,8 @@ export class OrderCareStatsService {
     );
     if (roleNames.includes('admin')) return [];
 
-    const ids = allowedUserIds && allowedUserIds.length ? allowedUserIds : [user?.id];
+    const ids =
+      allowedUserIds && allowedUserIds.length ? allowedUserIds : [user?.id];
     const validIds = ids.filter((id) => !!id);
     if (validIds.length === 0) return [];
 
