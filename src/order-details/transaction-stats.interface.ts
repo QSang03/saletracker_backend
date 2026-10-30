@@ -82,7 +82,6 @@ export interface EmployeeStat {
 
 export interface ExpiredStats {
   expiredToday: number;
-  overdue: number;
 }
 
 export interface TransactionStatsResponse {

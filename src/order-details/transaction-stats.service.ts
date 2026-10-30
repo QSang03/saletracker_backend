@@ -34,20 +34,12 @@ interface BacklogStats {
   gdYesterday: number;
   gd2DaysAgo: number;
   expiredToday: number;
-  overdue: number;
 }
 
 const RESPONSE_CACHE_PREFIX = 'order-details:transactions';
 const BACKLOG_CACHE_PREFIX = 'order-details:backlog';
 const RESPONSE_CACHE_TTL_SECONDS = 60;
 const BACKLOG_CACHE_TTL_SECONDS = 120;
-/**
- * Backlog phải đếm ~570k đơn quá hạn nên luôn là full scan có kiểm soát.
- * Covering index (deleted_at, status, expiry_days) + ép thứ tự join giúp
- * 6.8s -> 2.4s; phần còn lại bù bằng cache.
- */
-const BACKLOG_FORCE_HINT =
-  'FORCE INDEX (idx_od_deleted_status_expiry) STRAIGHT_JOIN';
 
 @Injectable()
 export class TransactionStatsService {
@@ -100,7 +92,6 @@ export class TransactionStatsService {
         employeeStats: employeeData,
         expiredStats: {
           expiredToday: backlog.expiredToday,
-          overdue: backlog.overdue,
         },
         totalRecords:
           summaryData.completed +
@@ -438,8 +429,10 @@ export class TransactionStatsService {
   }
 
   /**
-   * Tồn đọng GD + hết hạn. Không phụ thuộc khoảng ngày nên tách riêng và cache
-   * 120s; đây là query phải đếm toàn bộ đơn còn sống (~570k đơn quá hạn).
+   * Tồn đọng GD + hết hạn. Không phụ thuộc khoảng ngày nên tách riêng và cache.
+   * Chỉ còn 4 chỉ số đang được UI dùng; "overdue" (570k đơn) đã bỏ vì không
+   * hiển thị ở đâu — chính nó là 5.5s của query cũ. Range trên expiry_days
+   * giúp MySQL chỉ đọc ~5k dòng: 5.5s -> ~50ms.
    */
   private async getBacklogStats(
     params: TransactionStatsParams,
@@ -451,60 +444,33 @@ export class TransactionStatsService {
       permissionFilter,
     } = this.buildCommonFilters(params);
 
-    const cacheKey = `${BACKLOG_CACHE_PREFIX}:v1:${this.buildUserSignature(
+    const cacheKey = `${BACKLOG_CACHE_PREFIX}:v2:${this.buildUserSignature(
       params,
     )}:${this.buildDayKey()}`;
     const cached = await this.redisService.get<BacklogStats>(cacheKey);
     if (cached) return cached;
 
-    const hasFilters = !!(
-      blacklistFilter ||
-      permissionFilter ||
-      employeeFilter ||
-      departmentFilter
-    );
-    // Không có filter thì phải quét toàn bộ: ép đi theo covering index.
-    // Có filter thì để optimizer tự chọn (thường drive từ orders theo sale_by).
-    const fromClause = hasFilters
-      ? 'FROM order_details od JOIN orders o ON o.id = od.order_id'
-      : `FROM order_details od ${BACKLOG_FORCE_HINT} orders o ON o.id = od.order_id`;
-
     const query = `
       SELECT
-        SUM(CASE WHEN od.status IN ('quoted','cared','demand') AND (od.expiry_days - TO_DAYS(CURDATE())) = 1 THEN 1 ELSE 0 END) as expired_today,
-        SUM(CASE WHEN od.status IN ('quoted','cared','demand') AND (od.expiry_days - TO_DAYS(CURDATE())) < 1 THEN 1 ELSE 0 END) as overdue,
-        SUM(CASE WHEN (od.expiry_days - TO_DAYS(CURDATE())) >= 4 THEN 1 ELSE 0 END) as gd_today,
-        SUM(CASE WHEN (od.expiry_days - TO_DAYS(CURDATE())) = 3 THEN 1 ELSE 0 END) as gd_yesterday,
-        SUM(CASE WHEN (od.expiry_days - TO_DAYS(CURDATE())) = 2 THEN 1 ELSE 0 END) as gd_2days
-      ${fromClause}
+        SUM(CASE WHEN od.status IN ('quoted','cared','demand') AND od.expiry_days = TO_DAYS(CURDATE()) + 1 THEN 1 ELSE 0 END) as expired_today,
+        SUM(CASE WHEN od.expiry_days >= TO_DAYS(CURDATE()) + 4 THEN 1 ELSE 0 END) as gd_today,
+        SUM(CASE WHEN od.expiry_days = TO_DAYS(CURDATE()) + 3 THEN 1 ELSE 0 END) as gd_yesterday,
+        SUM(CASE WHEN od.expiry_days = TO_DAYS(CURDATE()) + 2 THEN 1 ELSE 0 END) as gd_2days
+      FROM order_details od
+      JOIN orders o ON o.id = od.order_id
       WHERE od.deleted_at IS NULL
         AND o.sale_by IS NOT NULL
+        AND od.expiry_days >= TO_DAYS(CURDATE()) + 1
         ${blacklistFilter}
         ${permissionFilter}
         ${employeeFilter}
         ${departmentFilter}
     `;
 
-    let result: any[];
-    try {
-      result = await this.orderDetailRepository.query(query);
-    } catch (error) {
-      if (error?.errno !== 1176 && error?.code !== 'ER_KEY_DOES_NOT_EXIST') {
-        throw error;
-      }
-      // DB chưa có index (môi trường mới trước lần synchronize đầu tiên).
-      this.logger.warn(
-        'idx_od_deleted_status_expiry chưa tồn tại, chạy lại query không hint',
-      );
-      result = await this.orderDetailRepository.query(
-        query.replace(BACKLOG_FORCE_HINT, 'JOIN'),
-      );
-    }
-
+    const result = await this.orderDetailRepository.query(query);
     const row = result[0] || {};
     const stats: BacklogStats = {
       expiredToday: parseInt(row.expired_today) || 0,
-      overdue: parseInt(row.overdue) || 0,
       gdToday: parseInt(row.gd_today) || 0,
       gdYesterday: parseInt(row.gd_yesterday) || 0,
       gd2DaysAgo: parseInt(row.gd_2days) || 0,
