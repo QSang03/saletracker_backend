@@ -6,8 +6,13 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { ExtendReason, OrderDetail, OrderDetailStatus } from './order-detail.entity';
+import { Repository, SelectQueryBuilder } from 'typeorm';
+import { createHash } from 'crypto';
+import {
+  ExtendReason,
+  OrderDetail,
+  OrderDetailStatus,
+} from './order-detail.entity';
 import {
   assertStatusTransition,
   normalizeOrderStatus,
@@ -19,6 +24,7 @@ import { User } from 'src/users/user.entity';
 import { Brand } from 'src/brands/brand.entity';
 import { Category } from 'src/categories/category.entity';
 import { OrderBlacklistService } from '../order-blacklist/order-blacklist.service';
+import { RedisService } from '../common/cache/redis.service';
 import { TransactionStatsService } from './transaction-stats.service';
 import {
   TransactionStatsParams,
@@ -60,6 +66,7 @@ export class OrderDetailService {
     private orderBlacklistService: OrderBlacklistService,
     private transactionStatsService: TransactionStatsService,
     private orderStatusContextService: OrderStatusContextService,
+    private readonly redisService: RedisService,
   ) {}
 
   // Normalize a date-only string (YYYY-MM-DD) into safe bounds for SQL comparisons.
@@ -1558,8 +1565,7 @@ export class OrderDetailService {
     // Sorting
     const sortField = options?.sortField;
     const sortDirection = (options?.sortDirection || 'desc').toUpperCase() as
-      | 'ASC'
-      | 'DESC';
+      'ASC' | 'DESC';
     if (sortField === 'quantity') {
       qb.orderBy('details.quantity', sortDirection);
     } else if (sortField === 'unit_price') {
@@ -1831,126 +1837,13 @@ export class OrderDetailService {
       .leftJoinAndSelect('sale_by.departments', 'sale_by_departments')
       .where('details.hidden_at IS NOT NULL');
 
-    // ✅ Permission scoping (giữ nguyên logic hiện tại)
     const allowedUserIds = await this.getUserIdsByRole(user);
-    if (allowedUserIds !== null) {
-      if (allowedUserIds.length === 0) {
-        qb.andWhere('1 = 0');
-      } else {
-        qb.andWhere('sale_by.id IN (:...userIds)', { userIds: allowedUserIds });
-      }
-    }
-
-    if (options?.search && options.search.trim()) {
-      const searchTerm = `%${options.search.trim()}%`;
-      qb.andWhere(
-        `(
-        CAST(details.id AS CHAR) LIKE :search 
-        OR LOWER(details.raw_item) LIKE LOWER(:search)
-        OR LOWER(product.productName) LIKE LOWER(:search)
-        OR LOWER(details.customer_name) LIKE LOWER(:search)
-      )`,
-        { search: searchTerm },
-      );
-    }
-
-    // ✅ Filter 1: Employees
-    if (options?.employees) {
-      const empIds = options.employees
-        .split(',')
-        .map((s) => Number(s.trim()))
-        .filter((n) => !Number.isNaN(n));
-      if (empIds.length > 0) {
-        qb.andWhere('sale_by.id IN (:...empIds)', { empIds });
-      }
-    }
-
-    // ✅ Filter 2: Departments
-    if (options?.departments) {
-      const deptIds = options.departments
-        .split(',')
-        .map((s) => Number(s.trim()))
-        .filter((n) => !Number.isNaN(n));
-      if (deptIds.length > 0) {
-        qb.andWhere(
-          `
-        sale_by_departments.id IN (:...deptIds)
-        AND sale_by_departments.server_ip IS NOT NULL
-        AND TRIM(sale_by_departments.server_ip) <> ''
-      `,
-          { deptIds },
-        );
-      }
-    }
-
-    // ✅ Filter 3: Status (hỗ trợ multiple statuses, map pending/confirmed cũ)
-    if (options?.status && options.status.trim()) {
-      const statusList = normalizeStatusCsv(options.status);
-      if (statusList.length > 0) {
-        qb.andWhere('details.status IN (:...statusList)', { statusList });
-      } else {
-        qb.andWhere('1 = 0');
-      }
-    }
-
-    // ✅ Filter (created_at): support single-day `date` (preferred) and `dateRange` fallbacks
-    if (options?.date && typeof options.date === 'string') {
-      const dateStr = options.date.trim();
-      // Support YYYY-MM-DD single-date format (treat as [date, nextDay))
-      if (this.isDateOnly(dateStr)) {
-        const startDate = new Date(dateStr);
-        const endDate = new Date(this.addOneDayDateOnly(dateStr));
-        endDate.setMilliseconds(endDate.getMilliseconds() - 1); // make inclusive
-        qb.andWhere('order.created_at BETWEEN :rangeStart AND :rangeEnd', {
-          rangeStart: startDate,
-          rangeEnd: endDate,
-        });
-      } else {
-        // If not a pure date string, fall back to parsing as dates (inclusive day logic)
-        try {
-          const startDate = new Date(dateStr);
-          const endDate = new Date(dateStr);
-          endDate.setHours(23, 59, 59, 999);
-          qb.andWhere('order.created_at BETWEEN :rangeStart AND :rangeEnd', {
-            rangeStart: startDate,
-            rangeEnd: endDate,
-          });
-        } catch (e) {
-          // ignore invalid date
-        }
-      }
-    } else if (options?.dateRange?.start && options?.dateRange?.end) {
-      const startDate = new Date(options.dateRange.start);
-      const endDate = new Date(options.dateRange.end);
-      endDate.setHours(23, 59, 59, 999);
-
-      qb.andWhere('order.created_at BETWEEN :rangeStart AND :rangeEnd', {
-        rangeStart: startDate,
-        rangeEnd: endDate,
-      });
-    }
-
-    // ✅ Filter 4: Hidden Date Range với giới hạn 14 ngày
-    if (options?.hiddenDateRange?.start && options?.hiddenDateRange?.end) {
-      const startDate = new Date(options.hiddenDateRange.start);
-      const endDate = new Date(options.hiddenDateRange.end);
-      endDate.setHours(23, 59, 59, 999);
-
-      // Ensure endDate is not in the future
-      const actualEndDate = endDate > now ? now : endDate;
-      const actualStartDate = startDate;
-
-      qb.andWhere('details.hidden_at BETWEEN :hiddenStart AND :hiddenEnd', {
-        hiddenStart: actualStartDate,
-        hiddenEnd: actualEndDate,
-      });
-    }
+    this.applyHiddenFilters(qb, options, allowedUserIds, now);
 
     // ✅ Sorting
     const sortField = options?.sortField;
     const sortDirection = (options?.sortDirection || 'desc').toUpperCase() as
-      | 'ASC'
-      | 'DESC';
+      'ASC' | 'DESC';
 
     if (sortField === 'quantity') {
       qb.orderBy('details.quantity', sortDirection);
@@ -1964,8 +1857,48 @@ export class OrderDetailService {
     }
 
     // ✅ Pagination
-    qb.skip((page - 1) * pageSize).take(pageSize);
-    const [rows, total] = await qb.getManyAndCount();
+    // TypeORM skip/take + join sinh subquery DISTINCT chọn toàn bộ cột (kể cả
+    // longtext/json) của 609k dòng -> ~8.5s. Lấy 20 id trước (~3ms) rồi fetch
+    // entity theo id. getManyAndCount() cũng sinh COUNT(DISTINCT id) trên cả 4
+    // join -> 5.4s; count riêng với join tối thiểu + cache 60s.
+    const sortColumn =
+      sortField === 'quantity'
+        ? 'quantity'
+        : sortField === 'unit_price'
+          ? 'unit_price'
+          : 'hidden_at';
+
+    const idRows = await qb
+      .clone()
+      .select('details.id', 'id')
+      .distinct(true)
+      .addSelect(`details.${sortColumn}`, 'sortValue')
+      // Cùng chiều với sort chính để MySQL dùng backward index scan; trộn chiều
+      // (hidden_at DESC, id ASC) buộc filesort 609k dòng: 7.5s.
+      .addOrderBy('details.id', sortDirection === 'ASC' ? 'ASC' : 'DESC')
+      .limit(pageSize)
+      .offset((page - 1) * pageSize)
+      .getRawMany<{ id: number | string }>();
+
+    const ids = idRows.map((row) => Number(row.id));
+    const [rowsById, total] = await Promise.all([
+      ids.length
+        ? this.orderDetailRepository
+            .createQueryBuilder('details')
+            .leftJoinAndSelect('details.order', 'order')
+            .leftJoinAndSelect('details.product', 'product')
+            .leftJoinAndSelect('order.sale_by', 'sale_by')
+            .leftJoinAndSelect('sale_by.departments', 'sale_by_departments')
+            .where('details.id IN (:...ids)', { ids })
+            .getMany()
+        : Promise.resolve([] as OrderDetail[]),
+      this.countHiddenOrders(user, options, allowedUserIds),
+    ]);
+
+    const rowMap = new Map(rowsById.map((row) => [Number(row.id), row]));
+    const rows = ids
+      .map((id) => rowMap.get(id))
+      .filter((row): row is OrderDetail => !!row);
 
     // ✅ Apply blacklist filtering (giữ nguyên logic cũ)
     let filtered = rows;
@@ -2008,6 +1941,202 @@ export class OrderDetailService {
     }
 
     return { data: filtered, total, page, pageSize };
+  }
+
+  /**
+   * Áp filter dùng chung cho query lấy dữ liệu và query đếm, tránh lệch logic.
+   * Các alias (order/sale_by/sale_by_departments/product) phải tồn tại trên qb.
+   */
+  private applyHiddenFilters(
+    qb: SelectQueryBuilder<OrderDetail>,
+    options: HiddenOrderOptions | undefined,
+    allowedUserIds: number[] | null,
+    now: Date,
+  ): void {
+    if (allowedUserIds !== null) {
+      if (allowedUserIds.length === 0) {
+        qb.andWhere('1 = 0');
+      } else {
+        qb.andWhere('sale_by.id IN (:...userIds)', { userIds: allowedUserIds });
+      }
+    }
+
+    if (options?.search && options.search.trim()) {
+      const searchTerm = `%${options.search.trim()}%`;
+      qb.andWhere(
+        `(
+        CAST(details.id AS CHAR) LIKE :search
+        OR LOWER(details.raw_item) LIKE LOWER(:search)
+        OR LOWER(product.productName) LIKE LOWER(:search)
+        OR LOWER(details.customer_name) LIKE LOWER(:search)
+      )`,
+        { search: searchTerm },
+      );
+    }
+
+    const empIds = this.parseCsvIds(options?.employees);
+    if (empIds.length > 0) {
+      qb.andWhere('sale_by.id IN (:...empIds)', { empIds });
+    }
+
+    const deptIds = this.parseCsvIds(options?.departments);
+    if (deptIds.length > 0) {
+      qb.andWhere(
+        `
+        sale_by_departments.id IN (:...deptIds)
+        AND sale_by_departments.server_ip IS NOT NULL
+        AND TRIM(sale_by_departments.server_ip) <> ''
+      `,
+        { deptIds },
+      );
+    }
+
+    if (options?.status && options.status.trim()) {
+      const statusList = normalizeStatusCsv(options.status);
+      if (statusList.length > 0) {
+        qb.andWhere('details.status IN (:...statusList)', { statusList });
+      } else {
+        qb.andWhere('1 = 0');
+      }
+    }
+
+    if (options?.date && typeof options.date === 'string') {
+      const dateStr = options.date.trim();
+      if (this.isDateOnly(dateStr)) {
+        const startDate = new Date(dateStr);
+        const endDate = new Date(this.addOneDayDateOnly(dateStr));
+        endDate.setMilliseconds(endDate.getMilliseconds() - 1);
+        qb.andWhere('order.created_at BETWEEN :rangeStart AND :rangeEnd', {
+          rangeStart: startDate,
+          rangeEnd: endDate,
+        });
+      } else {
+        try {
+          const startDate = new Date(dateStr);
+          const endDate = new Date(dateStr);
+          endDate.setHours(23, 59, 59, 999);
+          qb.andWhere('order.created_at BETWEEN :rangeStart AND :rangeEnd', {
+            rangeStart: startDate,
+            rangeEnd: endDate,
+          });
+        } catch {
+          // ignore invalid date
+        }
+      }
+    } else if (options?.dateRange?.start && options?.dateRange?.end) {
+      const startDate = new Date(options.dateRange.start);
+      const endDate = new Date(options.dateRange.end);
+      endDate.setHours(23, 59, 59, 999);
+      qb.andWhere('order.created_at BETWEEN :rangeStart AND :rangeEnd', {
+        rangeStart: startDate,
+        rangeEnd: endDate,
+      });
+    }
+
+    if (options?.hiddenDateRange?.start && options?.hiddenDateRange?.end) {
+      const startDate = new Date(options.hiddenDateRange.start);
+      const endDate = new Date(options.hiddenDateRange.end);
+      endDate.setHours(23, 59, 59, 999);
+      const actualEndDate = endDate > now ? now : endDate;
+      qb.andWhere('details.hidden_at BETWEEN :hiddenStart AND :hiddenEnd', {
+        hiddenStart: startDate,
+        hiddenEnd: actualEndDate,
+      });
+    }
+  }
+
+  private parseCsvIds(csv?: string): number[] {
+    if (!csv) return [];
+    return csv
+      .split(',')
+      .map((s) => Number(s.trim()))
+      .filter((n) => !Number.isNaN(n));
+  }
+
+  /**
+   * Count tối giản cho danh sách đơn ẩn: chỉ join bảng mà filter đang dùng nên
+   * không có fan-out từ users_departments. Cache 60s.
+   */
+  private async countHiddenOrders(
+    user: any,
+    options: HiddenOrderOptions | undefined,
+    allowedUserIds: number[] | null,
+  ): Promise<number> {
+    const empIds = this.parseCsvIds(options?.employees);
+    const deptIds = this.parseCsvIds(options?.departments);
+    const hasSearch = !!(options?.search && options.search.trim());
+    const needsSaleBy =
+      allowedUserIds !== null || empIds.length > 0 || deptIds.length > 0;
+    const needsDepartments = deptIds.length > 0;
+    const hasCreatedFilter =
+      !!options?.date ||
+      !!(options?.dateRange?.start && options?.dateRange?.end);
+    const needsOrder = needsSaleBy || hasCreatedFilter;
+
+    const cacheKey = this.buildHiddenCountCacheKey(
+      user,
+      options,
+      allowedUserIds,
+    );
+    const cached = await this.redisService.get<number>(cacheKey);
+    if (cached !== null && cached !== undefined) return Number(cached);
+
+    const qb = this.orderDetailRepository
+      .createQueryBuilder('details')
+      .select(
+        needsDepartments ? 'COUNT(DISTINCT details.id)' : 'COUNT(*)',
+        'cnt',
+      )
+      .where('details.hidden_at IS NOT NULL');
+
+    if (needsOrder) qb.leftJoin('details.order', 'order');
+    if (needsSaleBy) qb.leftJoin('order.sale_by', 'sale_by');
+    if (needsDepartments)
+      qb.leftJoin('sale_by.departments', 'sale_by_departments');
+    if (hasSearch) qb.leftJoin('details.product', 'product');
+
+    // Không có join: ép covering index (hidden_at, status, deleted_at) để count
+    // đọc index thay vì đọc bảng — 1.6s -> ~100ms cho 609k đơn ẩn.
+    if (!needsOrder && !hasSearch) {
+      qb.useIndex('idx_order_details_hidden_status');
+    }
+
+    this.applyHiddenFilters(qb, options, allowedUserIds, new Date());
+
+    const row = await qb.getRawOne();
+    const total = Number(row?.cnt) || 0;
+    await this.redisService.set(cacheKey, total, 60);
+    return total;
+  }
+
+  private buildHiddenCountCacheKey(
+    user: any,
+    options: HiddenOrderOptions | undefined,
+    allowedUserIds: number[] | null,
+  ): string {
+    const signature = createHash('sha1')
+      .update(
+        JSON.stringify({
+          user: user?.id ?? null,
+          roles: (user?.roles || [])
+            .map((r: any) => (typeof r === 'string' ? r : r?.name))
+            .sort(),
+          departments: (user?.departments || []).map((d: any) => [
+            d?.id ?? null,
+            d?.server_ip ?? null,
+          ]),
+          allowedUserIds,
+          search: options?.search?.trim() || null,
+          employees: options?.employees || null,
+          departmentsFilter: options?.departments || null,
+          status: options?.status || null,
+          date: options?.date || null,
+          dateRange: options?.dateRange || null,
+          hiddenDateRange: options?.hiddenDateRange || null,
+        }),
+      )
+      .digest('hex');
+    return `order-details:hidden-count:v1:${signature}`;
   }
 
   /**
