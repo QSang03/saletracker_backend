@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { OrderCareService } from '../dist/order-care/order-care.service.js';
 
-const service = new OrderCareService({}, {}, {}, {}, {}, {}, {});
+const service = new OrderCareService({}, {}, {}, {}, {}, {}, {}, {});
 
 const multiProduct = {
   id: 1,

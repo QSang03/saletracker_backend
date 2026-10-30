@@ -15,10 +15,15 @@ function makeService(user, blacklist = new Map()) {
   const blacklistService = {
     getBlacklistedContactsForUsers: async () => blacklist,
   };
+  const redisService = {
+    get: async () => null,
+    set: async () => undefined,
+  };
   const service = new OrderCareStatsService(
     dataSource,
     orderService,
     blacklistService,
+    redisService,
   );
   return { service, calls };
 }
@@ -44,7 +49,8 @@ for (const scope of ['created', 'all']) {
       scope,
     });
     assert.equal(result.scope.isProject, isProject);
-    assert.equal(calls.length, 9);
+    // order stats gộp + care totals + care timeline + completions
+    assert.equal(calls.length, 4);
     calls.forEach(assertPlaceholders);
   }
 }

@@ -19,6 +19,8 @@ import {
 import { OrderStatusContextService } from '../order-details/order-status-context.service';
 import { OrderService } from '../orders/order.service';
 import { ZaloPythonApiClient } from '../customer-kpi/zalo-python-api.client';
+import { RedisService } from '../common/cache/redis.service';
+import { ORDER_CARE_STATS_CACHE_VERSION_KEY } from './order-care-stats.service';
 import {
   OrderCareBatch,
   OrderCareBatchStatus,
@@ -87,6 +89,7 @@ export class OrderCareService {
     private readonly orderStatusContextService: OrderStatusContextService,
     private readonly orderService: OrderService,
     private readonly pythonApi: ZaloPythonApiClient,
+    private readonly redisService: RedisService,
   ) {}
 
   async preview(user: any, dto: CarePreviewDto) {
@@ -244,6 +247,9 @@ export class OrderCareService {
     for (const group of preview.groups) {
       results.push(await this.sendAndRecordGroup(user, group, dto, content));
     }
+
+    // Số liệu thống kê chăm sóc vừa đổi -> bỏ cache overview của mọi user.
+    await this.redisService.set(ORDER_CARE_STATS_CACHE_VERSION_KEY, Date.now());
 
     return {
       request_id: dto.request_id,

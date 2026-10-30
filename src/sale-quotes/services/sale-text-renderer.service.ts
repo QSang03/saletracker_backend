@@ -78,7 +78,7 @@ export class SaleTextRendererService {
     }
 
     // Giống file gốc: quote/máy ráp chỉ nối zaloSuffix, không nối globalNote.
-    return this.appendFooter(body, null, options.zaloSuffix);
+    return this.appendFooter(body, options.globalNote, options.zaloSuffix);
   }
 
   /**

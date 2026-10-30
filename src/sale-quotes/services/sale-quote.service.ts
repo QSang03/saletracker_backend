@@ -435,10 +435,17 @@ export class SaleQuoteService {
         ? query.zaloSuffix
         : quote.zaloSuffix || settings.zaloSuffix || undefined;
 
-    const text = this.renderer.renderQuote(quote.items || [], {
+    const finalGlobalNote =
+      quote.globalNote?.trim() || settings.defaultGlobalNote?.trim() || null;
+    const finalItems = (quote.items || []).map((item) => ({
+      ...item,
+      warranty: item.warranty?.trim() || settings.defaultWarranty || null,
+      statusText: item.statusText?.trim() || settings.defaultStatusText || null,
+    }));
+    const text = this.renderer.renderQuote(finalItems, {
       mode,
       title: quote.title,
-      globalNote: quote.globalNote,
+      globalNote: finalGlobalNote,
       zaloSuffix: suffix,
       customerMarkupPercent: rules?.customerMarkupPercent ?? 10,
       customerRoundTo: rules?.roundTo ?? 1000,

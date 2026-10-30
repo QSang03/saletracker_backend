@@ -416,9 +416,16 @@ export class SaleQuickCaseService {
   async renderText(id: number, user: any, zaloSuffix?: string) {
     const quickCase = await this.findOne(id, user);
     const settings = await this.settingsService.getForUser(getUserId(user));
+    const finalGlobalNote =
+      quickCase.globalNote?.trim() || settings.defaultGlobalNote?.trim() || null;
+    const finalItems = (quickCase.items || []).map((item) => ({
+      ...item,
+      warranty: item.warranty?.trim() || settings.defaultWarranty || null,
+      statusText: item.statusText?.trim() || settings.defaultStatusText || null,
+    }));
     const text = this.renderer.renderQuickCase(
-      { title: quickCase.title, globalNote: quickCase.globalNote },
-      quickCase.items || [],
+      { title: quickCase.title, globalNote: finalGlobalNote },
+      finalItems,
       { zaloSuffix: zaloSuffix ?? settings.zaloSuffix ?? undefined },
     );
     return {

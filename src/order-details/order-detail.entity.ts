@@ -71,6 +71,16 @@ export enum ExtendReason {
 @Index('idx_conversation_duration', ['conversation_start', 'conversation_end'])
 // Fulltext index for raw_item search optimization
 @Index('ft_order_details_raw_item', ['raw_item'], { fulltext: true })
+// Covering index cho /order-care/stats/overview: deleted_at + created_at để lọc,
+// các cột còn lại nằm trong index nên MySQL không phải đọc bảng (3.9GB).
+@Index('idx_od_stats_cover', [
+  'deleted_at',
+  'created_at',
+  'order_id',
+  'status',
+  'care_count',
+  'is_project',
+])
 @Entity('order_details')
 export class OrderDetail {
   @PrimaryGeneratedColumn('increment', { type: 'bigint' })

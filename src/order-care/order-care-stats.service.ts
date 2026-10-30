@@ -1,6 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
+import { createHash } from 'crypto';
+import { RedisService } from '../common/cache/redis.service';
 import { OrderBlacklistService } from '../order-blacklist/order-blacklist.service';
 import { OrderService } from '../orders/order.service';
 import { CareStatsQueryDto } from './dto/order-care.dto';
@@ -11,13 +13,61 @@ interface DateRange {
   normalizedPeriod: 'day' | 'week' | 'month' | 'quarter' | 'custom';
 }
 
+interface OrderStatsRow {
+  status: string;
+  is_project: number | string;
+  care_count: number | string;
+  sale_by: number | string;
+  full_name: string | null;
+  bucket: string;
+  c: number | string;
+}
+
+interface CareTimelineRow {
+  bucket: string;
+  careActions: number | string;
+  ordersCared: number | string;
+  careBatches: number | string;
+}
+
+interface CompletionRow {
+  bucket: string;
+  completedFromCare: number | string;
+}
+
+interface TimelineEntry {
+  bucket: string;
+  orders: number;
+  unclosed: number;
+  cared: number;
+  careActions: number;
+  ordersCared: number;
+  careBatches: number;
+  completedFromCare: number;
+}
+
+/** Tăng key này khi có dữ liệu chăm sóc mới để bỏ cache thống kê. */
+export const ORDER_CARE_STATS_CACHE_VERSION_KEY = 'order-care:stats:version';
+
+const STATS_CACHE_PREFIX = 'order-care:stats:overview';
+const STATS_CACHE_TTL_SECONDS = 60;
+/**
+ * Bảng order_details gần 600k dòng/3.9GB. Optimizer của MySQL 8 ước lượng sai
+ * và chọn join từ orders rồi tra từng dòng (3.2s/query); ép covering index đưa
+ * mỗi query về ~100ms.
+ */
+const STATS_INDEX_HINT = 'FORCE INDEX (idx_od_stats_cover)';
+
 @Injectable()
 export class OrderCareStatsService {
+  private readonly logger = new Logger(OrderCareStatsService.name);
+
   constructor(
     @InjectDataSource()
     private readonly dataSource: DataSource,
     private readonly orderService: OrderService,
     private readonly orderBlacklistService: OrderBlacklistService,
+    private readonly redisService: RedisService,
   ) {}
 
   async getOverview(user: any, query: CareStatsQueryDto) {
@@ -35,131 +85,259 @@ export class OrderCareStatsService {
     const departments = this.parseCsvNumbers(query.departments);
     const blacklist = await this.resolveBlacklist(user, allowedUserIds);
 
+    const cacheKey = await this.buildCacheKey(
+      user,
+      query,
+      scope,
+      isProject,
+      allowedUserIds,
+      employees,
+      departments,
+      blacklist,
+    );
+    const cached = await this.redisService.get<any>(cacheKey);
+    if (cached) return cached;
+
+    const sharedFilterOptions = {
+      allowedUserIds,
+      employees,
+      departments,
+      blacklist,
+      isProject,
+    };
+
     const orderFilters = this.buildFilters({
+      ...sharedFilterOptions,
       dateColumn: scope === 'created' ? 'od.created_at' : undefined,
       from: range.from,
       to: range.to,
-      allowedUserIds,
-      employees,
-      departments,
-      blacklist,
-      isProject,
     });
-
     const careFilters = this.buildFilters({
+      ...sharedFilterOptions,
       dateColumn: 'ci.cared_at',
       from: range.from,
       to: range.to,
-      allowedUserIds,
-      employees,
-      departments,
-      blacklist,
-      isProject,
     });
+    // Query hoàn tất tự lọc theo sh.changed_at nên chỉ cần các filter chung.
+    const completionFilters = this.buildFilters(sharedFilterOptions);
 
-    const orderFrom = `
-      FROM order_details od
-      INNER JOIN orders o ON o.id = od.order_id
-      INNER JOIN users u ON u.id = o.sale_by
-    `;
+    const bucketFormat = this.isMonthlyBucket(range) ? '%Y-%m' : '%Y-%m-%d';
 
-    const careFrom = `
-      FROM order_care_items ci
-      INNER JOIN order_details od ON od.id = ci.order_detail_id
-      INNER JOIN orders o ON o.id = od.order_id
-      INNER JOIN users u ON u.id = o.sale_by
-    `;
-
-    const [totalsRows, careRows, byStatusRows, turnRows, bySaleRows, byProjectRows] =
+    const [orderRows, careTotalsRows, careTimelineRows, completionRows] =
       await Promise.all([
-        this.dataSource.query(
-          `SELECT
-             COUNT(*) AS orders,
-             SUM(CASE WHEN od.status IN ('quoted','cared') THEN 1 ELSE 0 END) AS unclosedOrders,
-             SUM(CASE WHEN od.status = 'quoted' THEN 1 ELSE 0 END) AS quotedOrders,
-             SUM(CASE WHEN od.care_count > 0 THEN 1 ELSE 0 END) AS caredOrders,
-             SUM(CASE WHEN od.status IN ('quoted','cared') AND od.care_count = 0 THEN 1 ELSE 0 END) AS uncaredUnclosedOrders,
-             SUM(CASE WHEN od.care_count > 0 AND od.status = 'completed' THEN 1 ELSE 0 END) AS completedFromCare,
-             SUM(CASE WHEN od.care_count > 0 AND od.status = 'rejected' THEN 1 ELSE 0 END) AS rejectedFromCare,
-             SUM(CASE WHEN od.status = 'completed' THEN 1 ELSE 0 END) AS completedOrders,
-             SUM(CASE WHEN od.status = 'demand' THEN 1 ELSE 0 END) AS demandOrders,
-             SUM(CASE WHEN od.status = 'rejected' THEN 1 ELSE 0 END) AS rejectedOrders,
-             SUM(od.care_count) AS careCountLifetime
-           ${orderFrom}
-           WHERE 1 = 1 ${orderFilters.sql}`,
-          orderFilters.params,
+        this.queryOrderStats(
+          `SELECT od.status AS status,
+                  od.is_project AS is_project,
+                  od.care_count AS care_count,
+                  o.sale_by AS sale_by,
+                  u.full_name AS full_name,
+                  DATE_FORMAT(od.created_at, ?) AS bucket,
+                  COUNT(*) AS c
+           FROM order_details od ${STATS_INDEX_HINT}
+           INNER JOIN orders o ON o.id = od.order_id
+           INNER JOIN users u ON u.id = o.sale_by
+           WHERE 1 = 1 ${orderFilters.sql}
+           GROUP BY od.status, od.is_project, od.care_count, o.sale_by, u.full_name, bucket`,
+          [bucketFormat, ...orderFilters.params],
         ),
         this.dataSource.query(
-          `SELECT
-             COUNT(*) AS careActions,
-             COUNT(DISTINCT ci.order_detail_id) AS ordersCaredInPeriod,
-             COUNT(DISTINCT ci.batch_id) AS careBatches
-           ${careFrom}
+          `SELECT COUNT(*) AS careActions,
+                  COUNT(DISTINCT ci.order_detail_id) AS ordersCaredInPeriod,
+                  COUNT(DISTINCT ci.batch_id) AS careBatches
+           FROM order_care_items ci
+           INNER JOIN order_details od ON od.id = ci.order_detail_id
+           INNER JOIN orders o ON o.id = od.order_id
            WHERE 1 = 1 ${careFilters.sql}`,
           careFilters.params,
         ),
         this.dataSource.query(
-          `SELECT od.status AS status,
-                  COUNT(*) AS count,
-                  SUM(od.care_count) AS careCount
-           ${orderFrom}
-           WHERE 1 = 1 ${orderFilters.sql}
-           GROUP BY od.status`,
-          orderFilters.params,
+          `SELECT DATE_FORMAT(ci.cared_at, ?) AS bucket,
+                  COUNT(*) AS careActions,
+                  COUNT(DISTINCT ci.order_detail_id) AS ordersCared,
+                  COUNT(DISTINCT ci.batch_id) AS careBatches
+           FROM order_care_items ci
+           INNER JOIN order_details od ON od.id = ci.order_detail_id
+           INNER JOIN orders o ON o.id = od.order_id
+           WHERE 1 = 1 ${careFilters.sql}
+           GROUP BY bucket
+           ORDER BY bucket ASC`,
+          [bucketFormat, ...careFilters.params],
         ),
         this.dataSource.query(
-          `SELECT od.care_count AS careCount, COUNT(*) AS orders
-           ${orderFrom}
-           WHERE 1 = 1 ${orderFilters.sql}
-           GROUP BY od.care_count
-           ORDER BY od.care_count ASC`,
-          orderFilters.params,
-        ),
-        this.dataSource.query(
-          `SELECT o.sale_by AS userId,
-                  u.full_name AS fullName,
-                  COUNT(*) AS orders,
-                  SUM(CASE WHEN od.status IN ('quoted','cared') THEN 1 ELSE 0 END) AS unclosed,
-                  SUM(CASE WHEN od.care_count > 0 THEN 1 ELSE 0 END) AS cared,
-                  SUM(od.care_count) AS careActions,
-                  SUM(CASE WHEN od.care_count > 0 AND od.status = 'completed' THEN 1 ELSE 0 END) AS completedFromCare
-           ${orderFrom}
-           WHERE 1 = 1 ${orderFilters.sql}
-           GROUP BY o.sale_by, u.full_name
-           ORDER BY cared DESC, orders DESC`,
-          orderFilters.params,
-        ),
-        this.dataSource.query(
-          `SELECT od.is_project AS isProject,
-                  COUNT(*) AS orders,
-                  SUM(CASE WHEN od.care_count > 0 THEN 1 ELSE 0 END) AS cared,
-                  SUM(od.care_count) AS careActions,
-                  SUM(CASE WHEN od.care_count > 0 AND od.status = 'completed' THEN 1 ELSE 0 END) AS completedFromCare
-           ${orderFrom}
-           WHERE 1 = 1 ${orderFilters.sql}
-           GROUP BY od.is_project`,
-          orderFilters.params,
+          `SELECT DATE_FORMAT(sh.changed_at, ?) AS bucket,
+                  COUNT(DISTINCT sh.order_detail_id) AS completedFromCare
+           FROM order_status_histories sh
+           INNER JOIN order_details od ON od.id = sh.order_detail_id
+           INNER JOIN orders o ON o.id = od.order_id
+           WHERE sh.to_status IN ('completed')
+             AND sh.changed_at BETWEEN ? AND ?
+             AND EXISTS (
+               SELECT 1 FROM order_care_items ci
+               WHERE ci.order_detail_id = od.id AND ci.cared_at <= sh.changed_at
+             )
+             ${completionFilters.sql}
+           GROUP BY bucket
+           ORDER BY bucket ASC`,
+          [bucketFormat, range.from, range.to, ...completionFilters.params],
         ),
       ]);
 
-    const totalsRow = totalsRows?.[0] || {};
-    const careRow = careRows?.[0] || {};
+    const result = this.assembleOverview(
+      range,
+      scope,
+      isProject,
+      orderRows || [],
+      careTotalsRows?.[0] || {},
+      careTimelineRows || [],
+      completionRows || [],
+    );
+
+    await this.redisService.set(cacheKey, result, STATS_CACHE_TTL_SECONDS);
+    return result;
+  }
+
+  private assembleOverview(
+    range: DateRange,
+    scope: string,
+    isProject: string,
+    orderRows: OrderStatsRow[],
+    careTotalsRow: any,
+    careTimelineRows: CareTimelineRow[],
+    completionRows: CompletionRow[],
+  ) {
     const totals = {
-      orders: this.num(totalsRow.orders),
-      unclosedOrders: this.num(totalsRow.unclosedOrders),
-      quotedOrders: this.num(totalsRow.quotedOrders),
-      caredOrders: this.num(totalsRow.caredOrders),
-      ordersCaredInPeriod: this.num(careRow.ordersCaredInPeriod),
-      uncaredUnclosedOrders: this.num(totalsRow.uncaredUnclosedOrders),
-      careActions: this.num(careRow.careActions),
-      careBatches: this.num(careRow.careBatches),
-      careCountLifetime: this.num(totalsRow.careCountLifetime),
-      completedOrders: this.num(totalsRow.completedOrders),
-      completedFromCare: this.num(totalsRow.completedFromCare),
-      rejectedFromCare: this.num(totalsRow.rejectedFromCare),
-      demandOrders: this.num(totalsRow.demandOrders),
-      rejectedOrders: this.num(totalsRow.rejectedOrders),
+      orders: 0,
+      unclosedOrders: 0,
+      quotedOrders: 0,
+      caredOrders: 0,
+      ordersCaredInPeriod: this.num(careTotalsRow.ordersCaredInPeriod),
+      uncaredUnclosedOrders: 0,
+      careActions: this.num(careTotalsRow.careActions),
+      careBatches: this.num(careTotalsRow.careBatches),
+      careCountLifetime: 0,
+      completedOrders: 0,
+      completedFromCare: 0,
+      rejectedFromCare: 0,
+      demandOrders: 0,
+      rejectedOrders: 0,
     };
+
+    const statusMap = new Map<
+      string,
+      { status: string; count: number; careCount: number }
+    >();
+    const saleMap = new Map<
+      number,
+      {
+        userId: number;
+        fullName: string | null;
+        orders: number;
+        unclosed: number;
+        cared: number;
+        careActions: number;
+        completedFromCare: number;
+      }
+    >();
+    const projectMap = new Map<
+      boolean,
+      {
+        isProject: boolean;
+        orders: number;
+        cared: number;
+        careActions: number;
+        completedFromCare: number;
+      }
+    >();
+    const turnMap = new Map<number, number>();
+    const timelineMap = new Map<string, TimelineEntry>();
+
+    for (const row of orderRows) {
+      const count = this.num(row.c);
+      const careCount = Math.max(0, this.num(row.care_count));
+      const status = row.status;
+      const isProjectRow = !!Number(row.is_project);
+      const userId = this.num(row.sale_by);
+      const careActions = count * careCount;
+      const isUnclosed = status === 'quoted' || status === 'cared';
+
+      totals.orders += count;
+      totals.careCountLifetime += careActions;
+      if (isUnclosed) totals.unclosedOrders += count;
+      if (status === 'quoted') totals.quotedOrders += count;
+      if (careCount > 0) totals.caredOrders += count;
+      if (isUnclosed && careCount === 0) totals.uncaredUnclosedOrders += count;
+      if (careCount > 0 && status === 'completed')
+        totals.completedFromCare += count;
+      if (careCount > 0 && status === 'rejected')
+        totals.rejectedFromCare += count;
+      if (status === 'completed') totals.completedOrders += count;
+      if (status === 'demand') totals.demandOrders += count;
+      if (status === 'rejected') totals.rejectedOrders += count;
+
+      const statusEntry = statusMap.get(status) || {
+        status,
+        count: 0,
+        careCount: 0,
+      };
+      statusEntry.count += count;
+      statusEntry.careCount += careActions;
+      statusMap.set(status, statusEntry);
+
+      let saleEntry = saleMap.get(userId);
+      if (!saleEntry) {
+        saleEntry = {
+          userId,
+          fullName: row.full_name || null,
+          orders: 0,
+          unclosed: 0,
+          cared: 0,
+          careActions: 0,
+          completedFromCare: 0,
+        };
+        saleMap.set(userId, saleEntry);
+      }
+      saleEntry.orders += count;
+      if (isUnclosed) saleEntry.unclosed += count;
+      if (careCount > 0) saleEntry.cared += count;
+      saleEntry.careActions += careActions;
+      if (careCount > 0 && status === 'completed')
+        saleEntry.completedFromCare += count;
+
+      let projectEntry = projectMap.get(isProjectRow);
+      if (!projectEntry) {
+        projectEntry = {
+          isProject: isProjectRow,
+          orders: 0,
+          cared: 0,
+          careActions: 0,
+          completedFromCare: 0,
+        };
+        projectMap.set(isProjectRow, projectEntry);
+      }
+      projectEntry.orders += count;
+      if (careCount > 0) projectEntry.cared += count;
+      projectEntry.careActions += careActions;
+      if (careCount > 0 && status === 'completed')
+        projectEntry.completedFromCare += count;
+
+      turnMap.set(careCount, (turnMap.get(careCount) || 0) + count);
+
+      const timelineEntry = this.getTimelineEntry(timelineMap, row.bucket);
+      timelineEntry.orders += count;
+      if (isUnclosed) timelineEntry.unclosed += count;
+      if (careCount > 0) timelineEntry.cared += count;
+    }
+
+    for (const row of careTimelineRows) {
+      const entry = this.getTimelineEntry(timelineMap, row.bucket);
+      entry.careActions = this.num(row.careActions);
+      entry.ordersCared = this.num(row.ordersCared);
+      entry.careBatches = this.num(row.careBatches);
+    }
+    for (const row of completionRows) {
+      const entry = this.getTimelineEntry(timelineMap, row.bucket);
+      entry.completedFromCare = this.num(row.completedFromCare);
+    }
 
     const careCoverageDenominator =
       totals.caredOrders + totals.uncaredUnclosedOrders;
@@ -169,15 +347,6 @@ export class OrderCareStatsService {
     const careConversionRate = totals.caredOrders
       ? totals.completedFromCare / totals.caredOrders
       : 0;
-
-    const timeline = await this.buildTimeline(
-      orderFrom,
-      careFrom,
-      orderFilters,
-      careFilters,
-      range,
-      scope,
-    );
 
     return {
       period: {
@@ -191,162 +360,108 @@ export class OrderCareStatsService {
         careCoverageRate,
         careConversionRate,
       },
-      byStatus: (byStatusRows || []).map((row: any) => ({
-        status: row.status,
-        count: this.num(row.count),
-        careCount: this.num(row.careCount),
-      })),
-      careTurnDistribution: this.buildTurnDistribution(turnRows || []),
-      timeline,
-      bySale: (bySaleRows || []).map((row: any) => ({
-        userId: this.num(row.userId),
-        fullName: row.fullName || null,
-        orders: this.num(row.orders),
-        unclosed: this.num(row.unclosed),
-        cared: this.num(row.cared),
-        careActions: this.num(row.careActions),
-        completedFromCare: this.num(row.completedFromCare),
-      })),
-      byProject: (byProjectRows || []).map((row: any) => ({
-        isProject: !!Number(row.isProject),
-        orders: this.num(row.orders),
-        cared: this.num(row.cared),
-        careActions: this.num(row.careActions),
-        completedFromCare: this.num(row.completedFromCare),
-      })),
+      byStatus: Array.from(statusMap.values()),
+      careTurnDistribution: this.buildTurnDistribution(turnMap),
+      timeline: Array.from(timelineMap.values()).sort((a, b) =>
+        a.bucket.localeCompare(b.bucket),
+      ),
+      bySale: Array.from(saleMap.values()).sort(
+        (a, b) => b.cared - a.cared || b.orders - a.orders,
+      ),
+      byProject: Array.from(projectMap.values()),
     };
   }
 
-  private async buildTimeline(
-    orderFrom: string,
-    careFrom: string,
-    orderFilters: { sql: string; params: any[] },
-    careFilters: { sql: string; params: any[] },
-    range: DateRange,
-    scope: string,
-  ) {
-    const isMonthlyBucket =
+  private getTimelineEntry(
+    map: Map<string, TimelineEntry>,
+    bucket: string,
+  ): TimelineEntry {
+    if (!map.has(bucket)) {
+      map.set(bucket, {
+        bucket,
+        orders: 0,
+        unclosed: 0,
+        cared: 0,
+        careActions: 0,
+        ordersCared: 0,
+        careBatches: 0,
+        completedFromCare: 0,
+      });
+    }
+    return map.get(bucket)!;
+  }
+
+  private isMonthlyBucket(range: DateRange): boolean {
+    return (
       range.normalizedPeriod === 'quarter' ||
       range.normalizedPeriod === 'month' ||
       (range.normalizedPeriod === 'custom' &&
-        range.to.getTime() - range.from.getTime() > 62 * 24 * 60 * 60 * 1000);
-    const bucketExpr = isMonthlyBucket
-      ? `DATE_FORMAT(od.created_at, '%Y-%m')`
-      : `DATE_FORMAT(od.created_at, '%Y-%m-%d')`;
-    const careBucketExpr = isMonthlyBucket
-      ? `DATE_FORMAT(ci.cared_at, '%Y-%m')`
-      : `DATE_FORMAT(ci.cared_at, '%Y-%m-%d')`;
-    const completionBucketExpr = isMonthlyBucket
-      ? `DATE_FORMAT(sh.changed_at, '%Y-%m')`
-      : `DATE_FORMAT(sh.changed_at, '%Y-%m-%d')`;
-
-    const [orders, care, completions] = await Promise.all([
-      this.dataSource.query(
-        `SELECT ${bucketExpr} AS bucket,
-                COUNT(*) AS orders,
-                SUM(CASE WHEN od.status IN ('quoted','cared') THEN 1 ELSE 0 END) AS unclosed,
-                SUM(CASE WHEN od.care_count > 0 THEN 1 ELSE 0 END) AS cared
-         ${orderFrom}
-         WHERE 1 = 1 ${orderFilters.sql}
-         GROUP BY bucket
-         ORDER BY bucket ASC`,
-        orderFilters.params,
-      ),
-      this.dataSource.query(
-        `SELECT ${careBucketExpr} AS bucket,
-                COUNT(*) AS careActions,
-                COUNT(DISTINCT ci.order_detail_id) AS ordersCared,
-                COUNT(DISTINCT ci.batch_id) AS careBatches
-         ${careFrom}
-         WHERE 1 = 1 ${careFilters.sql}
-         GROUP BY bucket
-         ORDER BY bucket ASC`,
-        careFilters.params,
-      ),
-      this.dataSource.query(
-        `SELECT ${completionBucketExpr} AS bucket,
-                COUNT(DISTINCT sh.order_detail_id) AS completedFromCare
-         FROM order_status_histories sh
-         INNER JOIN order_details od ON od.id = sh.order_detail_id
-         INNER JOIN orders o ON o.id = od.order_id
-         WHERE sh.to_status IN ('completed')
-           AND sh.changed_at BETWEEN ? AND ?
-           AND EXISTS (
-             SELECT 1 FROM order_care_items ci
-             WHERE ci.order_detail_id = od.id AND ci.cared_at <= sh.changed_at
-           )
-           ${this.removeDateFilter(orderFilters.sql)}
-         GROUP BY bucket
-         ORDER BY bucket ASC`,
-        [range.from, range.to, ...this.removeDateParams(orderFilters)],
-      ),
-    ]);
-
-    const map = new Map<
-      string,
-      {
-        bucket: string;
-        orders: number;
-        unclosed: number;
-        cared: number;
-        careActions: number;
-        ordersCared: number;
-        careBatches: number;
-        completedFromCare: number;
-      }
-    >();
-
-    const get = (bucket: string) => {
-      if (!map.has(bucket)) {
-        map.set(bucket, {
-          bucket,
-          orders: 0,
-          unclosed: 0,
-          cared: 0,
-          careActions: 0,
-          ordersCared: 0,
-          careBatches: 0,
-          completedFromCare: 0,
-        });
-      }
-      return map.get(bucket)!;
-    };
-
-    for (const row of orders || []) {
-      const item = get(row.bucket);
-      item.orders = this.num(row.orders);
-      item.unclosed = this.num(row.unclosed);
-      item.cared = this.num(row.cared);
-    }
-    for (const row of care || []) {
-      const item = get(row.bucket);
-      item.careActions = this.num(row.careActions);
-      item.ordersCared = this.num(row.ordersCared);
-      item.careBatches = this.num(row.careBatches);
-    }
-    for (const row of completions || []) {
-      const item = get(row.bucket);
-      item.completedFromCare = this.num(row.completedFromCare);
-    }
-
-    return Array.from(map.values()).sort((a, b) =>
-      a.bucket.localeCompare(b.bucket),
+        range.to.getTime() - range.from.getTime() > 62 * 24 * 60 * 60 * 1000)
     );
   }
 
-  private buildTurnDistribution(rows: any[]) {
-    const buckets = new Map<number, number>();
-    for (const row of rows) {
-      const careCount = Math.max(0, this.num(row.careCount));
-      const bucket = careCount >= 5 ? 5 : careCount;
-      buckets.set(bucket, (buckets.get(bucket) || 0) + this.num(row.orders));
+  private async queryOrderStats(sql: string, params: any[]) {
+    try {
+      return await this.dataSource.query(sql, params);
+    } catch (error) {
+      if (error?.errno !== 1176 && error?.code !== 'ER_KEY_DOES_NOT_EXIST') {
+        throw error;
+      }
+      // DB chưa có index (môi trường mới trước lần synchronize đầu tiên):
+      // chạy lại không hint để endpoint vẫn trả được số liệu.
+      this.logger.warn(
+        'idx_od_stats_cover chưa tồn tại, chạy lại query không FORCE INDEX',
+      );
+      return this.dataSource.query(sql.replace(STATS_INDEX_HINT, ''), params);
     }
+  }
 
+  private async buildCacheKey(
+    user: any,
+    query: CareStatsQueryDto,
+    scope: string,
+    isProject: string,
+    allowedUserIds: number[] | null,
+    employees: number[],
+    departments: number[],
+    blacklist: string[],
+  ): Promise<string> {
+    const version =
+      (await this.redisService.get<string>(
+        ORDER_CARE_STATS_CACHE_VERSION_KEY,
+      )) || '0';
+    const signature = createHash('sha1')
+      .update(
+        JSON.stringify({
+          user: user?.id ?? null,
+          period: query.period ?? null,
+          date: query.date ?? null,
+          dateFrom: query.dateFrom ?? null,
+          dateTo: query.dateTo ?? null,
+          isProject,
+          scope,
+          employees,
+          departments,
+          allowedUserIds,
+          blacklist,
+        }),
+      )
+      .digest('hex');
+    return `${STATS_CACHE_PREFIX}:${version}:${signature}`;
+  }
+
+  private buildTurnDistribution(buckets: Map<number, number>) {
     const result: { careCount: number; orders: number; isPlus: boolean }[] = [];
     for (let i = 0; i <= 5; i += 1) {
+      let orders = buckets.get(i) || 0;
+      if (i === 5) {
+        for (const [careCount, count] of buckets) {
+          if (careCount > 5) orders += count;
+        }
+      }
       result.push({
         careCount: i,
-        orders: buckets.get(i) || 0,
+        orders,
         isPlus: i === 5,
       });
     }
@@ -419,17 +534,6 @@ export class OrderCareStatsService {
     }
 
     return { sql: ` ${clauses.join(' ')}`, params };
-  }
-
-  private removeDateFilter(sql: string): string {
-    return sql.replace(/\s+AND\s+[a-z_.]+\s+BETWEEN\s+\?\s+AND\s+\?/i, '');
-  }
-
-  private removeDateParams(filters: { sql: string; params: any[] }): any[] {
-    const withoutDate = this.removeDateFilter(filters.sql);
-    if (withoutDate === filters.sql) return filters.params;
-    // Date params were pushed first in buildFilters (right after isProject)
-    return filters.params.slice(2);
   }
 
   private async resolveBlacklist(

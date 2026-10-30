@@ -13,6 +13,12 @@ import { OrderCareBatch } from './order-care-batch.entity';
 @Index('uq_order_care_items_batch_detail', ['batch_id', 'order_detail_id'], {
   unique: true,
 })
+// Covering index cho thống kê chăm sóc: lọc cared_at trong kỳ, đọc order_detail_id/batch_id từ index.
+@Index('idx_order_care_items_cared', [
+  'cared_at',
+  'order_detail_id',
+  'batch_id',
+])
 export class OrderCareItem {
   @PrimaryGeneratedColumn('increment', { type: 'bigint' })
   id: number;
