@@ -30,6 +30,19 @@ import { Request } from 'express';
 const XLSX_MIME =
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
+/**
+ * Shape tối thiểu của user mà AuthGuard gắn vào request sau khi giải JWT
+ * (roles/permissions do jwt.strategy trả về — helper getRoleNames/getPermissions
+ * tự xử lý cả dạng chuỗi lẫn object).
+ */
+interface AuthedRequest {
+  user?: {
+    id?: number;
+    roles?: unknown[];
+    permissions?: unknown[];
+  };
+}
+
 @Controller('products')
 export class ProductController {
   constructor(
@@ -91,7 +104,7 @@ export class ProductController {
       categoryId: Number.isFinite(categoryIdNum) ? categoryIdNum : undefined,
       page: pageNum,
       pageSize: pageSizeNum,
-      user: (req as any)?.user,
+      user: (req as unknown as AuthedRequest)?.user,
       pmCustomMode,
       pmPermissions,
       rolePermissions,
@@ -196,8 +209,8 @@ export class ProductController {
     @Body() body: { userId?: number; userIds?: number[] },
     @Req() req?: Request,
   ) {
-    const authedReq = req as unknown as { user?: { id?: number } };
-    const createdBy = Number(authedReq?.user?.id) || null;
+    const createdBy =
+      Number((req as unknown as AuthedRequest)?.user?.id) || null;
     const userIds = Array.isArray(body?.userIds)
       ? body.userIds
       : body?.userId

@@ -23,6 +23,27 @@ function escapeLikePattern(value: string): string {
   return value.replace(/[\\%_]/g, (char) => `\\${char}`);
 }
 
+/**
+ * Đọc mảng permission (vd "pm_brand_canon") của 1 role trong payload
+ * `rolePermissions` (JSON string từ query) → danh sách slug. Phần tử không
+ * phải chuỗi hoặc không mang prefix đúng bị bỏ qua.
+ */
+function toPermissionSlugs(
+  roleData: object,
+  field: 'brands' | 'categories',
+  prefix: 'pm_brand_' | 'pm_cat_',
+): string[] {
+  const raw = (roleData as Record<string, unknown>)[field];
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((item): item is string => typeof item === 'string')
+    .filter((item) => item.startsWith(prefix))
+    .map((item) =>
+      slugify(item.slice(prefix.length), { lower: true, strict: true }),
+    )
+    .filter(Boolean);
+}
+
 @Injectable()
 export class ProductService {
   constructor(
@@ -101,51 +122,41 @@ export class ProductService {
           // Parse rolePermissions từ query parameter thay vì từ database
           if (filter.rolePermissions) {
             try {
-              const rolePermissionsData = JSON.parse(filter.rolePermissions);
-              Object.entries(rolePermissionsData).forEach(
-                ([roleName, roleData]: [string, any]) => {
-                  const roleBrands = roleData.brands || [];
-                  const roleCategories = roleData.categories || [];
-
-                  // Convert permissions to slugs
-                  const brandSlugs: string[] = [];
-                  const categorySlugs: string[] = [];
-
-                  roleBrands.forEach((brand: string) => {
-                    if (brand.startsWith('pm_brand_')) {
-                      const slug = slugify(brand.replace('pm_brand_', ''), {
-                        lower: true,
-                        strict: true,
-                      });
-                      brandSlugs.push(slug);
-                    }
-                  });
-
-                  roleCategories.forEach((category: string) => {
-                    if (category.startsWith('pm_cat_')) {
-                      const slug = slugify(category.replace('pm_cat_', ''), {
-                        lower: true,
-                        strict: true,
-                      });
-                      categorySlugs.push(slug);
-                    }
-                  });
+              const rolePermissionsData: unknown = JSON.parse(
+                filter.rolePermissions,
+              );
+              if (
+                rolePermissionsData &&
+                typeof rolePermissionsData === 'object'
+              ) {
+                for (const roleData of Object.values(
+                  rolePermissionsData as Record<string, unknown>,
+                )) {
+                  if (!roleData || typeof roleData !== 'object') continue;
+                  const brandSlugs = toPermissionSlugs(
+                    roleData,
+                    'brands',
+                    'pm_brand_',
+                  );
+                  const categorySlugs = toPermissionSlugs(
+                    roleData,
+                    'categories',
+                    'pm_cat_',
+                  );
 
                   // Tổ hợp chỉ trong role này
                   if (categorySlugs.length > 0 && brandSlugs.length > 0) {
-                    categorySlugs.forEach((cat) => {
-                      brandSlugs.forEach((brand) => {
-                        const combination = `${cat}+${brand}`;
-                        allCombinations.push(combination);
-                      });
-                    });
+                    for (const cat of categorySlugs) {
+                      for (const brand of brandSlugs) {
+                        allCombinations.push(`${cat}+${brand}`);
+                      }
+                    }
                   } else {
                     // Role chỉ có 1 loại permission
-                    const singleSlugs = [...categorySlugs, ...brandSlugs];
-                    allSingleSlugs.push(...singleSlugs);
+                    allSingleSlugs.push(...categorySlugs, ...brandSlugs);
                   }
-                },
-              );
+                }
+              }
             } catch (error) {
               console.error(
                 '❌ [Product PM Custom Mode] Error parsing rolePermissions:',
