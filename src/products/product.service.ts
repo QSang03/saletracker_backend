@@ -15,6 +15,14 @@ import {
   getRoleNames,
 } from '../common/utils/user-permission.helper';
 
+/** Số token tối đa cho search — giống catalog báo giá. */
+const MAX_SEARCH_TOKENS = 8;
+
+/** Ký tự LIKE đặc biệt phải escape để search không bị lộ nghĩa. */
+function escapeLikePattern(value: string): string {
+  return value.replace(/[\\%_]/g, (char) => `\\${char}`);
+}
+
 @Injectable()
 export class ProductService {
   constructor(
@@ -30,8 +38,10 @@ export class ProductService {
 
   async findAll(filter?: {
     search?: string;
-    brands?: string[]; // brand names (lowercased)
+    brands?: string[]; // brand names (lowercased) — khớp chính xác, comma CSV
+    brand?: string; // brand LIKE %...% — như catalog báo giá
     categoryIds?: number[];
+    categoryId?: number; // 1 category duy nhất — như catalog báo giá
     page?: number;
     pageSize?: number;
     user?: any;
@@ -39,6 +49,12 @@ export class ProductService {
     pmPermissions?: string; // PM permissions từ frontend
     rolePermissions?: string; // Thông tin từng role từ frontend
     priceChanged?: boolean; // true = chỉ lấy sản phẩm từng đổi giá
+    hasWarranty?: boolean; // true = có bảo hành (import Excel); false = chưa có
+    inStock?: boolean; // true = còn hàng (stock > 0)
+    hasPrice?: boolean; // true = có giá hợp lệ; false = không có giá
+    minPrice?: number; // giá từ
+    maxPrice?: number; // giá đến
+    sort?: string; // price_asc|price_desc|stock_desc|updated_desc|name_asc|name_desc
   }) {
     const qb = this.productRepository
       .createQueryBuilder('p')
@@ -228,20 +244,90 @@ export class ProductService {
       );
     }
 
-    if (filter?.search && filter.search.trim().length > 0) {
-      // Normalize search for accent-insensitive contains
-      const s = filter.search.trim().toLowerCase();
-      // Use MySQL utf8_general_ci (or database default) by applying LOWER and LIKE
+    if (filter?.brand?.trim()) {
+      qb.andWhere('LOWER(b.name) LIKE :brand', {
+        brand: `%${escapeLikePattern(filter.brand.trim().toLowerCase())}%`,
+      });
+    }
+
+    if (filter?.categoryId) {
+      qb.andWhere('c.id = :categoryId', { categoryId: filter.categoryId });
+    }
+
+    if (filter?.inStock === true) {
+      qb.andWhere('COALESCE(p.stock, 0) > 0');
+    }
+
+    if (filter?.hasPrice === true) {
+      qb.andWhere('p.price IS NOT NULL AND p.price > 0');
+    } else if (filter?.hasPrice === false) {
+      qb.andWhere('(p.price IS NULL OR p.price <= 0)');
+    }
+
+    if (filter?.minPrice !== undefined) {
+      qb.andWhere('p.price >= :minPrice', { minPrice: filter.minPrice });
+    }
+    if (filter?.maxPrice !== undefined) {
+      qb.andWhere('p.price <= :maxPrice', { maxPrice: filter.maxPrice });
+    }
+
+    // Bảo hành: chỉ từ import Excel — lọc "có / chưa có bảo hành".
+    if (filter?.hasWarranty === true) {
+      qb.andWhere('p.warranty_months IS NOT NULL');
+    } else if (filter?.hasWarranty === false) {
+      qb.andWhere('p.warranty_months IS NULL');
+    }
+
+    // Sản phẩm từng đổi giá (cronjob hoặc sửa tay): previous_price != price.
+    if (filter?.priceChanged === true) {
       qb.andWhere(
-        `(
-          LOWER(p.product_name) LIKE :kw
-          OR LOWER(p.product_code) LIKE :kw
-          OR LOWER(b.name) LIKE :kw
-          OR LOWER(c.cat_name) LIKE :kw
-          OR LOWER(p.description) LIKE :kw
-        )`,
-        { kw: `%${s}%` },
+        '(p.previous_price IS NOT NULL AND p.price_changed_at IS NOT NULL AND p.previous_price <> p.price)',
       );
+    }
+
+    // Search theo token (giống catalog báo giá): mỗi token phải khớp ít nhất
+    // một trường, xếp hạng theo độ khớp tên/mã.
+    const searchPhrase = filter?.search?.trim().toLowerCase() ?? '';
+    const tokens = searchPhrase
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, MAX_SEARCH_TOKENS);
+
+    if (tokens.length > 0) {
+      const relevanceParts: string[] = [];
+      tokens.forEach((token, index) => {
+        const key = `keyword${index}`;
+        qb.andWhere(
+          `(
+            LOWER(p.product_name) LIKE :${key}
+            OR LOWER(p.product_code) LIKE :${key}
+            OR LOWER(b.name) LIKE :${key}
+            OR LOWER(c.cat_name) LIKE :${key}
+            OR LOWER(p.description) LIKE :${key}
+          )`,
+          { [key]: `%${escapeLikePattern(token)}%` },
+        );
+
+        relevanceParts.push(
+          `(CASE WHEN LOWER(p.product_name) LIKE :${key} THEN 10 ELSE 0 END)`,
+          `(CASE WHEN LOWER(p.product_code) LIKE :${key} THEN 8 ELSE 0 END)`,
+        );
+      });
+
+      const likePhrase = escapeLikePattern(searchPhrase);
+      relevanceParts.push(
+        '(CASE WHEN LOWER(p.product_name) = :phraseExact THEN 50 ELSE 0 END)',
+        '(CASE WHEN LOWER(p.product_code) = :phraseExact THEN 50 ELSE 0 END)',
+        '(CASE WHEN LOWER(p.product_name) LIKE :phrasePrefix THEN 20 ELSE 0 END)',
+      );
+
+      qb.addSelect(
+        `(${relevanceParts.join(' + ')})`,
+        'relevance_score',
+      ).setParameters({
+        phraseExact: searchPhrase,
+        phrasePrefix: `${likePhrase}%`,
+      });
     }
 
     // Pagination
@@ -249,7 +335,28 @@ export class ProductService {
     const pageSize = Math.max(1, Math.min(Number(filter?.pageSize) || 10, 200));
     qb.skip((page - 1) * pageSize).take(pageSize);
 
-    qb.orderBy('p.id', 'ASC');
+    // Sắp xếp: có search → relevance trước; `sort` chọn cột phụ (mặc định id
+    // ASC như cũ để không phá FE hiện tại).
+    const sortOptions: Record<string, [string, 'ASC' | 'DESC']> = {
+      price_asc: ['p.price', 'ASC'],
+      price_desc: ['p.price', 'DESC'],
+      stock_desc: ['p.stock', 'DESC'],
+      updated_desc: ['p.updatedAt', 'DESC'],
+      name_asc: ['p.productName', 'ASC'],
+      name_desc: ['p.productName', 'DESC'],
+    };
+    const [sortColumn, sortDirection] = sortOptions[filter?.sort ?? ''] ?? [
+      'p.id',
+      'ASC',
+    ];
+
+    if (tokens.length > 0) {
+      qb.orderBy('relevance_score', 'DESC');
+      qb.addOrderBy(sortColumn, sortDirection);
+    } else {
+      qb.orderBy(sortColumn, sortDirection);
+    }
+    qb.addOrderBy('p.id', 'ASC');
 
     const [rows, total] = await qb.getManyAndCount();
     return { data: rows, total, page, pageSize };

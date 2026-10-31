@@ -42,13 +42,21 @@ export class ProductController {
   findAll(
     @Query('search') search?: string,
     @Query('brands') brandsCsv?: string, // comma-separated brand names
+    @Query('brand') brand?: string, // LIKE %...%
     @Query('categoryIds') categoryIdsCsv?: string, // comma-separated category IDs
+    @Query('categoryId') categoryId?: string, // single category ID
     @Query('page') page?: string,
     @Query('pageSize') pageSize?: string,
     @Query('pmCustomMode') pmCustomMode?: string, // Thêm parameter cho chế độ PM
     @Query('pmPermissions') pmPermissions?: string, // Thêm parameter cho PM permissions
     @Query('rolePermissions') rolePermissions?: string, // Thêm parameter cho thông tin từng role
     @Query('priceChanged') priceChanged?: string, // 'true' = chỉ sản phẩm từng đổi giá
+    @Query('hasWarranty') hasWarranty?: string, // 'true'/'false' = có/chưa có bảo hành
+    @Query('inStock') inStock?: string, // 'true' = còn hàng
+    @Query('hasPrice') hasPrice?: string, // 'true'/'false' = có/không có giá
+    @Query('minPrice') minPrice?: string, // giá từ
+    @Query('maxPrice') maxPrice?: string, // giá đến
+    @Query('sort') sort?: string, // price_asc|price_desc|stock_desc|updated_desc|name_asc|name_desc
     @Req() req?: Request,
   ) {
     const brands = brandsCsv
@@ -65,11 +73,22 @@ export class ProductController {
       : undefined;
     const pageNum = page ? Number(page) : undefined;
     const pageSizeNum = pageSize ? Number(pageSize) : undefined;
+    const categoryIdNum = categoryId ? Number(categoryId) : undefined;
+    const minPriceNum =
+      minPrice !== undefined && minPrice !== '' && !isNaN(Number(minPrice))
+        ? Number(minPrice)
+        : undefined;
+    const maxPriceNum =
+      maxPrice !== undefined && maxPrice !== '' && !isNaN(Number(maxPrice))
+        ? Number(maxPrice)
+        : undefined;
 
     return this.productService.findAll({
       search,
       brands,
+      brand,
       categoryIds,
+      categoryId: Number.isFinite(categoryIdNum) ? categoryIdNum : undefined,
       page: pageNum,
       pageSize: pageSizeNum,
       user: (req as any)?.user,
@@ -77,6 +96,18 @@ export class ProductController {
       pmPermissions,
       rolePermissions,
       priceChanged: priceChanged === 'true',
+      hasWarranty:
+        hasWarranty === 'true'
+          ? true
+          : hasWarranty === 'false'
+            ? false
+            : undefined,
+      inStock: inStock === 'true' ? true : undefined,
+      hasPrice:
+        hasPrice === 'true' ? true : hasPrice === 'false' ? false : undefined,
+      minPrice: minPriceNum,
+      maxPrice: maxPriceNum,
+      sort,
     });
   }
 
