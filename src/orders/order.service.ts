@@ -2116,6 +2116,8 @@ export class OrderService {
     total: number;
     page: number;
     pageSize: number;
+    customerCount: number;
+    saleCount: number;
   }> {
     // API này dành cho manager-order: PM user được xem như user thường (chỉ lấy đơn hàng của chính họ)
     return this.findAllPaginatedInternal(filters, false);
@@ -3032,6 +3034,8 @@ export class OrderService {
     total: number;
     page: number;
     pageSize: number;
+    customerCount: number;
+    saleCount: number;
   }> {
     const {
       page,
@@ -3161,7 +3165,7 @@ export class OrderService {
 
     if (allowedUserIds !== null) {
       if (allowedUserIds.length === 0) {
-        return { data: [], total: 0, page, pageSize };
+        return { data: [], total: 0, page, pageSize, customerCount: 0, saleCount: 0 };
       }
       qb.andWhere('sale_by.id IN (:...userIds)', { userIds: allowedUserIds });
     }
@@ -3191,7 +3195,7 @@ export class OrderService {
           .map((p) => p.replace('pm_cat_', '').trim())
           .filter(Boolean);
         if (brandSlugs.length === 0 && catSlugs.length === 0) {
-          return { data: [], total: 0, page, pageSize }; // Không có quyền riêng rõ ràng
+          return { data: [], total: 0, page, pageSize, customerCount: 0, saleCount: 0 }; // Không có quyền riêng rõ ràng
         }
         // Map slugs -> ids
         const allBrands = await this.brandRepository.find({
@@ -3215,7 +3219,7 @@ export class OrderService {
           )
           .map((c) => c.id);
         if (brandIds.length === 0 && categoryIds.length === 0) {
-          return { data: [], total: 0, page, pageSize };
+          return { data: [], total: 0, page, pageSize, customerCount: 0, saleCount: 0 };
         }
         if (brandIds.length > 0 && categoryIds.length > 0) {
           qb.andWhere(
@@ -3771,7 +3775,31 @@ export class OrderService {
     //   return d;
     // });
 
-    const total = await qb.getCount();
+    // ✅ OPTIMIZED: 1 aggregate query duy nhất thay cho qb.getCount() cũ và
+    // request /order-details/customer-count riêng từ frontend (trước đây phải
+    // hydrate toàn bộ order_details vào memory chỉ để đếm unique khách hàng).
+    // Dùng lại toàn bộ WHERE đã build phía trên (phân quyền, blacklist bằng
+    // generated column meta_customer_id, hidden_at, warningLevel qua expiry_days...)
+    // nên badge số khách hàng/nhân viên luôn khớp với dữ liệu đang hiển thị.
+    // CASE giữ lại 2 điều kiện của getCustomerCount cũ: customer_name không rỗng
+    // và loại đơn đã ẩn (hidden_at IS NULL) kể cả khi includeHidden được bật.
+    const aggQb = qb.clone().orderBy(); // orderBy() không đối số = clear ORDER BY (aggregate không cần sort)
+    const customerPairExpr =
+      "CASE WHEN details.customer_name IS NOT NULL AND TRIM(details.customer_name) <> '' AND details.hidden_at IS NULL " +
+      "THEN CONCAT(TRIM(details.customer_name), '__', COALESCE(sale_by.id, 'null')) END";
+    const saleCountExpr =
+      "CASE WHEN details.customer_name IS NOT NULL AND TRIM(details.customer_name) <> '' AND details.hidden_at IS NULL " +
+      "THEN sale_by.id END";
+    const rawAgg: any = await aggQb
+      .select('COUNT(DISTINCT(details.id))', 'total')
+      .addSelect(`COUNT(DISTINCT(${customerPairExpr}))`, 'customerCount')
+      .addSelect(`COUNT(DISTINCT(${saleCountExpr}))`, 'saleCount')
+      .getRawOne();
+
+    const total = Number(rawAgg?.total ?? 0);
+    const customerCount = Number(rawAgg?.customerCount ?? 0);
+    const saleCount = Number(rawAgg?.saleCount ?? 0);
+
     qb.skip(skip).take(pageSize);
 
     const rawAndEntities: any = await qb.getRawAndEntities();
@@ -3816,7 +3844,14 @@ export class OrderService {
       return this.decorateOrderDetailRow(e);
     });
 
-    return { data: mappedData as any, total, page, pageSize };
+    return {
+      data: mappedData as any,
+      total,
+      page,
+      pageSize,
+      customerCount,
+      saleCount,
+    };
   }
 
   async findAllPaginatedForPMWithoutProduct(filters: OrderFilters): Promise<{

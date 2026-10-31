@@ -67,6 +67,8 @@ export class OrderController {
     total: number;
     page: number;
     pageSize: number;
+    customerCount: number;
+    saleCount: number;
   }> {
     const pageNum = Math.max(1, parseInt(page, 10) || 1);
     const pageSizeNum = Math.min(
