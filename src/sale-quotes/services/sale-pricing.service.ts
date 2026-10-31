@@ -19,10 +19,10 @@ export class SalePricingService {
   }
 
   /**
-   * Giá bán đề xuất từ giá vốn:
+   * Tính giá bán theo quy tắc cấu hình (áp dụng cho Tab Báo Giá Theo Yêu Cầu):
    * - cost <= 0 hoặc null -> null (hiển thị CALL)
    * - cost < lowPriceThreshold -> cost + lowPriceMargin
-   * - còn lại -> cost * (1 + highPriceMarkupPercent / 100)
+   * - cost >= lowPriceThreshold -> cost * (1 + highPriceMarkupPercent / 100)
    * - làm tròn theo roundTo
    */
   suggestSalePrice(
@@ -33,31 +33,13 @@ export class SalePricingService {
     if (!Number.isFinite(cost) || cost <= 0) {
       return null;
     }
-    const effective = {
-      ...(rules || {}),
-    } as Partial<PricingRules>;
-
-    const threshold = Number(effective.lowPriceThreshold ?? 1_000_000);
-    const margin = Number(effective.lowPriceMargin ?? 20_000);
-    const percent = Number(effective.highPriceMarkupPercent ?? 2);
-    const roundTo = Number(effective.roundTo ?? 1_000);
-
-    const raw =
-      cost < threshold ? cost + margin : cost * (1 + percent / 100);
-    return this.roundTo(raw, roundTo);
-  }
-
-  customerPrice(
-    salePrice?: number | null,
-    rules?: Partial<PricingRules> | null,
-  ): number | null {
-    const price = Number(salePrice);
-    if (!Number.isFinite(price) || price <= 0) {
-      return null;
-    }
-    const percent = Number(rules?.customerMarkupPercent ?? 10);
+    const threshold = Number(rules?.lowPriceThreshold ?? 1_000_000);
+    const margin = Number(rules?.lowPriceMargin ?? 20_000);
+    const percent = Number(rules?.highPriceMarkupPercent ?? 2);
     const roundTo = Number(rules?.roundTo ?? 1_000);
-    return this.roundTo(price * (1 + percent / 100), roundTo);
+
+    const raw = cost < threshold ? cost + margin : cost * (1 + percent / 100);
+    return this.roundTo(raw, roundTo);
   }
 
   marginAmount(
@@ -83,6 +65,4 @@ export class SalePricingService {
     }
     return Number((((sale - cost) / cost) * 100).toFixed(2));
   }
-
-
 }

@@ -131,7 +131,7 @@ export class SaleResponseService {
 
     if (dto.userId !== user.id) {
       throw new ForbiddenException(
-        'Chỉ chủ sở hữu khoảng chờ mới được chặn khách',
+        'Chỉ chủ sở hữu lượt trao đổi mới được chặn khách',
       );
     }
 
@@ -145,7 +145,7 @@ export class SaleResponseService {
     });
     if (intervalCount === 0) {
       throw new NotFoundException(
-        'Không tìm thấy khoảng chờ của khách này với sale đã chọn',
+        'Không tìm thấy lượt trao đổi của khách này với sale đã chọn',
       );
     }
 

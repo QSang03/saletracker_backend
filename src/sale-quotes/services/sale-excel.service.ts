@@ -20,7 +20,6 @@ export class SaleExcelService {
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('BaoGia');
     const items = (quote.items || []) as any[];
-    const rules = quote.pricingRules || {};
     const isCustomer = type === 'customer';
 
     const headers = isCustomer
@@ -125,9 +124,7 @@ export class SaleExcelService {
         item.unitPrice !== null && item.unitPrice !== undefined
           ? Number(item.unitPrice)
           : null;
-      const price = isCustomer
-        ? this.pricingService.customerPrice(basePrice, rules)
-        : basePrice;
+      const price = basePrice;
       const lineTotal = price !== null ? price * quantity : null;
       if (lineTotal !== null) {
         total += lineTotal;
@@ -217,7 +214,6 @@ export class SaleExcelService {
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('CauHinh');
     const items = (build.items || []) as any[];
-    const rules = build.pricingRules || {};
     const isCustomer = type === 'customer';
     const headers = isCustomer
       ? ['STT', 'MÃ HT', 'P/N', 'LINH KIỆN', 'BH', 'ĐƠN GIÁ', 'SL', 'THÀNH TIỀN']
@@ -275,9 +271,7 @@ export class SaleExcelService {
         item.salePrice !== null && item.salePrice !== undefined
           ? Number(item.salePrice)
           : null;
-      const price = isCustomer
-        ? this.pricingService.customerPrice(basePrice, rules)
-        : basePrice;
+      const price = basePrice;
       const lineTotal = price !== null ? price * quantity : null;
       if (lineTotal !== null) {
         total += lineTotal;
@@ -370,7 +364,6 @@ export class SaleExcelService {
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('BaoGiaNhanh');
     const items = (quickCase.items || []) as any[];
-    const rules = quickCase.pricingRules || {};
     const isCustomer = type === 'customer';
     const headers = isCustomer
       ? ['STT', 'YÊU CẦU', 'DIỄN GIẢI / SẢN PHẨM', 'BH', 'ĐƠN GIÁ', 'SL', 'THÀNH TIỀN']
@@ -429,19 +422,18 @@ export class SaleExcelService {
         item.salePrice !== null && item.salePrice !== undefined
           ? Number(item.salePrice)
           : null;
-      const price = isCustomer
-        ? this.pricingService.customerPrice(basePrice, rules)
-        : basePrice;
+      const price = basePrice;
       const lineTotal = price !== null ? price * quantity : null;
       if (lineTotal !== null) {
         total += lineTotal;
       }
-      const description =
-        item.description ||
-        item.requestText ||
-        (item.matchType === 'replacement' || item.matchType === 'equivalent'
-          ? `(${item.matchType === 'replacement' ? 'Thay thế' : 'Tương đương'}) ${item.requestText || ''}`
-          : '');
+      const isReplacementOrEquiv = item.matchType === 'replacement' || item.matchType === 'equivalent';
+      const typeTag = item.matchType === 'replacement' ? '(Thay thế)' : item.matchType === 'equivalent' ? '(Tương đương)' : '';
+      let baseDesc = (item.description || item.requestText || '').trim();
+      if (typeTag && !baseDesc.includes(typeTag)) {
+        baseDesc = `${typeTag} ${baseDesc}`;
+      }
+      const description = baseDesc;
 
       const row = sheet.getRow(rowIndex);
       row.values = isCustomer
@@ -477,6 +469,19 @@ export class SaleExcelService {
           cell.numFmt = '#,##0';
         }
       });
+      if (isReplacementOrEquiv) {
+        row.eachCell({ includeEmpty: true }, (cell) => {
+          cell.fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: 'FFFFE4E6' },
+          };
+          cell.font = {
+            color: { argb: 'FFDC2626' },
+            bold: true,
+          };
+        });
+      }
       rowIndex += 1;
     });
 

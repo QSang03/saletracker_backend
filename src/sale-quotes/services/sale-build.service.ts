@@ -27,6 +27,7 @@ import {
 } from '../utils/entity-access.util';
 import {
   DEFAULT_BUILD_FOLDER,
+  PricingRules,
   DEFAULT_STATUS_TEXT,
 } from '../sale-quote.constants';
 import { normalizeStatusText, sumLineTotals } from '../utils/text.util';
@@ -114,7 +115,20 @@ export class SaleBuildService {
     if (query.search?.trim()) {
       const keyword = `%${query.search.trim().toLowerCase()}%`;
       qb.andWhere(
-        '(LOWER(b.name) LIKE :keyword OR LOWER(b.description) LIKE :keyword)',
+        `(
+          LOWER(b.name) LIKE :keyword 
+          OR LOWER(b.description) LIKE :keyword 
+          OR EXISTS (
+            SELECT 1 FROM sale_build_items sbi 
+            WHERE sbi.build_id = b.id 
+            AND (
+              LOWER(sbi.name) LIKE :keyword 
+              OR LOWER(sbi.description) LIKE :keyword 
+              OR LOWER(sbi.product_code) LIKE :keyword 
+              OR LOWER(sbi.pn) LIKE :keyword
+            )
+          )
+        )`,
         { keyword },
       );
     }
@@ -139,17 +153,9 @@ export class SaleBuildService {
     }
     this.assertCanRead(build, user);
 
-    const rules = await this.settingsService.getEffectiveRules(getUserId(user));
     return {
       ...build,
-      items: (build.items || []).map((item) => ({
-        ...item,
-        customerPrice: this.pricingService.customerPrice(
-          item.salePrice,
-          rules,
-        ),
-      })),
-      pricingRules: rules,
+      items: build.items || [],
     };
   }
 
@@ -293,10 +299,7 @@ export class SaleBuildService {
       if (dto.name === undefined) item.name = product.productName;
       if (dto.costPrice === undefined) item.costPrice = product.price ?? null;
       if (dto.salePrice === undefined) {
-        item.salePrice = this.pricingService.suggestSalePrice(
-          item.costPrice,
-          await this.settingsService.getEffectiveRules(getUserId(user)),
-        );
+        item.salePrice = item.costPrice;
       }
     }
 
@@ -393,6 +396,7 @@ export class SaleBuildService {
       includeSpecs,
       specs: build.specs,
       zaloSuffix: zaloSuffix ?? settings.zaloSuffix ?? undefined,
+      priceLabel: settings.priceLabel,
     });
     return {
       text,
@@ -444,7 +448,7 @@ export class SaleBuildService {
     dto: BuildItemInputDto,
     index: number,
     settings: Awaited<ReturnType<SaleSettingsService['getForUser']>>,
-    rules: any,
+    rules: PricingRules,
     products: Map<number, Product>,
   ): SaleBuildItem {
     const product = dto.productId
@@ -464,7 +468,7 @@ export class SaleBuildService {
     const salePrice =
       dto.salePrice !== undefined
         ? dto.salePrice
-        : this.pricingService.suggestSalePrice(costPrice, rules);
+        : costPrice;
     const quantity = Math.max(1, Number(dto.quantity) || 1);
     const statusText =
       normalizeStatusText(dto.statusText ?? settings.defaultStatusText) ||

@@ -1,3 +1,4 @@
+import { PricingRules } from '../sale-quote.constants';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
@@ -133,7 +134,6 @@ export class SaleCatalogService {
       total,
       page,
       pageSize,
-      pricingRules: rules,
     };
   }
 
@@ -170,7 +170,6 @@ export class SaleCatalogService {
     const productMap = new Map(products.map((product) => [product.id, product]));
 
     return {
-      pricingRules: rules,
       items: dto.items.map((item) => {
         const product = item.productId
           ? productMap.get(Number(item.productId))
@@ -179,18 +178,13 @@ export class SaleCatalogService {
           item.costPrice !== undefined && item.costPrice !== null
             ? Number(item.costPrice)
             : product?.price ?? null;
-        const salePrice = this.pricingService.suggestSalePrice(costPrice, rules);
-        const customerPrice = this.pricingService.customerPrice(
-          salePrice,
-          rules,
-        );
+        const salePrice = costPrice;
         return {
           productId: product?.id ?? item.productId ?? null,
           productCode: product?.productCode ?? null,
           productName: product?.productName ?? null,
           costPrice,
           suggestedPrice: salePrice,
-          customerPrice,
           marginAmount: this.pricingService.marginAmount(salePrice, costPrice),
           marginPercent: this.pricingService.marginPercent(salePrice, costPrice),
           quantity: Math.max(1, Number(item.quantity) || 1),
@@ -199,15 +193,12 @@ export class SaleCatalogService {
     };
   }
 
-  private mapProduct(product: Product, rules: any, includeDescription: boolean) {
+  private mapProduct(product: Product, rules: PricingRules, includeDescription: boolean) {
     const costPrice =
       product.price === null || product.price === undefined
         ? null
         : Number(product.price);
-    const suggestedPrice = this.pricingService.suggestSalePrice(
-      costPrice,
-      rules,
-    );
+    const suggestedPrice = costPrice;
     const descriptionText = stripHtml(product.description);
 
     return {

@@ -35,12 +35,6 @@ export class PricingRulesDto {
   @IsOptional()
   @Type(() => Number)
   @IsNumber()
-  @Min(0)
-  customerMarkupPercent?: number;
-
-  @IsOptional()
-  @Type(() => Number)
-  @IsNumber()
   @Min(1)
   roundTo?: number;
 }
@@ -60,6 +54,11 @@ export class UpdateSettingsDto {
   @IsString()
   @MaxLength(255)
   defaultStatusText?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  priceLabel?: string;
 
   @IsOptional()
   @IsString()

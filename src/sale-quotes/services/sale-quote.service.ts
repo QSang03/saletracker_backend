@@ -1,3 +1,4 @@
+import { PricingRules } from '../sale-quote.constants';
 import {
   BadRequestException,
   Injectable,
@@ -154,24 +155,7 @@ export class SaleQuoteService {
     }
     this.assertCanRead(quote, user);
 
-    const rules = await this.settingsService.getEffectiveRules(
-      getUserId(user),
-    );
-    const items = (quote.items || []).map((item) => ({
-      ...item,
-      customerPrice: this.pricingService.customerPrice(item.unitPrice, rules),
-    }));
-    const customerTotal = items.reduce((sum, item) => {
-      const price = Number(item.customerPrice ?? 0);
-      return price > 0 ? sum + price * Number(item.quantity || 1) : sum;
-    }, 0);
-
-    return {
-      ...quote,
-      items,
-      customerTotal,
-      pricingRules: rules,
-    };
+    return quote;
   }
 
   async update(id: number, dto: UpdateQuoteDto, user: any) {
@@ -334,13 +318,7 @@ export class SaleQuoteService {
         item.costPrice = product.price ?? null;
       }
       if (dto.unitPrice === undefined) {
-        const rules = await this.settingsService.getEffectiveRules(
-          getUserId(user),
-        );
-        item.unitPrice = this.pricingService.suggestSalePrice(
-          item.costPrice,
-          rules,
-        );
+        item.unitPrice = item.costPrice;
       }
     }
 
@@ -427,7 +405,6 @@ export class SaleQuoteService {
     query: { mode?: string; zaloSuffix?: string } = {},
   ) {
     const quote = await this.findOne(id, user);
-    const rules = quote.pricingRules;
     const mode = query.mode || quote.mode || 'standard';
     const settings = await this.settingsService.getForUser(getUserId(user));
     const suffix =
@@ -447,8 +424,7 @@ export class SaleQuoteService {
       title: quote.title,
       globalNote: finalGlobalNote,
       zaloSuffix: suffix,
-      customerMarkupPercent: rules?.customerMarkupPercent ?? 10,
-      customerRoundTo: rules?.roundTo ?? 1000,
+      priceLabel: settings.priceLabel,
     });
 
     return {
@@ -478,7 +454,7 @@ export class SaleQuoteService {
     dto: QuoteItemInputDto,
     index: number,
     settings: Awaited<ReturnType<SaleSettingsService['getForUser']>>,
-    rules: any,
+    rules: PricingRules,
     products: Map<number, Product>,
   ): SaleQuoteItem {
     const product = dto.productId
@@ -498,7 +474,7 @@ export class SaleQuoteService {
     const unitPrice =
       dto.unitPrice !== undefined
         ? dto.unitPrice
-        : this.pricingService.suggestSalePrice(costPrice, rules);
+        : costPrice;
     const quantity = Math.max(1, Number(dto.quantity) || 1);
     const statusText =
       normalizeStatusText(dto.statusText ?? settings.defaultStatusText) ||

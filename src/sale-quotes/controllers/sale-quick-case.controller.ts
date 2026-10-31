@@ -74,6 +74,14 @@ export class SaleQuickCaseController {
     return this.quickCaseService.remove(id, (req as any).user);
   }
 
+  @Post(':id/recalculate-prices')
+  recalculatePrices(
+    @Param('id', ParseIntPipe) id: number,
+    @Req() req: Request,
+  ) {
+    return this.quickCaseService.recalculatePrices(id, (req as any).user);
+  }
+
   @Post(':id/duplicate')
   duplicate(
     @Param('id', ParseIntPipe) id: number,
@@ -160,7 +168,8 @@ export class SaleQuickCaseController {
       quickCase,
       type === 'customer' ? 'customer' : 'internal',
     );
-    this.sendXlsx(res, buffer, `bao-gia-nhanh-${quickCase.id}`);
+    const rawName = (quickCase.title || `bao-gia-nhanh-${quickCase.id}`).trim();
+    this.sendXlsx(res, buffer, rawName);
   }
 
   private sendXlsx(res: Response, buffer: Buffer, filename: string) {
@@ -168,9 +177,11 @@ export class SaleQuickCaseController {
       'Content-Type',
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     );
+    const encoded = encodeURIComponent(filename);
+    const asciiFallback = filename.replace(/[^a-zA-Z0-9-_]/g, '-');
     res.setHeader(
       'Content-Disposition',
-      `attachment; filename="${filename.replace(/[^a-zA-Z0-9-_]/g, '-')}.xlsx"`,
+      `attachment; filename="${asciiFallback}.xlsx"; filename*=UTF-8''${encoded}.xlsx`,
     );
     res.send(buffer);
   }

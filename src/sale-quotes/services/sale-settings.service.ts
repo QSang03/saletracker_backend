@@ -26,6 +26,7 @@ export class SaleSettingsService {
       pricingRules: { ...DEFAULT_PRICING_RULES },
       defaultWarranty: '',
       defaultStatusText: DEFAULT_STATUS_TEXT,
+      priceLabel: 'fv',
       defaultGlobalNote: '',
       zaloSuffix: '',
     });
@@ -50,6 +51,7 @@ export class SaleSettingsService {
         pricingRules: { ...DEFAULT_PRICING_RULES },
         defaultWarranty: '',
         defaultStatusText: DEFAULT_STATUS_TEXT,
+        priceLabel: 'fv',
         defaultGlobalNote: '',
         zaloSuffix: '',
       });
@@ -67,6 +69,9 @@ export class SaleSettingsService {
     }
     if (dto.defaultStatusText !== undefined) {
       settings.defaultStatusText = dto.defaultStatusText;
+    }
+    if (dto.priceLabel !== undefined) {
+      settings.priceLabel = dto.priceLabel;
     }
     if (dto.defaultGlobalNote !== undefined) {
       settings.defaultGlobalNote = dto.defaultGlobalNote;
@@ -88,6 +93,7 @@ export class SaleSettingsService {
       },
       defaultWarranty: settings.defaultWarranty ?? '',
       defaultStatusText: settings.defaultStatusText ?? DEFAULT_STATUS_TEXT,
+      priceLabel: settings.priceLabel ?? 'fv',
       defaultGlobalNote: settings.defaultGlobalNote ?? '',
       zaloSuffix: settings.zaloSuffix ?? '',
       createdAt: settings.createdAt ?? null,

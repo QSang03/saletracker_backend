@@ -6,7 +6,7 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import { DEFAULT_PRICING_RULES, PricingRules } from '../sale-quote.constants';
+import { PricingRules } from '../sale-quote.constants';
 
 @Entity('sale_quote_settings')
 export class SaleQuoteSetting {
@@ -35,6 +35,15 @@ export class SaleQuoteSetting {
   })
   defaultStatusText?: string | null;
 
+  @Column({
+    name: 'price_label',
+    type: 'varchar',
+    length: 50,
+    nullable: true,
+    default: 'fv',
+  })
+  priceLabel?: string | null;
+
   @Column({ name: 'default_global_note', type: 'text', nullable: true })
   defaultGlobalNote?: string | null;
 
@@ -46,11 +55,4 @@ export class SaleQuoteSetting {
 
   @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
-
-  get effectivePricingRules(): PricingRules {
-    return {
-      ...DEFAULT_PRICING_RULES,
-      ...(this.pricingRules || {}),
-    };
-  }
 }

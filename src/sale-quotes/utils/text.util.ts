@@ -17,7 +17,10 @@ export function formatMoney(value?: number | null): string {
   return sign + digits.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
 }
 
-export function formatPrice(value?: number | null, withFv = false): string {
+export function formatPrice(
+  value?: number | null,
+  withFvOrLabel: boolean | string | null = false,
+): string {
   if (value === null || value === undefined) {
     return 'CALL';
   }
@@ -25,7 +28,12 @@ export function formatPrice(value?: number | null, withFv = false): string {
   if (!Number.isFinite(numeric) || numeric <= 0) {
     return 'CALL';
   }
-  return withFv ? `${formatMoney(numeric)} fv` : formatMoney(numeric);
+  if (typeof withFvOrLabel === 'string') {
+    return withFvOrLabel.trim()
+      ? `${formatMoney(numeric)} ${withFvOrLabel.trim()}`
+      : formatMoney(numeric);
+  }
+  return withFvOrLabel ? `${formatMoney(numeric)} fv` : formatMoney(numeric);
 }
 
 export function formatWarranty(value?: string | null): string {

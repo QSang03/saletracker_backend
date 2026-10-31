@@ -30,6 +30,7 @@ export interface BuildTextOptions {
   includeSpecs?: boolean;
   specs?: Array<{ label?: string; value?: string }> | null;
   zaloSuffix?: string | null;
+  priceLabel?: string | null;
 }
 
 export interface QuoteTextOptions {
@@ -37,8 +38,7 @@ export interface QuoteTextOptions {
   title?: string | null;
   globalNote?: string | null;
   zaloSuffix?: string | null;
-  customerMarkupPercent?: number;
-  customerRoundTo?: number;
+  priceLabel?: string | null;
 }
 
 @Injectable()
@@ -48,7 +48,6 @@ export class SaleTextRendererService {
    * - standard: nhiều dòng, mỗi dòng có số thứ tự
    * - single: chỉ dòng đầu tiên, không số thứ tự
    * - build: có Đơn giá/SL/Thành tiền/Tổng cộng
-   * - customer: bản gửi khách, giá đã cộng markup
    */
   renderQuote(
     items: RenderLineItem[],
@@ -65,19 +64,11 @@ export class SaleTextRendererService {
     if (mode === 'single') {
       body = this.renderSingle(lines[0]);
     } else if (mode === 'build') {
-      body = this.renderBuild(lines, { zaloSuffix: null });
-    } else if (mode === 'customer') {
-      body = this.renderCustomerLines(
-        lines,
-        options.title,
-        options.customerMarkupPercent ?? 10,
-        options.customerRoundTo ?? 1000,
-      );
+      body = this.renderBuild(lines, { zaloSuffix: null, priceLabel: options.priceLabel });
     } else {
       body = this.renderStandardLines(lines);
     }
 
-    // Giống file gốc: quote/máy ráp chỉ nối zaloSuffix, không nối globalNote.
     return this.appendFooter(body, options.globalNote, options.zaloSuffix);
   }
 
@@ -101,7 +92,7 @@ export class SaleTextRendererService {
       .map((item, index) => {
         const quantity = Number(item.quantity || 1);
         const unitPrice = item.unitPrice ?? item.salePrice;
-        const price = formatPrice(unitPrice, true);
+        const price = formatPrice(unitPrice, options.priceLabel !== undefined ? options.priceLabel : 'fv');
         const lineTotal =
           item.lineTotal !== null && item.lineTotal !== undefined
             ? Number(item.lineTotal)
@@ -160,7 +151,7 @@ export class SaleTextRendererService {
       globalNote?: string | null;
     },
     items: RenderLineItem[],
-    options: { zaloSuffix?: string | null } = {},
+    options: { zaloSuffix?: string | null; priceLabel?: string | null } = {},
   ): string {
     let body = '';
     if (quickCase.title) {
@@ -175,11 +166,13 @@ export class SaleTextRendererService {
       const warranty = formatWarranty(item.warranty);
       const quantity = Number(item.quantity || 1);
       const priceValue = item.salePrice ?? item.unitPrice;
-      const price = formatPrice(priceValue, true);
+      const pLabel = options.priceLabel !== undefined ? options.priceLabel : 'fv';
+      const price = formatPrice(priceValue, pLabel);
       const quantityText = quantity > 1 ? ` - SL: ${quantity}` : '';
       let totalText = '';
       if (quantity > 1 && priceValue) {
-        totalText = ` (Tổng: ${formatMoney(Number(priceValue) * quantity)} fv)`;
+        const totalLabel = pLabel && pLabel.trim() ? ` ${pLabel.trim()}` : '';
+        totalText = ` (Tổng: ${formatMoney(Number(priceValue) * quantity)}${totalLabel})`;
       }
       const statusText = stripStatusPrefix(item.statusText);
       const status = statusText ? `\t;${statusText}` : '';
@@ -224,40 +217,6 @@ export class SaleTextRendererService {
         )}\t${formatWarranty(item.warranty)}\t;\t${price}\t${status}`.trimEnd();
       })
       .join('\n\n');
-  }
-
-  private renderCustomerLines(
-    items: RenderLineItem[],
-    title: string | null | undefined,
-    markupPercent: number,
-    roundTo: number,
-  ): string {
-    let body = title ? `*${title.toUpperCase()}*\n\n` : '';
-    let total = 0;
-
-    body += items
-      .map((item, index) => {
-        const quantity = Number(item.quantity || 1);
-        const basePrice = Number(item.unitPrice);
-        const customerPrice =
-          Number.isFinite(basePrice) && basePrice > 0
-            ? Math.round(
-                (basePrice * (1 + markupPercent / 100)) / (roundTo || 1000),
-              ) * (roundTo || 1000)
-            : null;
-        if (customerPrice) {
-          total += customerPrice * quantity;
-        }
-        const priceText = customerPrice
-          ? `${formatMoney(customerPrice)} ₫`
-          : 'CALL';
-        const nameLine = this.nameLine(item).replace(/\t/g, ' | ');
-        const warranty = formatWarranty(item.warranty);
-        return `${index + 1}. ${nameLine}\n   BH: ${warranty || '—'} | SL: ${quantity} | Giá: ${priceText}`;
-      })
-      .join('\n\n');
-
-    return `${body}\n\nTổng cộng: ${formatMoney(total)} ₫`;
   }
 
   private nameLine(item: RenderLineItem): string {

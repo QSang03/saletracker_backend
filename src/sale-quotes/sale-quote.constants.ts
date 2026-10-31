@@ -24,18 +24,15 @@ export const DEFAULT_BUILD_FOLDER = 'Báo Giá Theo Yêu Cầu';
 export const DEFAULT_STATUS_TEXT = 'CHECK KHO NHẬP 1 BUỔI / 1 NGÀY';
 
 /**
- * Quy tắc giá mặc định, bám theo file saletracker_phucps.html:
- * - Hàng dưới 1.000.000đ: cộng thêm 20.000đ (file gốc random 20-30k, backend
- *   dùng mức cố định để giá luôn tái lập được).
- * - Hàng từ 1.000.000đ: cộng 2%.
- * - Giá khách hàng (export): cộng 10%.
- * - Làm tròn về bội số 1.000đ.
+ * Quy tắc tính giá đề xuất (áp dụng riêng cho tab Báo Giá Theo Yêu Cầu):
+ * - Hàng dưới 1.000.000đ: cộng thêm 20.000đ
+ * - Hàng từ 1.000.000đ: cộng 2%
+ * - Làm tròn về bội số 1.000đ
  */
 export const DEFAULT_PRICING_RULES = {
   lowPriceThreshold: 1_000_000,
   lowPriceMargin: 20_000,
   highPriceMarkupPercent: 2,
-  customerMarkupPercent: 10,
   roundTo: 1_000,
 };
 

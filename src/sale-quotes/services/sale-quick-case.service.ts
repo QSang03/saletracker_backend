@@ -1,3 +1,4 @@
+import { PricingRules } from '../sale-quote.constants';
 import {
   BadRequestException,
   Injectable,
@@ -152,17 +153,12 @@ export class SaleQuickCaseService {
         ...quickCase,
         items: items.map((item) => ({
           ...item,
-          customerPrice: this.pricingService.customerPrice(
-            item.salePrice,
-            rules,
-          ),
         })),
         itemCount: items.length,
-        pricingRules: rules,
       };
     });
 
-    return { data, total, page, pageSize, pricingRules: rules };
+    return { data, total, page, pageSize };
   }
 
   async findOne(id: number, user: any) {
@@ -185,9 +181,7 @@ export class SaleQuickCaseService {
       ...quickCase,
       items: (quickCase.items || []).map((item) => ({
         ...item,
-        customerPrice: this.pricingService.customerPrice(item.salePrice, rules),
       })),
-      pricingRules: rules,
     };
   }
 
@@ -217,6 +211,28 @@ export class SaleQuickCaseService {
     const quickCase = await this.getEditableCase(id, user);
     await this.caseRepo.softRemove(quickCase);
     return { success: true };
+  }
+
+  async recalculatePrices(id: number, user: any) {
+    const quickCase = await this.getEditableCase(id, user);
+    const rules = await this.settingsService.getEffectiveRules(getUserId(user));
+    const items = await this.itemRepo.find({
+      where: { caseId: id },
+      order: { sortOrder: 'ASC', id: 'ASC' },
+    });
+
+    for (const item of items) {
+      if (item.costPrice !== null && item.costPrice !== undefined && Number(item.costPrice) > 0) {
+        const salePrice = this.pricingService.suggestSalePrice(item.costPrice, rules);
+        const quantity = Math.max(1, Number(item.quantity) || 1);
+        item.salePrice = salePrice;
+        item.lineTotal = salePrice !== null ? Number(salePrice) * quantity : null;
+        await this.itemRepo.save(item);
+      }
+    }
+
+    await this.recalculateTotals(id);
+    return this.findOne(id, user);
   }
 
   async duplicate(id: number, user: any) {
@@ -426,7 +442,7 @@ export class SaleQuickCaseService {
     const text = this.renderer.renderQuickCase(
       { title: quickCase.title, globalNote: finalGlobalNote },
       finalItems,
-      { zaloSuffix: zaloSuffix ?? settings.zaloSuffix ?? undefined },
+      { zaloSuffix: zaloSuffix ?? settings.zaloSuffix ?? undefined, priceLabel: settings.priceLabel },
     );
     return {
       text,
@@ -454,7 +470,7 @@ export class SaleQuickCaseService {
     dto: QuickCaseItemInputDto,
     index: number,
     settings: Awaited<ReturnType<SaleSettingsService['getForUser']>>,
-    rules: any,
+    rules: PricingRules,
     products: Map<number, Product>,
   ): SaleQuickQuoteItem {
     const product = dto.productId

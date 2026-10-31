@@ -140,7 +140,8 @@ export class SaleQuoteController {
       quote,
       query.type || 'internal',
     );
-    this.sendXlsx(res, buffer, `bao-gia-${quote.quoteCode || quote.id}`);
+    const rawName = (quote.title || quote.quoteCode || `bao-gia-${quote.id}`).trim();
+    this.sendXlsx(res, buffer, rawName);
   }
 
   private sendXlsx(res: Response, buffer: Buffer, filename: string) {
@@ -148,9 +149,11 @@ export class SaleQuoteController {
       'Content-Type',
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     );
+    const encoded = encodeURIComponent(filename);
+    const asciiFallback = filename.replace(/[^a-zA-Z0-9-_]/g, '-');
     res.setHeader(
       'Content-Disposition',
-      `attachment; filename="${filename.replace(/[^a-zA-Z0-9-_]/g, '-')}.xlsx"`,
+      `attachment; filename="${asciiFallback}.xlsx"; filename*=UTF-8''${encoded}.xlsx`,
     );
     res.send(buffer);
   }
