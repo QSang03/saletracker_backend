@@ -17,6 +17,7 @@
 import * as ExcelJS from 'exceljs';
 import { WarrantyImportService } from '../src/products/warranty-import.service';
 import { WarrantyImporterGuard } from '../src/products/warranty-importer.guard';
+import { productWarrantyText } from '../src/sale-quotes/utils/text.util';
 
 interface CapturedUpdate {
   months: number;
@@ -299,6 +300,17 @@ async function main() {
     (await canActivateSafe(undefined)) === false,
     'guard: chưa đăng nhập → bị chặn 403',
   );
+
+  // ---- Case 6: helper auto-fill bảo hành cho item báo giá ----
+  expect(
+    productWarrantyText({ warrantyMonths: 12 }) === '12 tháng',
+    'helper quote: 12 tháng → "12 tháng"',
+  );
+  expect(
+    productWarrantyText({ warrantyMonths: null }) === null,
+    'helper quote: chưa nạp bảo hành → null (không có fallback nào khác)',
+  );
+  expect(productWarrantyText(undefined) === null, 'helper quote: item tay không gắn sản phẩm → null');
 
   if (process.exitCode !== 1) {
     console.log('\n🎉 TẤT CẢ TEST ĐẠT');

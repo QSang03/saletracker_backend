@@ -30,7 +30,11 @@ import {
   PricingRules,
   DEFAULT_STATUS_TEXT,
 } from '../sale-quote.constants';
-import { normalizeStatusText, sumLineTotals } from '../utils/text.util';
+import {
+  normalizeStatusText,
+  productWarrantyText,
+  sumLineTotals,
+} from '../utils/text.util';
 
 @Injectable()
 export class SaleBuildService {
@@ -311,9 +315,7 @@ export class SaleBuildService {
     if (dto.description !== undefined) {
       item.description = dto.description?.trim() || null;
     }
-    if (dto.warranty !== undefined) {
-      item.warranty = dto.warranty?.trim() || null;
-    }
+    // warranty KHÔNG cho sửa tay — chỉ lấy từ sản phẩm (import Excel).
     if (dto.costPrice !== undefined) item.costPrice = dto.costPrice;
     if (dto.salePrice !== undefined) item.salePrice = dto.salePrice;
     if (dto.quantity !== undefined) item.quantity = dto.quantity;
@@ -481,7 +483,9 @@ export class SaleBuildService {
       pn: dto.pn?.trim() || null,
       name: dto.name?.trim() || product?.productName || 'Linh kiện',
       description: dto.description?.trim() || null,
-      warranty: dto.warranty?.trim() || settings.defaultWarranty || null,
+      // Bảo hành chỉ lấy từ sản phẩm (import Excel "MÃ HT"/"TGBH") — không có
+      // nhập tay, không có default settings.
+      warranty: productWarrantyText(product),
       costPrice,
       salePrice,
       quantity,

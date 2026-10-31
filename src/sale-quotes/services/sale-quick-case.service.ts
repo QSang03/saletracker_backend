@@ -26,7 +26,11 @@ import {
   canReadAll,
   getUserId,
 } from '../utils/entity-access.util';
-import { normalizeStatusText, sumLineTotals } from '../utils/text.util';
+import {
+  normalizeStatusText,
+  productWarrantyText,
+  sumLineTotals,
+} from '../utils/text.util';
 
 @Injectable()
 export class SaleQuickCaseService {
@@ -362,9 +366,7 @@ export class SaleQuickCaseService {
     if (dto.description !== undefined) {
       item.description = dto.description?.trim() || null;
     }
-    if (dto.warranty !== undefined) {
-      item.warranty = dto.warranty?.trim() || null;
-    }
+    // warranty KHÔNG cho sửa tay — chỉ lấy từ sản phẩm (import Excel).
     if (dto.costPrice !== undefined) item.costPrice = dto.costPrice;
     if (dto.salePrice !== undefined) item.salePrice = dto.salePrice;
     if (dto.quantity !== undefined) item.quantity = dto.quantity;
@@ -436,7 +438,7 @@ export class SaleQuickCaseService {
       quickCase.globalNote?.trim() || settings.defaultGlobalNote?.trim() || null;
     const finalItems = (quickCase.items || []).map((item) => ({
       ...item,
-      warranty: item.warranty?.trim() || settings.defaultWarranty || null,
+      warranty: item.warranty?.trim() || null,
       statusText: item.statusText?.trim() || settings.defaultStatusText || null,
     }));
     const text = this.renderer.renderQuickCase(
@@ -504,7 +506,9 @@ export class SaleQuickCaseService {
       productCode: dto.productCode?.trim() || product?.productCode || null,
       pn: dto.pn?.trim() || null,
       description: dto.description?.trim() || product?.productName || null,
-      warranty: dto.warranty?.trim() || settings.defaultWarranty || null,
+      // Bảo hành chỉ lấy từ sản phẩm (import Excel "MÃ HT"/"TGBH") — không có
+      // nhập tay, không có default settings.
+      warranty: productWarrantyText(product),
       costPrice,
       salePrice,
       quantity,

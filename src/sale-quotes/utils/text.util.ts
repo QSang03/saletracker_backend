@@ -168,3 +168,13 @@ export function sumLineTotals(
   }, 0);
 }
 
+/**
+ * Bảo hành mặc định của một sản phẩm theo tháng (từ import Excel "MÃ HT"/"TGBH")
+ * — dùng làm fallback khi tạo item báo giá mà FE không gửi `warranty` tay.
+ */
+export function productWarrantyText(
+  product?: { warrantyMonths?: number | null } | null,
+): string | null {
+  const months = product?.warrantyMonths;
+  return months !== null && months !== undefined ? `${months} tháng` : null;
+}

@@ -103,6 +103,10 @@ export class SaleCatalogService {
       qb.andWhere('p.price <= :maxPrice', { maxPrice: query.maxPrice });
     }
 
+    if (query.priceChanged) {
+      qb.andWhere('p.priceChangedAt IS NOT NULL');
+    }
+
     const sortOptions: Record<string, [string, 'ASC' | 'DESC']> = {
       price_asc: ['p.price', 'ASC'],
       price_desc: ['p.price', 'DESC'],
@@ -228,7 +232,16 @@ export class SaleCatalogService {
         suggestedPrice,
         costPrice,
       ),
-      warranty: null,
+      warranty:
+        product.warrantyMonths !== null && product.warrantyMonths !== undefined
+          ? (product.warrantyMonths === 0 ? 'Không BH' : `BH ${product.warrantyMonths}T`)
+          : null,
+      warrantyMonths: product.warrantyMonths ?? null,
+      previousPrice:
+        product.previousPrice !== null && product.previousPrice !== undefined
+          ? Number(product.previousPrice)
+          : null,
+      priceChangedAt: product.priceChangedAt ?? null,
       stock: product.stock ?? 0,
       isInStock: product.isInStock ?? false,
       isActive: product.isActive,

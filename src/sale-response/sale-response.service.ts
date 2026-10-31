@@ -307,24 +307,52 @@ export class SaleResponseService {
       })
       .getRawMany();
 
+    // SLA gộp bằng một query duy nhất cho cả bảng thay vì query từng user
+    // (tránh N+1), sau đó tra theo (user, phòng ban) khớp với GROUP BY ở trên.
+    const slaByRow = await this.mergeSlaCounts(rows, query);
+
     return rows.map((row) => ({
       ...row,
-      ...this.mergeSlaCounts(row.userId, query),
+      slaBreachCounts:
+        slaByRow.get(this.slaRowKey(row.userId, row.departmentId)) ?? {},
     }));
   }
 
-  /** Cộng dồn sla_breach_counts của từng ngày thành một object cho cả khoảng. */
-  private async mergeSlaCounts(userId: number, query: ResponseTimeFilters) {
+  /** Chìa khoá gộp SLA theo (user, phòng ban), khớp với GROUP BY của bySale. */
+  private slaRowKey(userId: unknown, departmentId: unknown): string {
+    const dept =
+      departmentId === null || departmentId === undefined
+        ? ''
+        : Number(departmentId);
+    return `${Number(userId)}:${dept}`;
+  }
+
+  /**
+   * Cộng dồn sla_breach_counts của từng ngày thành một object cho cả khoảng,
+   * gộp theo (user, phòng ban): một sale đổi phòng ban giữa khoảng thì mỗi
+   * dòng của bySale chỉ nhận phần SLA của phòng ban đó, FE cộng lại vẫn đúng
+   * tổng của user. Trả về Map tra bằng slaRowKey.
+   */
+  private async mergeSlaCounts(
+    rows: { userId: unknown; departmentId?: unknown }[],
+    query: ResponseTimeFilters,
+  ): Promise<Map<string, Record<string, number>>> {
+    const result = new Map<string, Record<string, number>>();
+    if (rows.length === 0) return result;
+
     const dateFrom = this.normalizeDate(
       query.dateFrom,
       new Date(Date.now() - 30 * 86400000),
     );
     const dateTo = this.normalizeDate(query.dateTo, new Date());
 
-    const rows = await this.dailyRepo
+    const userIds = [...new Set(rows.map((row) => Number(row.userId)))];
+    const slaRows = await this.dailyRepo
       .createQueryBuilder('d')
-      .select('d.sla_breach_counts', 'sla')
-      .where('d.user_id = :userId', { userId })
+      .select('d.user_id', 'userId')
+      .addSelect('d.department_id', 'departmentId')
+      .addSelect('d.sla_breach_counts', 'sla')
+      .where('d.user_id IN (:...userIds)', { userIds })
       .andWhere('d.stat_date BETWEEN :dateFrom AND :dateTo', {
         dateFrom,
         dateTo,
@@ -332,16 +360,18 @@ export class SaleResponseService {
       .andWhere('d.sla_breach_counts IS NOT NULL')
       .getRawMany();
 
-    const merged: Record<string, number> = {};
-    for (const row of rows) {
+    for (const row of slaRows) {
+      const key = this.slaRowKey(row.userId, row.departmentId);
+      const merged = result.get(key) ?? {};
       const value =
         typeof row.sla === 'string' ? JSON.parse(row.sla) : row.sla;
       if (!value) continue;
-      for (const [key, count] of Object.entries(value as Record<string, number>)) {
-        merged[key] = (merged[key] ?? 0) + Number(count);
+      for (const [label, count] of Object.entries(value as Record<string, number>)) {
+        merged[label] = (merged[label] ?? 0) + Number(count);
       }
+      result.set(key, merged);
     }
-    return { slaBreachCounts: merged };
+    return result;
   }
 
   /** Chuỗi thời gian theo ngày, để vẽ biểu đồ. */

@@ -25,7 +25,11 @@ import {
   canReadAll,
   getUserId,
 } from '../utils/entity-access.util';
-import { normalizeStatusText, sumLineTotals } from '../utils/text.util';
+import {
+  normalizeStatusText,
+  productWarrantyText,
+  sumLineTotals,
+} from '../utils/text.util';
 
 @Injectable()
 export class SaleQuoteService {
@@ -330,9 +334,7 @@ export class SaleQuoteService {
     if (dto.description !== undefined) {
       item.description = dto.description?.trim() || null;
     }
-    if (dto.warranty !== undefined) {
-      item.warranty = dto.warranty?.trim() || null;
-    }
+    // warranty KHÔNG cho sửa tay — chỉ lấy từ sản phẩm (import Excel).
     if (dto.costPrice !== undefined) item.costPrice = dto.costPrice;
     if (dto.unitPrice !== undefined) item.unitPrice = dto.unitPrice;
     if (dto.quantity !== undefined) item.quantity = dto.quantity;
@@ -416,7 +418,7 @@ export class SaleQuoteService {
       quote.globalNote?.trim() || settings.defaultGlobalNote?.trim() || null;
     const finalItems = (quote.items || []).map((item) => ({
       ...item,
-      warranty: item.warranty?.trim() || settings.defaultWarranty || null,
+      warranty: item.warranty?.trim() || null,
       statusText: item.statusText?.trim() || settings.defaultStatusText || null,
     }));
     const text = this.renderer.renderQuote(finalItems, {
@@ -487,7 +489,9 @@ export class SaleQuoteService {
       pn: dto.pn?.trim() || null,
       name: dto.name?.trim() || product?.productName || 'Sản phẩm',
       description: dto.description?.trim() || null,
-      warranty: dto.warranty?.trim() || settings.defaultWarranty || null,
+      // Bảo hành chỉ lấy từ sản phẩm (import Excel "MÃ HT"/"TGBH") — không có
+      // nhập tay, không có default settings.
+      warranty: productWarrantyText(product),
       costPrice,
       unitPrice,
       quantity,

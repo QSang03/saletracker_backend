@@ -24,7 +24,6 @@ export class SaleSettingsService {
     return this.settingRepo.create({
       userId,
       pricingRules: { ...DEFAULT_PRICING_RULES },
-      defaultWarranty: '',
       defaultStatusText: DEFAULT_STATUS_TEXT,
       priceLabel: 'fv',
       defaultGlobalNote: '',
@@ -49,7 +48,6 @@ export class SaleSettingsService {
       settings = this.settingRepo.create({
         userId,
         pricingRules: { ...DEFAULT_PRICING_RULES },
-        defaultWarranty: '',
         defaultStatusText: DEFAULT_STATUS_TEXT,
         priceLabel: 'fv',
         defaultGlobalNote: '',
@@ -63,9 +61,6 @@ export class SaleSettingsService {
         ...(settings.pricingRules || {}),
         ...dto.pricingRules,
       };
-    }
-    if (dto.defaultWarranty !== undefined) {
-      settings.defaultWarranty = dto.defaultWarranty;
     }
     if (dto.defaultStatusText !== undefined) {
       settings.defaultStatusText = dto.defaultStatusText;
@@ -91,7 +86,6 @@ export class SaleSettingsService {
         ...DEFAULT_PRICING_RULES,
         ...(settings.pricingRules || {}),
       },
-      defaultWarranty: settings.defaultWarranty ?? '',
       defaultStatusText: settings.defaultStatusText ?? DEFAULT_STATUS_TEXT,
       priceLabel: settings.priceLabel ?? 'fv',
       defaultGlobalNote: settings.defaultGlobalNote ?? '',

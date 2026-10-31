@@ -24,8 +24,8 @@ export class SaleQuoteSetting {
   })
   pricingRules?: PricingRules | null;
 
-  @Column({ name: 'default_warranty', type: 'varchar', length: 100, nullable: true })
-  defaultWarranty?: string | null;
+  // LƯU Ý: cột default_warranty đã bị XOÁ — bảo hành chỉ lấy từ dữ liệu
+  // import Excel ("MÃ HT"/"TGBH") lưu trên products.warranty_months.
 
   @Column({
     name: 'default_status_text',

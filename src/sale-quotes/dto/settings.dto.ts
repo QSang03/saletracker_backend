@@ -45,10 +45,7 @@ export class UpdateSettingsDto {
   @Type(() => PricingRulesDto)
   pricingRules?: PricingRulesDto;
 
-  @IsOptional()
-  @IsString()
-  @MaxLength(100)
-  defaultWarranty?: string;
+  // defaultWarranty đã bị XOÁ — bảo hành chỉ lấy từ import Excel trên sản phẩm.
 
   @IsOptional()
   @IsString()
@@ -126,6 +123,11 @@ export class CatalogQueryDto {
   @IsString()
   @MaxLength(30)
   sort?: string;
+
+  @IsOptional()
+  @Transform(toBoolean)
+  @IsBoolean()
+  priceChanged?: boolean;
 }
 
 export class PricingPreviewItemDto {
