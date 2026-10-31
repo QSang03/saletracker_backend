@@ -10,6 +10,7 @@ import { OrderCleanupCronjobService } from './order-cleanup.cronjob.service';
 import { DatabaseCleanupCronjobService } from './database-cleanup.cronjob.service';
 import { NKCProduct } from '../nkc_products/nkc_product.entity';
 import { Product } from '../products/product.entity';
+import { ProductPriceHistory } from '../products/product-price-history.entity';
 import { Brand } from '../brands/brand.entity';
 import { Category } from '../categories/category.entity';
 import { DebtStatistic } from '../debt_statistics/debt_statistic.entity';
@@ -44,6 +45,7 @@ import { DbAnalyzeCronjobService } from './db-analyze.cronjob.service';
     TypeOrmModule.forFeature([
       NKCProduct,
       Product,
+      ProductPriceHistory,
       Brand,
       Category,
       DebtStatistic,

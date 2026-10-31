@@ -1,7 +1,12 @@
-import { Injectable } from '@nestjs/common';
+import {
+  Injectable,
+  BadRequestException,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 import { Product } from './product.entity';
+import { ProductPriceHistory } from './product-price-history.entity';
 import { Brand } from '../brands/brand.entity';
 import { Category } from '../categories/category.entity';
 import slugify from 'slugify';
@@ -15,6 +20,8 @@ export class ProductService {
   constructor(
     @InjectRepository(Product)
     private readonly productRepository: Repository<Product>,
+    @InjectRepository(ProductPriceHistory)
+    private readonly priceHistoryRepository: Repository<ProductPriceHistory>,
     @InjectRepository(Brand)
     private readonly brandRepo: Repository<Brand>,
     @InjectRepository(Category)
@@ -31,6 +38,7 @@ export class ProductService {
     pmCustomMode?: string; // 'true' hoặc 'false' để xác định chế độ PM
     pmPermissions?: string; // PM permissions từ frontend
     rolePermissions?: string; // Thông tin từng role từ frontend
+    priceChanged?: boolean; // true = chỉ lấy sản phẩm từng đổi giá
   }) {
     const qb = this.productRepository
       .createQueryBuilder('p')
@@ -213,6 +221,13 @@ export class ProductService {
       });
     }
 
+    // Sản phẩm từng đổi giá (cronjob hoặc sửa tay): previous_price != price.
+    if (filter?.priceChanged === true) {
+      qb.andWhere(
+        '(p.previous_price IS NOT NULL AND p.price_changed_at IS NOT NULL AND p.previous_price <> p.price)',
+      );
+    }
+
     if (filter?.search && filter.search.trim().length > 0) {
       // Normalize search for accent-insensitive contains
       const s = filter.search.trim().toLowerCase();
@@ -251,11 +266,98 @@ export class ProductService {
     return this.productRepository.save(data);
   }
 
-  update(id: number, data: Partial<Product>) {
-    return this.productRepository.update(id, data);
+  async update(id: number, data: Partial<Product>) {
+    const existing = await this.productRepository.findOne({
+      where: { id },
+      relations: ['brand', 'category'],
+    });
+    if (!existing) {
+      throw new NotFoundException(`Không tìm thấy sản phẩm id=${id}`);
+    }
+
+    const { price, ...rest } = data;
+
+    // Đổi giá tay qua API cũng ghi lịch sử biến động (source 'manual') để FE
+    // sale thấy "giá đã biến động" như với giá đổi qua cronjob đồng bộ.
+    if (price !== undefined && price !== null) {
+      const numericPrice = Number(price);
+      if (!Number.isFinite(numericPrice) || numericPrice < 0) {
+        throw new BadRequestException(`Giá không hợp lệ: ${String(price)}`);
+      }
+    }
+
+    const newPrice =
+      price === undefined
+        ? existing.price
+        : price === null
+          ? null
+          : Number(price) || null;
+
+    if (newPrice !== existing.price) {
+      const oldPrice = existing.price ?? null;
+      const changedAt = new Date();
+      await this.priceHistoryRepository.save(
+        this.priceHistoryRepository.create({
+          productId: existing.id,
+          productCode: existing.productCode,
+          oldPrice,
+          newPrice,
+          changedAt,
+          source: 'manual',
+        }),
+      );
+      existing.previousPrice = oldPrice;
+      existing.priceChangedAt = changedAt;
+    }
+    existing.price = newPrice;
+
+    Object.assign(existing, rest);
+    await this.productRepository.save(existing);
+    return existing;
   }
 
   remove(id: number) {
     return this.productRepository.delete(id);
+  }
+
+  /**
+   * Lịch sử biến động giá (mới nhất trước) — nguồn cho màn "giá đã biến động"
+   * của sale. Lọc theo khoảng ngày / mã sản phẩm / nguồn thay đổi.
+   */
+  async findPriceChanges(filter?: {
+    page?: number;
+    pageSize?: number;
+    from?: string;
+    to?: string;
+    productCode?: string;
+    source?: string;
+  }) {
+    const qb = this.priceHistoryRepository
+      .createQueryBuilder('h')
+      .leftJoinAndSelect('h.product', 'p')
+      .orderBy('h.changed_at', 'DESC')
+      .addOrderBy('h.id', 'DESC');
+
+    if (filter?.from && /^\d{4}-\d{2}-\d{2}$/.test(filter.from)) {
+      qb.andWhere('h.changed_at >= :from', { from: `${filter.from} 00:00:00` });
+    }
+    if (filter?.to && /^\d{4}-\d{2}-\d{2}$/.test(filter.to)) {
+      qb.andWhere('h.changed_at <= :to', { to: `${filter.to} 23:59:59` });
+    }
+    if (filter?.productCode && filter.productCode.trim().length > 0) {
+      qb.andWhere('LOWER(h.product_code) LIKE :code', {
+        code: `%${filter.productCode.trim().toLowerCase()}%`,
+      });
+    }
+    if (filter?.source && ['sync', 'manual'].includes(filter.source)) {
+      qb.andWhere('h.source = :source', { source: filter.source });
+    }
+
+    const page = Math.max(1, Number(filter?.page) || 1);
+    const pageSize = Math.max(1, Math.min(Number(filter?.pageSize) || 20, 200));
+    qb.skip((page - 1) * pageSize).take(pageSize);
+
+    const [rows, total] = await qb.getManyAndCount();
+    return { data: rows, total, page, pageSize };
   }
 }

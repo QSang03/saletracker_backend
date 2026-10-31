@@ -5,6 +5,7 @@ import { lastValueFrom } from 'rxjs';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { Product } from '../products/product.entity';
+import { ProductPriceHistory } from '../products/product-price-history.entity';
 import { Brand } from '../brands/brand.entity';
 import { Category } from '../categories/category.entity';
 import { PermissionService } from '../permissions/permission.service';
@@ -41,6 +42,7 @@ interface PageStats {
   created: number;
   updated: number;
   unchanged: number;
+  priceChanges: number;
 }
 
 @Injectable()
@@ -52,6 +54,8 @@ export class ProductV2CronjobService {
     private readonly httpService: HttpService,
     @InjectRepository(Product)
     private readonly productRepo: Repository<Product>,
+    @InjectRepository(ProductPriceHistory)
+    private readonly priceHistoryRepo: Repository<ProductPriceHistory>,
     @InjectRepository(Brand)
     private readonly brandRepo: Repository<Brand>,
     @InjectRepository(Category)
@@ -100,6 +104,7 @@ export class ProductV2CronjobService {
     let created = 0;
     let updated = 0;
     let unchanged = 0;
+    let priceChanged = 0;
 
     this.logger.log(
       `Start product sync from: ${apiUrl} (pageSize=${pageSize})`,
@@ -144,10 +149,12 @@ export class ProductV2CronjobService {
         created += stats.created;
         updated += stats.updated;
         unchanged += stats.unchanged;
+        priceChanged += stats.priceChanges;
 
         this.logger.log(
           `Page ${page}/${lastPage}: ${items.length} items, ` +
-            `created=${stats.created}, updated=${stats.updated}, unchanged=${stats.unchanged}`,
+            `created=${stats.created}, updated=${stats.updated}, unchanged=${stats.unchanged}, ` +
+            `priceChanged=${stats.priceChanges}`,
         );
 
         if (page < lastPage && delayMs > 0) {
@@ -173,7 +180,7 @@ export class ProductV2CronjobService {
 
       this.logger.log(
         `Finished product sync: fetched=${totalFetched}, created=${created}, ` +
-          `updated=${updated}, unchanged=${unchanged}`,
+          `updated=${updated}, unchanged=${unchanged}, priceChanged=${priceChanged}`,
       );
     } catch (error) {
       this.logger.error(
@@ -251,7 +258,7 @@ export class ProductV2CronjobService {
     );
 
     if (codes.length === 0) {
-      return { created: 0, updated: 0, unchanged: 0 };
+      return { created: 0, updated: 0, unchanged: 0, priceChanges: 0 };
     }
 
     const existingRows = await this.productRepo.find({
@@ -270,6 +277,8 @@ export class ProductV2CronjobService {
     let updated = 0;
     let unchanged = 0;
     const toSave: Product[] = [];
+    // Giá đổi trong lần chạy này — ghi lịch sử sau khi upsert xong.
+    const priceChanges: ProductPriceHistory[] = [];
 
     for (const item of items) {
       const code = item.MaHH?.trim();
@@ -327,8 +336,25 @@ export class ProductV2CronjobService {
         }
 
         if (product.price !== price) {
+          const oldPrice = product.price ?? null;
           product.price = price;
+          // Giữ giá cũ + mốc thời gian để FE sale thấy "giá đã biến động".
+          product.previousPrice = oldPrice;
+          product.priceChangedAt = runStartedAt;
           businessChanged = true;
+
+          if (product.id) {
+            priceChanges.push(
+              this.priceHistoryRepo.create({
+                productId: product.id,
+                productCode: product.productCode,
+                oldPrice,
+                newPrice: price,
+                changedAt: runStartedAt,
+                source: 'sync',
+              }),
+            );
+          }
         }
 
         if (product.stock !== stock) {
@@ -371,6 +397,10 @@ export class ProductV2CronjobService {
       await this.productRepo.save(toSave, { chunk: 200 });
     }
 
+    if (priceChanges.length > 0) {
+      await this.priceHistoryRepo.save(priceChanges, { chunk: 200 });
+    }
+
     // Mark every product seen in this run, including rows whose business
     // fields did not change, so a later cleanup can distinguish stale rows.
     await this.productRepo
@@ -380,7 +410,7 @@ export class ProductV2CronjobService {
       .where('product_code IN (:...codes)', { codes })
       .execute();
 
-    return { created, updated, unchanged };
+    return { created, updated, unchanged, priceChanges: priceChanges.length };
   }
 
   private async loadBrandCategoryCache(
