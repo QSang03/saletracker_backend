@@ -4,6 +4,8 @@ import {
   Get,
   HttpCode,
   HttpStatus,
+  Param,
+  ParseIntPipe,
   Post,
   Query,
   UseGuards,
@@ -66,6 +68,25 @@ export class SaleResponseController {
   @Get('statuses')
   statuses() {
     return this.saleResponseService.statuses();
+  }
+
+  /**
+   * Tin nhắn của một khoảng chờ — bấm vào cột "Số tin nhắn" ở bảng chi tiết
+   * để xem lại hội thoại trong khung giờ của khoảng. Phạm vi xem do service
+   * tự kiểm tra từ req.user; tra interval ngoài phạm vi trả 404.
+   */
+  @Get('intervals/:id/messages')
+  async intervalMessages(
+    @Param('id', ParseIntPipe) id: number,
+    @Query() query: any,
+    @Request() req: any,
+  ) {
+    return this.saleResponseService.intervalMessages(
+      req.user,
+      id,
+      query.page ? Number(query.page) : 1,
+      query.pageSize ? Number(query.pageSize) : 50,
+    );
   }
 
   /**

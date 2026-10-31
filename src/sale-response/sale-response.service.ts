@@ -12,6 +12,7 @@ import { User } from '../users/user.entity';
 import { Department } from '../departments/department.entity';
 import { OrderService } from '../orders/order.service';
 import { OrderBlacklistService } from '../order-blacklist/order-blacklist.service';
+import { ZaloPythonApiClient } from '../customer-kpi/zalo-python-api.client';
 
 export interface ResponseTimeFilters {
   dateFrom?: string;
@@ -45,6 +46,7 @@ export class SaleResponseService {
     private readonly userRepo: Repository<User>,
     private readonly orderService: OrderService,
     private readonly orderBlacklistService: OrderBlacklistService,
+    private readonly zaloPythonApi: ZaloPythonApiClient,
   ) {}
 
   /**
@@ -475,6 +477,75 @@ export class SaleResponseService {
               employee_code: item.user.employeeCode ?? null,
             }
           : null,
+      })),
+    };
+  }
+
+  /**
+   * Tin nhắn của một khoảng chờ, để bấm vào cột "Số tin nhắn" xem lại hội thoại.
+   *
+   * NestJS không đọc DB Zalo — tin nhắn lấy qua API Python (zalo_entities_api
+   * /web/messages) bằng conversation_id + khung giờ started_at..ended_at của
+   * khoảng. Interval ở main DB phải nằm trong phạm vi xem của người dùng thì
+   * mới được tra tin nhắn; out-of-scope trả 404 thay vì 403 để không lộ sự
+   * tồn tại của khoảng chờ của sale khác.
+   */
+  async intervalMessages(
+    user: any,
+    intervalId: number,
+    page = 1,
+    pageSize = 50,
+  ) {
+    const interval = await this.intervalRepo.findOne({
+      where: { id: intervalId },
+    });
+    if (!interval) {
+      throw new NotFoundException('Không tìm thấy khoảng chờ');
+    }
+
+    const { userIds } = await this.resolveScope(user);
+    if (
+      userIds !== undefined &&
+      (interval.user_id === null || !userIds.includes(interval.user_id))
+    ) {
+      throw new NotFoundException('Không tìm thấy khoảng chờ');
+    }
+
+    // Khoảng còn mở (pending) chưa có ended_at — cận trên là hiện tại để
+    // xem được các tin khách đã nhắn trong lúc đang chờ.
+    const toTs = (interval.ended_at ?? new Date()).toISOString();
+
+    const { items, totalCount } = await this.zaloPythonApi
+      .getConversationMessages({
+        conversationId: Number(interval.conversation_id),
+        fromTs: interval.started_at.toISOString(),
+        toTs,
+        page,
+        limit: Math.min(pageSize, 200),
+        sortOrder: 'asc',
+      });
+
+    return {
+      page,
+      pageSize,
+      total: totalCount,
+      interval: {
+        id: interval.id,
+        started_at: interval.started_at,
+        ended_at: interval.ended_at,
+        status: interval.status,
+      },
+      items: items.map((m) => ({
+        id: m.id,
+        content: m.content ?? '',
+        content_type: m.content_type ?? 'text',
+        timestamp: m.timestamp,
+        formatted_timestamp: m.formatted_timestamp ?? null,
+        is_outgoing: !!m.is_outgoing,
+        sender: {
+          name: m.sender?.name ?? null,
+          zalo_id: m.sender?.zalo_id ?? null,
+        },
       })),
     };
   }

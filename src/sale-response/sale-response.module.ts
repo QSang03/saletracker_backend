@@ -8,6 +8,7 @@ import { SaleWorkActivityDaily } from './sale-work-activity-daily.entity';
 import { OrderModule } from '../orders/order.module';
 import { OrderBlacklistModule } from '../order-blacklist/order-blacklist.module';
 import { User } from '../users/user.entity';
+import { ZaloPythonApiClient } from '../customer-kpi/zalo-python-api.client';
 
 @Module({
   imports: [
@@ -23,7 +24,10 @@ import { User } from '../users/user.entity';
     OrderBlacklistModule,
   ],
   controllers: [SaleResponseController],
-  providers: [SaleResponseService],
+  // ZaloPythonApiClient: CustomerKpiModule không export client này nên provide
+  // trực tiếp (pattern của order-blacklist/order-care). Client stateless —
+  // chỉ đọc env, nên provide lại ở nhiều module là an toàn.
+  providers: [SaleResponseService, ZaloPythonApiClient],
   exports: [SaleResponseService],
 })
 export class SaleResponseModule {}

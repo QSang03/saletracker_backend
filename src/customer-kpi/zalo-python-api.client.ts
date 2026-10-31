@@ -111,6 +111,61 @@ export class ZaloPythonApiClient {
     return Array.isArray(json?.data) ? json.data : [];
   }
 
+  /**
+   * Tin nhắn của một hội thoại trong khung giờ chính xác đến giây.
+   *
+   * Dùng cho drill-down "khoảng chờ" của trang thời gian phản hồi: truyền
+   * from_ts/to_ts (ISO 8601, chấp nhận đuôi Z) để API Python lọc đúng
+   * zalo_messages.timestamp thay vì chỉ theo ngày (from_date/to_date).
+   * Python trả về đã include tên sender (user nếu outgoing, contact nếu khách).
+   */
+  async getConversationMessages(opts: {
+    conversationId: number;
+    fromTs?: string;
+    toTs?: string;
+    page?: number;
+    limit?: number;
+    sortOrder?: 'asc' | 'desc';
+  }): Promise<{ items: any[]; totalCount: number }> {
+    if (!this.masterKey) {
+      throw new ServiceUnavailableException(
+        'Chưa cấu hình MASTER_KEY — không gọi được API Python (zalo_entities_api)',
+      );
+    }
+
+    const params = new URLSearchParams();
+    params.set('conversation_id', String(opts.conversationId));
+    if (opts.fromTs) params.set('from_ts', opts.fromTs);
+    if (opts.toTs) params.set('to_ts', opts.toTs);
+    if (opts.page && opts.page > 1) params.set('page', String(opts.page));
+    params.set('limit', String(Math.min(opts.limit ?? 50, 200)));
+    params.set('sort_order', opts.sortOrder ?? 'asc');
+    params.set('include_quotes', 'false');
+
+    let res: Response;
+    try {
+      res = await fetch(`${this.baseUrl}/web/messages?${params.toString()}`, {
+        headers: { 'x-master-key': this.masterKey },
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+    } catch (error: any) {
+      throw new ServiceUnavailableException(
+        `Không kết nối được API Python (${this.baseUrl}): ${error?.message}`,
+      );
+    }
+    if (!res.ok) {
+      throw new ServiceUnavailableException(
+        `API Python /web/messages trả HTTP ${res.status}`,
+      );
+    }
+
+    const json: any = await res.json().catch(() => null);
+    return {
+      items: Array.isArray(json?.data) ? json.data : [],
+      totalCount: Number(json?.pagination?.total_count ?? 0),
+    };
+  }
+
   /** Tài khoản Zalo theo nhân viên (za.user_id) — tối đa 200 dòng/lần. */
   async getAccounts(limit = 200): Promise<PythonZaloAccount[]> {
     const rows = await this.getData(
