@@ -33,6 +33,7 @@ import { User } from '../users/user.entity';
 import { UserModule } from '../users/user.module';
 import { ActivityLog } from '../activity-logs/activity-log.entity';
 import { ActivityLogCleanupCronjobService } from './activity-log-cleanup.cronjob.service';
+import { DbAnalyzeCronjobService } from './db-analyze.cronjob.service';
 
 @Module({
   imports: [
@@ -74,6 +75,7 @@ import { ActivityLogCleanupCronjobService } from './activity-log-cleanup.cronjob
     ZaloLinkMonitorCronjob, // Thêm cronjob monitor Zalo link
     CampaignCleanupCronjobService,
     ActivityLogCleanupCronjobService,
+    DbAnalyzeCronjobService,
   ],
   exports: [
     CronjobService,
@@ -86,6 +88,7 @@ import { ActivityLogCleanupCronjobService } from './activity-log-cleanup.cronjob
     ZaloLinkMonitorCronjob,
     CampaignCleanupCronjobService,
     ActivityLogCleanupCronjobService,
+    DbAnalyzeCronjobService,
   ],
 })
 export class CronjobModule {}
