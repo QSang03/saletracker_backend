@@ -312,6 +312,38 @@ async function main() {
   );
   expect(productWarrantyText(undefined) === null, 'helper quote: item tay không gắn sản phẩm → null');
 
+  // ---- Case 7: tự tra quyền cho FE ẩn/hiện nút nạp ----
+  const adminPerm = await service.getMyImportPermission({
+    id: 1,
+    roles: [{ name: 'admin' }],
+  });
+  expect(
+    adminPerm.isAdmin === true && adminPerm.allowed === true,
+    'me: admin → allowed:true',
+  );
+
+  const designatedPerm = await service.getMyImportPermission({
+    id: 555,
+    roles: [{ name: 'manager' }],
+  });
+  expect(
+    designatedPerm.isAdmin === false &&
+      designatedPerm.designated === true &&
+      designatedPerm.allowed === true,
+    'me: manager được chỉ định → allowed:true',
+  );
+
+  const strangerPerm = await service.getMyImportPermission({
+    id: 777,
+    roles: [{ name: 'sale' }],
+  });
+  expect(
+    strangerPerm.isAdmin === false &&
+      strangerPerm.designated === false &&
+      strangerPerm.allowed === false,
+    'me: sale thường → allowed:false',
+  );
+
   if (process.exitCode !== 1) {
     console.log('\n🎉 TẤT CẢ TEST ĐẠT');
   }

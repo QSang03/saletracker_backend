@@ -5,6 +5,7 @@ import * as ExcelJS from 'exceljs';
 import { Product } from './product.entity';
 import { ProductWarrantyImporter } from './product-warranty-importer.entity';
 import { User } from '../users/user.entity';
+import { getRoleNames } from '../common/utils/user-permission.helper';
 
 /**
  * Nạp thời gian bảo hành (theo THÁNG) cho sản phẩm từ file Excel.
@@ -145,6 +146,26 @@ export class WarrantyImportService {
       where: { userId: Number(userId) },
     });
     return Boolean(row);
+  }
+
+  /**
+   * Tự tra quyền của user hiện tại — nguồn cho FE ẩn/hiện nút "Nạp bảo hành"
+   * mà không cần gọi thử endpoint import rồi ăn 403.
+   */
+  async getMyImportPermission(
+    user:
+      | {
+          id?: number;
+          roles?: unknown[];
+        }
+      | null
+      | undefined,
+  ) {
+    const isAdmin = getRoleNames(user)
+      .map((role) => String(role).toLowerCase())
+      .includes('admin');
+    const designated = await this.isImporter(user?.id);
+    return { isAdmin, designated, allowed: isAdmin || designated };
   }
 
   /** Danh sách người được chỉ định — kèm thông tin user để vẽ bảng. */

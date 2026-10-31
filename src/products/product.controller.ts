@@ -159,6 +159,17 @@ export class ProductController {
     res.send(buffer);
   }
 
+  /**
+   * Tự tra quyền của user hiện tại — FE dùng để ẩn/hiện nút "Nạp bảo hành"
+   * (admin luôn được; user khác được khi nằm trong danh sách chỉ định).
+   */
+  @UseGuards(AuthGuard)
+  @Get('warranty-importers/me')
+  myWarrantyImportPermission(@Req() req?: Request) {
+    const user = (req as unknown as AuthedRequest)?.user;
+    return this.warrantyImportService.getMyImportPermission(user);
+  }
+
   /** Danh sách user được admin chỉ định nạp file bảo hành (chỉ admin xem). */
   @UseGuards(AuthGuard, AdminAuthGuard)
   @Get('warranty-importers')
