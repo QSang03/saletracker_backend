@@ -10,6 +10,8 @@ import { Brand } from '../brands/brand.entity';
 import { Category } from '../categories/category.entity';
 import { PermissionService } from '../permissions/permission.service';
 import slugify from 'slugify';
+import * as fs from 'fs';
+import * as path from 'path';
 import { WinstonLogger } from '../common/winston.logger';
 
 interface ApiProduct {
@@ -43,12 +45,35 @@ interface PageStats {
   updated: number;
   unchanged: number;
   priceChanges: number;
+  missingPrice: number;
+  missingPriceItems: MissingPriceItem[];
+}
+
+/** Sản phẩm mà API không trả giá hợp lệ (Price thiếu/không phải số/<= 0). */
+interface MissingPriceItem {
+  page?: number;
+  mahh: string;
+  name: string;
+  /** 'missing_or_invalid' = không có/không parse được; 'non_positive' = 0 hoặc âm. */
+  reason: 'missing_or_invalid' | 'non_positive';
+  /** Giá trị thô của item.Price đúng như API trả về. */
+  rawPrice: unknown;
+  rawPriceType: string;
+  /** Toàn bộ item thô để đối chiếu field bị đổi tên/thiếu. */
+  rawItem: ApiProduct;
 }
 
 @Injectable()
 export class ProductV2CronjobService {
   private readonly logger = new WinstonLogger(ProductV2CronjobService.name);
   private isRunning = false;
+  /** Raw payload các sản phẩm API trả thiếu giá, giữ 3 ngày để đối chiếu. */
+  private readonly missingPriceDumpDir = path.join(
+    process.cwd(),
+    'logs',
+    'product-sync-missing-price',
+  );
+  private readonly missingPriceRetentionDays = 3;
 
   constructor(
     private readonly httpService: HttpService,
@@ -105,6 +130,14 @@ export class ProductV2CronjobService {
     let updated = 0;
     let unchanged = 0;
     let priceChanged = 0;
+    // API trả thiếu/không hợp lệ giá — chỉ ghi log + dump raw, KHÔNG đổi logic
+    // (giá vẫn được cập nhật về null như hiện tại).
+    let missingPrice = 0;
+    const missingPriceItems: MissingPriceItem[] = [];
+    const maxMissingPriceDetails = this.getIntEnv(
+      'PRODUCT_SYNC_MISSING_PRICE_MAX_DETAILS',
+      2000,
+    );
 
     this.logger.log(
       `Start product sync from: ${apiUrl} (pageSize=${pageSize})`,
@@ -114,6 +147,7 @@ export class ProductV2CronjobService {
       const brandCache = new Map<string, Brand>();
       const categoryCache = new Map<string, Category>();
       await this.loadBrandCategoryCache(brandCache, categoryCache);
+      this.cleanupMissingPriceDumps();
 
       do {
         const body = await this.fetchPage(
@@ -151,6 +185,21 @@ export class ProductV2CronjobService {
         unchanged += stats.unchanged;
         priceChanged += stats.priceChanges;
 
+        missingPrice += stats.missingPrice;
+        if (stats.missingPrice > 0) {
+          this.logger.warn(
+            `Page ${page}: ${stats.missingPrice} sản phẩm API trả thiếu/không hợp lệ giá ` +
+              `(vd: ${stats.missingPriceItems
+                .slice(0, 5)
+                .map((it) => `${it.mahh}=${JSON.stringify(it.rawPrice)}`)
+                .join(', ')})`,
+          );
+          for (const item of stats.missingPriceItems) {
+            if (missingPriceItems.length >= maxMissingPriceDetails) break;
+            missingPriceItems.push({ ...item, page });
+          }
+        }
+
         this.logger.log(
           `Page ${page}/${lastPage}: ${items.length} items, ` +
             `created=${stats.created}, updated=${stats.updated}, unchanged=${stats.unchanged}, ` +
@@ -178,9 +227,24 @@ export class ProductV2CronjobService {
         );
       }
 
+      if (missingPrice > 0) {
+        const dumpPath = this.writeMissingPriceDump(
+          runStartedAt,
+          apiUrl,
+          missingPrice,
+          missingPriceItems,
+        );
+        this.logger.warn(
+          `Tổng ${missingPrice} sản phẩm API trả thiếu/không hợp lệ giá ` +
+            `(chi tiết=${missingPriceItems.length}). ` +
+            `Raw payload giữ ${this.missingPriceRetentionDays} ngày: ${dumpPath}`,
+        );
+      }
+
       this.logger.log(
         `Finished product sync: fetched=${totalFetched}, created=${created}, ` +
-          `updated=${updated}, unchanged=${unchanged}, priceChanged=${priceChanged}`,
+          `updated=${updated}, unchanged=${unchanged}, priceChanged=${priceChanged}, ` +
+          `missingPrice=${missingPrice}`,
       );
     } catch (error) {
       this.logger.error(
@@ -258,7 +322,14 @@ export class ProductV2CronjobService {
     );
 
     if (codes.length === 0) {
-      return { created: 0, updated: 0, unchanged: 0, priceChanges: 0 };
+      return {
+        created: 0,
+        updated: 0,
+        unchanged: 0,
+        priceChanges: 0,
+        missingPrice: 0,
+        missingPriceItems: [],
+      };
     }
 
     const existingRows = await this.productRepo.find({
@@ -279,6 +350,8 @@ export class ProductV2CronjobService {
     const toSave: Product[] = [];
     // Giá đổi trong lần chạy này — ghi lịch sử sau khi upsert xong.
     const priceChanges: ProductPriceHistory[] = [];
+    // API trả thiếu/không hợp lệ giá trong page này — chỉ dùng để log/dump raw.
+    const missingPriceItems: MissingPriceItem[] = [];
 
     for (const item of items) {
       const code = item.MaHH?.trim();
@@ -290,6 +363,21 @@ export class ProductV2CronjobService {
       const description = item.Description ? String(item.Description) : undefined;
       const rawPrice = this.toNullableNumber(item.Price);
       const price = rawPrice !== null && rawPrice > 0 ? rawPrice : null;
+
+      // Chỉ ghi nhận để debug; logic cập nhật giá về null giữ nguyên.
+      if (price === null) {
+        missingPriceItems.push({
+          mahh: code,
+          name,
+          reason: rawPrice === null ? 'missing_or_invalid' : 'non_positive',
+          rawPrice: item.Price ?? null,
+          rawPriceType:
+            item.Price === null || item.Price === undefined
+              ? String(item.Price)
+              : typeof item.Price,
+          rawItem: item,
+        });
+      }
       const stock = this.toStockQty(item);
       const isInStock = this.toBoolean(item.Stock);
 
@@ -410,7 +498,94 @@ export class ProductV2CronjobService {
       .where('product_code IN (:...codes)', { codes })
       .execute();
 
-    return { created, updated, unchanged, priceChanges: priceChanges.length };
+    return {
+      created,
+      updated,
+      unchanged,
+      priceChanges: priceChanges.length,
+      missingPrice: missingPriceItems.length,
+      missingPriceItems,
+    };
+  }
+
+  /**
+   * Ghi raw payload các sản phẩm API trả thiếu/không hợp lệ giá.
+   * Mỗi lần sync 1 file JSON; file cũ hơn missingPriceRetentionDays bị xoá.
+   */
+  private writeMissingPriceDump(
+    runStartedAt: Date,
+    apiUrl: string,
+    totalMissing: number,
+    items: MissingPriceItem[],
+  ): string {
+    const filePath = path.join(
+      this.missingPriceDumpDir,
+      `${this.formatDumpTimestamp(runStartedAt)}.json`,
+    );
+    try {
+      fs.mkdirSync(this.missingPriceDumpDir, { recursive: true });
+      const payload = {
+        runStartedAt: runStartedAt.toISOString(),
+        apiUrl,
+        totalMissing,
+        detailCount: items.length,
+        truncated: items.length < totalMissing,
+        items: items.map((item) => ({
+          page: item.page,
+          MaHH: item.mahh,
+          Name: item.name,
+          reason: item.reason,
+          rawPrice: item.rawPrice,
+          rawPriceType: item.rawPriceType,
+          rawItem: item.rawItem,
+        })),
+      };
+      fs.writeFileSync(filePath, JSON.stringify(payload, null, 2), 'utf8');
+      return filePath;
+    } catch (error) {
+      this.logger.error(
+        `Không ghi được dump thiếu giá: ${(error as Error)?.message || error}`,
+      );
+      return '(không ghi được)';
+    }
+  }
+
+  private cleanupMissingPriceDumps(): void {
+    try {
+      if (!fs.existsSync(this.missingPriceDumpDir)) return;
+      const cutoff =
+        Date.now() - this.missingPriceRetentionDays * 24 * 60 * 60 * 1000;
+      let removed = 0;
+      for (const name of fs.readdirSync(this.missingPriceDumpDir)) {
+        if (!name.endsWith('.json')) continue;
+        const full = path.join(this.missingPriceDumpDir, name);
+        try {
+          if (fs.statSync(full).mtimeMs < cutoff) {
+            fs.unlinkSync(full);
+            removed += 1;
+          }
+        } catch {
+          // bỏ qua file đang bị khoá/không đọc được
+        }
+      }
+      if (removed > 0) {
+        this.logger.log(
+          `Dọn ${removed} file dump thiếu giá cũ hơn ${this.missingPriceRetentionDays} ngày`,
+        );
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Không dọn được dump thiếu giá: ${(error as Error)?.message || error}`,
+      );
+    }
+  }
+
+  private formatDumpTimestamp(date: Date): string {
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return (
+      `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
+      `_${pad(date.getHours())}-${pad(date.getMinutes())}-${pad(date.getSeconds())}`
+    );
   }
 
   private async loadBrandCategoryCache(
