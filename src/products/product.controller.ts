@@ -130,14 +130,17 @@ export class ProductController {
   findPriceChanges(
     @Query('page') page?: string,
     @Query('pageSize') pageSize?: string,
+    @Query('productId') productId?: string,
     @Query('from') from?: string,
     @Query('to') to?: string,
     @Query('productCode') productCode?: string,
     @Query('source') source?: string,
   ) {
+    const productIdNum = productId ? Number(productId) : NaN;
     return this.productService.findPriceChanges({
       page: page ? Number(page) : undefined,
       pageSize: pageSize ? Number(pageSize) : undefined,
+      productId: Number.isFinite(productIdNum) ? productIdNum : undefined,
       from,
       to,
       productCode,

@@ -445,25 +445,38 @@ export class ProductService {
   async findPriceChanges(filter?: {
     page?: number;
     pageSize?: number;
+    productId?: number;
     from?: string;
     to?: string;
     productCode?: string;
     source?: string;
   }) {
+    // TypeORM cần property path của entity trong orderBy (changedAt), KHÔNG
+    // phải tên cột DB (changed_at): khi có join + skip/take nó dựng subquery
+    // phân trang và tra metadata theo property path, tên cột sẽ làm column
+    // undefined -> crash "reading 'databaseName'".
     const qb = this.priceHistoryRepository
       .createQueryBuilder('h')
       .leftJoinAndSelect('h.product', 'p')
-      .orderBy('h.changed_at', 'DESC')
+      .orderBy('h.changedAt', 'DESC')
       .addOrderBy('h.id', 'DESC');
 
+    if (
+      filter?.productId !== undefined &&
+      Number.isFinite(Number(filter.productId))
+    ) {
+      qb.andWhere('h.productId = :productId', {
+        productId: Number(filter.productId),
+      });
+    }
     if (filter?.from && /^\d{4}-\d{2}-\d{2}$/.test(filter.from)) {
-      qb.andWhere('h.changed_at >= :from', { from: `${filter.from} 00:00:00` });
+      qb.andWhere('h.changedAt >= :from', { from: `${filter.from} 00:00:00` });
     }
     if (filter?.to && /^\d{4}-\d{2}-\d{2}$/.test(filter.to)) {
-      qb.andWhere('h.changed_at <= :to', { to: `${filter.to} 23:59:59` });
+      qb.andWhere('h.changedAt <= :to', { to: `${filter.to} 23:59:59` });
     }
     if (filter?.productCode && filter.productCode.trim().length > 0) {
-      qb.andWhere('LOWER(h.product_code) LIKE :code', {
+      qb.andWhere('LOWER(h.productCode) LIKE :code', {
         code: `%${filter.productCode.trim().toLowerCase()}%`,
       });
     }
@@ -476,6 +489,19 @@ export class ProductService {
     qb.skip((page - 1) * pageSize).take(pageSize);
 
     const [rows, total] = await qb.getManyAndCount();
-    return { data: rows, total, page, pageSize };
+    // Trả phẳng productName cho FE (modal lịch sử giá đọc field này) thay vì
+    // bắt FE tự bóc object quan hệ `product`.
+    const data = rows.map((row) => ({
+      id: row.id,
+      productId: row.productId,
+      productCode: row.productCode,
+      productName: row.product?.productName ?? null,
+      oldPrice: row.oldPrice ?? null,
+      newPrice: row.newPrice ?? null,
+      changedAt: row.changedAt,
+      source: row.source,
+      createdAt: row.createdAt,
+    }));
+    return { data, total, page, pageSize };
   }
 }
