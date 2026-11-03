@@ -524,39 +524,27 @@ export class OrderCareStatsService {
       params.push(...options.departments);
     }
 
-    if (options.blacklist.length > 0) {
-      clauses.push(
-        `AND (od.meta_customer_id IS NULL OR od.meta_customer_id NOT IN (${options.blacklist
-          .map(() => '?')
-          .join(',')}))`,
-      );
-      params.push(...options.blacklist);
-    }
+    // Blacklist per (owner user_id, zalo_contact_id): ẩn nếu CHÍNH SALE sở
+    // hữu đơn đã chặn khách. Áp dụng cho mọi role, kể cả admin.
+    clauses.push(`AND NOT EXISTS (
+      SELECT 1 FROM order_blacklist ob
+      WHERE ob.user_id = o.sale_by
+        AND ob.zalo_contact_id = od.meta_customer_id
+    )`);
 
     return { sql: ` ${clauses.join(' ')}`, params };
   }
 
+  /**
+   * Blacklist giờ lọc trực tiếp trong SQL theo owner của đơn
+   * (order_blacklist.user_id = orders.sale_by) nên không cần precompute list.
+   * Giữ method để không phải sửa toàn bộ cache key/call site.
+   */
   private async resolveBlacklist(
-    user: any,
-    allowedUserIds: number[] | null,
+    _user: any,
+    _allowedUserIds: number[] | null,
   ): Promise<string[]> {
-    const roleNames = (user?.roles || []).map((r: any) =>
-      typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
-    );
-    if (roleNames.includes('admin')) return [];
-
-    const ids =
-      allowedUserIds && allowedUserIds.length ? allowedUserIds : [user?.id];
-    const validIds = ids.filter((id) => !!id);
-    if (validIds.length === 0) return [];
-
-    const map =
-      await this.orderBlacklistService.getBlacklistedContactsForUsers(validIds);
-    const merged = new Set<string>();
-    for (const set of map.values()) {
-      for (const value of set) merged.add(value);
-    }
-    return Array.from(merged);
+    return [];
   }
 
   private parseCsvNumbers(csv?: string): number[] {

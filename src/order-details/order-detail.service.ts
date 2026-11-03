@@ -316,84 +316,24 @@ export class OrderDetailService {
 
     const orderDetails = await queryBuilder.getMany();
 
-    // ✅ Apply blacklist filtering at application level
-    if (user && user.roles && user.roles.length > 0) {
-      const roleNames = (user.roles || []).map((r: any) =>
-        typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
-      );
+    // Blacklist per (owner user_id, zalo_contact_id): ẩn nếu CHÍNH SALE sở
+    // hữu đơn đã chặn khách. Áp dụng cho mọi role, kể cả admin.
+    const ownerIds = [
+      ...new Set(
+        orderDetails
+          .map((od) => od.order?.sale_by?.id)
+          .filter((id): id is number => !!id),
+      ),
+    ];
+    const ownerBlacklist =
+      await this.orderBlacklistService.getBlacklistedContactsForUsers(ownerIds);
 
-      const isAdmin = roleNames.includes('admin');
-      const isManager = roleNames.some((r: string) => r.startsWith('manager-'));
-
-      if (!isAdmin) {
-        // Admin không filter blacklist
-        const blacklistedSet = new Set<string>();
-        if (isManager) {
-          const userIds = Array.isArray(allowedUserIds)
-            ? allowedUserIds
-            : [user.id];
-          const map =
-            await this.orderBlacklistService.getBlacklistedContactsForUsers(
-              userIds,
-            );
-          for (const set of map.values()) {
-            for (const id of set) blacklistedSet.add(id);
-          }
-        } else {
-          const list =
-            await this.orderBlacklistService.getBlacklistedContactsForUser(
-              user.id,
-            );
-          for (const id of list) blacklistedSet.add(id);
-        }
-
-        if (blacklistedSet.size > 0) {
-          // Nếu là manager, cần lấy blacklist của tất cả owner để filter
-          let ownerBlacklistMap = new Map<number, Set<string>>();
-          if (isManager) {
-            const uniqueOwnerIds = [
-              ...new Set(
-                orderDetails
-                  .map((od) => od.order?.sale_by?.id)
-                  .filter((id) => id),
-              ),
-            ];
-            if (uniqueOwnerIds.length > 0) {
-              ownerBlacklistMap =
-                await this.orderBlacklistService.getBlacklistedContactsForUsers(
-                  uniqueOwnerIds,
-                );
-            }
-          }
-
-          return orderDetails.filter((orderDetail) => {
-            // Use generated column meta_customer_id (already string)
-            const customerId = orderDetail.meta_customer_id;
-            if (!customerId) return true; // Không có customer_id thì hiển thị
-
-            // Kiểm tra xem owner của order detail có blacklist contact này không
-            const orderOwnerId = orderDetail.order?.sale_by?.id;
-            if (!orderOwnerId) return true; // Không có owner thì hiển thị
-
-            // Nếu manager, kiểm tra xem owner có blacklist contact này không
-            if (isManager) {
-              const ownerBlacklistedContacts =
-                ownerBlacklistMap.get(orderOwnerId);
-              if (
-                ownerBlacklistedContacts &&
-                ownerBlacklistedContacts.has(customerId)
-              ) {
-                return false; // Owner đã blacklist contact này, không hiển thị cho manager
-              }
-            }
-
-            return !blacklistedSet.has(customerId);
-          });
-        }
-      }
-    }
-
-    return orderDetails;
+    return orderDetails.filter((orderDetail) => {
+      const ownerId = orderDetail.order?.sale_by?.id;
+      const customerId = orderDetail.meta_customer_id;
+      if (!ownerId || !customerId) return true;
+      return !ownerBlacklist.get(ownerId)?.has(customerId);
+    });
   }
 
   async findById(id: number): Promise<OrderDetail | null> {
@@ -421,46 +361,19 @@ export class OrderDetailService {
           return null; // Không có quyền xem
         }
 
-        // Kiểm tra blacklist cho user thường và manager
-        const roleNames = (user.roles || []).map((r: any) =>
-          typeof r === 'string'
-            ? r.toLowerCase()
-            : (r.name || '').toLowerCase(),
-        );
-
-        const isAdmin = roleNames.includes('admin');
-        const isManager = roleNames.some((r: string) =>
-          r.startsWith('manager-'),
-        );
-
-        if (!isAdmin) {
-          const customerId = orderDetail.meta_customer_id;
-          if (customerId) {
-            if (isManager) {
-              const userIds = Array.isArray(allowedUserIds)
-                ? allowedUserIds
-                : [user.id];
-              const map =
-                await this.orderBlacklistService.getBlacklistedContactsForUsers(
-                  userIds,
-                );
-              for (const set of map.values()) {
-                if (set.has(customerId)) return null; // Bị blacklist bởi user trong scope của manager
-              }
-            } else {
-              const isBlacklisted =
-                await this.orderBlacklistService.isBlacklisted(
-                  user.id,
-                  customerId,
-                );
-              if (isBlacklisted) {
-                return null; // Bị blacklist, không được xem
-              }
-            }
-          }
-        }
       }
-      // Admin (allowedUserIds === null) có thể xem tất cả
+
+      // Blacklist per (owner user_id, zalo_contact_id): ẩn nếu CHÍNH SALE sở
+      // hữu đơn đã chặn khách. Áp dụng cho mọi role, kể cả admin.
+      const customerId = orderDetail.meta_customer_id;
+      const ownerId = orderDetail.order?.sale_by?.id;
+      if (customerId && ownerId) {
+        const isBlacklisted = await this.orderBlacklistService.isBlacklisted(
+          ownerId,
+          customerId,
+        );
+        if (isBlacklisted) return null;
+      }
     }
 
     return orderDetail;
@@ -1350,63 +1263,25 @@ export class OrderDetailService {
 
     let rows = await qb.getMany();
 
-    // Blacklist filtering: non-admins
-    const roleNames = (params.user?.roles || []).map((r: any) =>
-      typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
-    );
-    const isAdmin = roleNames.includes('admin');
-    if (!isAdmin) {
-      const allowedIds2 = await this.getUserIdsByRole(params.user);
-      const isManager = roleNames.some((r: string) => r.startsWith('manager-'));
-      if (isManager) {
-        const map =
-          await this.orderBlacklistService.getBlacklistedContactsForUsers(
-            allowedIds2 || [params.user.id],
-          );
-        const bl = new Set<string>();
-        for (const set of map.values()) for (const id of set) bl.add(id);
-
-        // Lấy blacklist của tất cả owner để filter
-        const uniqueOwnerIds = [
-          ...new Set(
-            rows.map((od) => od.order?.sale_by?.id).filter((id) => id),
-          ),
-        ];
-        let ownerBlacklistMap = new Map<number, Set<string>>();
-        if (uniqueOwnerIds.length > 0) {
-          ownerBlacklistMap =
-            await this.orderBlacklistService.getBlacklistedContactsForUsers(
-              uniqueOwnerIds,
-            );
-        }
-
-        rows = rows.filter((od) => {
-          const cid = od.meta_customer_id;
-          if (!cid) return true;
-
-          const orderOwnerId = od.order?.sale_by?.id;
-          if (!orderOwnerId) return true;
-
-          // Kiểm tra xem owner có blacklist contact này không
-          const ownerBlacklistedContacts = ownerBlacklistMap.get(orderOwnerId);
-          if (ownerBlacklistedContacts && ownerBlacklistedContacts.has(cid)) {
-            return false; // Owner đã blacklist contact này, không hiển thị cho manager
-          }
-
-          return !bl.has(cid);
-        });
-      } else {
-        const list =
-          await this.orderBlacklistService.getBlacklistedContactsForUser(
-            params.user.id,
-          );
-        const bl = new Set(list);
-        rows = rows.filter((od) => {
-          const cid = od.meta_customer_id;
-          return !cid || !bl.has(cid);
-        });
-      }
-    }
+    // Blacklist per (owner user_id, zalo_contact_id): ẩn nếu CHÍNH SALE sở
+    // hữu đơn đã chặn khách. Áp dụng cho mọi role, kể cả admin.
+    const ownerIdsStats = [
+      ...new Set(
+        rows
+          .map((od) => od.order?.sale_by?.id)
+          .filter((id): id is number => !!id),
+      ),
+    ];
+    const ownerBlacklistStats =
+      await this.orderBlacklistService.getBlacklistedContactsForUsers(
+        ownerIdsStats,
+      );
+    rows = rows.filter((od) => {
+      const ownerId = od.order?.sale_by?.id;
+      const cid = od.meta_customer_id;
+      if (!ownerId || !cid) return true;
+      return !ownerBlacklistStats.get(ownerId)?.has(cid);
+    });
 
     // Map to response rows
     const resultRows = rows.map((od) => {
@@ -1481,6 +1356,16 @@ export class OrderDetailService {
       .leftJoinAndSelect('details.product', 'product')
       .leftJoinAndSelect('order.sale_by', 'sale_by')
       .where('details.deleted_at IS NOT NULL');
+
+    // Blacklist per (owner user_id, zalo_contact_id): ẩn nếu chính sale sở
+    // hữu đơn đã chặn khách. Áp dụng cho mọi role, kể cả admin.
+    qb.andWhere(
+      `NOT EXISTS (
+        SELECT 1 FROM order_blacklist ob
+        WHERE ob.user_id = sale_by.id
+          AND ob.zalo_contact_id = details.meta_customer_id
+      )`,
+    );
 
     // Permission scoping
     const allowedUserIds = await this.getUserIdsByRole(user);
@@ -1598,41 +1483,8 @@ export class OrderDetailService {
 
     const [rows, total] = await qb.getManyAndCount();
 
-    // Blacklist filtering for non-admins (same logic as active list)
-    let filtered = rows;
-    if (user && user.roles && user.roles.length > 0) {
-      const roleNames = (user.roles || []).map((r: any) =>
-        typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
-      );
-      const isAdmin = roleNames.includes('admin');
-      const isManager = roleNames.some((r: string) => r.startsWith('manager-'));
-      if (!isAdmin) {
-        const blacklistedSet = new Set<string>();
-        if (isManager) {
-          const userIds = Array.isArray(allowedUserIds)
-            ? allowedUserIds
-            : [user.id];
-          const map =
-            await this.orderBlacklistService.getBlacklistedContactsForUsers(
-              userIds,
-            );
-          for (const set of map.values())
-            for (const id of set) blacklistedSet.add(id);
-        } else {
-          const list =
-            await this.orderBlacklistService.getBlacklistedContactsForUser(
-              user.id,
-            );
-          for (const id of list) blacklistedSet.add(id);
-        }
-        if (blacklistedSet.size > 0) {
-          filtered = filtered.filter((od) => {
-            const customerId = od.meta_customer_id;
-            return !customerId || !blacklistedSet.has(customerId);
-          });
-        }
-      }
-    }
+    // Blacklist đã được lọc bằng NOT EXISTS (per-owner) trong query phía trên.
+    const filtered = rows;
 
     return { data: filtered, total, page, pageSize };
   }
@@ -1856,6 +1708,16 @@ export class OrderDetailService {
       .leftJoinAndSelect('sale_by.departments', 'sale_by_departments')
       .where('details.hidden_at IS NOT NULL');
 
+    // Blacklist per (owner user_id, zalo_contact_id): ẩn nếu chính sale sở
+    // hữu đơn đã chặn khách. Áp dụng cho mọi role, kể cả admin.
+    qb.andWhere(
+      `NOT EXISTS (
+        SELECT 1 FROM order_blacklist ob
+        WHERE ob.user_id = sale_by.id
+          AND ob.zalo_contact_id = details.meta_customer_id
+      )`,
+    );
+
     const allowedUserIds = await this.getUserIdsByRole(user);
     this.applyHiddenFilters(qb, options, allowedUserIds, now);
 
@@ -1919,45 +1781,8 @@ export class OrderDetailService {
       .map((id) => rowMap.get(id))
       .filter((row): row is OrderDetail => !!row);
 
-    // ✅ Apply blacklist filtering (giữ nguyên logic cũ)
-    let filtered = rows;
-    if (user && user.roles && user.roles.length > 0) {
-      const roleNames = (user.roles || []).map((r: any) =>
-        typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
-      );
-      const isAdmin = roleNames.includes('admin');
-      const isManager = roleNames.some((r: string) => r.startsWith('manager-'));
-
-      if (!isAdmin) {
-        const blacklistedSet = new Set<string>();
-
-        if (isManager) {
-          const userIds = Array.isArray(allowedUserIds)
-            ? allowedUserIds
-            : [user.id];
-          const map =
-            await this.orderBlacklistService.getBlacklistedContactsForUsers(
-              userIds,
-            );
-          for (const set of map.values()) {
-            for (const id of set) blacklistedSet.add(id);
-          }
-        } else {
-          const list =
-            await this.orderBlacklistService.getBlacklistedContactsForUser(
-              user.id,
-            );
-          for (const id of list) blacklistedSet.add(id);
-        }
-
-        if (blacklistedSet.size > 0) {
-          filtered = filtered.filter((od) => {
-            const customerId = od.meta_customer_id;
-            return !customerId || !blacklistedSet.has(customerId);
-          });
-        }
-      }
-    }
+    // Blacklist đã được lọc bằng NOT EXISTS (per-owner) trong query phía trên.
+    const filtered = rows;
 
     return { data: filtered, total, page, pageSize };
   }
@@ -2311,41 +2136,15 @@ export class OrderDetailService {
       }
     }
 
-    // Blacklist: bỏ khách đã bị chặn (admin xem tất cả)
-    if (params.user) {
-      const roleNames = (params.user.roles || []).map((r: any) =>
-        typeof r === 'string' ? r.toLowerCase() : (r.name || '').toLowerCase(),
-      );
-      const isAdmin = roleNames.includes('admin');
-      if (!isAdmin) {
-        const isManager = roleNames.some((r: string) =>
-          r.startsWith('manager-'),
-        );
-        let blocked: string[] = [];
-        if (isManager) {
-          const map =
-            await this.orderBlacklistService.getBlacklistedContactsForUsers(
-              allowedUserIds || [params.user.id],
-            );
-          const set = new Set<string>();
-          for (const ids of map.values()) for (const id of ids) set.add(id);
-          blocked = Array.from(set);
-        } else {
-          blocked =
-            await this.orderBlacklistService.getBlacklistedContactsForUser(
-              params.user.id,
-            );
-        }
-        if (blocked.length > 0) {
-          conditions.push(
-            `(details.meta_customer_id IS NULL
-              OR details.meta_customer_id = ''
-              OR details.meta_customer_id NOT IN (${blocked.map(() => '?').join(', ')}))`,
-          );
-          sqlParams.push(...blocked);
-        }
-      }
-    }
+    // Blacklist per (owner user_id, zalo_contact_id): ẩn nếu CHÍNH SALE sở
+    // hữu đơn đã chặn khách. Áp dụng cho mọi role, kể cả admin.
+    conditions.push(
+      `NOT EXISTS (
+        SELECT 1 FROM order_blacklist ob
+        WHERE ob.user_id = sale_by.id
+          AND ob.zalo_contact_id = details.meta_customer_id
+      )`,
+    );
 
     // Warning level: dynamicExtended = expiry_days - TO_DAYS(hôm nay)
     // (expiry_days là generated column = TO_DAYS(DATE(created_at)) + extended)

@@ -128,42 +128,15 @@ export class TransactionStatsService {
   }
 
   /**
-   * Build blacklist filter: exclude order_details whose metadata.customer_id appears
-   * in order_blacklist.zalo_contact_id for the same user (ob.user_id = u.id).
-   * Apply only for users with role 'manager' or 'user'.
+   * Blacklist per (owner user_id, zalo_contact_id): ẩn đơn nếu CHÍNH SALE sở
+   * hữu đơn đã chặn khách. Áp dụng cho mọi role, kể cả admin.
+   * Không dùng blacklist của sale khác → tránh ẩn chéo.
    */
-  private buildBlacklistFilter(user: any): string {
-    if (!user) return '';
-
-    const hasManagerOrUserRole = user.roles?.some(
-      (r: any) =>
-        r.name === 'manager' || r.name === 'user' || r.name.includes('manager'),
-    );
-
-    if (!hasManagerOrUserRole) return '';
-
-    // Exclude order_details where metadata.customer_id matches order_blacklist.zalo_contact_id
-    // and the blacklist entry belongs to the same user (ob.user_id = u.id)
-    // Note: use the current user's id so we exclude contacts blacklisted by the viewer
-    // If the user is a manager, also exclude blacklist entries created by users
-    // in the manager's main departments (same logic used in buildPermissionFilter).
-    // Determine department IDs from `user.departments` that have server_ip set.
-    let deptFilter = '';
-    if (user.departments && user.departments.length > 0) {
-      const mainDepts = user.departments.filter(
-        (d: any) => d.server_ip && d.server_ip.trim() !== '',
-      );
-      if (mainDepts.length > 0) {
-        const deptIds = mainDepts.map((d: any) => d.id).join(',');
-        // Subquery will find users who belong to those departments
-        deptFilter = `OR ob.user_id IN (SELECT u2.id FROM users u2 JOIN users_departments ud2 ON u2.id = ud2.user_id WHERE ud2.department_id IN (${deptIds}))`;
-      }
-    }
-
+  private buildBlacklistFilter(_user: any): string {
     return `AND NOT EXISTS (
       SELECT 1 FROM order_blacklist ob
-      WHERE ob.zalo_contact_id = od.meta_customer_id
-        AND (ob.user_id = ${user.id} ${deptFilter ? deptFilter : ''})
+      WHERE ob.user_id = o.sale_by
+        AND ob.zalo_contact_id = od.meta_customer_id
     )`;
   }
 
