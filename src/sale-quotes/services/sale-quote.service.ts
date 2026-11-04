@@ -19,6 +19,7 @@ import {
 import { SaleSettingsService } from './sale-settings.service';
 import { SalePricingService } from './sale-pricing.service';
 import { SaleTextRendererService } from './sale-text-renderer.service';
+import { AuthenticatedUser } from '../types/auth-user.type';
 import {
   assertCanMutate,
   assertOwnerOrAdmin,
@@ -46,7 +47,7 @@ export class SaleQuoteService {
     private readonly renderer: SaleTextRendererService,
   ) {}
 
-  async create(dto: CreateQuoteDto, user: any) {
+  async create(dto: CreateQuoteDto, user: AuthenticatedUser) {
     assertCanMutate(user);
     const userId = getUserId(user);
     const settings = await this.settingsService.getForUser(userId);
@@ -91,7 +92,7 @@ export class SaleQuoteService {
     return this.findOne(saved.id, user);
   }
 
-  async findAll(query: QueryQuoteDto, user: any) {
+  async findAll(query: QueryQuoteDto, user: AuthenticatedUser) {
     const userId = getUserId(user);
     const page = Math.max(1, Number(query.page) || 1);
     const pageSize = Math.max(1, Math.min(Number(query.pageSize) || 20, 100));
@@ -144,7 +145,7 @@ export class SaleQuoteService {
     return { data, total, page, pageSize };
   }
 
-  async findOne(id: number, user: any) {
+  async findOne(id: number, user: AuthenticatedUser) {
     const quote = await this.quoteRepo
       .createQueryBuilder('q')
       .leftJoinAndSelect('q.saleUser', 'u')
@@ -173,10 +174,10 @@ export class SaleQuoteService {
           stock: prod?.stock ?? item.metadata?.stock ?? 0,
         };
       }),
-    } as any;
+    };
   }
 
-  async update(id: number, dto: UpdateQuoteDto, user: any) {
+  async update(id: number, dto: UpdateQuoteDto, user: AuthenticatedUser) {
     const quote = await this.getEditableQuote(id, user);
 
     if (dto.title !== undefined) quote.title = dto.title?.trim() || null;
@@ -208,13 +209,13 @@ export class SaleQuoteService {
     return this.findOne(id, user);
   }
 
-  async remove(id: number, user: any) {
+  async remove(id: number, user: AuthenticatedUser) {
     const quote = await this.getEditableQuote(id, user);
     await this.quoteRepo.softRemove(quote);
     return { success: true };
   }
 
-  async duplicate(id: number, user: any) {
+  async duplicate(id: number, user: AuthenticatedUser) {
     assertCanMutate(user);
     const source = await this.quoteRepo
       .createQueryBuilder('q')
@@ -271,7 +272,7 @@ export class SaleQuoteService {
     return this.findOne(saved.id, user);
   }
 
-  async addItem(id: number, dto: QuoteItemInputDto, user: any) {
+  async addItem(id: number, dto: QuoteItemInputDto, user: AuthenticatedUser) {
     const quote = await this.getEditableQuote(id, user);
     const userId = getUserId(user);
     const settings = await this.settingsService.getForUser(userId);
@@ -304,7 +305,7 @@ export class SaleQuoteService {
     id: number,
     itemId: number,
     dto: UpdateQuoteItemDto,
-    user: any,
+    user: AuthenticatedUser,
   ) {
     const quote = await this.getEditableQuote(id, user);
     const item = await this.itemRepo.findOne({
@@ -379,7 +380,7 @@ export class SaleQuoteService {
     return this.findOne(quote.id, user);
   }
 
-  async removeItem(id: number, itemId: number, user: any) {
+  async removeItem(id: number, itemId: number, user: AuthenticatedUser) {
     const quote = await this.getEditableQuote(id, user);
     const item = await this.itemRepo.findOne({
       where: { id: itemId, quoteId: id },
@@ -392,7 +393,7 @@ export class SaleQuoteService {
     return this.findOne(quote.id, user);
   }
 
-  async reorderItems(id: number, itemIds: number[], user: any) {
+  async reorderItems(id: number, itemIds: number[], user: AuthenticatedUser) {
     const quote = await this.getEditableQuote(id, user);
     const items = await this.itemRepo.find({ where: { quoteId: id } });
     const ownedIds = new Set(items.map((item) => item.id));
@@ -420,7 +421,7 @@ export class SaleQuoteService {
 
   async renderText(
     id: number,
-    user: any,
+    user: AuthenticatedUser,
     query: { mode?: string; zaloSuffix?: string } = {},
   ) {
     const quote = await this.findOne(id, user);
@@ -532,7 +533,7 @@ export class SaleQuoteService {
     return new Map(products.map((product) => [product.id, product]));
   }
 
-  private async getEditableQuote(id: number, user: any) {
+  private async getEditableQuote(id: number, user: AuthenticatedUser) {
     const quote = await this.quoteRepo.findOne({ where: { id } });
     if (!quote) {
       throw new NotFoundException('Báo giá không tồn tại');
@@ -545,7 +546,7 @@ export class SaleQuoteService {
     return quote;
   }
 
-  private assertCanRead(quote: SaleQuote, user: any) {
+  private assertCanRead(quote: SaleQuote, user: AuthenticatedUser) {
     const userId = getUserId(user);
     if (!canReadAll(user) && Number(quote.saleUserId) !== userId) {
       throw new NotFoundException('Báo giá không tồn tại');

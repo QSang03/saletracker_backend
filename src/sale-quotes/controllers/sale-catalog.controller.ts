@@ -1,3 +1,4 @@
+import { AuthenticatedRequest } from '../types/auth-user.type';
 import {
   Body,
   Controller,
@@ -30,26 +31,26 @@ export class SaleCatalogController {
   ) {}
 
   @Get('catalog')
-  search(@Query() query: CatalogQueryDto, @Req() req: Request) {
-    return this.catalogService.search(query, (req as any).user);
+  search(@Query() query: CatalogQueryDto, @Req() req: AuthenticatedRequest) {
+    return this.catalogService.search(query, req.user);
   }
 
   @Get('catalog/:id')
   findOne(
     @Param('id', ParseIntPipe) id: number,
-    @Req() req: Request,
+    @Req() req: AuthenticatedRequest,
   ) {
-    return this.catalogService.findOne(id, (req as any).user);
+    return this.catalogService.findOne(id, req.user);
   }
 
   @Post('pricing/preview')
-  previewPricing(@Body() dto: PricingPreviewDto, @Req() req: Request) {
-    return this.catalogService.previewPricing(dto, (req as any).user);
+  previewPricing(@Body() dto: PricingPreviewDto, @Req() req: AuthenticatedRequest) {
+    return this.catalogService.previewPricing(dto, req.user);
   }
 
   @Get('settings')
-  async getSettings(@Req() req: Request) {
-    const userId = getUserId((req as any).user);
+  async getSettings(@Req() req: AuthenticatedRequest) {
+    const userId = getUserId(req.user);
     const settings = await this.settingsService.getForUser(userId);
     return this.settingsService.toResponse(settings);
   }
@@ -57,9 +58,9 @@ export class SaleCatalogController {
   @Patch('settings')
   async updateSettings(
     @Body() dto: UpdateSettingsDto,
-    @Req() req: Request,
+    @Req() req: AuthenticatedRequest,
   ) {
-    const userId = getUserId((req as any).user);
+    const userId = getUserId(req.user);
     const settings = await this.settingsService.upsert(userId, dto);
     return this.settingsService.toResponse(settings);
   }

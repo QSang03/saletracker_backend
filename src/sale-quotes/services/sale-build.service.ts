@@ -18,6 +18,7 @@ import {
 import { SaleSettingsService } from './sale-settings.service';
 import { SalePricingService } from './sale-pricing.service';
 import { SaleTextRendererService } from './sale-text-renderer.service';
+import { AuthenticatedUser } from '../types/auth-user.type';
 import {
   assertCanMutate,
   assertOwnerOrAdmin,
@@ -51,7 +52,7 @@ export class SaleBuildService {
     private readonly renderer: SaleTextRendererService,
   ) {}
 
-  async create(dto: CreateBuildDto, user: any) {
+  async create(dto: CreateBuildDto, user: AuthenticatedUser) {
     assertCanMutate(user);
     const userId = getUserId(user);
     const settings = await this.settingsService.getForUser(userId);
@@ -90,7 +91,7 @@ export class SaleBuildService {
     return this.findOne(saved.id, user);
   }
 
-  async findAll(query: QueryBuildDto, user: any) {
+  async findAll(query: QueryBuildDto, user: AuthenticatedUser) {
     const userId = getUserId(user);
     const page = Math.max(1, Number(query.page) || 1);
     const pageSize = Math.max(1, Math.min(Number(query.pageSize) || 20, 100));
@@ -146,7 +147,7 @@ export class SaleBuildService {
     return { data, total, page, pageSize };
   }
 
-  async findOne(id: number, user: any) {
+  async findOne(id: number, user: AuthenticatedUser) {
     const build = await this.buildRepo
       .createQueryBuilder('b')
       .leftJoinAndSelect('b.ownerUser', 'u')
@@ -167,7 +168,7 @@ export class SaleBuildService {
     };
   }
 
-  async update(id: number, dto: UpdateBuildDto, user: any) {
+  async update(id: number, dto: UpdateBuildDto, user: AuthenticatedUser) {
     const build = await this.getEditableBuild(id, user);
 
     if (dto.name !== undefined) build.name = dto.name.trim();
@@ -186,13 +187,13 @@ export class SaleBuildService {
     return this.findOne(id, user);
   }
 
-  async remove(id: number, user: any) {
+  async remove(id: number, user: AuthenticatedUser) {
     const build = await this.getEditableBuild(id, user);
     await this.buildRepo.softRemove(build);
     return { success: true };
   }
 
-  async duplicate(id: number, user: any) {
+  async duplicate(id: number, user: AuthenticatedUser) {
     assertCanMutate(user);
     const source = await this.buildRepo
       .createQueryBuilder('b')
@@ -246,7 +247,7 @@ export class SaleBuildService {
     return this.findOne(saved.id, user);
   }
 
-  async addItem(id: number, dto: BuildItemInputDto, user: any) {
+  async addItem(id: number, dto: BuildItemInputDto, user: AuthenticatedUser) {
     const build = await this.getEditableBuild(id, user);
     const userId = getUserId(user);
     const settings = await this.settingsService.getForUser(userId);
@@ -279,7 +280,7 @@ export class SaleBuildService {
     id: number,
     itemId: number,
     dto: UpdateBuildItemDto,
-    user: any,
+    user: AuthenticatedUser,
   ) {
     const build = await this.getEditableBuild(id, user);
     const item = await this.itemRepo.findOne({
@@ -347,7 +348,7 @@ export class SaleBuildService {
     return this.findOne(build.id, user);
   }
 
-  async removeItem(id: number, itemId: number, user: any) {
+  async removeItem(id: number, itemId: number, user: AuthenticatedUser) {
     const build = await this.getEditableBuild(id, user);
     const item = await this.itemRepo.findOne({
       where: { id: itemId, buildId: id },
@@ -360,7 +361,7 @@ export class SaleBuildService {
     return this.findOne(build.id, user);
   }
 
-  async reorderItems(id: number, itemIds: number[], user: any) {
+  async reorderItems(id: number, itemIds: number[], user: AuthenticatedUser) {
     const build = await this.getEditableBuild(id, user);
     const items = await this.itemRepo.find({ where: { buildId: id } });
     const ownedIds = new Set(items.map((item) => item.id));
@@ -388,7 +389,7 @@ export class SaleBuildService {
 
   async renderText(
     id: number,
-    user: any,
+    user: AuthenticatedUser,
     includeSpecs = false,
     zaloSuffix?: string,
   ) {
@@ -426,7 +427,7 @@ export class SaleBuildService {
     return { totalAmount, hasUnpricedItems };
   }
 
-  async listFolders(user: any) {
+  async listFolders(user: AuthenticatedUser) {
     const userId = getUserId(user);
     const readAll = canReadAll(user);
     const qb = this.buildRepo
@@ -528,7 +529,7 @@ export class SaleBuildService {
       .filter((spec) => spec.label || spec.value);
   }
 
-  private async getEditableBuild(id: number, user: any) {
+  private async getEditableBuild(id: number, user: AuthenticatedUser) {
     const build = await this.buildRepo.findOne({ where: { id } });
     if (!build) {
       throw new NotFoundException('Cấu hình máy ráp không tồn tại');
@@ -541,7 +542,7 @@ export class SaleBuildService {
     return build;
   }
 
-  private assertCanRead(build: SaleBuild, user: any) {
+  private assertCanRead(build: SaleBuild, user: AuthenticatedUser) {
     if (!canReadOwnerResource(build.ownerUserId, user, build.isShared)) {
       throw new NotFoundException('Cấu hình máy ráp không tồn tại');
     }

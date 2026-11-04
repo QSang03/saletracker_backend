@@ -1,3 +1,7 @@
+import { SaleQuote } from '../entities/sale-quote.entity';
+import { SaleBuild } from '../entities/sale-build.entity';
+import { SaleQuickQuoteCase } from '../entities/sale-quick-quote-case.entity';
+import { SaleQuoteSetting } from '../entities/sale-quote-setting.entity';
 import { Injectable } from '@nestjs/common';
 import * as ExcelJS from 'exceljs';
 import { SalePricingService } from './sale-pricing.service';
@@ -16,10 +20,14 @@ const THIN_BORDER: Partial<ExcelJS.Borders> = {
 export class SaleExcelService {
   constructor(private readonly pricingService: SalePricingService) {}
 
-  async buildQuoteWorkbook(quote: any, type: ExportType = 'internal', settings?: any) {
+  async buildQuoteWorkbook(
+    quote: SaleQuote,
+    type: ExportType = 'internal',
+    settings?: SaleQuoteSetting | null,
+  ): Promise<Buffer> {
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('BaoGia');
-    const items = (quote.items || []) as any[];
+    const items = quote.items || [];
     const isCustomer = type === 'customer';
 
     const headers = isCustomer
@@ -208,10 +216,14 @@ export class SaleExcelService {
     return Buffer.from(await workbook.xlsx.writeBuffer());
   }
 
-  async buildBuildWorkbook(build: any, type: ExportType = 'internal') {
+  async buildBuildWorkbook(
+    build: SaleBuild,
+    type: ExportType = 'internal',
+    settings?: SaleQuoteSetting,
+  ): Promise<Buffer> {
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('CauHinh');
-    const items = (build.items || []) as any[];
+    const items = build.items || [];
     const isCustomer = type === 'customer';
     const headers = isCustomer
       ? ['STT', 'MÃ HỆ THỐNG', 'LINH KIỆN', 'BH', 'ĐƠN GIÁ', 'SL', 'THÀNH TIỀN']
@@ -228,6 +240,32 @@ export class SaleExcelService {
         ];
 
     let rowIndex = 1;
+    if (isCustomer) {
+      const disclaimer1 =
+        settings?.excelDisclaimer1?.trim() ||
+        'BÁO GIÁ CHỈ MANG TÍNH CHẤT THAM KHẢO, QUÝ KHÁCH VUI LÒNG LIÊN HỆ KINH DOANH ĐỂ CÓ ĐƯỢC GIÁ TỐT NHẤT.';
+      const disclaimer2 =
+        settings?.excelDisclaimer2?.trim() ||
+        'HIỆU LỰC BÁO GIÁ CÓ THỜI HẠN TỪ 1-3 NGÀY DO BIẾN ĐỘNG TĂNG GIÁ TỪ HÃNG. MONG QUÝ KHÁCH LƯU Ý.';
+      sheet.mergeCells(
+        `A${rowIndex}:${String.fromCharCode(64 + headers.length)}${rowIndex}`,
+      );
+      sheet.getCell(`A${rowIndex}`).value = disclaimer1;
+      sheet.getCell(`A${rowIndex}`).font = {
+        italic: true,
+        color: { argb: 'FFB91C1C' },
+      };
+      rowIndex += 1;
+      sheet.mergeCells(
+        `A${rowIndex}:${String.fromCharCode(64 + headers.length)}${rowIndex}`,
+      );
+      sheet.getCell(`A${rowIndex}`).value = disclaimer2;
+      sheet.getCell(`A${rowIndex}`).font = {
+        italic: true,
+        color: { argb: 'FFB91C1C' },
+      };
+      rowIndex += 2;
+    }
     sheet.mergeCells(
       `A${rowIndex}:${String.fromCharCode(64 + headers.length)}${rowIndex}`,
     );
@@ -355,10 +393,14 @@ export class SaleExcelService {
     return Buffer.from(await workbook.xlsx.writeBuffer());
   }
 
-  async buildQuickCaseWorkbook(quickCase: any, type: ExportType = 'internal') {
+  async buildQuickCaseWorkbook(
+    quickCase: SaleQuickQuoteCase,
+    type: ExportType = 'internal',
+    settings?: SaleQuoteSetting,
+  ): Promise<Buffer> {
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('BaoGiaNhanh');
-    const items = (quickCase.items || []) as any[];
+    const items = quickCase.items || [];
     const isCustomer = type === 'customer';
     const headers = isCustomer
       ? ['STT', 'YÊU CẦU', 'DIỄN GIẢI / SẢN PHẨM', 'BH', 'ĐƠN GIÁ', 'SL', 'THÀNH TIỀN']
@@ -375,6 +417,32 @@ export class SaleExcelService {
         ];
 
     let rowIndex = 1;
+    if (isCustomer) {
+      const disclaimer1 =
+        settings?.excelDisclaimer1?.trim() ||
+        'BÁO GIÁ CHỈ MANG TÍNH CHẤT THAM KHẢO, QUÝ KHÁCH VUI LÒNG LIÊN HỆ KINH DOANH ĐỂ CÓ ĐƯỢC GIÁ TỐT NHẤT.';
+      const disclaimer2 =
+        settings?.excelDisclaimer2?.trim() ||
+        'HIỆU LỰC BÁO GIÁ CÓ THỜI HẠN TỪ 1-3 NGÀY DO BIẾN ĐỘNG TĂNG GIÁ TỪ HÃNG. MONG QUÝ KHÁCH LƯU Ý.';
+      sheet.mergeCells(
+        `A${rowIndex}:${String.fromCharCode(64 + headers.length)}${rowIndex}`,
+      );
+      sheet.getCell(`A${rowIndex}`).value = disclaimer1;
+      sheet.getCell(`A${rowIndex}`).font = {
+        italic: true,
+        color: { argb: 'FFB91C1C' },
+      };
+      rowIndex += 1;
+      sheet.mergeCells(
+        `A${rowIndex}:${String.fromCharCode(64 + headers.length)}${rowIndex}`,
+      );
+      sheet.getCell(`A${rowIndex}`).value = disclaimer2;
+      sheet.getCell(`A${rowIndex}`).font = {
+        italic: true,
+        color: { argb: 'FFB91C1C' },
+      };
+      rowIndex += 2;
+    }
     sheet.mergeCells(
       `A${rowIndex}:${String.fromCharCode(64 + headers.length)}${rowIndex}`,
     );

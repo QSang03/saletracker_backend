@@ -20,6 +20,7 @@ import {
 import { SaleSettingsService } from './sale-settings.service';
 import { SalePricingService } from './sale-pricing.service';
 import { SaleTextRendererService } from './sale-text-renderer.service';
+import { AuthenticatedUser } from '../types/auth-user.type';
 import {
   assertCanMutate,
   assertOwnerOrAdmin,
@@ -47,7 +48,7 @@ export class SaleQuickCaseService {
     private readonly renderer: SaleTextRendererService,
   ) {}
 
-  async create(dto: CreateQuickCaseDto, user: any) {
+  async create(dto: CreateQuickCaseDto, user: AuthenticatedUser) {
     assertCanMutate(user);
     const userId = getUserId(user);
     const settings = await this.settingsService.getForUser(userId);
@@ -90,7 +91,7 @@ export class SaleQuickCaseService {
    * Nhận danh sách yêu cầu dạng nhiều dòng (giống bqnProcessBulkInput):
    * mỗi dòng tạo 1 item ở trạng thái chưa map sản phẩm.
    */
-  async createBulk(dto: BulkQuickCaseDto, user: any) {
+  async createBulk(dto: BulkQuickCaseDto, user: AuthenticatedUser) {
     assertCanMutate(user);
     const lines = String(dto.rawText || '')
       .split(/\r?\n/)
@@ -115,7 +116,7 @@ export class SaleQuickCaseService {
     );
   }
 
-  async findAll(query: QueryQuickCaseDto, user: any) {
+  async findAll(query: QueryQuickCaseDto, user: AuthenticatedUser) {
     const userId = getUserId(user);
     const page = Math.max(1, Number(query.page) || 1);
     const pageSize = Math.max(1, Math.min(Number(query.pageSize) || 20, 100));
@@ -183,7 +184,7 @@ export class SaleQuickCaseService {
     return { data, total, page, pageSize };
   }
 
-  async findOne(id: number, user: any) {
+  async findOne(id: number, user: AuthenticatedUser) {
     const quickCase = await this.caseRepo
       .createQueryBuilder('c')
       .leftJoinAndSelect('c.ownerUser', 'u')
@@ -212,10 +213,10 @@ export class SaleQuickCaseService {
           stock: prod?.stock ?? 0,
         };
       }),
-    } as any;
+    };
   }
 
-  async update(id: number, dto: UpdateQuickCaseDto, user: any) {
+  async update(id: number, dto: UpdateQuickCaseDto, user: AuthenticatedUser) {
     const quickCase = await this.getEditableCase(id, user);
 
     if (dto.title !== undefined) {
@@ -237,13 +238,13 @@ export class SaleQuickCaseService {
     return this.findOne(id, user);
   }
 
-  async remove(id: number, user: any) {
+  async remove(id: number, user: AuthenticatedUser) {
     const quickCase = await this.getEditableCase(id, user);
     await this.caseRepo.softRemove(quickCase);
     return { success: true };
   }
 
-  async recalculatePrices(id: number, user: any) {
+  async recalculatePrices(id: number, user: AuthenticatedUser) {
     const quickCase = await this.getEditableCase(id, user);
     const rules = await this.settingsService.getEffectiveRules(getUserId(user));
     const items = await this.itemRepo.find({
@@ -265,7 +266,7 @@ export class SaleQuickCaseService {
     return this.findOne(id, user);
   }
 
-  async duplicate(id: number, user: any) {
+  async duplicate(id: number, user: AuthenticatedUser) {
     assertCanMutate(user);
     const source = await this.caseRepo
       .createQueryBuilder('c')
@@ -317,7 +318,7 @@ export class SaleQuickCaseService {
     return this.findOne(saved.id, user);
   }
 
-  async addItem(id: number, dto: QuickCaseItemInputDto, user: any) {
+  async addItem(id: number, dto: QuickCaseItemInputDto, user: AuthenticatedUser) {
     const quickCase = await this.getEditableCase(id, user);
     const userId = getUserId(user);
     const settings = await this.settingsService.getForUser(userId);
@@ -350,7 +351,7 @@ export class SaleQuickCaseService {
     id: number,
     itemId: number,
     dto: UpdateQuickCaseItemDto,
-    user: any,
+    user: AuthenticatedUser,
   ) {
     const quickCase = await this.getEditableCase(id, user);
     const item = await this.itemRepo.findOne({
@@ -421,7 +422,7 @@ export class SaleQuickCaseService {
     return this.findOne(quickCase.id, user);
   }
 
-  async removeItem(id: number, itemId: number, user: any) {
+  async removeItem(id: number, itemId: number, user: AuthenticatedUser) {
     const quickCase = await this.getEditableCase(id, user);
     const item = await this.itemRepo.findOne({
       where: { id: itemId, caseId: id },
@@ -434,7 +435,7 @@ export class SaleQuickCaseService {
     return this.findOne(quickCase.id, user);
   }
 
-  async reorderItems(id: number, itemIds: number[], user: any) {
+  async reorderItems(id: number, itemIds: number[], user: AuthenticatedUser) {
     const quickCase = await this.getEditableCase(id, user);
     const items = await this.itemRepo.find({ where: { caseId: id } });
     const ownedIds = new Set(items.map((item) => item.id));
@@ -460,11 +461,13 @@ export class SaleQuickCaseService {
     return this.findOne(quickCase.id, user);
   }
 
-  async renderText(id: number, user: any, zaloSuffix?: string) {
+  async renderText(id: number, user: AuthenticatedUser, zaloSuffix?: string, globalNote?: string) {
     const quickCase = await this.findOne(id, user);
     const settings = await this.settingsService.getForUser(getUserId(user));
     const finalGlobalNote =
-      quickCase.globalNote?.trim() || settings.defaultGlobalNote?.trim() || null;
+      globalNote !== undefined
+        ? (globalNote.trim() || null)
+        : (quickCase.globalNote?.trim() || settings.defaultGlobalNote?.trim() || null);
     const finalItems = (quickCase.items || []).map((item) => ({
       ...item,
       warranty: item.warranty?.trim() || null,
@@ -559,7 +562,7 @@ export class SaleQuickCaseService {
     return new Map(products.map((product) => [product.id, product]));
   }
 
-  private async getEditableCase(id: number, user: any) {
+  private async getEditableCase(id: number, user: AuthenticatedUser) {
     const quickCase = await this.caseRepo.findOne({ where: { id } });
     if (!quickCase) {
       throw new NotFoundException('Case báo giá nhanh không tồn tại');
@@ -572,7 +575,7 @@ export class SaleQuickCaseService {
     return quickCase;
   }
 
-  private assertCanRead(quickCase: SaleQuickQuoteCase, user: any) {
+  private assertCanRead(quickCase: SaleQuickQuoteCase, user: AuthenticatedUser) {
     if (
       !canReadAll(user) &&
       Number(quickCase.ownerUserId) !== getUserId(user)

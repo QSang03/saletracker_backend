@@ -1,4 +1,5 @@
 import { PricingRules } from '../sale-quote.constants';
+import { AuthenticatedUser } from '../types/auth-user.type';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
@@ -24,7 +25,7 @@ export class SaleCatalogService {
     private readonly settingsService: SaleSettingsService,
   ) {}
 
-  async search(query: CatalogQueryDto, user: any) {
+  async search(query: CatalogQueryDto, user: AuthenticatedUser) {
     const page = Math.max(1, Number(query.page) || 1);
     const pageSize = Math.max(
       1,
@@ -69,10 +70,9 @@ export class SaleCatalogService {
       qb.addSelect(
         `(${relevanceParts.join(' + ')})`,
         'relevance_score',
-      ).setParameters({
-        phraseExact: searchPhrase,
-        phrasePrefix: `${likePhrase}%`,
-      });
+      );
+      qb.setParameter('phraseExact', searchPhrase);
+      qb.setParameter('phrasePrefix', `${likePhrase}%`);
     }
 
     if (query.brand?.trim()) {
@@ -141,7 +141,7 @@ export class SaleCatalogService {
     };
   }
 
-  async findOne(productId: number, user: any) {
+  async findOne(productId: number, user: AuthenticatedUser) {
     const product = await this.productRepo.findOne({
       where: { id: productId },
       relations: ['brand', 'category'],
@@ -159,7 +159,7 @@ export class SaleCatalogService {
     };
   }
 
-  async previewPricing(dto: PricingPreviewDto, user: any) {
+  async previewPricing(dto: PricingPreviewDto, user: AuthenticatedUser) {
     const rules = await this.settingsService.getEffectiveRules(
       getUserId(user),
     );

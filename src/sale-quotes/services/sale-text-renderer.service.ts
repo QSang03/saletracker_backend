@@ -101,9 +101,11 @@ export class SaleTextRendererService {
             : unitPrice !== null && unitPrice !== undefined
               ? Number(unitPrice) * quantity
               : null;
+        const pLabel = options.priceLabel !== undefined ? options.priceLabel : 'fv';
+        const totalLabel = pLabel && pLabel.trim() ? ` ${pLabel.trim()}` : '';
         const totalText =
           lineTotal !== null && Number.isFinite(lineTotal)
-            ? `Thành tiền: ${formatMoney(lineTotal)} ₫`
+            ? `Thành tiền: ${formatMoney(lineTotal)}${totalLabel}`
             : 'Thành tiền: CALL';
         const status = options.showStockStatus === false ? '' : normalizeStatusText(item.statusText);
         return `${index + 1}-${item.productCode || ''}\t;\t${this.nameLine(
@@ -125,7 +127,9 @@ export class SaleTextRendererService {
       }),
     );
 
-    let text = `${body}\n\nTổng cộng:\t\t\t\t\t\t${formatMoney(total)} ₫`;
+    const pLabel = options.priceLabel !== undefined ? options.priceLabel : 'fv';
+    const totalLabel = pLabel && pLabel.trim() ? ` ${pLabel.trim()}` : '';
+    let text = `${body}\n\nTổng cộng:\t\t\t\t\t\t${formatMoney(total)}${totalLabel}`;
 
     if (options.includeSpecs && options.specs && options.specs.length > 0) {
       text += '\n\n*THÔNG SỐ KỸ THUẬT:*';
@@ -240,7 +244,10 @@ export class SaleTextRendererService {
     zaloSuffix?: string | null,
   ): string {
     let text = (body || '').trimEnd();
-    const note = (globalNote || '').trim();
+    let note = (globalNote || '').trim();
+    if (note.toLowerCase() === 'giá đã bao gồm vat.' || note.toLowerCase() === 'giá đã bao gồm vat') {
+      note = '';
+    }
     if (note) {
       text += `\n${note}`;
     }

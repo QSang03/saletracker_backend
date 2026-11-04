@@ -1,3 +1,5 @@
+import { AuthenticatedRequest } from '../types/auth-user.type';
+import { SaleQuote } from '../entities/sale-quote.entity';
 import {
   Body,
   Controller,
@@ -39,55 +41,55 @@ export class SaleQuoteController {
   ) {}
 
   @Post()
-  create(@Body() dto: CreateQuoteDto, @Req() req: Request) {
-    return this.quoteService.create(dto, (req as any).user);
+  create(@Body() dto: CreateQuoteDto, @Req() req: AuthenticatedRequest) {
+    return this.quoteService.create(dto, req.user);
   }
 
   @Get()
-  findAll(@Query() query: QueryQuoteDto, @Req() req: Request) {
-    return this.quoteService.findAll(query, (req as any).user);
+  findAll(@Query() query: QueryQuoteDto, @Req() req: AuthenticatedRequest) {
+    return this.quoteService.findAll(query, req.user);
   }
 
   @Get(':id')
   findOne(
     @Param('id', ParseIntPipe) id: number,
-    @Req() req: Request,
+    @Req() req: AuthenticatedRequest,
   ) {
-    return this.quoteService.findOne(id, (req as any).user);
+    return this.quoteService.findOne(id, req.user);
   }
 
   @Patch(':id')
   update(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateQuoteDto,
-    @Req() req: Request,
+    @Req() req: AuthenticatedRequest,
   ) {
-    return this.quoteService.update(id, dto, (req as any).user);
+    return this.quoteService.update(id, dto, req.user);
   }
 
   @Delete(':id')
   remove(
     @Param('id', ParseIntPipe) id: number,
-    @Req() req: Request,
+    @Req() req: AuthenticatedRequest,
   ) {
-    return this.quoteService.remove(id, (req as any).user);
+    return this.quoteService.remove(id, req.user);
   }
 
   @Post(':id/duplicate')
   duplicate(
     @Param('id', ParseIntPipe) id: number,
-    @Req() req: Request,
+    @Req() req: AuthenticatedRequest,
   ) {
-    return this.quoteService.duplicate(id, (req as any).user);
+    return this.quoteService.duplicate(id, req.user);
   }
 
   @Post(':id/items')
   addItem(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: QuoteItemInputDto,
-    @Req() req: Request,
+    @Req() req: AuthenticatedRequest,
   ) {
-    return this.quoteService.addItem(id, dto, (req as any).user);
+    return this.quoteService.addItem(id, dto, req.user);
   }
 
   @Patch(':id/items/:itemId')
@@ -95,30 +97,30 @@ export class SaleQuoteController {
     @Param('id', ParseIntPipe) id: number,
     @Param('itemId', ParseIntPipe) itemId: number,
     @Body() dto: UpdateQuoteItemDto,
-    @Req() req: Request,
+    @Req() req: AuthenticatedRequest,
   ) {
-    return this.quoteService.updateItem(id, itemId, dto, (req as any).user);
+    return this.quoteService.updateItem(id, itemId, dto, req.user);
   }
 
   @Delete(':id/items/:itemId')
   removeItem(
     @Param('id', ParseIntPipe) id: number,
     @Param('itemId', ParseIntPipe) itemId: number,
-    @Req() req: Request,
+    @Req() req: AuthenticatedRequest,
   ) {
-    return this.quoteService.removeItem(id, itemId, (req as any).user);
+    return this.quoteService.removeItem(id, itemId, req.user);
   }
 
   @Post(':id/items/reorder')
   reorderItems(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: ReorderItemsDto,
-    @Req() req: Request,
+    @Req() req: AuthenticatedRequest,
   ) {
     return this.quoteService.reorderItems(
       id,
       dto.itemIds,
-      (req as any).user,
+      req.user,
     );
   }
 
@@ -126,19 +128,19 @@ export class SaleQuoteController {
   renderText(
     @Param('id', ParseIntPipe) id: number,
     @Query() query: QuoteTextQueryDto,
-    @Req() req: Request,
+    @Req() req: AuthenticatedRequest,
   ) {
-    return this.quoteService.renderText(id, (req as any).user, query);
+    return this.quoteService.renderText(id, req.user, query);
   }
 
   @Post('export-raw')
   async exportRawExcel(
-    @Body() rawQuote: any,
+    @Body() rawQuote: SaleQuote,
     @Query('type') type: 'internal' | 'customer' = 'customer',
-    @Req() req: Request,
+    @Req() req: AuthenticatedRequest,
     @Res() res: Response,
   ) {
-    const userId = getUserId((req as any).user);
+    const userId = getUserId(req.user);
     const settings = await this.settingsService.getForUser(userId);
     const buffer = await this.excelService.buildQuoteWorkbook(
       rawQuote,
@@ -153,11 +155,11 @@ export class SaleQuoteController {
   async exportExcel(
     @Param('id', ParseIntPipe) id: number,
     @Query() query: QuoteExportQueryDto,
-    @Req() req: Request,
+    @Req() req: AuthenticatedRequest,
     @Res() res: Response,
   ) {
-    const quote = await this.quoteService.findOne(id, (req as any).user);
-    const userId = getUserId((req as any).user);
+    const quote = await this.quoteService.findOne(id, req.user);
+    const userId = getUserId(req.user);
     const settings = await this.settingsService.getForUser(userId);
     const buffer = await this.excelService.buildQuoteWorkbook(
       quote,

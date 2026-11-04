@@ -92,4 +92,7 @@ export class SaleQuoteItem {
 
   @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
+
+  /** Số lượng tồn kho tức thời (load từ catalog/products, không lưu DB) */
+  stock?: number;
 }

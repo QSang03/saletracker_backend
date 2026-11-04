@@ -1,15 +1,24 @@
 import { ForbiddenException } from '@nestjs/common';
 import { getRoleNames } from '../../common/utils/user-permission.helper';
+import { AuthenticatedUser } from '../types/auth-user.type';
 
-export function getUserRoleNames(user: any): string[] {
+export { AuthenticatedUser, AuthenticatedRequest } from '../types/auth-user.type';
+
+export function getUserRoleNames(
+  user: AuthenticatedUser | undefined | null,
+): string[] {
   return getRoleNames(user).map((role) => String(role).toLowerCase());
 }
 
-export function isAdminUser(user: any): boolean {
+export function isAdminUser(
+  user: AuthenticatedUser | undefined | null,
+): boolean {
   return getUserRoleNames(user).includes('admin');
 }
 
-export function isViewOnlyUser(user: any): boolean {
+export function isViewOnlyUser(
+  user: AuthenticatedUser | undefined | null,
+): boolean {
   const roles = getUserRoleNames(user);
   return roles.includes('view') && !roles.includes('admin');
 }
@@ -18,12 +27,16 @@ export function isViewOnlyUser(user: any): boolean {
  * Admin và role view được đọc toàn bộ dữ liệu; các role khác chỉ đọc dữ liệu
  * của mình (hoặc dữ liệu được chia sẻ).
  */
-export function canReadAll(user: any): boolean {
+export function canReadAll(
+  user: AuthenticatedUser | undefined | null,
+): boolean {
   const roles = getUserRoleNames(user);
   return roles.includes('admin') || roles.includes('view');
 }
 
-export function assertCanMutate(user: any): void {
+export function assertCanMutate(
+  user: AuthenticatedUser | undefined | null,
+): void {
   if (isViewOnlyUser(user)) {
     throw new ForbiddenException(
       'Tài khoản role view chỉ có quyền xem dữ liệu',
@@ -33,7 +46,7 @@ export function assertCanMutate(user: any): void {
 
 export function assertOwnerOrAdmin(
   ownerId: number | null | undefined,
-  user: any,
+  user: AuthenticatedUser | undefined | null,
   message = 'Bạn không có quyền thao tác dữ liệu này',
 ): void {
   assertCanMutate(user);
@@ -44,7 +57,7 @@ export function assertOwnerOrAdmin(
 
 export function canReadOwnerResource(
   ownerId: number | null | undefined,
-  user: any,
+  user: AuthenticatedUser | undefined | null,
   isShared = false,
 ): boolean {
   if (canReadAll(user)) {
@@ -56,7 +69,7 @@ export function canReadOwnerResource(
   return Number(ownerId) === Number(user?.id);
 }
 
-export function getUserId(user: any): number {
+export function getUserId(user: AuthenticatedUser | undefined | null): number {
   const id = Number(user?.id ?? user?.sub);
   if (!Number.isFinite(id) || id <= 0) {
     throw new ForbiddenException('Không xác định được người dùng');
