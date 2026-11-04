@@ -46,6 +46,11 @@ export class QuickCaseItemInputDto {
   description?: string;
 
   @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  warranty?: string;
+
+  @IsOptional()
   @Type(() => Number)
   @IsNumber()
   @Min(0)
@@ -175,6 +180,11 @@ export class UpdateQuickCaseItemDto {
   @IsString()
   @MaxLength(500)
   description?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  warranty?: string;
 
   @IsOptional()
   @Type(() => Number)

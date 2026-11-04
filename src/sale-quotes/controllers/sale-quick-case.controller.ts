@@ -168,8 +168,14 @@ export class SaleQuickCaseController {
       quickCase,
       type === 'customer' ? 'customer' : 'internal',
     );
-    const rawName = (quickCase.title || `bao-gia-nhanh-${quickCase.id}`).trim();
-    this.sendXlsx(res, buffer, rawName);
+    const now = new Date();
+    const dd = String(now.getDate()).padStart(2, '0');
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const yy = String(now.getFullYear()).slice(-2);
+    const dateStr = `${dd}.${mm}.${yy}`;
+    const cleanTitle = (quickCase.title || '').trim();
+    const filename = cleanTitle ? `BÁO GIÁ_${cleanTitle}_${dateStr}` : `BÁO GIÁ_${dateStr}`;
+    this.sendXlsx(res, buffer, filename);
   }
 
   private sendXlsx(res: Response, buffer: Buffer, filename: string) {

@@ -50,6 +50,15 @@ export class SaleQuoteSetting {
   @Column({ name: 'zalo_suffix', type: 'text', nullable: true })
   zaloSuffix?: string | null;
 
+  @Column({ name: 'show_stock_status', type: 'boolean', default: true })
+  showStockStatus?: boolean;
+
+  @Column({ name: 'excel_disclaimer_1', type: 'text', nullable: true })
+  excelDisclaimer1?: string | null;
+
+  @Column({ name: 'excel_disclaimer_2', type: 'text', nullable: true })
+  excelDisclaimer2?: string | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

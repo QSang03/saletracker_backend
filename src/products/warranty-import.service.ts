@@ -373,8 +373,8 @@ export class WarrantyImportService {
       'HƯỚNG DẪN NẠP THỜI GIAN BẢO HÀNH',
       '1. Điền dữ liệu ở sheet "BAO HANH", xoá 2 dòng ví dụ trước khi nạp.',
       '2. Cột "MÃ HT": mã sản phẩm (product_code), KHÔNG phải id. Dòng không có mã sẽ bị bỏ qua.',
-      '3. Cột "TGBH": thời gian bảo hành — đúng 1 con số, đơn vị THÁNG (ví dụ 12 = 12 tháng).',
-      '4. TGBH phải là số nguyên từ 0 đến 600. "12.5", "12 tháng", "1 năm" đều bị báo lỗi.',
+      '3. Cột "TGBH": thời gian bảo hành — nhập số NĂM (ví dụ 3, 4, 9... tự đổi thành 36, 48, 108 tháng) hoặc số THÁNG (ví dụ 12, 24, 36...).',
+      '4. Hỗ trợ ghi kèm chữ (ví dụ: "3 năm", "36 tháng"). Nếu là số <= 10 hệ thống sẽ tự quy đổi thành tháng.',
       '5. Mã không có trong hệ thống sẽ được liệt kê trong cảnh báo sau khi nạp.',
       '6. Chỉ hỗ trợ định dạng .xlsx.',
     ];
@@ -407,8 +407,17 @@ export class WarrantyImportService {
         let colMonths: number | undefined;
         row.eachCell({ includeEmpty: false }, (cell, colNumber) => {
           const header = norm(cellText(cell));
-          if (header === CODE_HEADER) colCode = colNumber;
-          else if (header === MONTHS_HEADER) colMonths = colNumber;
+          if (header === CODE_HEADER) {
+            colCode = colNumber;
+          } else if (!colCode && this.isCodeHeader(header)) {
+            colCode = colNumber;
+          }
+
+          if (header === MONTHS_HEADER) {
+            colMonths = colNumber;
+          } else if (!colMonths && this.isMonthsHeader(header)) {
+            colMonths = colNumber;
+          }
         });
         if (colCode !== undefined && colMonths !== undefined) {
           return { sheet, headerRow: r, colCode, colMonths };
@@ -452,37 +461,112 @@ export class WarrantyImportService {
     return { rows, totalRows: rows.length, skippedEmptyCode };
   }
 
+  private isCodeHeader(h: string): boolean {
+    return (
+      h === 'MA HT' ||
+      h === 'MA HANG' ||
+      h === 'MA SP' ||
+      h === 'MASP' ||
+      h === 'MA SAN PHAM' ||
+      h === 'P/N' ||
+      h === 'PN' ||
+      h === 'MODEL' ||
+      h === 'PRODUCT CODE'
+    );
+  }
+
+  private isMonthsHeader(h: string): boolean {
+    return (
+      h === 'TGBH' ||
+      h === 'BAO HANH' ||
+      h === 'BH' ||
+      h === 'THOI GIAN BAO HANH' ||
+      h === 'THOI HAN BAO HANH' ||
+      h === 'TGBH (THANG)' ||
+      h === 'TGBH(THANG)' ||
+      h.includes('BAO HANH')
+    );
+  }
+
   /**
-   * TGBH phải là số nguyên 0..600 (đơn vị tháng). "12" hợp lệ, "12.5",
-   * "12 tháng", "1 năm"… không hợp lệ.
+   * TGBH: Hỗ trợ linh hoạt cả số năm và số tháng, chuỗi kèm đơn vị (năm / tháng).
+   * - Nếu là số thuần:
+   *   + = 0 -> 0 tháng (không bảo hành)
+   *   + <= 10 (ví dụ 1, 2, 3, 4, 5, 9...) -> hiểu là NĂM và tự động quy đổi sang tháng (* 12)
+   *   + >= 12 (ví dụ 12, 18, 24, 36, 48...) -> hiểu là THÁNG
+   *   + = 11 -> 11 * 12 = 132 tháng
+   * - Nếu chuỗi có chữ "năm" / "y" / "year" -> quy đổi: số năm * 12 tháng
+   * - Nếu chuỗi có chữ "tháng" / "thg" / "m" -> lấy đúng số tháng
    */
   private parseMonths(raw: string): {
     value: number | null;
     error: string | null;
   } {
-    if (!raw) {
+    if (!raw || !raw.trim()) {
       return { value: null, error: 'TGBH để trống' };
     }
-    const parsed = Number(raw.replace(/,/g, '.'));
-    if (!Number.isFinite(parsed)) {
+
+    const trimmed = raw.trim();
+    const lowerNorm = trimmed
+      .replace(/[Đđ]/g, 'd')
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, '')
+      .toLowerCase();
+
+    // Nhận diện đơn vị rõ ràng trong chuỗi
+    const hasYearUnit =
+      /(nam|year|years|y|yr|yrs)/i.test(lowerNorm) ||
+      /n[aăâ]m/i.test(trimmed);
+    const hasMonthUnit =
+      /(thang|thg|th|month|months|m|mon)/i.test(lowerNorm) ||
+      /th[aá]ng/i.test(trimmed);
+
+    // Trích xuất cụm số (hỗ trợ cả 3, 3.5, 3,5, 12, 36...)
+    const match = trimmed.match(/(-?\d+(?:[.,]\d+)?)/);
+    if (!match) {
       return {
         value: null,
-        error: `TGBH "${raw}" không phải là số (cần số nguyên, đơn vị tháng)`,
+        error: `TGBH "${raw}" không chứa số bảo hành hợp lệ`,
       };
     }
-    if (!Number.isInteger(parsed)) {
+
+    const num = Number(match[1].replace(/,/g, '.'));
+    if (!Number.isFinite(num) || num < 0) {
       return {
         value: null,
-        error: `TGBH "${raw}" không phải số nguyên (đơn vị tháng, ví dụ 12)`,
+        error: `TGBH "${raw}" không hợp lệ (cần số không âm)`,
       };
     }
-    if (parsed < 0 || parsed > MAX_WARRANTY_MONTHS) {
+
+    let months: number;
+    if (hasYearUnit && !hasMonthUnit) {
+      // Ghi rõ đơn vị năm: ví dụ "3 năm", "0.5 năm" -> nhân 12
+      months = Math.round(num * 12);
+    } else if (hasMonthUnit && !hasYearUnit) {
+      // Ghi rõ đơn vị tháng: ví dụ "36 tháng", "6 tháng" -> giữ nguyên
+      months = Math.round(num);
+    } else {
+      // Số thuần hoặc không xác định rõ:
+      // - 0: không bảo hành
+      // - <= 10 (ví dụ 1, 2, 3, 4, 5, 9...): là NĂM -> quy đổi sang tháng (* 12)
+      // - >= 12 (ví dụ 12, 18, 24, 36...): là THÁNG -> giữ nguyên
+      if (num === 0) {
+        months = 0;
+      } else if (num <= 10) {
+        months = Math.round(num * 12);
+      } else {
+        months = Math.round(num);
+      }
+    }
+
+    if (months < 0 || months > MAX_WARRANTY_MONTHS) {
       return {
         value: null,
-        error: `TGBH "${raw}" ngoài khoảng cho phép 0..${MAX_WARRANTY_MONTHS} tháng`,
+        error: `TGBH "${raw}" quy đổi thành ${months} tháng, ngoài khoảng 0..${MAX_WARRANTY_MONTHS} tháng`,
       };
     }
-    return { value: parsed, error: null };
+
+    return { value: months, error: null };
   }
 
   /** Map mã chuẩn hoá → các id sản phẩm trong DB (xử lý cả trùng mã). */

@@ -16,7 +16,7 @@ const THIN_BORDER: Partial<ExcelJS.Borders> = {
 export class SaleExcelService {
   constructor(private readonly pricingService: SalePricingService) {}
 
-  async buildQuoteWorkbook(quote: any, type: ExportType = 'internal') {
+  async buildQuoteWorkbook(quote: any, type: ExportType = 'internal', settings?: any) {
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('BaoGia');
     const items = (quote.items || []) as any[];
@@ -25,8 +25,7 @@ export class SaleExcelService {
     const headers = isCustomer
       ? [
           'STT',
-          'MÃ HT / PROD CODE',
-          'P/N / MODEL',
+          'MÃ HỆ THỐNG',
           'DIỄN GIẢI',
           'THBH / WARRANTY',
           'ĐƠN GIÁ (VNĐ)',
@@ -35,8 +34,7 @@ export class SaleExcelService {
         ]
       : [
           'STT',
-          'MÃ HT / PROD CODE',
-          'P/N / MODEL',
+          'MÃ HỆ THỐNG',
           'DIỄN GIẢI',
           'THBH / WARRANTY',
           'GIÁ VỐN',
@@ -49,17 +47,19 @@ export class SaleExcelService {
     let rowIndex = 1;
     if (isCustomer) {
       const disclaimer1 =
+        settings?.excelDisclaimer1?.trim() ||
         'BÁO GIÁ CHỈ MANG TÍNH CHẤT THAM KHẢO, QUÝ KHÁCH VUI LÒNG LIÊN HỆ KINH DOANH ĐỂ CÓ ĐƯỢC GIÁ TỐT NHẤT.';
       const disclaimer2 =
+        settings?.excelDisclaimer2?.trim() ||
         'HIỆU LỰC BÁO GIÁ CÓ THỜI HẠN TỪ 1-3 NGÀY DO BIẾN ĐỘNG TĂNG GIÁ TỪ HÃNG. MONG QUÝ KHÁCH LƯU Ý.';
-      sheet.mergeCells(`A${rowIndex}:H${rowIndex}`);
+      sheet.mergeCells(`A${rowIndex}:G${rowIndex}`);
       sheet.getCell(`A${rowIndex}`).value = disclaimer1;
       sheet.getCell(`A${rowIndex}`).font = {
         italic: true,
         color: { argb: 'FFB91C1C' },
       };
       rowIndex += 1;
-      sheet.mergeCells(`A${rowIndex}:H${rowIndex}`);
+      sheet.mergeCells(`A${rowIndex}:G${rowIndex}`);
       sheet.getCell(`A${rowIndex}`).value = disclaimer2;
       sheet.getCell(`A${rowIndex}`).font = {
         italic: true,
@@ -135,7 +135,6 @@ export class SaleExcelService {
         ? [
             index + 1,
             item.productCode || '',
-            item.pn || '',
             item.name || '',
             formatWarranty(item.warranty),
             price ?? 'CALL',
@@ -145,7 +144,6 @@ export class SaleExcelService {
         : [
             index + 1,
             item.productCode || '',
-            item.pn || '',
             item.name || '',
             formatWarranty(item.warranty),
             item.costPrice ?? '',
@@ -164,8 +162,8 @@ export class SaleExcelService {
         };
         if (
           typeof cell.value === 'number' &&
-          ((!isCustomer && [6, 7, 9].includes(colNumber)) ||
-            (isCustomer && [6, 8].includes(colNumber)))
+          ((!isCustomer && [5, 6, 8].includes(colNumber)) ||
+            (isCustomer && [5, 7].includes(colNumber)))
         ) {
           cell.numFmt = '#,##0';
         }
@@ -175,12 +173,12 @@ export class SaleExcelService {
 
     const totalRow = sheet.getRow(rowIndex);
     totalRow.values = isCustomer
-      ? ['', '', '', '', '', '', 'TỔNG CỘNG:', total]
+      ? ['', '', '', '', '', 'TỔNG CỘNG:', total]
       : ['', '', '', '', '', '', '', 'TỔNG CỘNG:', total, ''];
     totalRow.font = { bold: true, size: 12 };
     totalRow.eachCell((cell, colNumber) => {
       cell.border = THIN_BORDER;
-      if (colNumber === (isCustomer ? 7 : 8)) {
+      if (colNumber === (isCustomer ? 6 : 8)) {
         cell.alignment = { horizontal: 'right' };
       }
       if (typeof cell.value === 'number') {
@@ -206,7 +204,7 @@ export class SaleExcelService {
       sheet.getRow(rowIndex).height = 60;
     }
 
-    this.setWidths(sheet, headers.length, isCustomer);
+    this.setWidths(sheet, headers.length, isCustomer, 'quote');
     return Buffer.from(await workbook.xlsx.writeBuffer());
   }
 
@@ -216,11 +214,10 @@ export class SaleExcelService {
     const items = (build.items || []) as any[];
     const isCustomer = type === 'customer';
     const headers = isCustomer
-      ? ['STT', 'MÃ HT', 'P/N', 'LINH KIỆN', 'BH', 'ĐƠN GIÁ', 'SL', 'THÀNH TIỀN']
+      ? ['STT', 'MÃ HỆ THỐNG', 'LINH KIỆN', 'BH', 'ĐƠN GIÁ', 'SL', 'THÀNH TIỀN']
       : [
           'STT',
-          'MÃ HT',
-          'P/N',
+          'MÃ HỆ THỐNG',
           'LINH KIỆN',
           'BH',
           'GIÁ VỐN',
@@ -282,7 +279,6 @@ export class SaleExcelService {
         ? [
             index + 1,
             item.productCode || '',
-            item.pn || '',
             item.name || '',
             formatWarranty(item.warranty),
             price ?? 'CALL',
@@ -292,7 +288,6 @@ export class SaleExcelService {
         : [
             index + 1,
             item.productCode || '',
-            item.pn || '',
             item.name || '',
             formatWarranty(item.warranty),
             item.costPrice ?? '',
@@ -307,8 +302,8 @@ export class SaleExcelService {
         cell.alignment = { vertical: 'middle', wrapText: true };
         if (
           typeof cell.value === 'number' &&
-          ((!isCustomer && [6, 7, 9].includes(colNumber)) ||
-            (isCustomer && [6, 8].includes(colNumber)))
+          ((!isCustomer && [5, 6, 8].includes(colNumber)) ||
+            (isCustomer && [5, 7].includes(colNumber)))
         ) {
           cell.numFmt = '#,##0';
         }
@@ -318,7 +313,7 @@ export class SaleExcelService {
 
     const totalRow = sheet.getRow(rowIndex);
     totalRow.values = isCustomer
-      ? ['', '', '', '', '', '', 'TỔNG CỘNG:', total]
+      ? ['', '', '', '', '', 'TỔNG CỘNG:', total]
       : ['', '', '', '', '', '', '', 'TỔNG CỘNG:', total, ''];
     totalRow.font = { bold: true, size: 12 };
     totalRow.eachCell((cell, colNumber) => {
@@ -356,7 +351,7 @@ export class SaleExcelService {
       }
     }
 
-    this.setWidths(sheet, headers.length, isCustomer);
+    this.setWidths(sheet, headers.length, isCustomer, 'build');
     return Buffer.from(await workbook.xlsx.writeBuffer());
   }
 
@@ -520,7 +515,7 @@ export class SaleExcelService {
       sheet.getRow(rowIndex).height = 60;
     }
 
-    this.setWidths(sheet, headers.length, isCustomer);
+    this.setWidths(sheet, headers.length, isCustomer, 'quickCase');
     return Buffer.from(await workbook.xlsx.writeBuffer());
   }
 
@@ -528,10 +523,19 @@ export class SaleExcelService {
     sheet: ExcelJS.Worksheet,
     columnCount: number,
     isCustomer: boolean,
+    templateType: 'quote' | 'build' | 'quickCase' = 'quote',
   ) {
-    const widths = isCustomer
-      ? [6, 22, 22, 48, 18, 16, 8, 18]
-      : [6, 22, 22, 48, 18, 16, 16, 8, 18, 26];
+    let widths: number[];
+    if (templateType === 'quickCase') {
+      widths = isCustomer
+        ? [6, 35, 45, 14, 16, 8, 18]
+        : [6, 35, 45, 14, 16, 16, 8, 18, 26];
+    } else {
+      // quote or build (7 cols customer, 9 cols internal)
+      widths = isCustomer
+        ? [6, 22, 48, 16, 16, 8, 18]
+        : [6, 22, 48, 16, 16, 16, 8, 18, 26];
+    }
     for (let index = 1; index <= columnCount; index += 1) {
       sheet.getColumn(index).width = widths[index - 1] ?? 16;
     }

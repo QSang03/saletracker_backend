@@ -114,7 +114,11 @@ export class SaleBuildService {
     }
 
     if (query.folder?.trim()) {
-      qb.andWhere('b.folder = :folder', { folder: query.folder.trim() });
+      const folderVal = query.folder.trim();
+      qb.andWhere('(b.folder = :folder OR b.folder LIKE :folderPrefix)', {
+        folder: folderVal,
+        folderPrefix: `${folderVal} / %`,
+      });
     }
     if (query.search?.trim()) {
       const keyword = `%${query.search.trim().toLowerCase()}%`;
@@ -399,6 +403,7 @@ export class SaleBuildService {
       specs: build.specs,
       zaloSuffix: zaloSuffix ?? settings.zaloSuffix ?? undefined,
       priceLabel: settings.priceLabel,
+      showStockStatus: settings.showStockStatus ?? true,
     });
     return {
       text,

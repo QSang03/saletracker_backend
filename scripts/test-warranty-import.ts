@@ -68,10 +68,10 @@ async function buildWorkbook(): Promise<ExcelJS.Buffer> {
   ws.getRow(5).getCell(3).value = 24; // không có mã → bỏ qua
 
   ws.getRow(6).getCell(2).value = 'ABC-111';
-  ws.getRow(6).getCell(3).value = '12 tháng'; // sai định dạng
+  ws.getRow(6).getCell(3).value = 'khong co so'; // sai định dạng
 
   ws.getRow(7).getCell(2).value = 'NOT-EXIST';
-  ws.getRow(7).getCell(3).value = 6; // mã không có trong hệ
+  ws.getRow(7).getCell(3).value = 9; // số 9 -> 108 tháng (mã không có trong hệ)
 
   ws.getRow(8).getCell(2).value = 'KV-2366';
   ws.getRow(8).getCell(3).value = 18; // trùng mã — bị dòng sau ghi đè
@@ -80,10 +80,10 @@ async function buildWorkbook(): Promise<ExcelJS.Buffer> {
   ws.getRow(9).getCell(3).value = 24; // last wins → 24
 
   ws.getRow(10).getCell(2).value = 'SAI-SO';
-  ws.getRow(10).getCell(3).value = 3.5; // không phải số nguyên
+  ws.getRow(10).getCell(3).value = -5; // số âm không hợp lệ
 
   ws.getRow(11).getCell(2).value = 'ĐÔI-MỚI  '; // Đ→D + trim khi so khớp
-  ws.getRow(11).getCell(3).value = 12; // hợp lệ
+  ws.getRow(11).getCell(3).value = 3; // số 3 -> tự quy đổi thành 36 tháng
 
   return (await wb.xlsx.writeBuffer()) as ExcelJS.Buffer;
 }
@@ -170,15 +170,15 @@ async function main() {
   expect(result.warnings.length === 4, '4 cảnh báo trả về');
   expect(
     result.warnings.some(
-      (w) => w.row === 6 && w.message.includes('không phải là số'),
+      (w) => w.row === 6 && w.message.includes('không chứa số'),
     ),
-    'dòng 6: "12 tháng" bị báo lỗi',
+    'dòng 6: "khong co so" bị báo lỗi',
   );
   expect(
     result.warnings.some(
-      (w) => w.row === 10 && w.message.includes('không phải số nguyên'),
+      (w) => w.row === 10 && w.message.includes('không hợp lệ'),
     ),
-    'dòng 10: 3.5 bị báo lỗi (không phải số nguyên)',
+    'dòng 10: số âm bị báo lỗi',
   );
   expect(
     result.warnings.some((w) => w.row === 7 && w.message.includes('Không tìm thấy')),
@@ -194,13 +194,13 @@ async function main() {
     'KV-2366 được cập nhật 24 tháng (last wins, gộp theo nhóm tháng)',
   );
   expect(
-    updates.some((u) => u.months === 12 && u.ids.length === 1 && u.ids[0] === 2),
-    'ĐÔI-MỚI được cập nhật 12 tháng (chuẩn hoá Đ→D, thường/hoa, khoảng trắng)',
+    updates.some((u) => u.months === 36 && u.ids.length === 1 && u.ids[0] === 2),
+    'ĐÔI-MỚI có giá trị 3 -> tự quy đổi thành 36 tháng (* 12)',
   );
 
   // ---- Case 2: thiếu cột → lỗi rõ ràng ----
   const wb2 = new ExcelJS.Workbook();
-  wb2.addWorksheet('Sai').addRow(['Ma hang', 'Thang bao hanh']);
+  wb2.addWorksheet('Sai').addRow(['Cot bat ky', 'Gia ban']);
   try {
     await service.importFromExcel({
       buffer: Buffer.from(await wb2.xlsx.writeBuffer()),

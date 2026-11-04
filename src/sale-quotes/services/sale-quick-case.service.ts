@@ -149,15 +149,33 @@ export class SaleQuickCaseService {
     const [rows, total] = await qb.getManyAndCount();
     const rules = await this.settingsService.getEffectiveRules(userId);
 
+    const allProductIds = Array.from(
+      new Set(
+        rows.flatMap((c) =>
+          (c.items || [])
+            .map((i) => i.productId)
+            .filter((pid): pid is number => typeof pid === 'number' && pid > 0),
+        ),
+      ),
+    );
+    const productsMap =
+      allProductIds.length > 0
+        ? await this.loadProducts(allProductIds)
+        : new Map();
+
     const data = rows.map((quickCase) => {
       const items = [...(quickCase.items || [])].sort(
         (a, b) => a.sortOrder - b.sortOrder || a.id - b.id,
       );
       return {
         ...quickCase,
-        items: items.map((item) => ({
-          ...item,
-        })),
+        items: items.map((item) => {
+          const prod = item.productId ? productsMap.get(item.productId) : undefined;
+          return {
+            ...item,
+            stock: prod?.stock ?? 0,
+          };
+        }),
         itemCount: items.length,
       };
     });
@@ -180,13 +198,21 @@ export class SaleQuickCaseService {
     }
     this.assertCanRead(quickCase, user);
 
-    const rules = await this.settingsService.getEffectiveRules(getUserId(user));
+    const productIds = (quickCase.items || [])
+      .map((i) => i.productId)
+      .filter((pid): pid is number => typeof pid === 'number' && pid > 0);
+    const products = productIds.length > 0 ? await this.loadProducts(productIds) : new Map();
+
     return {
       ...quickCase,
-      items: (quickCase.items || []).map((item) => ({
-        ...item,
-      })),
-    };
+      items: (quickCase.items || []).map((item) => {
+        const prod = item.productId ? products.get(item.productId) : undefined;
+        return {
+          ...item,
+          stock: prod?.stock ?? 0,
+        };
+      }),
+    } as any;
   }
 
   async update(id: number, dto: UpdateQuickCaseDto, user: any) {
@@ -367,6 +393,9 @@ export class SaleQuickCaseService {
       item.description = dto.description?.trim() || null;
     }
     // warranty KHÔNG cho sửa tay — chỉ lấy từ sản phẩm (import Excel).
+    if (dto.warranty !== undefined) {
+      item.warranty = dto.warranty?.trim() || null;
+    }
     if (dto.costPrice !== undefined) item.costPrice = dto.costPrice;
     if (dto.salePrice !== undefined) item.salePrice = dto.salePrice;
     if (dto.quantity !== undefined) item.quantity = dto.quantity;
@@ -444,7 +473,7 @@ export class SaleQuickCaseService {
     const text = this.renderer.renderQuickCase(
       { title: quickCase.title, globalNote: finalGlobalNote },
       finalItems,
-      { zaloSuffix: zaloSuffix ?? settings.zaloSuffix ?? undefined, priceLabel: settings.priceLabel },
+      { zaloSuffix: zaloSuffix ?? settings.zaloSuffix ?? undefined, priceLabel: settings.priceLabel, showStockStatus: settings.showStockStatus ?? true },
     );
     return {
       text,
@@ -508,7 +537,7 @@ export class SaleQuickCaseService {
       description: dto.description?.trim() || product?.productName || null,
       // Bảo hành chỉ lấy từ sản phẩm (import Excel "MÃ HT"/"TGBH") — không có
       // nhập tay, không có default settings.
-      warranty: productWarrantyText(product),
+      warranty: dto.warranty?.trim() || productWarrantyText(product),
       costPrice,
       salePrice,
       quantity,

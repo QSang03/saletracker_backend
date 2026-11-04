@@ -151,12 +151,7 @@ export function buildNameLine(
     (!!lowerPn && lowerName.includes(lowerPn)) ||
     lowerPn === codeClean.toLowerCase();
 
-  let line = simple ? nameClean : `${pnClean}\t${nameClean}`;
-  const desc = stripHtml(description);
-  if (desc && !line.toLowerCase().includes(desc.toLowerCase())) {
-    line += ` - ${desc}`;
-  }
-  return line;
+  return simple ? nameClean : `${pnClean}	${nameClean}`;
 }
 
 export function sumLineTotals(

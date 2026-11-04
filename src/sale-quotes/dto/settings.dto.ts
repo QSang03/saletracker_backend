@@ -66,6 +66,20 @@ export class UpdateSettingsDto {
   @IsString()
   @MaxLength(2000)
   zaloSuffix?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  showStockStatus?: boolean;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  excelDisclaimer1?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  excelDisclaimer2?: string;
 }
 
 export class CatalogQueryDto {

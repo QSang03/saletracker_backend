@@ -31,6 +31,7 @@ export interface BuildTextOptions {
   specs?: Array<{ label?: string; value?: string }> | null;
   zaloSuffix?: string | null;
   priceLabel?: string | null;
+  showStockStatus?: boolean | null;
 }
 
 export interface QuoteTextOptions {
@@ -39,6 +40,7 @@ export interface QuoteTextOptions {
   globalNote?: string | null;
   zaloSuffix?: string | null;
   priceLabel?: string | null;
+  showStockStatus?: boolean | null;
 }
 
 @Injectable()
@@ -62,11 +64,11 @@ export class SaleTextRendererService {
 
     let body = '';
     if (mode === 'single') {
-      body = this.renderSingle(lines[0]);
+      body = this.renderSingle(lines[0], options);
     } else if (mode === 'build') {
-      body = this.renderBuild(lines, { zaloSuffix: null, priceLabel: options.priceLabel });
+      body = this.renderBuild(lines, { zaloSuffix: null, priceLabel: options.priceLabel, showStockStatus: options.showStockStatus });
     } else {
-      body = this.renderStandardLines(lines);
+      body = this.renderStandardLines(lines, options);
     }
 
     return this.appendFooter(body, options.globalNote, options.zaloSuffix);
@@ -103,10 +105,10 @@ export class SaleTextRendererService {
           lineTotal !== null && Number.isFinite(lineTotal)
             ? `Thành tiền: ${formatMoney(lineTotal)} ₫`
             : 'Thành tiền: CALL';
-        const status = normalizeStatusText(item.statusText);
+        const status = options.showStockStatus === false ? '' : normalizeStatusText(item.statusText);
         return `${index + 1}-${item.productCode || ''}\t;\t${this.nameLine(
           item,
-        )}\t${formatWarranty(item.warranty)}\t;\tĐơn giá: ${price}\t;\tSL: ${quantity}\t;\t${totalText}\t${status}`.trimEnd();
+        )}\t${formatWarranty(item.warranty)}\t;\tĐơn giá: ${price}\t;\tSL: ${quantity}\t;\t${totalText}${status ? `\t${status}` : ''}`.trimEnd();
       })
       .join('\n\n');
 
@@ -151,7 +153,11 @@ export class SaleTextRendererService {
       globalNote?: string | null;
     },
     items: RenderLineItem[],
-    options: { zaloSuffix?: string | null; priceLabel?: string | null } = {},
+    options: {
+      zaloSuffix?: string | null;
+      priceLabel?: string | null;
+      showStockStatus?: boolean | null;
+    } = {},
   ): string {
     let body = '';
     if (quickCase.title) {
@@ -174,7 +180,7 @@ export class SaleTextRendererService {
         const totalLabel = pLabel && pLabel.trim() ? ` ${pLabel.trim()}` : '';
         totalText = ` (Tổng: ${formatMoney(Number(priceValue) * quantity)}${totalLabel})`;
       }
-      const statusText = stripStatusPrefix(item.statusText);
+      const statusText = options.showStockStatus === false ? '' : stripStatusPrefix(item.statusText);
       const status = statusText ? `\t;${statusText}` : '';
       const codePrefix = item.productCode ? `${item.productCode}\t;\t` : '';
 
@@ -199,22 +205,22 @@ export class SaleTextRendererService {
     );
   }
 
-  private renderSingle(item: RenderLineItem): string {
+  private renderSingle(item: RenderLineItem, options: QuoteTextOptions = {}): string {
     const price = formatPrice(item.unitPrice, false);
-    const status = normalizeStatusText(item.statusText);
+    const status = options.showStockStatus === false ? '' : normalizeStatusText(item.statusText);
     return `${item.productCode || ''}\t;\t${this.nameLine(item)}\t${formatWarranty(
       item.warranty,
-    )}\t;\t${price}\t${status}`.trimEnd();
+    )}\t;\t${price}${status ? `\t${status}` : ''}`.trimEnd();
   }
 
-  private renderStandardLines(items: RenderLineItem[]): string {
+  private renderStandardLines(items: RenderLineItem[], options: QuoteTextOptions = {}): string {
     return items
       .map((item, index) => {
         const price = formatPrice(item.unitPrice, false);
-        const status = normalizeStatusText(item.statusText);
+        const status = options.showStockStatus === false ? '' : normalizeStatusText(item.statusText);
         return `${index + 1}-${item.productCode || ''}\t;\t${this.nameLine(
           item,
-        )}\t${formatWarranty(item.warranty)}\t;\t${price}\t${status}`.trimEnd();
+        )}\t${formatWarranty(item.warranty)}\t;\t${price}${status ? `\t${status}` : ''}`.trimEnd();
       })
       .join('\n\n');
   }

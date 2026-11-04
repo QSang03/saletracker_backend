@@ -159,7 +159,21 @@ export class SaleQuoteService {
     }
     this.assertCanRead(quote, user);
 
-    return quote;
+    const productIds = (quote.items || [])
+      .map((i) => i.productId)
+      .filter((pid): pid is number => typeof pid === 'number' && pid > 0);
+    const products = productIds.length > 0 ? await this.loadProducts(productIds) : new Map();
+
+    return {
+      ...quote,
+      items: (quote.items || []).map((item) => {
+        const prod = item.productId ? products.get(item.productId) : undefined;
+        return {
+          ...item,
+          stock: prod?.stock ?? item.metadata?.stock ?? 0,
+        };
+      }),
+    } as any;
   }
 
   async update(id: number, dto: UpdateQuoteDto, user: any) {
@@ -334,7 +348,10 @@ export class SaleQuoteService {
     if (dto.description !== undefined) {
       item.description = dto.description?.trim() || null;
     }
-    // warranty KHÔNG cho sửa tay — chỉ lấy từ sản phẩm (import Excel).
+    // Nếu là item thủ công (không có productId) thì cho phép nhập/sửa bảo hành
+    if (!item.productId && dto.warranty !== undefined) {
+      item.warranty = dto.warranty?.trim() || null;
+    }
     if (dto.costPrice !== undefined) item.costPrice = dto.costPrice;
     if (dto.unitPrice !== undefined) item.unitPrice = dto.unitPrice;
     if (dto.quantity !== undefined) item.quantity = dto.quantity;
@@ -427,6 +444,7 @@ export class SaleQuoteService {
       globalNote: finalGlobalNote,
       zaloSuffix: suffix,
       priceLabel: settings.priceLabel,
+      showStockStatus: settings.showStockStatus ?? true,
     });
 
     return {
@@ -489,9 +507,8 @@ export class SaleQuoteService {
       pn: dto.pn?.trim() || null,
       name: dto.name?.trim() || product?.productName || 'Sản phẩm',
       description: dto.description?.trim() || null,
-      // Bảo hành chỉ lấy từ sản phẩm (import Excel "MÃ HT"/"TGBH") — không có
-      // nhập tay, không có default settings.
-      warranty: productWarrantyText(product),
+      // Bảo hành lấy từ sản phẩm (nếu có catalog), nếu thủ công thì lấy từ dto
+      warranty: product ? productWarrantyText(product) : (dto.warranty?.trim() || null),
       costPrice,
       unitPrice,
       quantity,

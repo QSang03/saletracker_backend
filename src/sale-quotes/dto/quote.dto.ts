@@ -45,6 +45,11 @@ export class QuoteItemInputDto {
   description?: string;
 
   @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  warranty?: string;
+
+  @IsOptional()
   @Type(() => Number)
   @IsNumber()
   @Min(0)
@@ -206,6 +211,11 @@ export class UpdateQuoteItemDto {
   @IsString()
   @MaxLength(5000)
   description?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  warranty?: string;
 
   @IsOptional()
   @Type(() => Number)

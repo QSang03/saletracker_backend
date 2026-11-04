@@ -16,6 +16,8 @@ import { Request, Response } from 'express';
 import { AuthGuard } from '../../common/guards/auth.guard';
 import { SaleQuoteService } from '../services/sale-quote.service';
 import { SaleExcelService } from '../services/sale-excel.service';
+import { SaleSettingsService } from '../services/sale-settings.service';
+import { getUserId } from '../utils/entity-access.util';
 import {
   CreateQuoteDto,
   QueryQuoteDto,
@@ -33,6 +35,7 @@ export class SaleQuoteController {
   constructor(
     private readonly quoteService: SaleQuoteService,
     private readonly excelService: SaleExcelService,
+    private readonly settingsService: SaleSettingsService,
   ) {}
 
   @Post()
@@ -128,6 +131,24 @@ export class SaleQuoteController {
     return this.quoteService.renderText(id, (req as any).user, query);
   }
 
+  @Post('export-raw')
+  async exportRawExcel(
+    @Body() rawQuote: any,
+    @Query('type') type: 'internal' | 'customer' = 'customer',
+    @Req() req: Request,
+    @Res() res: Response,
+  ) {
+    const userId = getUserId((req as any).user);
+    const settings = await this.settingsService.getForUser(userId);
+    const buffer = await this.excelService.buildQuoteWorkbook(
+      rawQuote,
+      type,
+      settings,
+    );
+    const filename = this.formatQuoteFilename(rawQuote?.title);
+    this.sendXlsx(res, buffer, filename);
+  }
+
   @Get(':id/export')
   async exportExcel(
     @Param('id', ParseIntPipe) id: number,
@@ -136,12 +157,28 @@ export class SaleQuoteController {
     @Res() res: Response,
   ) {
     const quote = await this.quoteService.findOne(id, (req as any).user);
+    const userId = getUserId((req as any).user);
+    const settings = await this.settingsService.getForUser(userId);
     const buffer = await this.excelService.buildQuoteWorkbook(
       quote,
-      query.type || 'internal',
+      query.type || 'customer',
+      settings,
     );
-    const rawName = (quote.title || quote.quoteCode || `bao-gia-${quote.id}`).trim();
-    this.sendXlsx(res, buffer, rawName);
+    const filename = this.formatQuoteFilename(quote.title);
+    this.sendXlsx(res, buffer, filename);
+  }
+
+  private formatQuoteFilename(title?: string | null): string {
+    const now = new Date();
+    const dd = String(now.getDate()).padStart(2, '0');
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const yy = String(now.getFullYear()).slice(-2);
+    const dateStr = `${dd}.${mm}.${yy}`;
+    const cleanTitle = (title || '').trim();
+    if (cleanTitle) {
+      return `BÁO GIÁ_${cleanTitle}_${dateStr}`;
+    }
+    return `BÁO GIÁ_${dateStr}`;
   }
 
   private sendXlsx(res: Response, buffer: Buffer, filename: string) {

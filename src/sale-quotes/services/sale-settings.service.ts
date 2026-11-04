@@ -28,6 +28,9 @@ export class SaleSettingsService {
       priceLabel: 'fv',
       defaultGlobalNote: '',
       zaloSuffix: '',
+      showStockStatus: true,
+      excelDisclaimer1: 'BÁO GIÁ CHỈ MANG TÍNH CHẤT THAM KHẢO, QUÝ KHÁCH VUI LÒNG LIÊN HỆ KINH DOANH ĐỂ CÓ ĐƯỢC GIÁ TỐT NHẤT.',
+      excelDisclaimer2: 'HIỆU LỰC BÁO GIÁ CÓ THỜI HẠN TỪ 1-3 NGÀY DO BIẾN ĐỘNG TĂNG GIÁ TỪ HÃNG. MONG QUÝ KHÁCH LƯU Ý.',
     });
   }
 
@@ -74,6 +77,15 @@ export class SaleSettingsService {
     if (dto.zaloSuffix !== undefined) {
       settings.zaloSuffix = dto.zaloSuffix;
     }
+    if (dto.showStockStatus !== undefined) {
+      settings.showStockStatus = dto.showStockStatus;
+    }
+    if (dto.excelDisclaimer1 !== undefined) {
+      settings.excelDisclaimer1 = dto.excelDisclaimer1;
+    }
+    if (dto.excelDisclaimer2 !== undefined) {
+      settings.excelDisclaimer2 = dto.excelDisclaimer2;
+    }
 
     return this.settingRepo.save(settings);
   }
@@ -90,6 +102,9 @@ export class SaleSettingsService {
       priceLabel: settings.priceLabel ?? 'fv',
       defaultGlobalNote: settings.defaultGlobalNote ?? '',
       zaloSuffix: settings.zaloSuffix ?? '',
+      showStockStatus: settings.showStockStatus ?? true,
+      excelDisclaimer1: settings.excelDisclaimer1 ?? 'BÁO GIÁ CHỈ MANG TÍNH CHẤT THAM KHẢO, QUÝ KHÁCH VUI LÒNG LIÊN HỆ KINH DOANH ĐỂ CÓ ĐƯỢC GIÁ TỐT NHẤT.',
+      excelDisclaimer2: settings.excelDisclaimer2 ?? 'HIỆU LỰC BÁO GIÁ CÓ THỜI HẠN TỪ 1-3 NGÀY DO BIẾN ĐỘNG TĂNG GIÁ TỪ HÃNG. MONG QUÝ KHÁCH LƯU Ý.',
       createdAt: settings.createdAt ?? null,
       updatedAt: settings.updatedAt ?? null,
     };
