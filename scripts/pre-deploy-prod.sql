@@ -111,10 +111,17 @@ WHERE NOT EXISTS (
 -- BƯỚC 4 (BẮT BUỘC): bỏ status pending/confirmed, thêm cột dự án + chăm sóc
 --
 -- Vì sao: entity mới chỉ còn enum
---   quoted | cared | completed | demand | rejected
+--   quoted | cared | completed | demand | rejected | demand_cared
 -- Nếu còn dòng pending/confirmed, ALTER enum sẽ lỗi Data truncated (strict mode).
 -- Chạy bước này TRƯỚC khi start backend mới. Nên dừng Python/Nest ghi đơn
 -- trong lúc chạy (maintenance window ngắn) hoặc deploy Python normalization trước.
+--
+-- Từ bản demand_cared: enum có thêm 'demand_cared' ở CUỐI (chỉ thêm, không đổi
+-- thứ tự/xoá giá trị cũ). DB đã deploy trước đó chỉ cần chạy:
+--   ALTER TABLE `order_details`
+--     MODIFY COLUMN `status`
+--       ENUM('quoted','cared','completed','demand','rejected','demand_cared')
+--       NOT NULL DEFAULT 'quoted';
 --
 -- LƯU Ý: đây là thao tác một lần. Nếu cột đã tồn tại (deploy lại), bỏ qua phần
 -- ADD COLUMN/ADD INDEX tương ứng.
@@ -122,13 +129,13 @@ WHERE NOT EXISTS (
 UPDATE `order_details` SET `status` = 'quoted'    WHERE `status` = 'pending';
 UPDATE `order_details` SET `status` = 'completed' WHERE `status` = 'confirmed';
 
--- Kiểm tra trước khi ALTER: chỉ còn 5 giá trị
+-- Kiểm tra trước khi ALTER: chỉ còn 6 giá trị
 SELECT `status`, COUNT(*) AS `count`
 FROM `order_details`
 GROUP BY `status`;
 
 ALTER TABLE `order_details`
-  MODIFY COLUMN `status` ENUM('quoted','cared','completed','demand','rejected')
+  MODIFY COLUMN `status` ENUM('quoted','cared','completed','demand','rejected','demand_cared')
     NOT NULL DEFAULT 'quoted',
   ADD COLUMN `is_project` TINYINT(1) NOT NULL DEFAULT 0,
   ADD COLUMN `projected_at` TIMESTAMP NULL,
@@ -140,7 +147,7 @@ ALTER TABLE `order_details`
 
 -- 3) Kiểm tra sau ALTER:
 --    SHOW COLUMNS FROM order_details LIKE 'status';
---    -> enum('quoted','cared','completed','demand','rejected')
+--    -> enum('quoted','cared','completed','demand','rejected','demand_cared')
 --    SELECT status, COUNT(*) FROM order_details GROUP BY status;
 --    -> không còn pending/confirmed
 --    SELECT COUNT(*) FROM order_details WHERE is_project = 1;

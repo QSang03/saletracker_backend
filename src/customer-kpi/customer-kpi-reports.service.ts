@@ -556,9 +556,10 @@ export class CustomerKpiReportsService {
    * → `order_details.meta_customer_id`, và đơn phải thuộc chính sale đang xét
    * (`orders.sale_by`) — cột đó là chủ hội thoại/đơn trên Sale Tracker.
    *
-   * Loại khỏi danh sách: đơn đã chốt (`completed`), đơn đã xoá (`deleted_at`),
-   * đơn sale tự ẩn (`hidden_at` — không còn là việc phải làm) và chat nhóm
-   * (`meta_is_group = 0`).
+   * Loại khỏi danh sách: đơn đã chốt (`completed`), đơn nhu cầu
+   * (`demand`/`demand_cared` — không có hàng để đốc chốt), đơn đã xoá
+   * (`deleted_at`), đơn sale tự ẩn (`hidden_at` — không còn là việc phải làm)
+   * và chat nhóm (`meta_is_group = 0`).
    *
    * Cửa sổ neo vào HÔM NAY (giờ VN) chứ không theo khoảng xem: khoảng quý có
    * `to` là ngày cuối quý (tương lai) nên neo vào đó sẽ ra danh sách rỗng.
@@ -665,8 +666,14 @@ export class CustomerKpiReportsService {
         .andWhere('od.deleted_at IS NULL')
         .andWhere('od.hidden_at IS NULL')
         .andWhere('od.meta_is_group = 0')
-        .andWhere('od.status <> :completed', {
-          completed: OrderDetailStatus.COMPLETED,
+        .andWhere('od.status NOT IN (:...excludedStatuses)', {
+          // Đơn nhu cầu không phải "chưa chốt" theo nghĩa bán được: không có
+          // hàng để chốt nên không đưa vào gợi ý đốc chốt của sale.
+          excludedStatuses: [
+            OrderDetailStatus.COMPLETED,
+            OrderDetailStatus.DEMAND,
+            OrderDetailStatus.DEMAND_CARED,
+          ],
         })
         .andWhere('od.created_at >= :windowFrom', {
           windowFrom: `${windowFrom} 00:00:00`,

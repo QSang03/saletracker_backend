@@ -14,7 +14,7 @@ export interface SummaryStats {
   chaoBan: number; // completed + quoted
   completed: number;
   quoted: number;
-  demand: number;
+  demand: number; // demand + demand_cared
   cared: number;
   rejected: number;
   /** @deprecated pending/confirmed đã bị xóa — giữ key = 0 cho FE cũ 1 release */
@@ -23,7 +23,7 @@ export interface SummaryStats {
   confirmed: number;
   totalRevenue: number;
   avgOrderValue: number;
-  conversionRate: number; // completed / (completed + quoted) * 100
+  conversionRate: number; // completed / (completed + quoted + cared + rejected) * 100
 
   // Working days stats
   gdToday: number;
@@ -34,7 +34,7 @@ export interface SummaryStats {
   prevChaoBan: number;
   prevCompleted: number;
   prevQuoted: number;
-  prevDemand: number;
+  prevDemand: number; // demand + demand_cared
   prevCared: number;
   prevRejected: number;
   /** @deprecated */

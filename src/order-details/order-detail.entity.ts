@@ -19,6 +19,8 @@ export enum OrderDetailStatus {
   COMPLETED = 'completed',
   DEMAND = 'demand',
   REJECTED = 'rejected',
+  // Thêm cuối enum để TypeORM chỉ ALTER thêm giá trị, không dựng lại bảng.
+  DEMAND_CARED = 'demand_cared',
 }
 export enum ExtendReason {
   SYSTEM_SUNDAY_AUTO = 'hệ thống tự gia hạn vào chủ nhật hoặc nghỉ lễ',

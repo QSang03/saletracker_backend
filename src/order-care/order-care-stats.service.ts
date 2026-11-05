@@ -219,6 +219,9 @@ export class OrderCareStatsService {
       completedFromCare: 0,
       rejectedFromCare: 0,
       demandOrders: 0,
+      demandCaredOrders: 0,
+      uncaredDemandOrders: 0,
+      activeCaredOrders: 0,
       rejectedOrders: 0,
     };
 
@@ -259,6 +262,7 @@ export class OrderCareStatsService {
       const userId = this.num(row.sale_by);
       const careActions = count * careCount;
       const isUnclosed = status === 'quoted' || status === 'cared';
+      const isDemand = status === 'demand' || status === 'demand_cared';
 
       totals.orders += count;
       totals.careCountLifetime += careActions;
@@ -270,8 +274,14 @@ export class OrderCareStatsService {
         totals.completedFromCare += count;
       if (careCount > 0 && status === 'rejected')
         totals.rejectedFromCare += count;
+      if (careCount > 0 && (status === 'quoted' || status === 'cared'))
+        totals.activeCaredOrders += count;
       if (status === 'completed') totals.completedOrders += count;
-      if (status === 'demand') totals.demandOrders += count;
+      // "Nhu cầu" trong báo cáo = demand + demand_cared (đã thăm hỏi nhu cầu).
+      if (isDemand) totals.demandOrders += count;
+      if (isDemand && careCount > 0) totals.demandCaredOrders += count;
+      if (status === 'demand' && careCount === 0)
+        totals.uncaredDemandOrders += count;
       if (status === 'rejected') totals.rejectedOrders += count;
 
       const statusEntry = statusMap.get(status) || {
@@ -340,12 +350,21 @@ export class OrderCareStatsService {
     }
 
     const careCoverageDenominator =
-      totals.caredOrders + totals.uncaredUnclosedOrders;
+      totals.caredOrders +
+      totals.uncaredUnclosedOrders +
+      totals.uncaredDemandOrders;
     const careCoverageRate = careCoverageDenominator
       ? totals.caredOrders / careCoverageDenominator
       : 0;
-    const careConversionRate = totals.caredOrders
-      ? totals.completedFromCare / totals.caredOrders
+    // Conversion chỉ tính đơn bán được: completed / (completed + đang chăm +
+    // rejected). Đơn nhu cầu (demand/demand_cared) bị loại vì không có hàng
+    // để chốt, không được kéo tỉ lệ chuyển đổi xuống.
+    const careConversionDenominator =
+      totals.completedFromCare +
+      totals.activeCaredOrders +
+      totals.rejectedFromCare;
+    const careConversionRate = careConversionDenominator
+      ? totals.completedFromCare / careConversionDenominator
       : 0;
 
     return {

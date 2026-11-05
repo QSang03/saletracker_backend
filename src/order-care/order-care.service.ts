@@ -505,7 +505,9 @@ export class OrderCareService {
             const after =
               before === OrderDetailStatus.QUOTED
                 ? OrderDetailStatus.CARED
-                : before;
+                : before === OrderDetailStatus.DEMAND
+                  ? OrderDetailStatus.DEMAND_CARED
+                  : before;
             const careCountBefore = Number(detail.care_count || 0);
 
             await detailRepo.update(detail.id, {

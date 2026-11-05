@@ -318,7 +318,7 @@ export class TransactionStatsService {
         SUM(CASE WHEN d.created_at >= ? AND d.created_at <= ? THEN 1 ELSE 0 END) as current_total,
         SUM(CASE WHEN d.created_at >= ? AND d.created_at <= ? AND d.status = 'completed' THEN 1 ELSE 0 END) as current_completed,
         SUM(CASE WHEN d.created_at >= ? AND d.created_at <= ? AND d.status IN ('quoted','cared') THEN 1 ELSE 0 END) as current_quoted,
-        SUM(CASE WHEN d.created_at >= ? AND d.created_at <= ? AND d.status = 'demand' THEN 1 ELSE 0 END) as current_demand,
+        SUM(CASE WHEN d.created_at >= ? AND d.created_at <= ? AND d.status IN ('demand','demand_cared') THEN 1 ELSE 0 END) as current_demand,
         SUM(CASE WHEN d.created_at >= ? AND d.created_at <= ? AND d.status = 'cared' THEN 1 ELSE 0 END) as current_cared,
         SUM(CASE WHEN d.created_at >= ? AND d.created_at <= ? AND d.status = 'rejected' THEN 1 ELSE 0 END) as current_rejected,
         SUM(CASE WHEN d.created_at >= ? AND d.created_at <= ? AND d.status = 'pending' THEN 1 ELSE 0 END) as current_pending,
@@ -328,7 +328,7 @@ export class TransactionStatsService {
         SUM(CASE WHEN d.created_at >= ? AND d.created_at <= ? THEN 1 ELSE 0 END) as prev_total,
         SUM(CASE WHEN d.created_at >= ? AND d.created_at <= ? AND d.status = 'completed' THEN 1 ELSE 0 END) as prev_completed,
         SUM(CASE WHEN d.created_at >= ? AND d.created_at <= ? AND d.status IN ('quoted','cared') THEN 1 ELSE 0 END) as prev_quoted,
-        SUM(CASE WHEN d.created_at >= ? AND d.created_at <= ? AND d.status = 'demand' THEN 1 ELSE 0 END) as prev_demand,
+        SUM(CASE WHEN d.created_at >= ? AND d.created_at <= ? AND d.status IN ('demand','demand_cared') THEN 1 ELSE 0 END) as prev_demand,
         SUM(CASE WHEN d.created_at >= ? AND d.created_at <= ? AND d.status = 'cared' THEN 1 ELSE 0 END) as prev_cared,
         SUM(CASE WHEN d.created_at >= ? AND d.created_at <= ? AND d.status = 'rejected' THEN 1 ELSE 0 END) as prev_rejected,
         SUM(CASE WHEN d.created_at >= ? AND d.created_at <= ? AND d.status = 'pending' THEN 1 ELSE 0 END) as prev_pending,
@@ -363,15 +363,22 @@ export class TransactionStatsService {
     const result = await this.orderDetailRepository.query(query, queryParams);
     const row = result[0];
 
-    const currentTotal = parseInt(row.current_total) || 0;
     const currentCompleted = parseInt(row.current_completed) || 0;
     const currentQuoted = parseInt(row.current_quoted) || 0;
+    const currentRejected = parseInt(row.current_rejected) || 0;
     const currentRevenue = parseFloat(row.current_revenue) || 0;
 
-    const prevTotal = parseInt(row.prev_total) || 0;
     const prevCompleted = parseInt(row.prev_completed) || 0;
     const prevQuoted = parseInt(row.prev_quoted) || 0;
+    const prevRejected = parseInt(row.prev_rejected) || 0;
     const prevRevenue = parseFloat(row.prev_revenue) || 0;
+
+    // completed / (completed + quoted/cared + rejected).
+    // `currentQuoted` đã gồm status `cared`; demand/demand_cared bị loại vì đơn
+    // nhu cầu không có hàng để chốt.
+    const currentConversionBase =
+      currentCompleted + currentQuoted + currentRejected;
+    const prevConversionBase = prevCompleted + prevQuoted + prevRejected;
 
     return {
       chaoBan: currentCompleted + currentQuoted,
@@ -386,7 +393,9 @@ export class TransactionStatsService {
       avgOrderValue:
         currentCompleted > 0 ? currentRevenue / currentCompleted : 0,
       conversionRate:
-        currentTotal > 0 ? (currentCompleted / currentTotal) * 100 : 0,
+        currentConversionBase > 0
+          ? (currentCompleted / currentConversionBase) * 100
+          : 0,
 
       prevChaoBan: prevCompleted + prevQuoted,
       prevCompleted,
@@ -397,7 +406,8 @@ export class TransactionStatsService {
       prevPending: parseInt(row.prev_pending) || 0,
       prevTotalRevenue: prevRevenue,
       prevAvgOrderValue: prevCompleted > 0 ? prevRevenue / prevCompleted : 0,
-      prevConversionRate: prevTotal > 0 ? (prevCompleted / prevTotal) * 100 : 0,
+      prevConversionRate:
+        prevConversionBase > 0 ? (prevCompleted / prevConversionBase) * 100 : 0,
     };
   }
 
@@ -577,7 +587,7 @@ export class TransactionStatsService {
         ${groupBy} as period_key,
         DATE_FORMAT(MIN(deduped.created_at), '${dateFormat}') as period_name,
         UNIX_TIMESTAMP(DATE(MIN(deduped.created_at))) * 1000 as timestamp,
-        SUM(CASE WHEN deduped.status = 'demand' THEN 1 ELSE 0 END) as demand,
+        SUM(CASE WHEN deduped.status IN ('demand','demand_cared') THEN 1 ELSE 0 END) as demand,
         SUM(CASE WHEN deduped.status = 'completed' THEN 1 ELSE 0 END) as completed,
         SUM(CASE WHEN deduped.status IN ('quoted','cared') THEN 1 ELSE 0 END) as quoted,
         SUM(CASE WHEN deduped.status = 'cared' THEN 1 ELSE 0 END) as cared,
@@ -654,7 +664,7 @@ export class TransactionStatsService {
         SUM(CASE WHEN deduped.status = 'cared' THEN 1 ELSE 0 END) as cared,
         SUM(CASE WHEN deduped.status = 'rejected' THEN 1 ELSE 0 END) as rejected,
         SUM(CASE WHEN deduped.status = 'pending' THEN 1 ELSE 0 END) as pending,
-        SUM(CASE WHEN deduped.status = 'demand' THEN 1 ELSE 0 END) as demand,
+        SUM(CASE WHEN deduped.status IN ('demand','demand_cared') THEN 1 ELSE 0 END) as demand,
         SUM(CASE WHEN deduped.status = 'confirmed' THEN 1 ELSE 0 END) as confirmed
       FROM (
         SELECT od.customer_name, od.status
@@ -725,9 +735,9 @@ export class TransactionStatsService {
         SUM(CASE WHEN deduped.status = 'completed' THEN 1 ELSE 0 END) as completed,
         SUM(CASE WHEN deduped.status IN ('quoted','cared') THEN 1 ELSE 0 END) as quoted,
         CASE 
-          WHEN SUM(CASE WHEN deduped.status IN ('completed', 'quoted', 'cared') THEN 1 ELSE 0 END) > 0
+          WHEN SUM(CASE WHEN deduped.status IN ('completed', 'quoted', 'cared', 'rejected') THEN 1 ELSE 0 END) > 0
           THEN (SUM(CASE WHEN deduped.status = 'completed' THEN 1 ELSE 0 END) * 100.0) / 
-               SUM(CASE WHEN deduped.status IN ('completed', 'quoted', 'cared') THEN 1 ELSE 0 END)
+               SUM(CASE WHEN deduped.status IN ('completed', 'quoted', 'cared', 'rejected') THEN 1 ELSE 0 END)
           ELSE 0
         END as conversion
       FROM (

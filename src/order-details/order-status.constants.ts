@@ -6,6 +6,7 @@ export type OrderStatusValue =
   | OrderDetailStatus.CARED
   | OrderDetailStatus.COMPLETED
   | OrderDetailStatus.DEMAND
+  | OrderDetailStatus.DEMAND_CARED
   | OrderDetailStatus.REJECTED;
 
 export const ORDER_STATUS_VALUES: OrderStatusValue[] = [
@@ -13,18 +14,26 @@ export const ORDER_STATUS_VALUES: OrderStatusValue[] = [
   OrderDetailStatus.CARED,
   OrderDetailStatus.COMPLETED,
   OrderDetailStatus.DEMAND,
+  OrderDetailStatus.DEMAND_CARED,
   OrderDetailStatus.REJECTED,
 ];
 
+/**
+ * Trạng thái cuối (không còn chuyển tiếp).
+ * `demand` KHÔNG còn final vì chăm sóc có thể đưa sang `demand_cared`;
+ * `demand_cared` là trạng thái cuối của đơn nhu cầu đã thăm hỏi.
+ */
 export const FINAL_ORDER_STATUSES: OrderStatusValue[] = [
   OrderDetailStatus.COMPLETED,
-  OrderDetailStatus.DEMAND,
+  OrderDetailStatus.DEMAND_CARED,
   OrderDetailStatus.REJECTED,
 ];
 
 export const CARE_ELIGIBLE_STATUSES: OrderStatusValue[] = [
   OrderDetailStatus.QUOTED,
   OrderDetailStatus.CARED,
+  OrderDetailStatus.DEMAND,
+  OrderDetailStatus.DEMAND_CARED,
 ];
 
 /**
@@ -43,13 +52,16 @@ const TRANSITIONS: Record<OrderStatusValue, OrderStatusValue[]> = {
     OrderDetailStatus.DEMAND,
     OrderDetailStatus.REJECTED,
   ],
+  // cared -> demand bị chặn có chủ đích: không hạ cấp đơn đã chăm.
   [OrderDetailStatus.CARED]: [
     OrderDetailStatus.COMPLETED,
     OrderDetailStatus.REJECTED,
     OrderDetailStatus.CARED,
   ],
   [OrderDetailStatus.COMPLETED]: [],
-  [OrderDetailStatus.DEMAND]: [],
+  // demand không còn terminal: chỉ chăm sóc mới được đưa sang demand_cared.
+  [OrderDetailStatus.DEMAND]: [OrderDetailStatus.DEMAND_CARED],
+  [OrderDetailStatus.DEMAND_CARED]: [],
   [OrderDetailStatus.REJECTED]: [],
 };
 
@@ -112,14 +124,25 @@ export function assertStatusTransition(
   if (cur === nxt) return nxt;
 
   // Trong giai đoạn FE cũ chưa cập nhật, có thể tạm đặt ORDER_STATUS_STRICT=false
-  // để không chặn các chuyển đổi cũ. Mặc định vẫn enforce.
-  if (process.env.ORDER_STATUS_STRICT === 'false' && nxt !== OrderDetailStatus.CARED) {
+  // để không chặn các chuyển đổi cũ. Mặc định vẫn enforce; các status do care
+  // service gán thì luôn phải đi qua chức năng Chăm sóc.
+  if (
+    process.env.ORDER_STATUS_STRICT === 'false' &&
+    nxt !== OrderDetailStatus.CARED &&
+    nxt !== OrderDetailStatus.DEMAND_CARED
+  ) {
     return nxt;
   }
 
   if (nxt === OrderDetailStatus.CARED && !opts?.allowCared) {
     throw new BadRequestException(
       'Trạng thái "Đã thăm hỏi" chỉ được gán qua chức năng Chăm sóc đơn hàng',
+    );
+  }
+
+  if (nxt === OrderDetailStatus.DEMAND_CARED && !opts?.allowCared) {
+    throw new BadRequestException(
+      'Trạng thái "Đã thăm hỏi nhu cầu" chỉ được gán qua chức năng Chăm sóc đơn hàng',
     );
   }
 

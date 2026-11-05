@@ -13,7 +13,10 @@ import { Product } from 'src/products/product.entity';
 import { Brand } from 'src/brands/brand.entity';
 import { Category } from 'src/categories/category.entity';
 import { OrderBlacklistService } from '../order-blacklist/order-blacklist.service';
-import { normalizeStatusCsv } from '../order-details/order-status.constants';
+import {
+  isCareEligibleStatus,
+  normalizeStatusCsv,
+} from '../order-details/order-status.constants';
 import { Logger } from '@nestjs/common';
 import slugify from 'slugify';
 
@@ -602,7 +605,7 @@ export class OrderService {
     row.care_eligible =
       !!sourceMessageId &&
       !!customerId &&
-      ['quoted', 'cared'].includes(row?.status) &&
+      isCareEligibleStatus(row?.status) &&
       !row?.hidden_at &&
       !row?.deleted_at;
     return row;

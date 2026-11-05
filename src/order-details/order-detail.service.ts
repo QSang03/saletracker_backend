@@ -404,9 +404,16 @@ export class OrderDetailService {
   async create(orderDetailData: Partial<OrderDetail>): Promise<OrderDetail> {
     if (orderDetailData.status !== undefined) {
       const normalized = normalizeOrderStatus(orderDetailData.status);
-      if (normalized === OrderDetailStatus.CARED) {
+      if (
+        normalized === OrderDetailStatus.CARED ||
+        normalized === OrderDetailStatus.DEMAND_CARED
+      ) {
+        const label =
+          normalized === OrderDetailStatus.CARED
+            ? 'Đã thăm hỏi'
+            : 'Đã thăm hỏi nhu cầu';
         throw new BadRequestException(
-          'Trạng thái "Đã thăm hỏi" chỉ được gán qua chức năng Chăm sóc đơn hàng',
+          `Trạng thái "${label}" chỉ được gán qua chức năng Chăm sóc đơn hàng`,
         );
       }
       orderDetailData.status = normalized;
@@ -427,7 +434,7 @@ export class OrderDetailService {
     const currentOrderDetail = await this.findById(id);
 
     // Chuẩn hóa status cũ (pending/confirmed) và chặn chuyển trạng thái sai.
-    // "cared" chỉ được gán bởi chức năng Chăm sóc, không cho sửa tay.
+    // "cared"/"demand_cared" chỉ được gán bởi chức năng Chăm sóc, không cho sửa tay.
     let statusChanged = false;
     if (orderDetailData.status !== undefined) {
       const normalizedStatus = assertStatusTransition(
@@ -764,13 +771,19 @@ export class OrderDetailService {
     let requestedStatus: OrderDetailStatus | undefined;
     if (updates.status !== undefined) {
       requestedStatus = normalizeOrderStatus(updates.status);
-      if (requestedStatus === OrderDetailStatus.CARED) {
+      if (
+        requestedStatus === OrderDetailStatus.CARED ||
+        requestedStatus === OrderDetailStatus.DEMAND_CARED
+      ) {
+        const label =
+          requestedStatus === OrderDetailStatus.CARED
+            ? 'Đã thăm hỏi'
+            : 'Đã thăm hỏi nhu cầu';
         return {
           updated: 0,
           skipped: orderDetails.map((od) => ({
             id: od.id,
-            reason:
-              'Trạng thái "Đã thăm hỏi" chỉ được gán qua chức năng Chăm sóc đơn hàng',
+            reason: `Trạng thái "${label}" chỉ được gán qua chức năng Chăm sóc đơn hàng`,
           })),
         };
       }
