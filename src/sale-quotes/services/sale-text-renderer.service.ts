@@ -7,6 +7,7 @@ import {
   normalizeStatusText,
   stripStatusPrefix,
   sumLineTotals,
+  generateAutoProductCode,
 } from '../utils/text.util';
 
 export interface RenderLineItem {
@@ -94,23 +95,34 @@ export class SaleTextRendererService {
       .map((item, index) => {
         const quantity = Number(item.quantity || 1);
         const unitPrice = item.unitPrice ?? item.salePrice;
-        const price = formatPrice(unitPrice, options.priceLabel !== undefined ? options.priceLabel : 'fv');
-        const lineTotal =
-          item.lineTotal !== null && item.lineTotal !== undefined
-            ? Number(item.lineTotal)
-            : unitPrice !== null && unitPrice !== undefined
-              ? Number(unitPrice) * quantity
-              : null;
         const pLabel = options.priceLabel !== undefined ? options.priceLabel : 'fv';
         const totalLabel = pLabel && pLabel.trim() ? ` ${pLabel.trim()}` : '';
-        const totalText =
-          lineTotal !== null && Number.isFinite(lineTotal)
-            ? `Thành tiền: ${formatMoney(lineTotal)}${totalLabel}`
-            : 'Thành tiền: CALL';
-        const status = options.showStockStatus === false ? '' : normalizeStatusText(item.statusText);
-        return `${index + 1}-${item.productCode || ''}\t;\t${this.nameLine(
-          item,
-        )}\t${formatWarranty(item.warranty)}\t;\tĐơn giá: ${price}\t;\tSL: ${quantity}\t;\t${totalText}${status ? `\t${status}` : ''}`.trimEnd();
+        const price = formatPrice(unitPrice, pLabel);
+        const rawStatus = options.showStockStatus === false ? '' : normalizeStatusText(item.statusText);
+        const statusClean = stripStatusPrefix(rawStatus);
+        const warranty = formatWarranty(item.warranty);
+        const namePart = this.nameLine(item);
+        const nameWithWarranty = warranty ? `${namePart}\t${warranty}` : namePart;
+
+        if (quantity > 1) {
+          const lineTotal =
+            item.lineTotal !== null && item.lineTotal !== undefined
+              ? Number(item.lineTotal)
+              : unitPrice !== null && unitPrice !== undefined
+                ? Number(unitPrice) * quantity
+                : null;
+          const totalText =
+            lineTotal !== null && Number.isFinite(lineTotal)
+              ? `Thành tiền: ${formatMoney(lineTotal)}${totalLabel}`
+              : 'Thành tiền: CALL';
+          const statusPart = statusClean ? `\t;${statusClean}` : '';
+          const code = (item.productCode || generateAutoProductCode(item.name)).trim();
+          return `${index + 1}-${code}\t;\t${nameWithWarranty}\t;\tĐơn giá: ${price}\t;\tSL: ${quantity}\t;\t${totalText}${statusPart}`.trimEnd();
+        } else {
+          const statusPart = statusClean ? `\t;${statusClean}` : '';
+          const code = (item.productCode || generateAutoProductCode(item.name)).trim();
+          return `${index + 1}-${code}\t;\t${nameWithWarranty}\t;\t${price}\t;${statusPart}`.trimEnd();
+        }
       })
       .join('\n\n');
 
@@ -222,7 +234,8 @@ export class SaleTextRendererService {
       .map((item, index) => {
         const price = formatPrice(item.unitPrice, false);
         const status = options.showStockStatus === false ? '' : normalizeStatusText(item.statusText);
-        return `${index + 1}-${item.productCode || ''}\t;\t${this.nameLine(
+        const code = (item.productCode || generateAutoProductCode(item.name)).trim();
+        return `${index + 1}-${code}\t;\t${this.nameLine(
           item,
         )}\t${formatWarranty(item.warranty)}\t;\t${price}${status ? `\t${status}` : ''}`.trimEnd();
       })

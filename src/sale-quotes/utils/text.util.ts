@@ -173,3 +173,43 @@ export function productWarrantyText(
   const months = product?.warrantyMonths;
   return months !== null && months !== undefined ? `${months} tháng` : null;
 }
+
+/**
+ * Tự sinh mã sản phẩm cho các dòng/linh kiện nhập thủ công ngoài S1.
+ * Ví dụ: "RAM" -> "KHO_RAM", "Nguồn Arrow 500W" -> "KHO_NGUON_ARROW_50"
+ */
+export function generateAutoProductCode(name?: string | null, existingCodeOrSeed?: string | number | null): string {
+  const val = (name || '').trim();
+  const clean = val
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .toUpperCase()
+    .slice(0, 14);
+
+  let suffix = '';
+  if (typeof existingCodeOrSeed === 'string' && existingCodeOrSeed) {
+    const parts = existingCodeOrSeed.split('_');
+    const lastPart = parts[parts.length - 1];
+    if (lastPart && lastPart.length >= 3 && lastPart.length <= 6 && /^[A-Z0-9]+$/.test(lastPart)) {
+      suffix = lastPart;
+    }
+  }
+  if (!suffix) {
+    suffix = Math.random().toString(36).substring(2, 6).toUpperCase();
+  }
+
+  const isGeneric = !clean || 
+    clean.startsWith('LINH_KIEN') || 
+    clean.startsWith('SAN_PHAM') || 
+    clean.includes('TUY_CHON') || 
+    clean.includes('THU_CONG');
+
+  if (isGeneric) {
+    return 'HT_' + suffix;
+  }
+
+  return 'KHO_' + clean + '_' + suffix;
+}
