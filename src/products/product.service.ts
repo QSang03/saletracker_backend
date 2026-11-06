@@ -409,7 +409,7 @@ export class ProductService {
         ? existing.price
         : price === null
           ? null
-          : Number(price) || null;
+          : Number(price);
 
     if (newPrice !== existing.price) {
       const oldPrice = existing.price ?? null;

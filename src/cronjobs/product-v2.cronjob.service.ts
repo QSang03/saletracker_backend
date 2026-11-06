@@ -49,13 +49,13 @@ interface PageStats {
   missingPriceItems: MissingPriceItem[];
 }
 
-/** Sản phẩm mà API không trả giá hợp lệ (Price thiếu/không phải số/<= 0). */
+/** Sản phẩm mà API không trả giá hợp lệ (Price thiếu/không phải số/âm). */
 interface MissingPriceItem {
   page?: number;
   mahh: string;
   name: string;
-  /** 'missing_or_invalid' = không có/không parse được; 'non_positive' = 0 hoặc âm. */
-  reason: 'missing_or_invalid' | 'non_positive';
+  /** 'missing_or_invalid' = không có/không parse được; 'negative' = giá âm. */
+  reason: 'missing_or_invalid' | 'negative';
   /** Giá trị thô của item.Price đúng như API trả về. */
   rawPrice: unknown;
   rawPriceType: string;
@@ -362,14 +362,16 @@ export class ProductV2CronjobService {
       const name = item.Name?.trim() || 'Unknown Product';
       const description = item.Description ? String(item.Description) : undefined;
       const rawPrice = this.toNullableNumber(item.Price);
-      const price = rawPrice !== null && rawPrice > 0 ? rawPrice : null;
+      // Giá 0 là giá trị hợp lệ (ERP có thể tạm đặt 0 khi đang cập nhật giá),
+      // chỉ thiếu/không parse được hoặc âm mới coi là không có giá.
+      const price = rawPrice !== null && rawPrice >= 0 ? rawPrice : null;
 
-      // Chỉ ghi nhận để debug; logic cập nhật giá về null giữ nguyên.
+      // Chỉ ghi nhận để debug; sản phẩm không có giá hợp lệ vẫn lưu null.
       if (price === null) {
         missingPriceItems.push({
           mahh: code,
           name,
-          reason: rawPrice === null ? 'missing_or_invalid' : 'non_positive',
+          reason: rawPrice === null ? 'missing_or_invalid' : 'negative',
           rawPrice: item.Price ?? null,
           rawPriceType:
             item.Price === null || item.Price === undefined
@@ -426,22 +428,31 @@ export class ProductV2CronjobService {
         if (product.price !== price) {
           const oldPrice = product.price ?? null;
           product.price = price;
-          // Giữ giá cũ + mốc thời gian để FE sale thấy "giá đã biến động".
-          product.previousPrice = oldPrice;
-          product.priceChangedAt = runStartedAt;
           businessChanged = true;
 
-          if (product.id) {
-            priceChanges.push(
-              this.priceHistoryRepo.create({
-                productId: product.id,
-                productCode: product.productCode,
-                oldPrice,
-                newPrice: price,
-                changedAt: runStartedAt,
-                source: 'sync',
-              }),
-            );
+          // null và 0 đều nghĩa là "chưa có giá" → không coi là biến động giá.
+          const isRealPriceChange = !(
+            (oldPrice === null || oldPrice === 0) &&
+            (price === null || price === 0)
+          );
+
+          if (isRealPriceChange) {
+            // Giữ giá cũ + mốc thời gian để FE sale thấy "giá đã biến động".
+            product.previousPrice = oldPrice;
+            product.priceChangedAt = runStartedAt;
+
+            if (product.id) {
+              priceChanges.push(
+                this.priceHistoryRepo.create({
+                  productId: product.id,
+                  productCode: product.productCode,
+                  oldPrice,
+                  newPrice: price,
+                  changedAt: runStartedAt,
+                  source: 'sync',
+                }),
+              );
+            }
           }
         }
 
