@@ -257,16 +257,33 @@ export class SaleTextRendererService {
     zaloSuffix?: string | null,
   ): string {
     let text = (body || '').trimEnd();
-    let note = (globalNote || '').trim();
-    if (note.toLowerCase() === 'giá đã bao gồm vat.' || note.toLowerCase() === 'giá đã bao gồm vat') {
-      note = '';
-    }
-    if (note) {
-      text += `\n${note}`;
-    }
-    const suffix = (zaloSuffix || '').trim();
-    if (suffix) {
-      text += `\n${suffix}`;
+    const footerLines: string[] = [];
+    const seenLines = new Set<string>();
+
+    const addLines = (raw?: string | null) => {
+      if (!raw) return;
+      const lines = raw.split('\n');
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (
+          !trimmed ||
+          trimmed.toLowerCase() === 'giá đã bao gồm vat.' ||
+          trimmed.toLowerCase() === 'giá đã bao gồm vat'
+        ) {
+          continue;
+        }
+        if (!seenLines.has(trimmed)) {
+          seenLines.add(trimmed);
+          footerLines.push(trimmed);
+        }
+      }
+    };
+
+    addLines(globalNote);
+    addLines(zaloSuffix);
+
+    if (footerLines.length > 0) {
+      text += `\n\n${footerLines.join('\n')}`;
     }
     return text.trim();
   }
