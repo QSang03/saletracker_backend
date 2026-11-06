@@ -196,6 +196,7 @@ export class SaleQuickCaseController {
     );
     const encoded = encodeURIComponent(filename);
     const asciiFallback = filename.replace(/[^a-zA-Z0-9-_]/g, '-');
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
     res.setHeader(
       'Content-Disposition',
       `attachment; filename="${asciiFallback}.xlsx"; filename*=UTF-8''${encoded}.xlsx`,
