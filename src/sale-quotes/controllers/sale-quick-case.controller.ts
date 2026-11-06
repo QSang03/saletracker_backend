@@ -182,8 +182,10 @@ export class SaleQuickCaseController {
     const mm = String(now.getMonth() + 1).padStart(2, '0');
     const yy = String(now.getFullYear()).slice(-2);
     const dateStr = `${dd}.${mm}.${yy}`;
-    const cleanTitle = (quickCase.title || '').trim();
-    const filename = cleanTitle ? `BÁO GIÁ_${cleanTitle}_${dateStr}` : `BÁO GIÁ_${dateStr}`;
+    const cleanTitle = (quickCase.title || '').trim().replace(/[\/\\:*?"<>|]/g, '_');
+    const filename = cleanTitle
+      ? `BÁO GIÁ THEO YÊU CẦU_${cleanTitle}_${dateStr}`
+      : `BÁO GIÁ THEO YÊU CẦU_${dateStr}`;
     this.sendXlsx(res, buffer, filename);
   }
 

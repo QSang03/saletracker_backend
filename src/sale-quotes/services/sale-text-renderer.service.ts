@@ -198,7 +198,7 @@ export class SaleTextRendererService {
       }
       const statusText = options.showStockStatus === false ? '' : stripStatusPrefix(item.statusText);
       const status = statusText ? `\t;${statusText}` : '';
-      const codePrefix = item.productCode ? `${item.productCode}\t;\t` : '';
+      const code = (item.productCode || generateAutoProductCode(description || request)).trim();
 
       const isReplacement =
         item.matchType === 'replacement' || item.matchType === 'equivalent';
@@ -206,17 +206,17 @@ export class SaleTextRendererService {
       if (isReplacement) {
         const label =
           item.matchType === 'replacement' ? 'Thay thế' : 'Tương đương';
-        body += `${stt}. ${request}\n`;
-        body += `↳ (${label}): ${codePrefix}${description}\t${warranty}\t;\t${price}${quantityText}${totalText}${status}\n\n`;
+        body += `${stt}-${request}\n`;
+        body += `↳ (${label}): ${code}\t;\t${description}\t${warranty}\t;\t${price}${quantityText}${totalText}${status}\n\n`;
       } else {
         const finalDescription = description || request;
-        body += `${stt}. ${codePrefix}${finalDescription}\t${warranty}\t;\t${price}${quantityText}${totalText}${status}\n\n`;
+        body += `${stt}-${code}\t;\t${finalDescription}\t${warranty}\t;\t${price}${quantityText}${totalText}${status}\n\n`;
       }
     });
 
     return this.appendFooter(
       body.trimEnd(),
-      quickCase.globalNote,
+      null,
       options.zaloSuffix,
     );
   }

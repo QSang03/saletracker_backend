@@ -467,7 +467,9 @@ export class SaleQuickCaseService {
     const finalGlobalNote =
       globalNote !== undefined
         ? (globalNote.trim() || null)
-        : (quickCase.globalNote?.trim() || settings.defaultGlobalNote?.trim() || null);
+        : (quickCase.globalNote && quickCase.globalNote.trim() !== 'Giá đã bao gồm VAT.'
+            ? quickCase.globalNote.trim()
+            : null);
     const finalItems = (quickCase.items || []).map((item) => ({
       ...item,
       warranty: item.warranty?.trim() || null,
