@@ -4,7 +4,9 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { Product } from '../../products/product.entity';
+import { Category } from '../../categories/category.entity';
 import { CatalogQueryDto, PricingPreviewDto } from '../dto/settings.dto';
+import { SaleCategoryQueryDto } from '../dto/category.dto';
 import { SalePricingService } from './sale-pricing.service';
 import { SaleSettingsService } from './sale-settings.service';
 import { getUserId } from '../utils/entity-access.util';
@@ -21,6 +23,8 @@ export class SaleCatalogService {
   constructor(
     @InjectRepository(Product)
     private readonly productRepo: Repository<Product>,
+    @InjectRepository(Category)
+    private readonly categoryRepo: Repository<Category>,
     private readonly pricingService: SalePricingService,
     private readonly settingsService: SaleSettingsService,
   ) {}
@@ -139,6 +143,65 @@ export class SaleCatalogService {
       page,
       pageSize,
     };
+  }
+
+  /**
+   * Danh mục dùng riêng cho Công cụ hỗ trợ báo giá.
+   * Không áp dụng filter role/permission (khác GET /categories của PM).
+   * Search tokenized + relevance giống GET /sale-quotes/catalog.
+   */
+  async listCategories(query: SaleCategoryQueryDto) {
+    const qb = this.categoryRepo
+      .createQueryBuilder('c')
+      .select(['c.id', 'c.catName', 'c.slug'])
+      .where('c.deleted_at IS NULL');
+
+    const searchPhrase = query.search?.trim().toLowerCase() ?? '';
+    const tokens = searchPhrase
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, MAX_SEARCH_TOKENS);
+
+    if (tokens.length > 0) {
+      const relevanceParts: string[] = [];
+
+      tokens.forEach((token, index) => {
+        const key = `catKeyword${index}`;
+        qb.andWhere(
+          `(LOWER(c.cat_name) LIKE :${key} OR LOWER(c.slug) LIKE :${key})`,
+          { [key]: `%${escapeLikePattern(token)}%` },
+        );
+
+        relevanceParts.push(
+          `(CASE WHEN LOWER(c.cat_name) LIKE :${key} THEN 10 ELSE 0 END)`,
+          `(CASE WHEN LOWER(c.slug) LIKE :${key} THEN 8 ELSE 0 END)`,
+        );
+      });
+
+      const likePhrase = escapeLikePattern(searchPhrase);
+      relevanceParts.push(
+        '(CASE WHEN LOWER(c.cat_name) = :catPhraseExact THEN 50 ELSE 0 END)',
+        '(CASE WHEN LOWER(c.slug) = :catPhraseExact THEN 50 ELSE 0 END)',
+        '(CASE WHEN LOWER(c.cat_name) LIKE :catPhrasePrefix THEN 20 ELSE 0 END)',
+      );
+
+      qb.addSelect(`(${relevanceParts.join(' + ')})`, 'relevance_score');
+      qb.setParameter('catPhraseExact', searchPhrase);
+      qb.setParameter('catPhrasePrefix', `${likePhrase}%`);
+      qb.orderBy('relevance_score', 'DESC');
+      qb.addOrderBy('c.cat_name', 'ASC');
+    } else {
+      qb.orderBy('c.cat_name', 'ASC');
+    }
+
+    qb.addOrderBy('c.id', 'ASC');
+
+    const rows = await qb.getMany();
+    return rows.map((row) => ({
+      id: row.id,
+      catName: row.catName,
+      slug: row.slug ?? null,
+    }));
   }
 
   async findOne(productId: number, user: AuthenticatedUser) {

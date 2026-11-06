@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuthModule } from '../auth/auth.module';
 import { Product } from '../products/product.entity';
+import { Category } from '../categories/category.entity';
 import { SaleQuoteSetting } from './entities/sale-quote-setting.entity';
 import { SaleQuote } from './entities/sale-quote.entity';
 import { SaleQuoteItem } from './entities/sale-quote-item.entity';
@@ -29,6 +30,7 @@ import { SaleQuickCaseController } from './controllers/sale-quick-case.controlle
     AuthModule,
     TypeOrmModule.forFeature([
       Product,
+      Category,
       SaleQuoteSetting,
       SaleQuote,
       SaleQuoteItem,

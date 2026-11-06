@@ -20,6 +20,7 @@ import {
   PricingPreviewDto,
   UpdateSettingsDto,
 } from '../dto/settings.dto';
+import { SaleCategoryQueryDto } from '../dto/category.dto';
 import { getUserId } from '../utils/entity-access.util';
 
 @Controller('sale-quotes')
@@ -33,6 +34,15 @@ export class SaleCatalogController {
   @Get('catalog')
   search(@Query() query: CatalogQueryDto, @Req() req: AuthenticatedRequest) {
     return this.catalogService.search(query, req.user);
+  }
+
+  /**
+   * Danh mục full cho Công cụ hỗ trợ báo giá — không filter theo role.
+   * Không dùng endpoint này thay cho CRUD /categories của PM.
+   */
+  @Get('categories')
+  listCategories(@Query() query: SaleCategoryQueryDto) {
+    return this.catalogService.listCategories(query);
   }
 
   @Get('catalog/:id')
