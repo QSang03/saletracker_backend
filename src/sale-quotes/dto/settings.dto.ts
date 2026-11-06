@@ -80,6 +80,10 @@ export class UpdateSettingsDto {
   @IsString()
   @MaxLength(2000)
   excelDisclaimer2?: string;
+
+  @IsOptional()
+  @IsArray()
+  selectedCategoryIds?: number[];
 }
 
 export class CatalogQueryDto {
@@ -97,6 +101,9 @@ export class CatalogQueryDto {
   @Type(() => Number)
   @IsInt()
   categoryId?: number;
+
+  @IsOptional()
+  categoryIds?: number[] | string;
 
   @IsOptional()
   @Transform(toBoolean)

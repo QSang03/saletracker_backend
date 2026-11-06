@@ -86,6 +86,9 @@ export class SaleSettingsService {
     if (dto.excelDisclaimer2 !== undefined) {
       settings.excelDisclaimer2 = dto.excelDisclaimer2;
     }
+    if (dto.selectedCategoryIds !== undefined) {
+      settings.selectedCategoryIds = dto.selectedCategoryIds;
+    }
 
     return this.settingRepo.save(settings);
   }
@@ -105,6 +108,7 @@ export class SaleSettingsService {
       showStockStatus: settings.showStockStatus ?? true,
       excelDisclaimer1: settings.excelDisclaimer1 ?? 'BÁO GIÁ CHỈ MANG TÍNH CHẤT THAM KHẢO, QUÝ KHÁCH VUI LÒNG LIÊN HỆ KINH DOANH ĐỂ CÓ ĐƯỢC GIÁ TỐT NHẤT.',
       excelDisclaimer2: settings.excelDisclaimer2 ?? 'HIỆU LỰC BÁO GIÁ CÓ THỜI HẠN TỪ 1-3 NGÀY DO BIẾN ĐỘNG TĂNG GIÁ TỪ HÃNG. MONG QUÝ KHÁCH LƯU Ý.',
+      selectedCategoryIds: settings.selectedCategoryIds ?? null,
       createdAt: settings.createdAt ?? null,
       updatedAt: settings.updatedAt ?? null,
     };

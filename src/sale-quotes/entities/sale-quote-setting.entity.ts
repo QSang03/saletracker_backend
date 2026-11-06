@@ -59,6 +59,13 @@ export class SaleQuoteSetting {
   @Column({ name: 'excel_disclaimer_2', type: 'text', nullable: true })
   excelDisclaimer2?: string | null;
 
+  @Column({
+    name: 'selected_category_ids',
+    type: 'json',
+    nullable: true,
+  })
+  selectedCategoryIds?: number[] | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

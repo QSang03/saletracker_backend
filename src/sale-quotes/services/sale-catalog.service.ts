@@ -85,7 +85,19 @@ export class SaleCatalogService {
       });
     }
 
-    if (query.categoryId) {
+    let catIds: number[] = [];
+    if (Array.isArray(query.categoryIds)) {
+      catIds = (query.categoryIds as any[]).map(Number).filter((n) => Number.isInteger(n) && n > 0);
+    } else if (typeof query.categoryIds === 'string' && (query.categoryIds as string).trim()) {
+      catIds = (query.categoryIds as string)
+        .split(',')
+        .map((s) => Number(s.trim()))
+        .filter((n) => Number.isInteger(n) && n > 0);
+    }
+
+    if (catIds.length > 0) {
+      qb.andWhere('c.id IN (:...catIds)', { catIds });
+    } else if (query.categoryId) {
       qb.andWhere('c.id = :categoryId', { categoryId: query.categoryId });
     }
 
