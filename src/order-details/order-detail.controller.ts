@@ -22,6 +22,8 @@ import { TransactionStatsService } from './transaction-stats.service';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { OrderBlacklistService } from '../order-blacklist/order-blacklist.service';
+import { BulkUpdateStatusDto } from './dto/bulk-update-status.dto';
+import { BulkStatusUpdateResult } from './bulk-status.helper';
 
 @Controller('order-details')
 @UseGuards(AuthGuard('jwt'))
@@ -487,6 +489,15 @@ export class OrderDetailController {
     skipped?: { id: number; reason: string }[];
   }> {
     return this.orderDetailService.bulkUpdate(data.ids, data.updates, req.user);
+  }
+
+  @Post('bulk-status')
+  @HttpCode(HttpStatus.OK)
+  async bulkUpdateStatus(
+    @Body() dto: BulkUpdateStatusDto,
+    @Req() req?: any,
+  ): Promise<BulkStatusUpdateResult> {
+    return this.orderDetailService.bulkUpdateStatus(dto, req.user);
   }
 
   @Post('bulk-extend')

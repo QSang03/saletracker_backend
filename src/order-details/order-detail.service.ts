@@ -6,7 +6,7 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, SelectQueryBuilder } from 'typeorm';
+import { IsNull, Repository, SelectQueryBuilder } from 'typeorm';
 import { createHash } from 'crypto';
 import {
   ExtendReason,
@@ -15,9 +15,16 @@ import {
 } from './order-detail.entity';
 import {
   assertStatusTransition,
+  MAX_BULK_STATUS_IDS,
   normalizeOrderStatus,
   normalizeStatusCsv,
 } from './order-status.constants';
+import {
+  BulkStatusSkipped,
+  BulkStatusUpdateResult,
+  planBulkStatusTransition,
+} from './bulk-status.helper';
+import { BulkUpdateStatusDto } from './dto/bulk-update-status.dto';
 import { OrderStatusContextService } from './order-status-context.service';
 import { Department } from 'src/departments/department.entity';
 import { User } from 'src/users/user.entity';
@@ -147,6 +154,20 @@ export class OrderDetailService {
     } catch {
       return true;
     }
+  }
+
+  /** Đọc JSON array từ cột json (TypeORM có thể trả array hoặc string). */
+  private parseJsonArray(value: any): any[] {
+    if (Array.isArray(value)) return value;
+    if (typeof value === 'string') {
+      try {
+        const parsed = JSON.parse(value);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    }
+    return [];
   }
 
   private addOneDayDateOnly(value: string): string {
@@ -917,6 +938,159 @@ export class OrderDetailService {
     }
 
     return { updated: prepared.length, skipped };
+  }
+
+  /**
+   * Cập nhật trạng thái hàng loạt cho các đơn thuộc chính sale đang đăng nhập.
+   * - Owner-only, chỉ đơn active (không hidden/deleted).
+   * - Partial success: dòng sai transition/hidden/không sở hữu trả trong `skipped`.
+   * - Conditional update theo status cũ để tránh ghi đè thay đổi đồng thời.
+   */
+  async bulkUpdateStatus(
+    dto: BulkUpdateStatusDto,
+    user: any,
+  ): Promise<BulkStatusUpdateResult> {
+    const uniqueIds = [
+      ...new Set((dto.ids || []).map((id) => Number(id))),
+    ].filter((id) => Number.isInteger(id) && id > 0);
+
+    if (uniqueIds.length === 0) {
+      throw new BadRequestException('ids không được rỗng');
+    }
+    if (uniqueIds.length > MAX_BULK_STATUS_IDS) {
+      throw new BadRequestException(
+        `Tối đa ${MAX_BULK_STATUS_IDS} đơn mỗi lần cập nhật`,
+      );
+    }
+    if (!user?.id) {
+      throw new ForbiddenException(
+        'Bạn không có quyền cập nhật trạng thái đơn hàng',
+      );
+    }
+
+    // Chỉ lấy đơn của chính user; TypeORM tự loại deleted_at.
+    const rows = await this.orderDetailRepository
+      .createQueryBuilder('orderDetail')
+      .leftJoinAndSelect('orderDetail.order', 'order')
+      .leftJoinAndSelect('order.sale_by', 'sale_by')
+      .where('orderDetail.id IN (:...ids)', { ids: uniqueIds })
+      .andWhere('sale_by.id = :userId', { userId: user.id })
+      .getMany();
+
+    const rowById = new Map<number, OrderDetail>();
+    for (const row of rows) {
+      rowById.set(Number(row.id), row);
+    }
+
+    const skipped: BulkStatusSkipped[] = [];
+    const activeRows: OrderDetail[] = [];
+
+    for (const id of uniqueIds) {
+      const row = rowById.get(id);
+      if (!row) {
+        skipped.push({
+          id,
+          code: 'not_found_or_forbidden',
+          reason: 'Không tìm thấy đơn hoặc bạn không có quyền cập nhật',
+        });
+        continue;
+      }
+      if (row.hidden_at) {
+        skipped.push({
+          id,
+          code: 'hidden_order',
+          reason: 'Đơn đã ẩn — hãy khôi phục trước khi cập nhật trạng thái',
+        });
+        continue;
+      }
+      activeRows.push(row);
+    }
+
+    const plan = planBulkStatusTransition(
+      activeRows.map((row) => ({ id: Number(row.id), status: row.status })),
+      dto.status,
+    );
+    skipped.push(...plan.skipped);
+
+    const updatedIds: number[] = [];
+    const editNote = dto.note?.trim() || null;
+
+    if (plan.updatable.length > 0) {
+      const activeRowById = new Map<number, OrderDetail>();
+      for (const row of activeRows) {
+        activeRowById.set(Number(row.id), row);
+      }
+
+      await this.orderStatusContextService.runWithContext(
+        {
+          actorId: user?.id ?? null,
+          actorName: user?.fullName || user?.username || null,
+          source: 'bulk_update',
+          note: editNote,
+        },
+        async (manager) => {
+          const repo = manager.getRepository(OrderDetail);
+
+          for (const item of plan.updatable) {
+            const row = activeRowById.get(item.id);
+            if (!row) continue;
+
+            const editHistory = this.parseJsonArray(row.edit_history);
+            editHistory.push({
+              user_id: user?.id ?? null,
+              user_name: user?.fullName || user?.username || 'Unknown',
+              fields: [
+                {
+                  field: 'status',
+                  old_value: item.fromStatus,
+                  new_value: plan.toStatus,
+                },
+              ],
+              note: editNote,
+              changed_at: new Date().toISOString(),
+            });
+
+            const result = await repo.update(
+              {
+                id: item.id,
+                status: item.dbStatus as OrderDetailStatus,
+                deleted_at: IsNull(),
+                hidden_at: IsNull(),
+              },
+              {
+                status: plan.toStatus as OrderDetailStatus,
+                edit_history:
+                  editHistory.length > 1000
+                    ? editHistory.slice(-1000)
+                    : editHistory,
+              },
+            );
+
+            if (!result.affected) {
+              skipped.push({
+                id: item.id,
+                code: 'concurrent_change',
+                reason:
+                  'Trạng thái vừa thay đổi bởi thao tác khác, vui lòng tải lại',
+              });
+              continue;
+            }
+
+            updatedIds.push(item.id);
+          }
+        },
+      );
+    }
+
+    return {
+      requested: uniqueIds.length,
+      target_status: plan.toStatus,
+      updated: updatedIds.length,
+      unchanged: plan.unchangedIds.length,
+      updated_ids: updatedIds,
+      unchanged_ids: plan.unchangedIds,
+      skipped,
+    };
   }
 
   async setProject(

@@ -21,6 +21,7 @@
     "test:activity-log": "node scripts/test-activity-log.mjs",
     "test:activity-log-cleanup": "node scripts/test-activity-log-cleanup.mjs",
     "test:order-status": "node scripts/test-order-status.mjs",
+    "test:bulk-order-status": "node scripts/test-bulk-order-status.mjs",
     "test:order-care-stats": "node scripts/test-order-care-stats-sql.mjs",
     "test:order-care-helpers": "node scripts/test-order-care-helpers.mjs",
     "seed:customer-kpi-dev": "node scripts/seed-customer-kpi-dev.mjs",

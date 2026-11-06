@@ -37,6 +37,19 @@ export const CARE_ELIGIBLE_STATUSES: OrderStatusValue[] = [
 ];
 
 /**
+ * Status được phép chọn làm đích khi sale cập nhật trạng thái hàng loạt.
+ * `cared`/`demand_cared` là care-only; `quoted` không phải đích chuyển tiếp.
+ */
+export const MANUAL_BULK_TARGET_STATUSES: OrderStatusValue[] = [
+  OrderDetailStatus.COMPLETED,
+  OrderDetailStatus.DEMAND,
+  OrderDetailStatus.REJECTED,
+];
+
+/** Giới hạn số đơn mỗi lần bulk status (khớp convention bulk care/project). */
+export const MAX_BULK_STATUS_IDS = 200;
+
+/**
  * Dữ liệu cũ trước migration: pending/confirmed không còn trong DB.
  * Map ở biên nhận input để client/FE cũ không làm sập luồng.
  */
