@@ -150,19 +150,8 @@ export class SaleQuickCaseService {
     const [rows, total] = await qb.getManyAndCount();
     const rules = await this.settingsService.getEffectiveRules(userId);
 
-    const allProductIds = Array.from(
-      new Set(
-        rows.flatMap((c) =>
-          (c.items || [])
-            .map((i) => i.productId)
-            .filter((pid): pid is number => typeof pid === 'number' && pid > 0),
-        ),
-      ),
-    );
-    const productsMap =
-      allProductIds.length > 0
-        ? await this.loadProducts(allProductIds)
-        : new Map();
+    const allItems = rows.flatMap((c) => c.items || []);
+    const { idMap, codeMap } = await this.loadProductsForItems(allItems);
 
     const data = rows.map((quickCase) => {
       const items = [...(quickCase.items || [])].sort(
@@ -171,7 +160,9 @@ export class SaleQuickCaseService {
       return {
         ...quickCase,
         items: items.map((item) => {
-          const prod = item.productId ? productsMap.get(item.productId) : undefined;
+          const prod =
+            (item.productId ? idMap.get(item.productId) : undefined) ||
+            (item.productCode ? codeMap.get(item.productCode.trim().toLowerCase()) : undefined);
           return {
             ...item,
             stock: prod?.stock ?? 0,
@@ -199,15 +190,14 @@ export class SaleQuickCaseService {
     }
     this.assertCanRead(quickCase, user);
 
-    const productIds = (quickCase.items || [])
-      .map((i) => i.productId)
-      .filter((pid): pid is number => typeof pid === 'number' && pid > 0);
-    const products = productIds.length > 0 ? await this.loadProducts(productIds) : new Map();
+    const { idMap, codeMap } = await this.loadProductsForItems(quickCase.items || []);
 
     return {
       ...quickCase,
       items: (quickCase.items || []).map((item) => {
-        const prod = item.productId ? products.get(item.productId) : undefined;
+        const prod =
+          (item.productId ? idMap.get(item.productId) : undefined) ||
+          (item.productCode ? codeMap.get(item.productCode.trim().toLowerCase()) : undefined);
         return {
           ...item,
           stock: prod?.stock ?? 0,
@@ -562,6 +552,31 @@ export class SaleQuickCaseService {
         ? await this.productRepo.find({ where: { id: In(uniqueIds) } })
         : [];
     return new Map(products.map((product) => [product.id, product]));
+  }
+
+  private async loadProductsForItems(
+    items: Array<{ productId?: number | null; productCode?: string | null }>,
+  ) {
+    const pids = Array.from(
+      new Set(items.map((i) => Number(i.productId)).filter((id) => id > 0)),
+    );
+    const pcodes = Array.from(
+      new Set(items.map((i) => i.productCode?.trim()).filter((c): c is string => Boolean(c))),
+    );
+
+    const [byIds, byCodes] = await Promise.all([
+      pids.length > 0 ? this.productRepo.find({ where: { id: In(pids) } }) : [],
+      pcodes.length > 0 ? this.productRepo.find({ where: { productCode: In(pcodes) } }) : [],
+    ]);
+
+    const idMap = new Map<number, Product>();
+    const codeMap = new Map<string, Product>();
+    for (const p of byIds) idMap.set(p.id, p);
+    for (const p of byCodes) {
+      if (p.productCode) codeMap.set(p.productCode.trim().toLowerCase(), p);
+      if (!idMap.has(p.id)) idMap.set(p.id, p);
+    }
+    return { idMap, codeMap };
   }
 
   private async getEditableCase(id: number, user: AuthenticatedUser) {

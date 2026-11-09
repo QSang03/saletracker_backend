@@ -160,18 +160,22 @@ export class SaleQuoteService {
     }
     this.assertCanRead(quote, user);
 
-    const productIds = (quote.items || [])
-      .map((i) => i.productId)
-      .filter((pid): pid is number => typeof pid === 'number' && pid > 0);
-    const products = productIds.length > 0 ? await this.loadProducts(productIds) : new Map();
+    const productMap = await this.loadProductsForItems(quote.items || []);
 
     return {
       ...quote,
       items: (quote.items || []).map((item) => {
-        const prod = item.productId ? products.get(item.productId) : undefined;
+        const prod = productMap.get(item.productId, item.productCode);
+        const resolvedStock =
+          prod?.stock !== null && prod?.stock !== undefined
+            ? Number(prod.stock)
+            : item.metadata?.stock !== undefined && item.metadata?.stock !== null
+            ? Number(item.metadata.stock)
+            : 0;
+
         return {
           ...item,
-          stock: prod?.stock ?? item.metadata?.stock ?? 0,
+          stock: resolvedStock,
         };
       }),
     };
@@ -520,6 +524,60 @@ export class SaleQuoteService {
       isManual: dto.isManual ?? !product,
       metadata: dto.metadata ?? null,
     });
+  }
+
+  private async loadProductsForItems(
+    items: Array<{ productId?: number | null; productCode?: string | null }>,
+  ) {
+    const productIds = Array.from(
+      new Set(
+        items
+          .map((i) => Number(i.productId))
+          .filter((id) => Number.isFinite(id) && id > 0),
+      ),
+    );
+    const productCodes = Array.from(
+      new Set(
+        items
+          .map((i) => i.productCode?.trim())
+          .filter((c): c is string => !!c),
+      ),
+    );
+
+    const byId = new Map<number, Product>();
+    const byCode = new Map<string, Product>();
+
+    if (productIds.length > 0) {
+      const prodsById = await this.productRepo.find({
+        where: { id: In(productIds) },
+      });
+      for (const p of prodsById) {
+        byId.set(p.id, p);
+        if (p.productCode) byCode.set(p.productCode.trim().toLowerCase(), p);
+      }
+    }
+
+    if (productCodes.length > 0) {
+      const prodsByCode = await this.productRepo.find({
+        where: { productCode: In(productCodes) },
+      });
+      for (const p of prodsByCode) {
+        byId.set(p.id, p);
+        if (p.productCode) byCode.set(p.productCode.trim().toLowerCase(), p);
+      }
+    }
+
+    return {
+      get: (productId?: number | null, productCode?: string | null): Product | undefined => {
+        if (productId && byId.has(Number(productId))) {
+          return byId.get(Number(productId));
+        }
+        if (productCode && byCode.has(productCode.trim().toLowerCase())) {
+          return byCode.get(productCode.trim().toLowerCase());
+        }
+        return undefined;
+      },
+    };
   }
 
   private async loadProducts(productIds: number[]) {
