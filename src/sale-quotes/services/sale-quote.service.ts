@@ -173,9 +173,20 @@ export class SaleQuoteService {
             ? Number(item.metadata.stock)
             : 0;
 
+        const resolvedCostPrice =
+          item.costPrice !== null && item.costPrice !== undefined
+            ? Number(item.costPrice)
+            : prod?.price !== null && prod?.price !== undefined
+            ? Number(prod.price)
+            : null;
+
+        const resolvedWarranty = item.warranty || (prod ? productWarrantyText(prod) : null);
+
         return {
           ...item,
           stock: resolvedStock,
+          costPrice: resolvedCostPrice,
+          warranty: resolvedWarranty,
         };
       }),
     };
@@ -353,8 +364,7 @@ export class SaleQuoteService {
     if (dto.description !== undefined) {
       item.description = dto.description?.trim() || null;
     }
-    // Nếu là item thủ công (không có productId) thì cho phép nhập/sửa bảo hành
-    if (!item.productId && dto.warranty !== undefined) {
+    if (dto.warranty !== undefined) {
       item.warranty = dto.warranty?.trim() || null;
     }
     if (dto.costPrice !== undefined) item.costPrice = dto.costPrice;

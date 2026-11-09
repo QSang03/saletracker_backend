@@ -175,9 +175,20 @@ export class SaleBuildService {
             ? Number(item.metadata.stock)
             : 0;
 
+        const resolvedCostPrice =
+          item.costPrice !== null && item.costPrice !== undefined
+            ? Number(item.costPrice)
+            : prod?.price !== null && prod?.price !== undefined
+            ? Number(prod.price)
+            : null;
+
+        const resolvedWarranty = item.warranty || (prod ? productWarrantyText(prod) : null);
+
         return {
           ...item,
           stock: resolvedStock,
+          costPrice: resolvedCostPrice,
+          warranty: resolvedWarranty,
         };
       }),
     };
