@@ -717,6 +717,17 @@ export class OrderService {
      */
     const isPM = roleNames.includes('pm');
     if (isPM) {
+      // ✅ Nếu user có custom PM roles (pm_<username>_*), ưu tiên lọc theo PM sản phẩm -> return null
+      const u = (user.username || '').toLowerCase();
+      const hasCustomPMRoles = roleNames.some((r: string) => {
+        const lower = (r || '').toLowerCase();
+        if (lower === `pm_${u}` || lower === 'pm_username' || lower.startsWith('pm-')) return false;
+        return lower.startsWith(`pm_${u}_`) || (lower.startsWith('pm_') && !lower.startsWith('pm-'));
+      });
+      if (hasCustomPMRoles) {
+        return null;
+      }
+
       // Kiểm tra có role pm_{phong_ban} nào không
       const pmRoles = roleNames.filter((r: string) => r.startsWith('pm-'));
 
@@ -2214,7 +2225,12 @@ export class OrderService {
         // ✅ PM logic thuần túy: chỉ check PM roles
         const isPM = roleNames.includes('pm');
         if (isPM) {
-          allowedUserIds = await this.getPMUserIdsOnly(user);
+          const isPMCustom = filters.pmCustomMode === 'true' || !!filters.rolePermissions;
+          if (isPMCustom) {
+            allowedUserIds = null;
+          } else {
+            allowedUserIds = await this.getPMUserIdsOnly(user);
+          }
         } else {
           // User thường: chỉ xem của chính họ
           allowedUserIds = [user.id];
@@ -2260,9 +2276,9 @@ export class OrderService {
           p.toLowerCase().startsWith('pm_'),
         );
 
-        if (pmPermissions.length > 0) {
+        if (pmPermissions.length > 0 || filters.pmCustomMode === 'true' || !!filters.rolePermissions) {
           // ✅ Kiểm tra chế độ PM từ query parameter
-          const pmCustomMode = filters.pmCustomMode === 'true';
+          const pmCustomMode = filters.pmCustomMode === 'true' || !!filters.rolePermissions;
 
           if (pmCustomMode) {
             const allCombinations: string[] = [];
