@@ -17,7 +17,8 @@ import {
   OrderDetailStatus,
 } from '../order-details/order-detail.entity';
 import { Order } from '../orders/order.entity';
-import { CustomerMovementReport } from './customer-movement-report.entity';
+import { CustomerAppointment } from './customer-appointment.entity';
+import { CustomerAppointmentsService } from './customer-appointments.service';
 import { CustomerRevenueDaily } from './customer-revenue-daily.entity';
 import { DeptRevenueTarget } from './dept-revenue-target.entity';
 import { NkmSaleMap } from './nkm-sale-map.entity';
@@ -99,11 +100,12 @@ interface SuggestionRevenueContext {
   previous: number | null;
 }
 
-/** Một sự kiện báo cáo di chuyển thô, đọc từ customer_movement_reports. */
+/** Completed appointment evidence within the requested reporting period. */
 interface MovementEventRow {
   user_id: number;
   customer_code: string;
   sent_at: Date | string;
+  customer_id: number;
 }
 
 /** Số liệu gợi ý đơn hàng đã gộp — theo từng khách (phân công) và từng sale. */
@@ -221,6 +223,9 @@ const revenueData = (
 export class CustomerKpiReportsService {
   constructor(
     private readonly scoring: CustomerKpiScoringService,
+    private readonly appointments: CustomerAppointmentsService,
+    @InjectRepository(CustomerAppointment)
+    private readonly appointmentRepo: Repository<CustomerAppointment>,
     @InjectRepository(CustomerActivityDaily)
     private readonly activityRepo: Repository<CustomerActivityDaily>,
     @InjectRepository(KpiDefinition)
@@ -241,8 +246,6 @@ export class CustomerKpiReportsService {
     private readonly userRepo: Repository<User>,
     @InjectRepository(Debt)
     private readonly debtRepo: Repository<Debt>,
-    @InjectRepository(CustomerMovementReport)
-    private readonly movementRepo: Repository<CustomerMovementReport>,
     @InjectRepository(KpiCriterionOverride)
     private readonly overrideRepo: Repository<KpiCriterionOverride>,
     @InjectRepository(CustomerRevenueDaily)
@@ -284,9 +287,7 @@ export class CustomerKpiReportsService {
     }
     if (lower.some((r) => r.startsWith('manager-'))) {
       const departmentIds = (user.departments || [])
-        .filter(
-          (d: any) => d?.server_ip && String(d.server_ip).trim() !== '',
-        )
+        .filter((d: any) => d?.server_ip && String(d.server_ip).trim() !== '')
         .map((d: any) => d?.id)
         .filter(Boolean);
       if (departmentIds.length === 0) return [];
@@ -466,10 +467,9 @@ export class CustomerKpiReportsService {
   }
 
   /**
-   * Sự kiện báo cáo di chuyển (tiêu chí 3) của các sale trong cửa sổ — job
-   * Python ghi theo (user_id, mã KH). Chỉ nạp trong [from, to]: tiêu chí này
-   * không cần lookback. `to` là ngày cuối cửa sổ nên phải cộng 1 ngày để
-   * so sánh với cột DATETIME (không mất ngày cuối).
+   * Tiêu chí 3: lịch completed có check-in trong TOÀN BỘ kỳ [from, to].
+   * Không có mốc triển khai và không đọc bằng chứng regex cũ.
+   * Dùng đầu ngày kế tiếp làm cận trên để không mất ngày cuối kỳ.
    */
   private async loadMovementEvents(
     saleIds: number[],
@@ -477,22 +477,27 @@ export class CustomerKpiReportsService {
     to: string,
   ): Promise<MovementEventRow[]> {
     if (saleIds.length === 0) return [];
-    const toExclusive = this.shiftDate(to, 1);
-    return this.movementRepo
-      .createQueryBuilder('m')
-      .select('m.user_id', 'user_id')
-      .addSelect('m.customer_code', 'customer_code')
-      .addSelect('m.sent_at', 'sent_at')
-      .where('m.user_id IN (:...saleIds)', { saleIds: [...new Set(saleIds)] })
-      .andWhere('m.sent_at >= :from', { from })
-      .andWhere('m.sent_at < :toExclusive', { toExclusive })
+    return this.appointmentRepo
+      .createQueryBuilder('a')
+      .select('a.user_id', 'user_id')
+      .addSelect('a.customer_id', 'customer_id')
+      .addSelect('a.customer_code', 'customer_code')
+      .addSelect('a.checkin_at', 'sent_at')
+      .where('a.user_id IN (:...saleIds)', { saleIds: [...new Set(saleIds)] })
+      .andWhere(
+        "a.status = 'completed' AND a.mapping_status = 'matched' AND a.customer_id IS NOT NULL",
+      )
+      .andWhere('a.checkin_at >= :from AND a.checkin_at < :until', {
+        from: `${from} 00:00:00`,
+        until: `${this.shiftDate(to, 1)} 00:00:00`,
+      })
       .getRawMany<MovementEventRow>();
   }
 
   /**
-   * Ghép sự kiện báo cáo di chuyển vào map ngày hoạt động. Khớp theo
-   * (user_id, customer_code chuẩn hoá) — NestJS tự tra khách của sale, job
-   * Python không cần biết bảng khách. Ngày chưa có dòng thì tạo dòng mới với
+   * Ghép bằng chứng gặp vào map ngày hoạt động. Lịch mới khớp user + customer_id
+   * (đã đối chiếu mã/SAP), không fallback theo mã hoặc tin nhắn cũ.
+   * Ngày chưa có dòng thì tạo dòng mới với
    * inbound/outbound = 0 và zalo_linked = false (các metric Zalo lọc
    * zalo_linked nên không bị ảnh hưởng; adapter movement_report không gate).
    */
@@ -502,14 +507,11 @@ export class CustomerKpiReportsService {
     events: MovementEventRow[],
   ): void {
     if (events.length === 0) return;
-    const normCode = (value: unknown): string =>
-      String(value ?? '')
-        .trim()
-        .toLowerCase();
-    // (user_id | mã KH) -> ngày -> số tin
+    // (user_id | customer identity) -> day -> evidence count
     const counts = new Map<string, Map<string, number>>();
     for (const event of events) {
-      const key = `${Number(event.user_id)}|${normCode(event.customer_code)}`;
+      if (!event.customer_id) continue;
+      const key = `${Number(event.user_id)}|${event.customer_id}`;
       const day =
         event.sent_at instanceof Date
           ? this.fmtDate(event.sent_at)
@@ -520,8 +522,8 @@ export class CustomerKpiReportsService {
       counts.set(key, byDay);
     }
     for (const row of rows) {
-      const byDay = counts.get(`${row.saleId}|${normCode(row.customerCode)}`);
-      if (!byDay) continue;
+      const byDay = counts.get(`${row.saleId}|${row.customerId}`);
+      if (!byDay?.size) continue;
       const days = activity.get(row.assignmentId) ?? [];
       for (const [day, count] of byDay) {
         const existing = days.find((d) => d.stat_date === day);
@@ -1240,7 +1242,8 @@ export class CustomerKpiReportsService {
       let current = 0;
       let previous = 0;
       for (const slp of codes) {
-        current += currentTotals.get(`${slp}|${row.customerCode}`)?.lineTotal ?? 0;
+        current +=
+          currentTotals.get(`${slp}|${row.customerCode}`)?.lineTotal ?? 0;
         previous +=
           previousTotals.get(`${slp}|${row.customerCode}`)?.lineTotal ?? 0;
       }
@@ -1438,6 +1441,7 @@ export class CustomerKpiReportsService {
     orderSuggestions?: OrderSuggestionBundle,
     /** Doanh số kỳ hiện tại + kỳ trước — nguồn cho nhóm gợi ý doanh số. */
     suggestionRevenue?: Map<number, SuggestionRevenueContext>,
+    appointmentReasons = new Map<number, string>(),
   ) {
     const customersBySale = new Map<number, AssignmentRow[]>();
     for (const row of assignments) {
@@ -1550,6 +1554,7 @@ export class CustomerKpiReportsService {
               debtBalances.get(row.customerId) ?? null,
               revenueData(revenue, revenueFor(row)),
               orderSuggestions?.byAssignment.get(row.assignmentId) ?? null,
+              appointmentReasons.get(row.assignmentId),
             ),
           };
         });
@@ -1594,6 +1599,9 @@ export class CustomerKpiReportsService {
               : undefined,
             // Tiêu chí gợi ý đơn hàng cần tổng hợp đơn chưa chốt của sale.
             orderSuggestions?.bySale.get(saleId) ?? null,
+            saleCustomers
+              .map((c) => appointmentReasons.get(c.assignmentId))
+              .find(Boolean),
           ),
         );
 
@@ -1675,6 +1683,7 @@ export class CustomerKpiReportsService {
             debtBalances.get(row.customerId) ?? null,
             revenueData(revenue, revenueRow),
             orderSuggestions?.byAssignment.get(row.assignmentId) ?? null,
+            appointmentReasons.get(row.assignmentId),
           );
           // Cùng luật ghi đè với vòng chấm cấp sale: ghi đè cả sale ép mọi ô
           // khách, ghi đè từng khách chỉ hạ ô của khách đó
@@ -1805,7 +1814,7 @@ export class CustomerKpiReportsService {
       to,
     );
     const months = this.monthsInRange(from, to);
-    // Sự kiện báo cáo di chuyển (tiêu chí 3) ghép thẳng vào map ngày hoạt động
+    // Visit evidence (TC3) across the entire requested reporting period.
     this.mergeMovementReports(
       activity,
       assignments,
@@ -1873,6 +1882,7 @@ export class CustomerKpiReportsService {
         revenue,
         orderSuggestions,
         suggestionRevenue,
+        await this.appointments.unavailableReasons(assignments, from, to),
       ),
       definitions,
       debtBalances,
@@ -2723,12 +2733,7 @@ export class CustomerKpiReportsService {
       );
     }
     // 4. Khách KEY rơi doanh số: kỳ trước có, kỳ này không còn
-    if (
-      tier === 'KEY' &&
-      hasRevenue &&
-      revenueBefore > 0 &&
-      revenueNow === 0
-    ) {
+    if (tier === 'KEY' && hasRevenue && revenueBefore > 0 && revenueNow === 0) {
       return this.suggestion(
         row,
         'key_rut_doanh_so',
@@ -2738,7 +2743,12 @@ export class CustomerKpiReportsService {
       );
     }
     // 5. Khách KEY chưa từng có doanh số (cả kỳ trước lẫn kỳ này)
-    if (tier === 'KEY' && hasRevenue && revenueBefore === 0 && revenueNow === 0) {
+    if (
+      tier === 'KEY' &&
+      hasRevenue &&
+      revenueBefore === 0 &&
+      revenueNow === 0
+    ) {
       return this.suggestion(
         row,
         'key_chua_co_doanh_so',
@@ -2811,7 +2821,11 @@ export class CustomerKpiReportsService {
       const days = Math.max(silentDays, SUGGESTION_KEY_GAP_DAYS);
       const baseText = `Khách KEY đã ${days} ngày không được liên lạc`;
       if (!revenue || revenue.current === null) return baseText;
-      if (revenue.previous !== null && revenue.previous > 0 && revenue.current === 0) {
+      if (
+        revenue.previous !== null &&
+        revenue.previous > 0 &&
+        revenue.current === 0
+      ) {
         return `${baseText} · rơi doanh số (kỳ trước ${this.formatMoney(revenue.previous)}, kỳ này 0)`;
       }
       if (revenue.current === 0) {

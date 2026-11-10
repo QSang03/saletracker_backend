@@ -18,9 +18,8 @@ import { FiscalQuarter } from './nkm-fiscal';
  *
  * BẢNG QUY TẮC ĐÃ CHỐT VỚI NGƯỜI DÙNG (10/06/2026):
  * - support_khach  : TIÊU CHÍ 3 — "có đi hỗ trợ khách chưa". metric
- *   movement_report: tháng đạt khi có ≥1 tin nhắn báo cáo di chuyển khớp cụm
- *   system_config.movement_report_pattern (mặc định "di gap khach") + mã KH
- *   (bảng customer_movement_reports, job Python ghi, không phân biệt nguồn).
+ *   movement_report: đạt khi có lịch completed + check-in trong kỳ (API lịch hẹn).
+ *   Xét toàn bộ kỳ báo cáo, không có mốc triển khai hoặc nguồn regex cũ.
  * - lien_lac_phan_hoi: TIÊU CHÍ 4 — "có chủ động hỏi thăm khách chưa". metric
  *   monthly_contact: tháng đạt khi có ≥1 tin SALE nhắn đi tới khách
  *   (outbound > 0, không cần khách trả lời). (Trước đây là ratio 2 chiều.)
@@ -221,7 +220,7 @@ export interface ActivityDayRow {
   order_count: number;
   revenue: number;
   zalo_linked: boolean;
-  /** Số tin báo cáo di chuyển khớp cú pháp trong ngày (tiêu chí 3). */
+  /** Số lịch hoàn thành có check-in trong ngày (tiêu chí 3). */
   movement_count?: number;
 }
 
@@ -535,6 +534,7 @@ export class CustomerKpiScoringService {
     debtBalance?: number | null,
     revenue?: { tier: string | null; quantity: number; lineTotal: number },
     openOrders?: CustomerOrderSuggestion | null,
+    appointmentUnavailableReason?: string,
   ): CustomerCriterion {
     const base: CustomerCriterion = {
       key: definition.key,
@@ -555,10 +555,10 @@ export class CustomerKpiScoringService {
       return this.scoreCustomerOrderSuggestion(definition, base, openOrders);
     }
 
-    // Tiêu chí 3 KHÔNG gate zalo_linked: báo cáo di chuyển tồn tại độc lập với
-    // khớp liên hệ Zalo nên phải chấm TRƯỚC nhánh lọc ngày đo được (sale chưa
-    // khớp liên hệ vẫn có thể đã gửi báo cáo trong nhóm).
+    // Lịch hẹn độc lập với liên kết Zalo; chấm trước nhánh lọc ngày đo được.
     if (definition.metric === 'movement_report') {
+      if (appointmentUnavailableReason)
+        return { ...base, reason: appointmentUnavailableReason };
       const reported = days.filter(
         (row) => (row.movement_count ?? 0) > 0 && row.stat_date >= fromDate,
       );
@@ -1008,6 +1008,7 @@ export class CustomerKpiScoringService {
     fromDate: string,
     revenue?: RevenueSaleInput,
     orderSuggestions?: SaleOrderSuggestion | null,
+    appointmentUnavailableReason?: string,
   ): SaleCriterion {
     const base: SaleCriterion = {
       key: definition.key,
@@ -1163,6 +1164,8 @@ export class CustomerKpiScoringService {
     // Tiêu chí 3 — báo cáo không cần khớp liên hệ Zalo nên mẫu số là TOÀN BỘ
     // khách của sale (khác reachable của các tiêu chí Zalo)
     if (definition.metric === 'movement_report') {
+      if (appointmentUnavailableReason)
+        return { ...base, reason: appointmentUnavailableReason };
       const pool = windowedCustomers;
       if (pool.length === 0) {
         return { ...base, reason: REASON_NO_CUSTOMERS };

@@ -457,7 +457,7 @@ const mvDay = (d, count, o = {}) => ({
 });
 
 console.log(
-  '\n[N] Tiêu chí 3 — movement_report (báo cáo di chuyển khớp cú pháp)',
+  '\n[N] Tiêu chí 3 — movement_report (lịch hẹn hoàn thành có check-in)',
 );
 
 r = engine.scoreCustomer(
@@ -471,7 +471,7 @@ r = engine.scoreCustomer(
   1,
   FROM,
 );
-check('có tin báo cáo trong tháng → pass', r.status === 'pass', r);
+check('có bằng chứng gặp khách trong tháng → pass', r.status === 'pass', r);
 
 r = engine.scoreCustomer(
   def({
@@ -485,7 +485,7 @@ r = engine.scoreCustomer(
   FROM,
 );
 check(
-  'không có tin báo cáo → fail (mặc định chưa đạt)',
+  'không có bằng chứng gặp khách → fail (mặc định chưa đạt)',
   r.status === 'fail',
   r,
 );

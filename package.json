@@ -16,6 +16,7 @@
     "test:customer-kpi": "node scripts/test-customer-kpi.mjs",
     "test:nkm-fiscal": "node scripts/test-nkm-fiscal.mjs",
     "test:customer-kpi-scoring": "node scripts/test-customer-kpi-scoring.mjs",
+    "test:customer-appointments": "node scripts/test-customer-appointments.mjs",
     "test:kpi-report-filter": "ts-node --transpile-only -r tsconfig-paths/register scripts/test-kpi-report-filter.ts",
     "test:warranty-import": "ts-node --transpile-only -r tsconfig-paths/register scripts/test-warranty-import.ts",
     "test:activity-log": "node scripts/test-activity-log.mjs",

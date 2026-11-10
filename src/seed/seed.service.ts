@@ -446,14 +446,6 @@ export class SeedService implements OnModuleInit {
           section: 'system',
           status: 1,
         },
-        {
-          name: 'movement_report_pattern',
-          display_name: 'Cụm báo cáo di chuyển (tiêu chí 3)',
-          value: 'di gap khach',
-          type: 'text',
-          section: 'kpi',
-          status: 1,
-        },
         // API NKM — nguồn chân lý của tiêu chí doanh số
         // (thiết kế THIET-KE-DOANH-SO-API-NKM.md). Đổi môi trường thì sửa value
         // ở đây, không cần sửa code.
@@ -548,14 +540,6 @@ export class SeedService implements OnModuleInit {
           value: '7',
           type: 'number',
           section: 'system',
-          status: 1,
-        },
-        {
-          name: 'movement_report_pattern',
-          display_name: 'Cụm báo cáo di chuyển (tiêu chí 3)',
-          value: 'di gap khach',
-          type: 'text',
-          section: 'kpi',
           status: 1,
         },
         // API NKM — nguồn chân lý của tiêu chí doanh số

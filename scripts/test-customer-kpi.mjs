@@ -1771,7 +1771,6 @@ console.log('\n-- M. Mục 4: rollup Python → engine KPI → chỉ tiêu → g
           }
           if (saleUserId) {
             await mainConn.query('DELETE FROM kpi_criterion_overrides WHERE sale_id = ?', [saleUserId]);
-            await mainConn.query('DELETE FROM customer_movement_reports WHERE user_id = ?', [saleUserId]);
             await mainConn.query('DELETE FROM kpi_targets WHERE sale_id = ?', [saleUserId]);
           }
           if (requestIds.length) {
@@ -1945,15 +1944,9 @@ console.log('\n-- M. Mục 4: rollup Python → engine KPI → chỉ tiêu → g
         [asgIds.key, accountId, CONTACTS.key, `Khách test M key (${CONTACTS.key})`,
          asgIds.non, accountId, CONTACTS.non, `Khách test M non (${CONTACTS.non})`],
       );
-      // 3b. Sự kiện báo cáo di chuyển (tiêu chí 3): job Python ghi bảng này,
-      // test giả lập 1 tin khớp cú pháp cho KEY hôm nay + 1 tin của NON hôm
-      // qua (ngoài cửa sổ TODAY — kiểm tra lọc theo ngày).
-      const mvBase = 9500000000 + (Date.now() % 100000000);
-      await mainConn.query(
-        'INSERT INTO customer_movement_reports (user_id, customer_code, sent_at, source_type, raw_text, source_message_id, created_at) VALUES (?, ?, ?, ?, ?, ?, NOW()), (?, ?, ?, ?, ?, ?, NOW())',
-        [saleUserId, CODES.key, `${TODAY} 10:00:00`, 'group', `ĐI GAP KHACH ${CODES.key}`, mvBase,
-         saleUserId, CODES.non, `${YESTERDAY} 10:00:00`, 'personal', `di gap khach ${CODES.non}`, mvBase + 1],
-      );
+      // TC3 is now sourced from the appointment API. This synthetic sale has
+      // no NKM identity, so TC3 must be no_data, never a regex-generated pass.
+      // Appointment mapping/completion/boundary tests are in test-customer-appointments.mjs.
       const s1 = runRollup();
       assert(s1, 'rollup không in được summary — chạy tay: py -m src.services.common.customer_kpi_rollup_service');
       ok(`Rollup 1: ${JSON.stringify(s1)}`);
@@ -2004,17 +1997,15 @@ console.log('\n-- M. Mục 4: rollup Python → engine KPI → chỉ tiêu → g
       });
 
       // 6. Engine chấm điểm lúc đọc — overview
-      await expect('[M] Overview: TC3 support 1/2 (có báo cáo), TC4 tương tác 1/2, gợi ý pass, doanh số no_data', 200, async () => {
+      await expect('[M] Overview: TC3 thiếu mapping, TC4 tương tác 1/2, gợi ý pass, doanh số no_data', 200, async () => {
         const r = await call('GET', `/customer-kpi-reports/overview?saleId=${saleUserId}&from=${TODAY}&to=${TODAY}`, H());
         assert(r.status === 200, `HTTP ${r.status}: ${r.text?.slice(0, 200)}`);
         const sale = (r.json?.sales || []).find((x) => x.saleId === saleUserId);
         assert(sale, 'không thấy sale test trong overview');
         const byKey = new Map(sale.criteria.map((c) => [c.key, c]));
-        // TC3 binary: KEY có báo cáo di chuyển trong cửa sổ → 1/2 khách đạt
+        // No provider sale mapping: report missing data, not a failed visit.
         const support = byKey.get('support_khach');
-        assert(support && support.status === 'pass' && support.actualValue === 1, JSON.stringify(support));
-        assert(support.numerator === 1 && support.denominatorValue === 2 && support.totalCriteria === 2, JSON.stringify(support));
-        assert(support.passedCriteria === 1, JSON.stringify(support));
+        assert(support && support.status === 'no_data' && support.actualValue === null && support.reason, JSON.stringify(support));
         // TC4 binary: KEY có tin sale nhắn đi, NON không → 1/2
         const reply = byKey.get('lien_lac_phan_hoi');
         assert(reply && reply.status === 'pass' && reply.numerator === 1 && reply.denominatorValue === 2, JSON.stringify(reply));
@@ -2033,15 +2024,8 @@ console.log('\n-- M. Mục 4: rollup Python → engine KPI → chỉ tiêu → g
           suggest.orderSuggestion.customersWithOrders === 1 && suggest.orderSuggestion.totalCustomers === 2,
           `x/y khách có đơn chưa chốt sai: ${JSON.stringify(suggest.orderSuggestion)}`,
         );
-        // byTier: FE hiện "đạt x/y" tách KEY/NON — KEY có báo cáo/đơn, NON không
-        assert(
-          support.byTier && support.byTier.key.total === 1 && support.byTier.non.total === 1,
-          `byTier TC3 sai: ${JSON.stringify(support.byTier)}`,
-        );
-        assert(
-          support.byTier.key.passed === 1 && support.byTier.non.passed === 0,
-          `byTier TC3 đạt sai: ${JSON.stringify(support.byTier)}`,
-        );
+        // TC3 cannot publish a tier breakdown when source identity is unknown.
+        assert(!support.byTier, JSON.stringify(support));
         assert(
           reply.byTier && reply.byTier.key.passed === 1 && reply.byTier.key.total === 1,
           `byTier TC4 sai: ${JSON.stringify(reply.byTier)}`,
@@ -2094,14 +2078,13 @@ console.log('\n-- M. Mục 4: rollup Python → engine KPI → chỉ tiêu → g
         assert(key.zaloLinked === true, 'khách KEY phải zaloLinked');
         const ackKey = key.criteria.find((c) => c.key === 'goi_y_thuc_hien');
         assert(ackKey && ackKey.status === 'pass', JSON.stringify(ackKey));
-        // TC3/TC4 binary cấp khách: KEY đạt cả 2; NON không có báo cáo + không
-        // có tin sale nhắn đi → chưa đạt cả 2
+        // TC3 thiếu mapping ở cả hai khách; TC4 vẫn dựa trên tin nhắn.
         const keyTc3 = key.criteria.find((c) => c.key === 'support_khach');
-        assert(keyTc3 && keyTc3.status === 'pass', JSON.stringify(keyTc3));
+        assert(keyTc3 && keyTc3.status === 'no_data', JSON.stringify(keyTc3));
         const keyTc4 = key.criteria.find((c) => c.key === 'lien_lac_phan_hoi');
         assert(keyTc4 && keyTc4.status === 'pass', JSON.stringify(keyTc4));
         const nonTc3 = non.criteria.find((c) => c.key === 'support_khach');
-        assert(nonTc3 && nonTc3.status === 'fail', JSON.stringify(nonTc3));
+        assert(nonTc3 && nonTc3.status === 'no_data', JSON.stringify(nonTc3));
         const nonTc4 = non.criteria.find((c) => c.key === 'lien_lac_phan_hoi');
         assert(nonTc4 && nonTc4.status === 'fail', JSON.stringify(nonTc4));
         // Tiêu chí 6 cấp khách: KEY có 1 đơn chưa chốt (500000đ), NON không có
@@ -2363,7 +2346,7 @@ console.log('\n-- M. Mục 4: rollup Python → engine KPI → chỉ tiêu → g
 
       // 11b. Ghi đè thủ công tiêu chí 3 — quản lý tự ghi, không qua duyệt
       await expect('[M] Ghi đè 1 khách → ô fail + đầu bảng x giảm; ghi đè cả sale → mạnh nhất', [200, 201], async () => {
-        // Cấp khách: KEY đang đạt TC3 → ép chưa đạt
+        // Cấp khách: quản lý có thể ghi đè TC3 thiếu dữ liệu thành fail rõ ràng.
         const r = await call('POST', '/customer-kpi-overrides', {
           ...H(),
           body: {
@@ -2378,7 +2361,7 @@ console.log('\n-- M. Mục 4: rollup Python → engine KPI → chỉ tiêu → g
         const keyRow = saleBs?.customers?.find((c) => c.customerId === customerIds.key);
         const keyTc3 = keyRow?.criteria?.find((c) => c.key === 'support_khach');
         assert(keyTc3 && keyTc3.status === 'fail' && keyTc3.overridden === true, JSON.stringify(keyTc3));
-        // Đầu bảng cấp sale: x từ 1 → 0 (ghi đè trừ vào tổng)
+        // Ghi đè thủ công đưa đầu bảng về fail, x = 0.
         const saleTc3 = saleBs?.criteria?.find((c) => c.key === 'support_khach');
         assert(saleTc3 && saleTc3.status === 'fail' && saleTc3.passedCriteria === 0, JSON.stringify(saleTc3));
         // Cấp sale: mạnh nhất — cả tiêu chí không đạt cho mọi khách
@@ -2426,7 +2409,7 @@ console.log('\n-- M. Mục 4: rollup Python → engine KPI → chỉ tiêu → g
         const ov = await call('GET', `/customer-kpi-reports/overview?saleId=${saleUserId}&from=${TODAY}&to=${TODAY}`, H());
         const sale = ov.json?.sales?.find((x) => x.saleId === saleUserId);
         const tc3 = sale?.criteria?.find((c) => c.key === 'support_khach');
-        assert(tc3 && tc3.status === 'pass' && tc3.overridden !== true, JSON.stringify(tc3));
+        assert(tc3 && tc3.status === 'no_data' && tc3.overridden !== true, JSON.stringify(tc3));
         return 200;
       });
 

@@ -11,7 +11,12 @@ import { CustomerZalo } from './customer-zalo.entity';
 import { CustomerZaloScanResult } from './customer-zalo-scan-result.entity';
 import { ZaloPythonApiClient } from './zalo-python-api.client';
 import { CustomerActivityDaily } from './customer-activity-daily.entity';
-import { CustomerMovementReport } from './customer-movement-report.entity';
+import {
+  CustomerAppointment,
+  CustomerAppointmentSyncState,
+} from './customer-appointment.entity';
+import { CustomerAppointmentsService } from './customer-appointments.service';
+import { CustomerAppointmentsController } from './customer-appointments.controller';
 import { CustomerResponseDaily } from './customer-response-daily.entity';
 import { KpiDefinition } from './kpi-definition.entity';
 import { KpiTarget } from './kpi-target.entity';
@@ -70,7 +75,8 @@ import { NkmSyncCronjob } from './nkm-sync.cronjob';
       CustomerZalo,
       CustomerZaloScanResult,
       CustomerActivityDaily,
-      CustomerMovementReport,
+      CustomerAppointment,
+      CustomerAppointmentSyncState,
       CustomerResponseDaily,
       KpiDefinition,
       KpiTarget,
@@ -101,6 +107,7 @@ import { NkmSyncCronjob } from './nkm-sync.cronjob';
     ]),
   ],
   controllers: [
+    CustomerAppointmentsController,
     CustomersController,
     CustomerAssignmentsController,
     CustomerKpiReportsController,
@@ -111,6 +118,7 @@ import { NkmSyncCronjob } from './nkm-sync.cronjob';
     NkmMappingController,
   ],
   providers: [
+    CustomerAppointmentsService,
     ZaloPythonApiClient,
     CustomersService,
     CustomerAssignmentsService,

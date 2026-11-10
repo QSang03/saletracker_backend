@@ -6,20 +6,15 @@ import {
   PrimaryGeneratedColumn,
 } from 'typeorm';
 
-/**
- * Một tin nhắn báo cáo di chuyển của sale, khớp cụm cấu hình
- * `system_config.movement_report_pattern` (mặc định "di gap khach") + mã khách
- * hàng. Job Python quét tin nhắn (KHÔNG phân biệt nhóm Zalo hay chat cá nhân —
- * miễn khớp cụm là ghi) và upsert vào bảng này; NestJS chỉ ĐỌC để chấm tiêu chí
- * `movement_report` (tiêu chí 3), cùng tiền lệ customer_activity_daily.
- *
- * Job KHÔNG cần tra bảng khách: NestJS tự khớp `customer_code` với
- * `customers.customer_code` lúc chấm điểm (chỉ theo customer_code, không dùng
- * sap_code). Đổi cụm khớp = sửa value system_config rồi chạy lại job, không
- * cần deploy; sự kiện đã ghi giữ nguyên kết quả theo cụm cũ.
+/** Historical message archive only. No current writer and no KPI consumer.
+ * Retained as data history; all visit scoring uses customer_appointments.
  */
 @Entity('customer_movement_reports')
-@Index('idx_customer_movement_user_code', ['user_id', 'customer_code', 'sent_at'])
+@Index('idx_customer_movement_user_code', [
+  'user_id',
+  'customer_code',
+  'sent_at',
+])
 @Index('idx_customer_movement_sent_at', ['sent_at'])
 export class CustomerMovementReport {
   @PrimaryGeneratedColumn()

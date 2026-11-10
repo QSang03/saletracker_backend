@@ -70,7 +70,7 @@ const DEFAULT_KPI_DEFINITIONS: Array<Partial<KpiDefinition>> = [
     target_value: 1,
     sort_order: 3,
     description:
-      'Tiêu chí 3: tháng đạt khi có ≥1 tin báo cáo di chuyển khớp cụm system_config.movement_report_pattern ("di gap khach") + mã KH (bảng customer_movement_reports, job Python ghi)',
+      'Tiêu chí 3: có ít nhất một lịch hẹn completed và check-in trong toàn bộ kỳ báo cáo, theo ngày check-in; nguồn API lịch hẹn, không giới hạn bởi ngày triển khai.',
   },
   {
     team_group: 'kinh-doanh',
@@ -137,6 +137,23 @@ export class CustomerKpiDefinitionsService implements OnModuleInit {
     await this.upgradeBehaviorCriteria();
     await this.upgradeRevenueCriteria();
     await this.ensureDefaultCriteria();
+    // Replace only the obsolete provider description, preserve admin settings.
+    const legacy = await this.definitionRepo.find({
+      where: { metric: 'movement_report' },
+    });
+    for (const row of legacy) {
+      if (
+        row.description?.includes('movement_report_pattern') ||
+        row.description?.includes(
+          'Trước mốc chuyển đổi dùng bằng chứng lưu trữ',
+        )
+      ) {
+        row.description = DEFAULT_KPI_DEFINITIONS.find(
+          (d) => d.key === 'support_khach',
+        )!.description!;
+        await this.definitionRepo.save(row);
+      }
+    }
   }
 
   /**
