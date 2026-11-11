@@ -27,6 +27,7 @@ import {
   getUserId,
 } from '../utils/entity-access.util';
 import {
+  computeStockStatus,
   normalizeStatusText,
   productWarrantyText,
   sumLineTotals,
@@ -182,11 +183,26 @@ export class SaleQuoteService {
 
         const resolvedWarranty = item.warranty || (prod ? productWarrantyText(prod) : null);
 
+        let resolvedStatusText = item.statusText;
+        if (!item.isManual) {
+          const upper = (item.statusText || '').toUpperCase();
+          const isStandard =
+            !upper ||
+            upper.includes('SẴN') ||
+            upper.includes('GẦN HẾT') ||
+            upper.includes('CHỜ') ||
+            upper.includes('CHECK');
+          if (isStandard) {
+            resolvedStatusText = computeStockStatus(resolvedStock, item.statusText || undefined);
+          }
+        }
+
         return {
           ...item,
           stock: resolvedStock,
           costPrice: resolvedCostPrice,
           warranty: resolvedWarranty,
+          statusText: resolvedStatusText,
         };
       }),
     };
@@ -512,8 +528,9 @@ export class SaleQuoteService {
         : costPrice;
     const quantity = Math.max(1, Number(dto.quantity) || 1);
     const statusText =
-      normalizeStatusText(dto.statusText ?? settings.defaultStatusText) ||
-      null;
+      dto.statusText !== undefined
+        ? (normalizeStatusText(dto.statusText) || null)
+        : computeStockStatus(product?.stock, settings.defaultStatusText);
 
     return this.itemRepo.create({
       quoteId,

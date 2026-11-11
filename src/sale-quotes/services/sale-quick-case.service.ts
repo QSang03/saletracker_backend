@@ -28,6 +28,7 @@ import {
   getUserId,
 } from '../utils/entity-access.util';
 import {
+  computeStockStatus,
   normalizeStatusText,
   productWarrantyText,
   sumLineTotals,
@@ -198,9 +199,23 @@ export class SaleQuickCaseService {
         const prod =
           (item.productId ? idMap.get(item.productId) : undefined) ||
           (item.productCode ? codeMap.get(item.productCode.trim().toLowerCase()) : undefined);
+        const resolvedStock = prod?.stock !== null && prod?.stock !== undefined ? Number(prod.stock) : 0;
+        let resolvedStatusText = item.statusText;
+        const upper = (item.statusText || '').toUpperCase();
+        const isStandard =
+          !upper ||
+          upper.includes('SẴN') ||
+          upper.includes('GẦN HẾT') ||
+          upper.includes('CHỜ') ||
+          upper.includes('CHECK');
+        if (isStandard && prod) {
+          resolvedStatusText = computeStockStatus(resolvedStock, item.statusText || undefined);
+        }
+
         return {
           ...item,
-          stock: prod?.stock ?? 0,
+          stock: resolvedStock,
+          statusText: resolvedStatusText,
         };
       }),
     };
@@ -519,8 +534,9 @@ export class SaleQuickCaseService {
         : this.pricingService.suggestSalePrice(costPrice, rules);
     const quantity = Math.max(1, Number(dto.quantity) || 1);
     const statusText =
-      normalizeStatusText(dto.statusText ?? settings.defaultStatusText) ||
-      null;
+      dto.statusText !== undefined
+        ? (normalizeStatusText(dto.statusText) || null)
+        : computeStockStatus(product?.stock, settings.defaultStatusText);
 
     return this.itemRepo.create({
       caseId,

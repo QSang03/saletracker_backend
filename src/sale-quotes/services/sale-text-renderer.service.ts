@@ -101,8 +101,10 @@ export class SaleTextRendererService {
         const rawStatus = options.showStockStatus === false ? '' : normalizeStatusText(item.statusText);
         const statusClean = stripStatusPrefix(rawStatus);
         const warranty = formatWarranty(item.warranty);
-        const namePart = this.nameLine(item);
-        const nameWithWarranty = warranty ? `${namePart}\t${warranty}` : namePart;
+        const namePart = this.nameLine(item).replace(/\t+/g, ' ');
+        const nameWithWarranty = warranty ? `${namePart} - ${warranty}` : namePart;
+        const code = (item.productCode || generateAutoProductCode(item.name)).trim();
+        const statusPart = statusClean ? ` ; ${statusClean}` : '';
 
         if (quantity > 1) {
           const lineTotal =
@@ -115,13 +117,9 @@ export class SaleTextRendererService {
             lineTotal !== null && Number.isFinite(lineTotal)
               ? `Thành tiền: ${formatMoney(lineTotal)}${totalLabel}`
               : 'Thành tiền: CALL';
-          const statusPart = statusClean ? `\t;${statusClean}` : '';
-          const code = (item.productCode || generateAutoProductCode(item.name)).trim();
-          return `${index + 1}-${code}\t;\t${nameWithWarranty}\t;\tĐơn giá: ${price}\t;\tSL: ${quantity}\t;\t${totalText}${statusPart}`.trimEnd();
+          return `${index + 1}-${code} ; ${nameWithWarranty} ; Đơn giá: ${price} ; SL: ${quantity} ; ${totalText}${statusPart}`.trimEnd();
         } else {
-          const statusPart = statusClean ? `\t;${statusClean}` : '';
-          const code = (item.productCode || generateAutoProductCode(item.name)).trim();
-          return `${index + 1}-${code}\t;\t${nameWithWarranty}\t;\t${price}\t;${statusPart}`.trimEnd();
+          return `${index + 1}-${code} ; ${nameWithWarranty} ; ${price}${statusPart}`.trimEnd();
         }
       })
       .join('\n\n');
@@ -141,7 +139,7 @@ export class SaleTextRendererService {
 
     const pLabel = options.priceLabel !== undefined ? options.priceLabel : 'fv';
     const totalLabel = pLabel && pLabel.trim() ? ` ${pLabel.trim()}` : '';
-    let text = `${body}\n\nTổng cộng:\t\t\t\t\t\t${formatMoney(total)}${totalLabel}`;
+    let text = `${body}\n\nTổng cộng: ${formatMoney(total)}${totalLabel}`;
 
     if (options.includeSpecs && options.specs && options.specs.length > 0) {
       text += '\n\n*THÔNG SỐ KỸ THUẬT:*';
@@ -223,21 +221,28 @@ export class SaleTextRendererService {
 
   private renderSingle(item: RenderLineItem, options: QuoteTextOptions = {}): string {
     const price = formatPrice(item.unitPrice, false);
-    const status = options.showStockStatus === false ? '' : normalizeStatusText(item.statusText);
-    return `${item.productCode || ''}\t;\t${this.nameLine(item)}\t${formatWarranty(
-      item.warranty,
-    )}\t;\t${price}${status ? `\t${status}` : ''}`.trimEnd();
+    const rawStatus = options.showStockStatus === false ? '' : normalizeStatusText(item.statusText);
+    const statusClean = stripStatusPrefix(rawStatus);
+    const statusPart = statusClean ? ` ; ${statusClean}` : '';
+    const warranty = formatWarranty(item.warranty);
+    const namePart = this.nameLine(item).replace(/\t+/g, ' ');
+    const nameWithWarranty = warranty ? `${namePart} - ${warranty}` : namePart;
+    const code = (item.productCode || '').trim();
+    return `${code ? `${code} ; ` : ''}${nameWithWarranty} ; ${price}${statusPart}`.trimEnd();
   }
 
   private renderStandardLines(items: RenderLineItem[], options: QuoteTextOptions = {}): string {
     return items
       .map((item, index) => {
         const price = formatPrice(item.unitPrice, false);
-        const status = options.showStockStatus === false ? '' : normalizeStatusText(item.statusText);
+        const rawStatus = options.showStockStatus === false ? '' : normalizeStatusText(item.statusText);
+        const statusClean = stripStatusPrefix(rawStatus);
+        const statusPart = statusClean ? ` ; ${statusClean}` : '';
+        const warranty = formatWarranty(item.warranty);
+        const namePart = this.nameLine(item).replace(/\t+/g, ' ');
+        const nameWithWarranty = warranty ? `${namePart} - ${warranty}` : namePart;
         const code = (item.productCode || generateAutoProductCode(item.name)).trim();
-        return `${index + 1}-${code}\t;\t${this.nameLine(
-          item,
-        )}\t${formatWarranty(item.warranty)}\t;\t${price}${status ? `\t${status}` : ''}`.trimEnd();
+        return `${index + 1}-${code} ; ${nameWithWarranty} ; ${price}${statusPart}`.trimEnd();
       })
       .join('\n\n');
   }

@@ -32,6 +32,7 @@ import {
   DEFAULT_STATUS_TEXT,
 } from '../sale-quote.constants';
 import {
+  computeStockStatus,
   normalizeStatusText,
   productWarrantyText,
   sumLineTotals,
@@ -184,11 +185,27 @@ export class SaleBuildService {
 
         const resolvedWarranty = item.warranty || (prod ? productWarrantyText(prod) : null);
 
+        // Tự động đồng bộ tình trạng kho theo số lượng tồn kho mới nhất (dưới 10 là gần hết hàng)
+        let resolvedStatusText = item.statusText;
+        if (!item.isManual) {
+          const upper = (item.statusText || '').toUpperCase();
+          const isStandard =
+            !upper ||
+            upper.includes('SẴN') ||
+            upper.includes('GẦN HẾT') ||
+            upper.includes('CHỜ') ||
+            upper.includes('CHECK');
+          if (isStandard) {
+            resolvedStatusText = computeStockStatus(resolvedStock, item.statusText || undefined);
+          }
+        }
+
         return {
           ...item,
           stock: resolvedStock,
           costPrice: resolvedCostPrice,
           warranty: resolvedWarranty,
+          statusText: resolvedStatusText,
         };
       }),
     };
@@ -505,8 +522,9 @@ export class SaleBuildService {
         : costPrice;
     const quantity = Math.max(1, Number(dto.quantity) || 1);
     const statusText =
-      normalizeStatusText(dto.statusText ?? settings.defaultStatusText) ||
-      null;
+      dto.statusText !== undefined
+        ? (normalizeStatusText(dto.statusText) || null)
+        : computeStockStatus(product?.stock, settings.defaultStatusText);
 
     return this.itemRepo.create({
       buildId,

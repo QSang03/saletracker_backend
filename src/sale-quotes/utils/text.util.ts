@@ -86,6 +86,30 @@ export function stripStatusPrefix(value?: string | null): string {
   return String(value).replace(/^;+/, '').trim();
 }
 
+/**
+ * Tính trạng thái tồn kho chuẩn theo số lượng tồn:
+ * - stock <= 0: defaultStatus (mặc định ';CHECK KHO CHỜ NHẬP 1 BUỔI / 1 NGÀY')
+ * - 0 < stock < 10 (dưới 10): ';GẦN HẾT HÀNG'
+ * - stock >= 10: ';SẴN HÀNG'
+ */
+export function computeStockStatus(
+  stock: number | string | null | undefined,
+  defaultStatus?: string | null,
+): string {
+  const fallback = defaultStatus || 'CHECK KHO CHỜ NHẬP 1 BUỔI / 1 NGÀY';
+  if (stock === null || stock === undefined || stock === '') {
+    return normalizeStatusText(fallback);
+  }
+  const num = typeof stock === 'number' ? stock : parseInt(String(stock), 10);
+  if (Number.isNaN(num) || num <= 0) {
+    return normalizeStatusText(fallback);
+  }
+  if (num < 10) {
+    return ';GẦN HẾT HÀNG';
+  }
+  return ';SẴN HÀNG';
+}
+
 export function stripHtml(value?: string | null): string {
   if (!value) {
     return '';
