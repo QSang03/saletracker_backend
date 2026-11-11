@@ -360,7 +360,7 @@ export class CustomersService {
     }
     if (query.search) {
       qb.andWhere(
-        '(c.customer_code LIKE :search OR c.customer_name LIKE :search)',
+        '(c.customer_code LIKE :search OR c.customer_name LIKE :search OR c.sap_code LIKE :search)',
         {
           search: `%${query.search}%`,
         },
@@ -545,7 +545,7 @@ export class CustomersService {
     }
     if (query.search) {
       qb.andWhere(
-        '(c.customer_code LIKE :search OR c.customer_name LIKE :search)',
+        '(c.customer_code LIKE :search OR c.customer_name LIKE :search OR c.sap_code LIKE :search)',
         {
           search: `%${query.search}%`,
         },
