@@ -75,6 +75,11 @@ export interface KpiCustomerFilters {
   daysSinceContact?: number;
   minDebt?: number;
   hasDebt?: boolean;
+  /**
+   * Giai đoạn chăm sóc — KHÔNG lọc trong `filterKpiCustomers` vì phải gọi
+   * `KpiCustomerInteractionService.enrich` trước; service tự lọc sau khi gộp.
+   */
+  careStage?: 'purchased' | 'quoted' | 'communicated' | 'unreached';
   /** Trường hợp đặc biệt hoặc mã tiêu chí đang bật — xem `KPI_SORT_KEYS`. */
   sortBy?: string;
   sortOrder?: 'asc' | 'desc';

@@ -147,6 +147,18 @@ export class KpiBySaleQueryDto extends KpiOverviewQueryDto {
   @IsIn(['linked', 'unlinked'])
   zaloStatus?: 'linked' | 'unlinked';
 
+  /**
+   * Giai đoạn chăm sóc trong khoảng xem — suy từ dữ liệu đã gộp:
+   * purchased (có phát sinh NKM) > quoted (có order_detail chưa chốt) >
+   * communicated (có tin nhắn/lịch hẹn) > unreached.
+   *
+   * Lọc theo trường này phải nạp tương tác cho TOÀN BỘ khách của sale trước
+   * khi cắt trang (xem bySale), nên chỉ dùng khi thật sự cần.
+   */
+  @IsOptional()
+  @IsIn(['purchased', 'quoted', 'communicated', 'unreached'])
+  careStage?: 'purchased' | 'quoted' | 'communicated' | 'unreached';
+
   /** Khớp CHÍNH XÁC mã đối tác SAP. */
   @IsOptional()
   @IsString()

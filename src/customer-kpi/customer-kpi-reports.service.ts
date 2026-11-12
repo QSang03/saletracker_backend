@@ -25,7 +25,11 @@ import { KpiTarget } from './kpi-target.entity';
 import { CustomersService } from './customers.service';
 import { KpiScopeService } from './kpi-scope.service';
 import { KpiSlaService } from './kpi-sla.service';
-import { KpiCustomerInteractionService } from './kpi-customer-interaction.service';
+import {
+  CustomerInteractionInfo,
+  CustomerInteractionInput,
+  KpiCustomerInteractionService,
+} from './kpi-customer-interaction.service';
 import { diffDateStr, shiftDateStr, vnToday } from './vn-date';
 import {
   ActivityDayRow,
@@ -2323,11 +2327,41 @@ export class CustomerKpiReportsService {
 
     // Chấm điểm vẫn tính trên TOÀN BỘ khách của sale — lọc/sắp xếp chỉ tác
     // động tới danh sách hiển thị, đầu bảng `criteria` giữ nguyên số liệu đầy đủ
+    let filtered = filterKpiCustomers(entry.customers, filters, {
+      daysSinceContact,
+      debtBalances,
+    });
+    const interactionInputs = (
+      customers: typeof filtered,
+    ): CustomerInteractionInput[] =>
+      customers.map((customer) => ({
+        assignmentId: customer.row.assignmentId,
+        customerCode: customer.row.customerCode,
+        nkmQuantity: customer.totals.nkmQuantity,
+        hasRevenue: customer.revenueStatus === 'has_revenue',
+      }));
+
+    // careStage chỉ có sau khi gộp tương tác, nên phải enrich TOÀN BỘ khách
+    // đã qua bộ lọc danh tính rồi mới cắt trang. Không lọc careStage thì giữ
+    // nguyên đường cũ: cắt trang trước, enrich đúng trang đó.
+    let interactions: Map<number, CustomerInteractionInfo> | undefined;
+    if (filters.careStage) {
+      interactions = await this.interactionService.enrich(
+        query.saleId,
+        window.from,
+        window.to,
+        interactionInputs(filtered),
+      );
+      const stage = filters.careStage;
+      filtered = filtered.filter(
+        (customer) =>
+          (interactions?.get(customer.row.assignmentId)?.careStage ??
+            'unreached') === stage,
+      );
+    }
+
     const matched = sortKpiCustomers(
-      filterKpiCustomers(entry.customers, filters, {
-        daysSinceContact,
-        debtBalances,
-      }),
+      filtered,
       filters.sortBy,
       filters.sortOrder,
       { daysSinceContact, debtBalances },
@@ -2337,16 +2371,11 @@ export class CustomerKpiReportsService {
       (page - 1) * pageSize,
       page * pageSize,
     );
-    const interactions = await this.interactionService.enrich(
+    interactions ??= await this.interactionService.enrich(
       query.saleId,
       window.from,
       window.to,
-      pagedCustomers.map((customer) => ({
-        assignmentId: customer.row.assignmentId,
-        customerCode: customer.row.customerCode,
-        nkmQuantity: customer.totals.nkmQuantity,
-        hasRevenue: customer.revenueStatus === 'has_revenue',
-      })),
+      interactionInputs(pagedCustomers),
     );
     const paged = pagedCustomers.map((customer) => {
       const interaction = interactions.get(customer.row.assignmentId);
@@ -2443,6 +2472,7 @@ export class CustomerKpiReportsService {
       daysSinceContact: numeric(query.daysSinceContact),
       minDebt: numeric(query.minDebt),
       hasDebt: boolean(query.hasDebt),
+      careStage: text(query.careStage) as KpiCustomerFilters['careStage'],
       sortBy: text(query.sortBy),
       sortOrder: order === 'asc' || order === 'desc' ? order : undefined,
     };
