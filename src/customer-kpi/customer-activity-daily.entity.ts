@@ -45,13 +45,6 @@ export class CustomerActivityDaily {
   @Column({ type: 'int', default: 0 })
   outbound_count: number;
 
-  /**
-   * Tin SALE thật (đã loại bot/auto-reply/campaign) — Python rollup sẽ ghi.
-   * Mặc định 0 để bảng cũ không lỗi; `outbound_count` hiện vẫn gồm bot.
-   */
-  @Column({ type: 'int', default: 0 })
-  sale_outbound_count: number;
-
   @Column({ type: 'int', default: 0 })
   order_count: number;
 

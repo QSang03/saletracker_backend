@@ -70,6 +70,7 @@ import { KpiCoverageCronjob } from './kpi-coverage.cronjob';
 import { KpiCareFunnelService } from './kpi-care-funnel.service';
 import { KpiSlaService } from './kpi-sla.service';
 import { KpiAppealService } from './kpi-appeal.service';
+import { KpiCustomerInteractionService } from './kpi-customer-interaction.service';
 
 /**
  * Module khách hàng & KPI (thiết kế: BAO-CAO-KPI-KHACH-HANG.md).
@@ -161,6 +162,7 @@ import { KpiAppealService } from './kpi-appeal.service';
     KpiCareFunnelService,
     KpiSlaService,
     KpiAppealService,
+    KpiCustomerInteractionService,
   ],
 })
 export class CustomerKpiModule {}

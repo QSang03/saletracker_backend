@@ -25,6 +25,7 @@ import { KpiTarget } from './kpi-target.entity';
 import { CustomersService } from './customers.service';
 import { KpiScopeService } from './kpi-scope.service';
 import { KpiSlaService } from './kpi-sla.service';
+import { KpiCustomerInteractionService } from './kpi-customer-interaction.service';
 import { diffDateStr, shiftDateStr, vnToday } from './vn-date';
 import {
   ActivityDayRow,
@@ -257,6 +258,7 @@ export class CustomerKpiReportsService {
     private readonly customersService: CustomersService,
     private readonly kpiScope: KpiScopeService,
     private readonly slaService: KpiSlaService,
+    private readonly interactionService: KpiCustomerInteractionService,
   ) {}
 
   /**
@@ -2331,9 +2333,24 @@ export class CustomerKpiReportsService {
       { daysSinceContact, debtBalances },
     );
     const total = matched.length;
-    const paged = matched
-      .slice((page - 1) * pageSize, page * pageSize)
-      .map((customer) => ({
+    const pagedCustomers = matched.slice(
+      (page - 1) * pageSize,
+      page * pageSize,
+    );
+    const interactions = await this.interactionService.enrich(
+      query.saleId,
+      window.from,
+      window.to,
+      pagedCustomers.map((customer) => ({
+        assignmentId: customer.row.assignmentId,
+        customerCode: customer.row.customerCode,
+        nkmQuantity: customer.totals.nkmQuantity,
+        hasRevenue: customer.revenueStatus === 'has_revenue',
+      })),
+    );
+    const paged = pagedCustomers.map((customer) => {
+      const interaction = interactions.get(customer.row.assignmentId);
+      return {
         assignmentId: customer.row.assignmentId,
         customerId: customer.row.customerId,
         customerCode: customer.row.customerCode,
@@ -2351,7 +2368,28 @@ export class CustomerKpiReportsService {
         criteria: customer.criteria,
         // 'has_revenue' khi khách có phát sinh NKM trong kỳ (≥1 phiếu)
         revenueStatus: customer.revenueStatus,
-      }));
+        // Dữ liệu tương tác gộp sẵn cho FE (Sprint 3).
+        careStage: interaction?.careStage ?? 'unreached',
+        zalo: interaction?.zalo ?? {
+          inCount: 0,
+          outCount: 0,
+          lastMessageAt: null,
+          lastMessagePrecision: 'none',
+          isActive: false,
+          lastVerifiedAt: null,
+        },
+        appointment: interaction?.appointment ?? {
+          lastVisitAt: null,
+          status: null,
+          appointmentCode: null,
+        },
+        quote: interaction?.quote ?? {
+          quoteCount: 0,
+          lastQuoteAt: null,
+          lastQuoteAmount: 0,
+        },
+      };
+    });
 
     return {
       from: window.from,
