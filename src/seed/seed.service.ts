@@ -446,6 +446,30 @@ export class SeedService implements OnModuleInit {
           section: 'system',
           status: 1,
         },
+        {
+          name: 'kpi_monthly_coverage_rate',
+          display_name: 'Ngưỡng độ phủ khách KEY tối thiểu mỗi tháng (%)',
+          value: '60',
+          type: 'number',
+          section: 'kpi',
+          status: 1,
+        },
+        {
+          name: 'kpi_sla_rest_time',
+          display_name: 'Chu kỳ quét SLA 2h KPI customer (giây)',
+          value: '300',
+          type: 'number',
+          section: 'kpi',
+          status: 1,
+        },
+        {
+          name: 'kpi_sla_scan_overlap_minutes',
+          display_name: 'Cửa sổ overlap khi quét tin Zalo cho SLA (phút)',
+          value: '60',
+          type: 'number',
+          section: 'kpi',
+          status: 1,
+        },
         // API NKM — nguồn chân lý của tiêu chí doanh số
         // (thiết kế THIET-KE-DOANH-SO-API-NKM.md). Đổi môi trường thì sửa value
         // ở đây, không cần sửa code.
@@ -540,6 +564,30 @@ export class SeedService implements OnModuleInit {
           value: '7',
           type: 'number',
           section: 'system',
+          status: 1,
+        },
+        {
+          name: 'kpi_monthly_coverage_rate',
+          display_name: 'Ngưỡng độ phủ khách KEY tối thiểu mỗi tháng (%)',
+          value: '60',
+          type: 'number',
+          section: 'kpi',
+          status: 1,
+        },
+        {
+          name: 'kpi_sla_rest_time',
+          display_name: 'Chu kỳ quét SLA 2h KPI customer (giây)',
+          value: '300',
+          type: 'number',
+          section: 'kpi',
+          status: 1,
+        },
+        {
+          name: 'kpi_sla_scan_overlap_minutes',
+          display_name: 'Cửa sổ overlap khi quét tin Zalo cho SLA (phút)',
+          value: '60',
+          type: 'number',
+          section: 'kpi',
           status: 1,
         },
         // API NKM — nguồn chân lý của tiêu chí doanh số

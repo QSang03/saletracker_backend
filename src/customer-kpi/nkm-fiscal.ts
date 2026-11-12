@@ -37,8 +37,6 @@ export interface FiscalQuarter {
   label: string;
 }
 
-const pad = (value: number): string => String(value).padStart(2, '0');
-
 const toDate = (date: string): Date => {
   const [y, m, d] = date.split('-').map(Number);
   return new Date(Date.UTC(y, m - 1, d));
@@ -87,6 +85,39 @@ export function fiscalQuarterRange(
 export function currentFiscalQuarter(today?: string): FiscalQuarter {
   const base = today ?? new Date().toISOString().slice(0, 10);
   return fiscalQuarterRange(fiscalYearOf(base), fiscalQuarterOf(base))!;
+}
+
+/** Các tháng `YYYY-MM` của một quý tài chính — dùng cho snapshot tháng/quý. */
+export function fiscalQuarterMonths(
+  fiscalYear: number,
+  quarter: number,
+): string[] {
+  const range = fiscalQuarterRange(fiscalYear, quarter);
+  if (!range) return [];
+  const months: string[] = [];
+  let cursor = range.from;
+  while (cursor <= range.to) {
+    const month = cursor.slice(0, 7);
+    if (months[months.length - 1] !== month) months.push(month);
+    const [y, m, d] = cursor.split('-').map(Number);
+    cursor = new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10);
+  }
+  return months;
+}
+
+/**
+ * Quý tài chính kết thúc gần nhất trước quý hiện tại.
+ *
+ * Dùng cho cron recompute 10 ngày đầu quý: ngày 1-10/01, 04, 07, 10 sẽ trả
+ * về quý vừa kết thúc (quý liền trước quý đang chứa `today`).
+ */
+export function previousFiscalQuarter(today?: string): FiscalQuarter {
+  const base = today ?? new Date().toISOString().slice(0, 10);
+  const current = currentFiscalQuarter(base);
+  const quarter = current.quarter === 1 ? 4 : current.quarter - 1;
+  const fiscalYear =
+    current.quarter === 1 ? current.fiscalYear - 1 : current.fiscalYear;
+  return fiscalQuarterRange(fiscalYear, quarter)!;
 }
 
 /**

@@ -501,9 +501,6 @@ export const rollupRevenue = (
   };
 };
 
-const sumOutbound = (rows: ActivityDayRow[]): number =>
-  rows.reduce((acc, row) => acc + (Number(row.outbound_count) || 0), 0);
-
 const isInbound = (row: ActivityDayRow): boolean =>
   (Number(row.inbound_count) || 0) > 0;
 const isOutbound = (row: ActivityDayRow): boolean =>
@@ -543,6 +540,15 @@ export class CustomerKpiScoringService {
       actualValue: null,
       targetValue,
     };
+
+    // SLA 2h là tiêu chí cấp SALE — ở cấp khách chỉ đánh dấu không áp dụng.
+    if (definition.metric === 'sla_compliance') {
+      return {
+        ...base,
+        notApplicable: true,
+        reason: 'Tiêu chí SLA phản hồi chấm ở cấp sale.',
+      };
+    }
 
     if (REVENUE_METRICS.includes(definition.metric)) {
       return this.scoreCustomerRevenue(definition, base, revenue);
@@ -1009,6 +1015,7 @@ export class CustomerKpiScoringService {
     revenue?: RevenueSaleInput,
     orderSuggestions?: SaleOrderSuggestion | null,
     appointmentUnavailableReason?: string,
+    slaViolationCount?: number | null,
   ): SaleCriterion {
     const base: SaleCriterion = {
       key: definition.key,
@@ -1023,6 +1030,26 @@ export class CustomerKpiScoringService {
       totalCriteria: null,
       passedCriteria: null,
     };
+
+    // SLA 2h: cả kỳ không có vi phạm CHƯA miễn là đạt.
+    if (definition.metric === 'sla_compliance') {
+      if (slaViolationCount == null) {
+        return { ...base, reason: 'Chưa có dữ liệu vi phạm SLA.' };
+      }
+      const passed = slaViolationCount === 0;
+      return {
+        ...base,
+        status: passed ? 'pass' : 'fail',
+        actualValue: passed ? 1 : 0,
+        numerator: passed ? 1 : 0,
+        denominatorValue: 1,
+        totalCriteria: 1,
+        passedCriteria: passed ? 1 : 0,
+        reason: passed
+          ? undefined
+          : `Có ${slaViolationCount} vi phạm SLA 2h chưa được miễn trong kỳ.`,
+      };
+    }
 
     if (REVENUE_METRICS.includes(definition.metric)) {
       return this.scoreSaleRevenue(definition, base, revenue);

@@ -33,12 +33,18 @@ import { NkmGroupMap } from './nkm-group-map.entity';
 import { CustomerRevenueDaily } from './customer-revenue-daily.entity';
 import { SaleRevenueTarget } from './sale-revenue-target.entity';
 import { DeptRevenueTarget } from './dept-revenue-target.entity';
+import { KpiMonthlyResult } from './kpi-monthly-result.entity';
+import { KpiQuarterlySettlement } from './kpi-quarterly-settlement.entity';
+import { KpiSlaInterval } from './kpi-sla-interval.entity';
+import { KpiSlaViolation } from './kpi-sla-violation.entity';
+import { KpiAppeal } from './kpi-appeal.entity';
 import { SystemConfig } from '../system_config/system_config.entity';
 import { OrderDetail } from '../order-details/order-detail.entity';
 import { Order } from '../orders/order.entity';
 import { CustomersController } from './customers.controller';
 import { CustomerAssignmentsController } from './customer-assignments.controller';
 import { CustomerKpiReportsController } from './customer-kpi-reports.controller';
+import { KpiAppealsController } from './kpi-appeals.controller';
 import { CustomerKpiDefinitionsController } from './customer-kpi-definitions.controller';
 import { CustomerKpiTargetsController } from './customer-kpi-targets.controller';
 import { ApprovalRequestsController } from './approval-requests.controller';
@@ -56,6 +62,14 @@ import { NkmApiClient } from './nkm-api.client';
 import { NkmMappingService } from './nkm-mapping.service';
 import { NkmSyncService } from './nkm-sync.service';
 import { NkmSyncCronjob } from './nkm-sync.cronjob';
+import { KpiScopeService } from './kpi-scope.service';
+import { WorkingDaysService } from './working-days.service';
+import { KpiSaleDirectoryService } from './kpi-sale-directory.service';
+import { KpiCoverageService } from './kpi-coverage.service';
+import { KpiCoverageCronjob } from './kpi-coverage.cronjob';
+import { KpiCareFunnelService } from './kpi-care-funnel.service';
+import { KpiSlaService } from './kpi-sla.service';
+import { KpiAppealService } from './kpi-appeal.service';
 
 /**
  * Module khách hàng & KPI (thiết kế: BAO-CAO-KPI-KHACH-HANG.md).
@@ -94,6 +108,11 @@ import { NkmSyncCronjob } from './nkm-sync.cronjob';
       CustomerRevenueDaily,
       SaleRevenueTarget,
       DeptRevenueTarget,
+      KpiMonthlyResult,
+      KpiQuarterlySettlement,
+      KpiSlaInterval,
+      KpiSlaViolation,
+      KpiAppeal,
       SystemConfig,
       // Đơn Zalo (Sale Tracker) — CHỈ ĐỌC cho tiêu chí 6 "Gợi ý đơn hàng".
       // Entity đã có metadata từ OrderModule/OrderDetailModule; khai báo lại ở
@@ -111,6 +130,7 @@ import { NkmSyncCronjob } from './nkm-sync.cronjob';
     CustomersController,
     CustomerAssignmentsController,
     CustomerKpiReportsController,
+    KpiAppealsController,
     CustomerKpiDefinitionsController,
     CustomerKpiTargetsController,
     ApprovalRequestsController,
@@ -133,6 +153,14 @@ import { NkmSyncCronjob } from './nkm-sync.cronjob';
     NkmMappingService,
     NkmSyncService,
     NkmSyncCronjob,
+    KpiScopeService,
+    WorkingDaysService,
+    KpiSaleDirectoryService,
+    KpiCoverageService,
+    KpiCoverageCronjob,
+    KpiCareFunnelService,
+    KpiSlaService,
+    KpiAppealService,
   ],
 })
 export class CustomerKpiModule {}

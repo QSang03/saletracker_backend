@@ -18,6 +18,7 @@
     "test:customer-kpi-scoring": "node scripts/test-customer-kpi-scoring.mjs",
     "test:customer-appointments": "node scripts/test-customer-appointments.mjs",
     "test:kpi-report-filter": "ts-node --transpile-only -r tsconfig-paths/register scripts/test-kpi-report-filter.ts",
+    "test:kpi-coverage": "ts-node --transpile-only -r tsconfig-paths/register scripts/test-kpi-coverage.ts",
     "test:warranty-import": "ts-node --transpile-only -r tsconfig-paths/register scripts/test-warranty-import.ts",
     "test:activity-log": "node scripts/test-activity-log.mjs",
     "test:activity-log-cleanup": "node scripts/test-activity-log-cleanup.mjs",

@@ -1,8 +1,4 @@
-import {
-  BadRequestException,
-  ForbiddenException,
-  Injectable,
-} from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import * as ExcelJS from 'exceljs';
@@ -27,6 +23,8 @@ import { KpiCriterionOverride } from './kpi-criterion-overrides.entity';
 import { KpiDefinition, ScoringMode } from './kpi-definition.entity';
 import { KpiTarget } from './kpi-target.entity';
 import { CustomersService } from './customers.service';
+import { KpiScopeService } from './kpi-scope.service';
+import { KpiSlaService } from './kpi-sla.service';
 import { diffDateStr, shiftDateStr, vnToday } from './vn-date';
 import {
   ActivityDayRow,
@@ -257,6 +255,8 @@ export class CustomerKpiReportsService {
     @InjectRepository(NkmSaleMap)
     private readonly saleMapRepo: Repository<NkmSaleMap>,
     private readonly customersService: CustomersService,
+    private readonly kpiScope: KpiScopeService,
+    private readonly slaService: KpiSlaService,
   ) {}
 
   /**
@@ -273,39 +273,11 @@ export class CustomerKpiReportsService {
    * (quyết định ghi ở CustomerKpiModule).
    */
   private async scopeUserIds(user: any): Promise<number[] | undefined> {
-    if (!user?.id)
-      throw new ForbiddenException('Không xác định được người dùng');
-    const lower: string[] = (user.roles || []).map((r: any) =>
-      (typeof r === 'string' ? r : r?.name || '').toLowerCase(),
-    );
-    if (
-      lower.includes('admin') ||
-      lower.includes('view') ||
-      lower.includes('pm-khach-hang')
-    ) {
-      return undefined;
-    }
-    if (lower.some((r) => r.startsWith('manager-'))) {
-      const departmentIds = (user.departments || [])
-        .filter((d: any) => d?.server_ip && String(d.server_ip).trim() !== '')
-        .map((d: any) => d?.id)
-        .filter(Boolean);
-      if (departmentIds.length === 0) return [];
-      const users = await this.userRepo
-        .createQueryBuilder('user')
-        .leftJoin('user.departments', 'dept')
-        .where('dept.id IN (:...departmentIds)', { departmentIds })
-        .andWhere('user.deletedAt IS NULL')
-        .getMany();
-      return users.map((u) => u.id);
-    }
-    return [user.id];
+    return this.kpiScope.scopeUserIds(user);
   }
 
   private assertSaleInScope(saleId: number, userIds: number[] | undefined) {
-    if (userIds !== undefined && !userIds.includes(saleId)) {
-      throw new ForbiddenException('Bạn không có quyền xem sale này');
-    }
+    this.kpiScope.assertSaleInScope(saleId, userIds);
   }
 
   // ------------------------------------------------------------- loaders
@@ -1442,6 +1414,7 @@ export class CustomerKpiReportsService {
     /** Doanh số kỳ hiện tại + kỳ trước — nguồn cho nhóm gợi ý doanh số. */
     suggestionRevenue?: Map<number, SuggestionRevenueContext>,
     appointmentReasons = new Map<number, string>(),
+    slaCounts = new Map<number, number>(),
   ) {
     const customersBySale = new Map<number, AssignmentRow[]>();
     for (const row of assignments) {
@@ -1602,6 +1575,7 @@ export class CustomerKpiReportsService {
             saleCustomers
               .map((c) => appointmentReasons.get(c.assignmentId))
               .find(Boolean),
+            slaCounts.get(saleId) ?? 0,
           ),
         );
 
@@ -1867,6 +1841,17 @@ export class CustomerKpiReportsService {
           )
         : undefined;
 
+    // SLA 2h chỉ nạp khi tiêu chí đang bật — tránh query thừa.
+    const slaViolations = definitions.some(
+      (definition) => definition.metric === 'sla_compliance',
+    )
+      ? await this.slaService.countEffectiveBySale(
+          [...new Set(saleIds)],
+          from,
+          to,
+        )
+      : new Map<number, number>();
+
     return {
       scored: this.buildScoredData(
         assignments,
@@ -1883,6 +1868,7 @@ export class CustomerKpiReportsService {
         orderSuggestions,
         suggestionRevenue,
         await this.appointments.unavailableReasons(assignments, from, to),
+        slaViolations,
       ),
       definitions,
       debtBalances,

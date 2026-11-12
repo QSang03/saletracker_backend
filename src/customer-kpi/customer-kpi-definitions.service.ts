@@ -110,6 +110,19 @@ const DEFAULT_KPI_DEFINITIONS: Array<Partial<KpiDefinition>> = [
     description:
       'Tiêu chí 6: đơn CHƯA CHỐT trên Zalo tạo trong 4 ngày gần nhất của sale × khách trong danh sách (orders.sale_by + order_details.meta_customer_id khớp customer_zalo) — đếm số gợi ý và tổng giá trị (unit_price × quantity, chưa VAT) để đốc chốt. Đạt = có ≥1 đơn cần chốt; đổi `comparison` sang lte + target 0 nếu muốn nghĩa "đạt = hết đơn tồn"',
   },
+  {
+    team_group: 'kinh-doanh',
+    key: 'sla_phan_hoi_2h',
+    name: 'SLA phản hồi 2 giờ',
+    metric: 'sla_compliance',
+    scoring_mode: ScoringMode.BINARY,
+    comparison: KpiComparison.GTE,
+    period: KpiPeriod.MONTH,
+    target_value: 1,
+    sort_order: 7,
+    description:
+      'Tiêu chí 7 (KPI customer): tháng đạt khi không có vi phạm SLA 2h CHƯA được miễn. Nguồn: kpi_sla_violations do Python quét Zalo ghi; lịch thứ 2–7, 08:00–23:00, xuyên trưa, bỏ Chủ nhật/ngày lễ; call tính là phản hồi, emoji/reaction không tính. Khiếu nại được duyệt → is_waived=1, không tính vi phạm.',
+  },
 ];
 
 /** CRUD cấu hình tiêu chí KPI — làm đủ hôm nay (bảng + seed mặc định). */
