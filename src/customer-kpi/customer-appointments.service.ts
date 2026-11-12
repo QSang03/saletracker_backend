@@ -46,9 +46,9 @@ export class CustomerAppointmentsService implements OnModuleInit {
     try {
       await this.sync();
     } catch {
-      this.logger.error(
-        'Đồng bộ lịch hẹn thất bại; xem customer_appointment_sync_state',
-      );
+      // sync() đã log chi tiết (message + cause + stack) và ghi
+      // customer_appointment_sync_state; ở đây chỉ cần không ném tiếp để cron
+      // không bị dừng.
     }
   }
 
@@ -86,8 +86,11 @@ export class CustomerAppointmentsService implements OnModuleInit {
         return await response.json();
       } catch (error) {
         if (error instanceof BadRequestException || attempt === 2)
-          throw new ServiceUnavailableException(
-            'Không lấy được dữ liệu API lịch hẹn',
+          throw this.withCause(
+            new ServiceUnavailableException(
+              'Không lấy được dữ liệu API lịch hẹn',
+            ),
+            error,
           );
         await new Promise((resolve) =>
           setTimeout(resolve, (attempt + 1) * 500),
@@ -98,10 +101,12 @@ export class CustomerAppointmentsService implements OnModuleInit {
 
   async sync() {
     const runner = this.db.createQueryRunner();
-    await runner.connect();
+    let connected = false;
     let locked = false;
     let transaction = false;
     try {
+      await runner.connect();
+      connected = true;
       const [lock] = await runner.query(
         "SELECT GET_LOCK(CONCAT(DATABASE(), ':customer-appointments'), 0) AS acquired",
       );
@@ -213,30 +218,69 @@ export class CustomerAppointmentsService implements OnModuleInit {
         previousSuccessAt: previous?.last_success_at ?? null,
       };
     } catch (error) {
-      if (transaction) {
-        await runner.rollbackTransaction();
-        transaction = false;
+      if (error instanceof ConflictException) {
+        this.logger.warn('Đồng bộ lịch hẹn đang chạy ở tiến trình khác');
+        throw error;
       }
+      this.logSyncFailure(error);
+      if (transaction)
+        await runner.rollbackTransaction().catch(() => undefined);
       if (locked)
-        await runner.manager.getRepository(CustomerAppointmentSyncState).save({
-          id: 1,
-          status: 'error',
-          error: 'Đồng bộ thất bại; dữ liệu cũ được giữ nguyên',
-        });
-      if (error instanceof ConflictException) throw error;
-      throw new ServiceUnavailableException(
-        'Đồng bộ lịch hẹn thất bại; dữ liệu cũ được giữ nguyên',
+        await runner.manager
+          .getRepository(CustomerAppointmentSyncState)
+          .save({
+            id: 1,
+            status: 'error',
+            error: 'Đồng bộ thất bại; dữ liệu cũ được giữ nguyên',
+          })
+          .catch(() => undefined);
+      throw this.withCause(
+        new ServiceUnavailableException(
+          'Đồng bộ lịch hẹn thất bại; dữ liệu cũ được giữ nguyên',
+        ),
+        error,
       );
     } finally {
-      try {
-        if (locked)
-          await runner.query(
+      if (locked)
+        await runner
+          .query(
             "SELECT RELEASE_LOCK(CONCAT(DATABASE(), ':customer-appointments'))",
-          );
-      } finally {
-        await runner.release();
-      }
+          )
+          .catch(() => undefined);
+      if (connected) await runner.release().catch(() => undefined);
     }
+  }
+
+  /**
+   * Log đầy đủ chuỗi nguyên nhân. Trước đây cron chỉ ghi một dòng generic nên
+   * không biết lỗi gốc là timeout, 4xx/5xx của provider hay dữ liệu sai schema.
+   */
+  private logSyncFailure(error: unknown) {
+    const chain: string[] = [];
+    const seen = new Set<unknown>();
+    let current: unknown = error;
+    while (current instanceof Error && !seen.has(current)) {
+      seen.add(current);
+      chain.push(
+        `${current.name}: ${current.message}${current.stack ? `\n${current.stack}` : ''}`,
+      );
+      current = (current as Error & { cause?: unknown }).cause;
+    }
+    if (current !== undefined && !(current instanceof Error))
+      chain.push(
+        typeof current === 'string'
+          ? current
+          : (JSON.stringify(current) ?? '(không đọc được cause)'),
+      );
+    this.logger.error(
+      'Đồng bộ lịch hẹn thất bại; xem customer_appointment_sync_state',
+      chain.join('\nCaused by: '),
+    );
+  }
+
+  private withCause<T extends Error>(error: T, cause: unknown): T {
+    (error as T & { cause?: unknown }).cause = cause;
+    return error;
   }
 
   async syncStatus() {
