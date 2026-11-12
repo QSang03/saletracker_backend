@@ -191,6 +191,15 @@ export class KpiSlaQueryDto {
   @IsString()
   customerCode?: string;
 
+  /**
+   * Ô tìm kiếm chung: khớp MỘT PHẦN (LIKE %...%) với tên/mã nhân viên sale,
+   * tên/mã khách, hoặc tên hiển thị Zalo (`customer_zalo.matched_name`). Không
+   * phân biệt hoa thường theo collation utf8mb4_unicode_ci của DB.
+   */
+  @IsOptional()
+  @IsString()
+  search?: string;
+
   @IsOptional()
   @IsIn(['all', 'open', 'responded', 'none', 'waived'])
   status?: 'all' | 'open' | 'responded' | 'none' | 'waived';

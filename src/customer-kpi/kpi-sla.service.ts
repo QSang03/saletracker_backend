@@ -1,16 +1,19 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { FindOptionsWhere, In, IsNull, Not, Repository } from 'typeorm';
+import { FindOptionsWhere, In, Repository } from 'typeorm';
 import { KpiSlaViolation } from './kpi-sla-violation.entity';
 import { KpiSlaResponseType } from './kpi-sla-interval.entity';
 import { KpiScopeService, KpiUser } from './kpi-scope.service';
 import { KpiSaleDirectoryService } from './kpi-sale-directory.service';
+import { Customer } from './customer.entity';
 import { vnToday } from './vn-date';
 
 export interface KpiSlaQuery {
   period?: string;
   saleId?: number;
   customerCode?: string;
+  /** Khớp một phần tên/mã sale hoặc tên/mã khách. */
+  search?: string;
   status?: 'all' | 'open' | 'responded' | 'none' | 'waived';
   page?: number;
   limit?: number;
@@ -32,6 +35,8 @@ export class KpiSlaService {
   constructor(
     @InjectRepository(KpiSlaViolation)
     private readonly violationRepo: Repository<KpiSlaViolation>,
+    @InjectRepository(Customer)
+    private readonly customerRepo: Repository<Customer>,
     private readonly scope: KpiScopeService,
     private readonly saleDirectory: KpiSaleDirectoryService,
   ) {}
@@ -51,45 +56,84 @@ export class KpiSlaService {
       this.scope.assertSaleInScope(query.saleId, userIds);
     }
 
-    const where: FindOptionsWhere<KpiSlaViolation> = { period };
+    const page = Math.max(1, Number(query.page) || 1);
+    const limit = Math.min(200, Math.max(1, Number(query.limit) || 50));
+
+    if (userIds !== undefined && userIds.length === 0) {
+      return { period, total: 0, page, limit, items: [] };
+    }
+
+    const qb = this.violationRepo
+      .createQueryBuilder('v')
+      .where('v.period = :period', { period });
     if (query.saleId !== undefined) {
-      where.sale_id = query.saleId;
+      qb.andWhere('v.sale_id = :saleId', { saleId: query.saleId });
     } else if (userIds !== undefined) {
-      if (userIds.length === 0) {
-        return { period, total: 0, page: 1, limit: 50, items: [] };
-      }
-      where.sale_id = In(userIds);
+      qb.andWhere('v.sale_id IN (:...userIds)', { userIds });
     }
     if (query.customerCode?.trim()) {
-      where.customer_code = query.customerCode.trim();
+      qb.andWhere('v.customer_code = :customerCode', {
+        customerCode: query.customerCode.trim(),
+      });
     }
     switch (query.status) {
       case 'open':
-        where.responded_time = IsNull();
+        qb.andWhere('v.responded_time IS NULL');
         break;
       case 'responded':
-        where.responded_time = Not(IsNull());
+        qb.andWhere('v.responded_time IS NOT NULL');
         break;
       case 'none':
-        where.response_type = KpiSlaResponseType.NONE;
+        qb.andWhere('v.response_type = :none', {
+          none: KpiSlaResponseType.NONE,
+        });
         break;
       case 'waived':
-        where.is_waived = true;
+        qb.andWhere('v.is_waived = :waived', { waived: true });
         break;
       default:
         break;
     }
 
-    const page = Math.max(1, Number(query.page) || 1);
-    const limit = Math.min(200, Math.max(1, Number(query.limit) || 50));
-    const [rows, total] = await this.violationRepo.findAndCount({
-      where,
-      order: { inbound_time: 'DESC' },
-      skip: (page - 1) * limit,
-      take: limit,
-    });
+    // Ô tìm kiếm chung: tên/mã sale HOẶC tên/mã khách. Dùng subquery để giữ
+    // các bộ lọc khác dạng AND và không phải nạp sẵn danh sách ID.
+    const search = query.search?.trim();
+    if (search) {
+      qb.andWhere(
+        `(
+          v.sale_id IN (
+            SELECT u.id FROM users u
+            WHERE u.deleted_at IS NULL
+              AND (u.full_name LIKE :search OR u.employee_code LIKE :search)
+          )
+          OR v.customer_code IN (
+            SELECT c.customer_code FROM customers c
+            WHERE c.status <> 'deleted'
+              AND (c.customer_code LIKE :search OR c.customer_name LIKE :search)
+          )
+          OR v.customer_code IN (
+            SELECT c2.customer_code
+            FROM customer_zalo z
+            JOIN customer_assignments a ON a.id = z.assignment_id
+            JOIN customers c2 ON c2.id = a.customer_id
+            WHERE z.is_active = 1
+              AND z.matched_name LIKE :search
+          )
+        )`,
+        { search: `%${this.escapeLike(search)}%` },
+      );
+    }
+
+    const [rows, total] = await qb
+      .orderBy('v.inbound_time', 'DESC')
+      .skip((page - 1) * limit)
+      .take(limit)
+      .getManyAndCount();
     const infos = await this.saleDirectory.loadSaleInfos([
       ...new Set(rows.map((row) => row.sale_id)),
+    ]);
+    const customerNames = await this.loadCustomerNames([
+      ...new Set(rows.map((row) => row.customer_code)),
     ]);
     return {
       period,
@@ -99,8 +143,46 @@ export class KpiSlaService {
       items: rows.map((row) => ({
         ...row,
         saleName: infos.get(row.sale_id)?.fullName ?? null,
+        customerName: customerNames.get(row.customer_code) ?? null,
       })),
     };
+  }
+
+  /** Escape ký tự đại diện để `%`/`_` người dùng gõ không thành wildcard. */
+  private escapeLike(value: string): string {
+    return value.replace(/[\\%_]/g, (char) => `\\${char}`);
+  }
+
+  private async loadCustomerNames(
+    customerCodes: string[],
+  ): Promise<Map<string, string>> {
+    const result = new Map<string, string>();
+    if (customerCodes.length === 0) return result;
+
+    // customer_name của bảng customers chỉ có một phần; đa số tên thật nằm ở
+    // customer_zalo.matched_name (tên hiển thị Zalo do Python đồng bộ).
+    const placeholders = customerCodes.map(() => '?').join(',');
+    const rows: Array<{
+      customer_code: string;
+      customer_name: string | null;
+      matched_name: string | null;
+    }> = await this.customerRepo.manager.query(
+      `SELECT c.customer_code, c.customer_name, z.matched_name
+       FROM customers c
+       LEFT JOIN customer_assignments a ON a.customer_id = c.id
+       LEFT JOIN customer_zalo z ON z.assignment_id = a.id AND z.is_active = 1
+       WHERE c.customer_code IN (${placeholders})
+       ORDER BY z.id ASC`,
+      customerCodes,
+    );
+    for (const row of rows) {
+      if (row.customer_name) {
+        result.set(row.customer_code, row.customer_name);
+      } else if (!result.has(row.customer_code) && row.matched_name) {
+        result.set(row.customer_code, row.matched_name);
+      }
+    }
+    return result;
   }
 
   async summary(query: KpiSlaSummaryQuery, user: KpiUser): Promise<any> {
