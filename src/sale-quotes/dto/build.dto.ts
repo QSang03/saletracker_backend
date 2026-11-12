@@ -43,6 +43,11 @@ export class BuildItemInputDto {
   description?: string;
 
   @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  warranty?: string;
+
+  @IsOptional()
   @Type(() => Number)
   @IsNumber()
   @Min(0)
@@ -192,6 +197,11 @@ export class UpdateBuildItemDto {
   @IsString()
   @MaxLength(5000)
   description?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  warranty?: string;
 
   @IsOptional()
   @Type(() => Number)

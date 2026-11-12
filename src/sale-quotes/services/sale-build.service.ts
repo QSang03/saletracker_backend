@@ -200,8 +200,18 @@ export class SaleBuildService {
           }
         }
 
+        // Auto-heal pn cho sản phẩm S1 nếu bị kẹt P/N của linh kiện cũ trước khi đổi
+        let resolvedPn = item.pn;
+        if (!item.isManual && (item.productId || prod)) {
+          const effectiveCode = item.productCode || prod?.productCode;
+          if (resolvedPn && effectiveCode && resolvedPn !== effectiveCode) {
+            resolvedPn = effectiveCode;
+          }
+        }
+
         return {
           ...item,
+          pn: resolvedPn,
           stock: resolvedStock,
           costPrice: resolvedCostPrice,
           warranty: resolvedWarranty,
@@ -353,17 +363,29 @@ export class SaleBuildService {
       if (dto.salePrice === undefined) {
         item.salePrice = item.costPrice;
       }
+      if (dto.warranty === undefined) {
+        item.warranty = productWarrantyText(product);
+      }
+      if (dto.pn === undefined) {
+        item.pn = product.productCode;
+      }
     }
 
     if (dto.productCode !== undefined) {
-      item.productCode = dto.productCode?.trim() || null;
+      const newCode = dto.productCode?.trim() || null;
+      if (dto.pn === undefined && newCode && newCode !== item.productCode) {
+        item.pn = newCode;
+      }
+      item.productCode = newCode;
     }
     if (dto.pn !== undefined) item.pn = dto.pn?.trim() || null;
     if (dto.name !== undefined) item.name = dto.name?.trim() || null;
     if (dto.description !== undefined) {
       item.description = dto.description?.trim() || null;
     }
-    // warranty KHÔNG cho sửa tay — chỉ lấy từ sản phẩm (import Excel).
+    if (dto.warranty !== undefined) {
+      item.warranty = dto.warranty?.trim() || null;
+    }
     if (dto.costPrice !== undefined) item.costPrice = dto.costPrice;
     if (dto.salePrice !== undefined) item.salePrice = dto.salePrice;
     if (dto.quantity !== undefined) item.quantity = dto.quantity;
@@ -530,12 +552,10 @@ export class SaleBuildService {
       buildId,
       productId: product?.id ?? dto.productId ?? null,
       productCode: dto.productCode?.trim() || product?.productCode || null,
-      pn: dto.pn?.trim() || null,
+      pn: dto.pn?.trim() || product?.productCode || null,
       name: dto.name?.trim() || product?.productName || 'Linh kiện',
       description: dto.description?.trim() || null,
-      // Bảo hành chỉ lấy từ sản phẩm (import Excel "MÃ HT"/"TGBH") — không có
-      // nhập tay, không có default settings.
-      warranty: productWarrantyText(product),
+      warranty: dto.warranty?.trim() || productWarrantyText(product),
       costPrice,
       salePrice,
       quantity,

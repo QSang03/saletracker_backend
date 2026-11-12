@@ -197,8 +197,18 @@ export class SaleQuoteService {
           }
         }
 
+        // Auto-heal pn cho sản phẩm S1 nếu bị kẹt P/N của linh kiện cũ trước khi đổi
+        let resolvedPn = item.pn;
+        if (!item.isManual && (item.productId || prod)) {
+          const effectiveCode = item.productCode || prod?.productCode;
+          if (resolvedPn && effectiveCode && resolvedPn !== effectiveCode) {
+            resolvedPn = effectiveCode;
+          }
+        }
+
         return {
           ...item,
+          pn: resolvedPn,
           stock: resolvedStock,
           costPrice: resolvedCostPrice,
           warranty: resolvedWarranty,
@@ -370,10 +380,20 @@ export class SaleQuoteService {
       if (dto.unitPrice === undefined) {
         item.unitPrice = item.costPrice;
       }
+      if (dto.warranty === undefined) {
+        item.warranty = productWarrantyText(product);
+      }
+      if (dto.pn === undefined) {
+        item.pn = product.productCode;
+      }
     }
 
     if (dto.productCode !== undefined) {
-      item.productCode = dto.productCode?.trim() || null;
+      const newCode = dto.productCode?.trim() || null;
+      if (dto.pn === undefined && newCode && newCode !== item.productCode) {
+        item.pn = newCode;
+      }
+      item.productCode = newCode;
     }
     if (dto.pn !== undefined) item.pn = dto.pn?.trim() || null;
     if (dto.name !== undefined) item.name = dto.name?.trim() || null;
