@@ -87,9 +87,7 @@ export class CustomerKpiTargetsService {
    */
   private async managerScopeSaleIds(user: any): Promise<number[]> {
     const departmentIds = (user.departments || [])
-      .filter(
-        (d: any) => d?.server_ip && String(d.server_ip).trim() !== '',
-      )
+      .filter((d: any) => d?.server_ip && String(d.server_ip).trim() !== '')
       .map((d: any) => d?.id)
       .filter(Boolean);
     if (departmentIds.length === 0) return [];
@@ -100,6 +98,17 @@ export class CustomerKpiTargetsService {
       .andWhere('user.deletedAt IS NULL')
       .getMany();
     return users.map((u) => u.id);
+  }
+
+  /**
+   * Slug phòng ban CÓ server_ip của trưởng phòng — dùng để giới hạn cả khách
+   * hàng thuộc phòng khác khi một sale nằm ở nhiều phòng ban.
+   */
+  private managerDepartmentSlugs(user: any): string[] {
+    return (user?.departments || [])
+      .filter((d: any) => d?.server_ip && String(d.server_ip).trim() !== '')
+      .map((d: any) => String(d?.slug || '').trim())
+      .filter(Boolean);
   }
 
   async list(query: KpiTargetQueryDto, user: any) {
@@ -231,6 +240,33 @@ export class CustomerKpiTargetsService {
         throw new ForbiddenException(
           'Chỉ được giao chỉ tiêu cho người trong phòng ban của mình',
         );
+      }
+      // Gán theo khách: khách phải thuộc phân công của sale TRONG phòng ban
+      // mà trưởng phòng quản lý, không chỉ thuộc sale (sale có thể ở nhiều phòng).
+      const customerIds = rows
+        .map((row) => row.customerId)
+        .filter((customerId) => customerId > 0);
+      if (customerIds.length > 0) {
+        const slugs = this.managerDepartmentSlugs(user);
+        if (slugs.length === 0) {
+          throw new ForbiddenException(
+            'Bạn không quản lý phòng ban nào có server_ip',
+          );
+        }
+        const owned = await this.assignmentRepo.find({
+          where: {
+            sale_id: dto.sale_id as number,
+            customer_id: In(customerIds),
+            department_slug: In(slugs),
+          },
+          select: ['customer_id'],
+        });
+        const ownedIds = new Set(owned.map((a) => a.customer_id));
+        if (customerIds.some((customerId) => !ownedIds.has(customerId))) {
+          throw new ForbiddenException(
+            'Có khách hàng không thuộc phòng ban bạn quản lý',
+          );
+        }
       }
     }
 

@@ -20,6 +20,7 @@ import {
 import { CustomerResponseDaily } from './customer-response-daily.entity';
 import { CustomerActivityDaily } from './customer-activity-daily.entity';
 import { CustomerRevenueDaily } from './customer-revenue-daily.entity';
+import { KpiScopeService } from './kpi-scope.service';
 import { NkmSaleMap } from './nkm-sale-map.entity';
 import { CustomerRole } from './customer.entity';
 import { CustomerQueryDto } from './dto/customer-query.dto';
@@ -92,6 +93,7 @@ export class CustomersService {
     private readonly approvalRequestRepo: Repository<ApprovalRequest>,
     @InjectRepository(ApprovalRequestCustomerItem)
     private readonly approvalCustomerItemRepo: Repository<ApprovalRequestCustomerItem>,
+    private readonly kpiScope: KpiScopeService,
   ) {}
 
   /**
@@ -253,9 +255,7 @@ export class CustomersService {
     if (roles.includes('admin')) return true;
     if (!roles.some((r) => r.startsWith('manager-'))) return false;
     const callerDeptIds = (user.departments || [])
-      .filter(
-        (d: any) => d?.server_ip && String(d.server_ip).trim() !== '',
-      )
+      .filter((d: any) => d?.server_ip && String(d.server_ip).trim() !== '')
       .map((d: any) => d?.id)
       .filter(Boolean);
     if (callerDeptIds.length === 0) return false;
@@ -299,9 +299,7 @@ export class CustomersService {
     }
     if (lower.some((r) => r.startsWith('manager-'))) {
       const departmentIds = (user.departments || [])
-        .filter(
-          (d: any) => d?.server_ip && String(d.server_ip).trim() !== '',
-        )
+        .filter((d: any) => d?.server_ip && String(d.server_ip).trim() !== '')
         .map((d: any) => d?.id)
         .filter(Boolean);
       if (departmentIds.length === 0) return [];
@@ -314,6 +312,27 @@ export class CustomersService {
       return users.map((u) => u.id);
     }
     return [user.id];
+  }
+
+  /**
+   * Slug phòng ban CÓ server_ip mà manager được quản lý.
+   * `undefined` = không phải manager (admin/view/pm đã có scope rộng ở
+   * `scopeUserIds`; sale chỉ thao tác trên chính mình).
+   */
+  private managerDepartmentSlugs(user: any): string[] | undefined {
+    if (!this.kpiScope.isManager(user)) return undefined;
+    return this.kpiScope.managedDepartmentSlugs(user);
+  }
+
+  /** Manager chỉ được xem/ghi dòng phân công thuộc phòng ban có server_ip của mình. */
+  private assertDepartmentScope(user: any, departmentSlug: string): void {
+    const slugs = this.managerDepartmentSlugs(user);
+    if (slugs === undefined) return;
+    if (!slugs.includes(departmentSlug)) {
+      throw new ForbiddenException(
+        'Khách hàng không thuộc phòng ban bạn quản lý',
+      );
+    }
   }
 
   async findAll(query: CustomerQueryDto, user: any) {
@@ -333,6 +352,10 @@ export class CustomersService {
 
     if (userIds !== undefined) {
       qb.andWhere('a.sale_id IN (:...userIds)', { userIds });
+    }
+    const managedSlugs = this.managerDepartmentSlugs(user);
+    if (managedSlugs !== undefined) {
+      qb.andWhere('a.department_slug IN (:...managedSlugs)', { managedSlugs });
     }
     if (query.saleId) {
       qb.andWhere('a.sale_id = :saleId', { saleId: query.saleId });
@@ -440,6 +463,7 @@ export class CustomersService {
     if (userIds !== undefined && !userIds.includes(assignment.sale_id)) {
       throw new ForbiddenException('Khách hàng không thuộc phạm vi của bạn');
     }
+    this.assertDepartmentScope(user, assignment.department_slug);
 
     const sale = await this.userRepo.findOne({
       where: { id: assignment.sale_id },
@@ -526,6 +550,12 @@ export class CustomersService {
 
     if (userIds !== undefined) {
       qb.andWhere('a.sale_id IN (:...userIds)', { userIds });
+    }
+    const unmatchedManagedSlugs = this.managerDepartmentSlugs(user);
+    if (unmatchedManagedSlugs !== undefined) {
+      qb.andWhere('a.department_slug IN (:...managedSlugs)', {
+        managedSlugs: unmatchedManagedSlugs,
+      });
     }
     if (query.department) {
       qb.andWhere('a.department_slug = :department', {
@@ -651,8 +681,7 @@ export class CustomersService {
       const departmentIds = (user.departments || [])
         .filter(
           (d: any) =>
-            !isManager ||
-            (d?.server_ip && String(d.server_ip).trim() !== ''),
+            !isManager || (d?.server_ip && String(d.server_ip).trim() !== ''),
         )
         .map((d: any) => d?.id)
         .filter(Boolean);
@@ -673,7 +702,10 @@ export class CustomersService {
    *
    * `department` lọc theo slug phòng ban của sale (6 slug của file phân bổ).
    */
-  async filterSales(query: { department?: string; search?: string }, user: any) {
+  async filterSales(
+    query: { department?: string; search?: string },
+    user: any,
+  ) {
     const userIds = await this.scopeUserIds(user);
     if (userIds !== undefined && userIds.length === 0) return { data: [] };
 
@@ -842,6 +874,7 @@ export class CustomersService {
     if (userIds !== undefined && !userIds.includes(link.assignment.sale_id)) {
       throw new ForbiddenException('Cặp khớp không thuộc phạm vi của bạn');
     }
+    this.assertDepartmentScope(user, link.assignment.department_slug);
     return link;
   }
 
@@ -1127,6 +1160,7 @@ export class CustomersService {
     if (!(await this.canManageSale(user, dto.sale_id))) {
       throw new ForbiddenException('Sale không thuộc phạm vi quản lý của bạn');
     }
+    this.assertDepartmentScope(user, dto.department_slug);
 
     // Tìm hoặc tạo khách theo CẶP (mã, SAP) — cùng mã khác SAP là khách khác,
     // được tạo thêm dòng mới (ví dụ HQS_Q03_SR_PHUCHAI với C00375 và C00552)
@@ -1231,6 +1265,7 @@ export class CustomersService {
     if (!(await this.canManageSale(user, assignment.sale_id))) {
       throw new ForbiddenException('Sale không thuộc phạm vi quản lý của bạn');
     }
+    this.assertDepartmentScope(user, assignment.department_slug);
     if (assignment.customer.status === CustomerStatus.DELETED) {
       throw new NotFoundException('Khách đã bị xoá trước đó');
     }
@@ -1277,6 +1312,17 @@ export class CustomersService {
         skipped.push({ assignmentId, reason: 'ngoài phạm vi quản lý' });
         continue;
       }
+      const bulkManagedSlugs = this.managerDepartmentSlugs(user);
+      if (
+        bulkManagedSlugs !== undefined &&
+        !bulkManagedSlugs.includes(assignment.department_slug)
+      ) {
+        skipped.push({
+          assignmentId,
+          reason: 'khách thuộc phòng ban ngoài phạm vi quản lý',
+        });
+        continue;
+      }
       if (assignment.customer.status === CustomerStatus.DELETED) {
         // Bulk-update không được lặng lẽ sửa dữ liệu của khách đã bị xoá
         skipped.push({ assignmentId, reason: 'khách đã bị xoá' });
@@ -1308,10 +1354,11 @@ export class CustomersService {
     assignmentId: number,
     userIds: number[] | undefined,
     accounts: PythonZaloAccount[],
+    user: any,
   ): Promise<PythonZaloAccount[]> {
     const assignment = await this.assignmentRepo.findOne({
       where: { id: assignmentId },
-      select: ['id', 'sale_id'],
+      select: ['id', 'sale_id', 'department_slug'],
     });
     if (!assignment) {
       throw new NotFoundException('Không tìm thấy dòng phân công');
@@ -1319,6 +1366,7 @@ export class CustomersService {
     if (userIds !== undefined && !userIds.includes(assignment.sale_id)) {
       throw new ForbiddenException('Khách hàng không thuộc phạm vi của bạn');
     }
+    this.assertDepartmentScope(user, assignment.department_slug);
     return accounts.filter((a) => a.userId === assignment.sale_id);
   }
 
@@ -1358,7 +1406,7 @@ export class CustomersService {
       return { data: [] };
 
     const saleAccounts = query.assignmentId
-      ? await this.saleZaloAccounts(query.assignmentId, userIds, accounts)
+      ? await this.saleZaloAccounts(query.assignmentId, userIds, accounts, user)
       : null;
 
     let rows;
@@ -1456,6 +1504,7 @@ export class CustomersService {
     if (userIds !== undefined && !userIds.includes(assignment.sale_id)) {
       throw new ForbiddenException('Khách hàng không thuộc phạm vi của bạn');
     }
+    this.assertDepartmentScope(user, assignment.department_slug);
 
     const oldData = {
       customer_tier: assignment.customer_tier,

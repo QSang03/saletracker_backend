@@ -76,9 +76,7 @@ export class ApprovalRequestsService {
     }
     if (roles.some((r) => r.startsWith('manager-'))) {
       const departmentIds = (user?.departments || [])
-        .filter(
-          (d: any) => d?.server_ip && String(d.server_ip).trim() !== '',
-        )
+        .filter((d: any) => d?.server_ip && String(d.server_ip).trim() !== '')
         .map((d: any) => d?.id)
         .filter(Boolean);
       if (!departmentIds.length) return [];
@@ -240,15 +238,21 @@ export class ApprovalRequestsService {
     };
   }
 
+  /** Slug phòng ban CÓ server_ip của caller (rỗng nếu không có). */
+  private managedDepartmentSlugs(user: any): string[] {
+    return (user?.departments || [])
+      .filter((d: any) => d?.server_ip && String(d.server_ip).trim() !== '')
+      .map((d: any) => String(d?.slug || '').trim())
+      .filter(Boolean);
+  }
+
   /** Caller và sale bị tác động có chung phòng ban CÓ server_ip không? */
   private async sharesDepartmentWith(
     user: any,
     targetUserId: number,
   ): Promise<boolean> {
     const callerDeptIds = (user?.departments || [])
-      .filter(
-        (d: any) => d?.server_ip && String(d.server_ip).trim() !== '',
-      )
+      .filter((d: any) => d?.server_ip && String(d.server_ip).trim() !== '')
       .map((d: any) => d?.id)
       .filter(Boolean);
     if (!callerDeptIds.length) return false;
@@ -354,6 +358,21 @@ export class ApprovalRequestsService {
       if (!isDeptManager) {
         throw new ForbiddenException(
           'Chỉ trưởng phòng của sale này mới được duyệt đề xuất',
+        );
+      }
+      // Một sale có thể thuộc nhiều phòng: chỉ duyệt mục thuộc phòng ban
+      // CÓ server_ip của mình.
+      const managedSlugs = this.managedDepartmentSlugs(user);
+      const customerItems = await this.customerItemRepo.find({
+        where: { request_id: id },
+      });
+      const foreign = customerItems.filter(
+        (item) =>
+          item.department_slug && !managedSlugs.includes(item.department_slug),
+      );
+      if (foreign.length > 0) {
+        throw new ForbiddenException(
+          `Đề xuất có ${foreign.length} khách thuộc phòng ban ngoài phạm vi của bạn`,
         );
       }
     }

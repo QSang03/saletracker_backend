@@ -451,9 +451,7 @@ export class CustomerAssignmentsService {
     const empCodes = [
       ...new Set(
         parsed.customers.flatMap((c) =>
-          c.assignments.map((a) =>
-            normalizeEmployeeCode(a.employee_code),
-          ),
+          c.assignments.map((a) => normalizeEmployeeCode(a.employee_code)),
         ),
       ),
     ];
@@ -598,9 +596,8 @@ export class CustomerAssignmentsService {
             action: ImportChangeAction.UPDATE,
             old_data: oldFields,
             new_data: newFields,
-            error: [...p.errors, ...rowExtraErrors]
-              .join('; ')
-              .slice(0, 255) || null,
+            error:
+              [...p.errors, ...rowExtraErrors].join('; ').slice(0, 255) || null,
           });
         }
       }
@@ -608,9 +605,8 @@ export class CustomerAssignmentsService {
       // 4b. Phân công: tạo mới / cập nhật (đổi sale, đổi tier)
       for (const a of p.assignments) {
         const saleId =
-          saleIdByAssignment.get(
-            `${a.department_slug}|${a.employee_code}`,
-          ) ?? null;
+          saleIdByAssignment.get(`${a.department_slug}|${a.employee_code}`) ??
+          null;
         const existing = dbCustomer
           ? (assignmentsByCustomer.get(dbCustomer.id) || []).find(
               (x) => x.department_slug === a.department_slug,
@@ -810,7 +806,10 @@ export class CustomerAssignmentsService {
    *   cron Python tự khớp lại và tạo bản ghi mới cho phân công còn tồn tại.
    * - customer_zalo_scan_results: cache trạng thái lần quét gần nhất.
    */
-  private async detachAssignmentChildren(em: EntityManager, assignmentId: number) {
+  private async detachAssignmentChildren(
+    em: EntityManager,
+    assignmentId: number,
+  ) {
     await em.delete(CustomerActivityDaily, { assignment_id: assignmentId });
     await em.delete(CustomerResponseDaily, { assignment_id: assignmentId });
     await em.delete(CustomerZalo, { assignment_id: assignmentId });
@@ -1455,9 +1454,7 @@ export class CustomerAssignmentsService {
     }
     if (lower.some((r) => r.startsWith('manager-'))) {
       const departmentIds = (user.departments || [])
-        .filter(
-          (d: any) => d?.server_ip && String(d.server_ip).trim() !== '',
-        )
+        .filter((d: any) => d?.server_ip && String(d.server_ip).trim() !== '')
         .map((d: any) => d?.id)
         .filter(Boolean);
       if (departmentIds.length === 0) return [];
@@ -1470,6 +1467,21 @@ export class CustomerAssignmentsService {
       return users.map((u) => u.id);
     }
     return [user.id];
+  }
+
+  /**
+   * Slug phòng ban CÓ server_ip của manager; `undefined` = không phải manager.
+   * Dùng để chặn lộ phân công của phòng khác khi một sale thuộc nhiều phòng.
+   */
+  private managerDepartmentSlugs(user: any): string[] | undefined {
+    const roles = (user?.roles || []).map((r: any) =>
+      String(typeof r === 'string' ? r : r?.name || '').toLowerCase(),
+    );
+    if (!roles.some((r) => r.startsWith('manager-'))) return undefined;
+    return (user?.departments || [])
+      .filter((d: any) => d?.server_ip && String(d.server_ip).trim() !== '')
+      .map((d: any) => String(d?.slug || '').trim())
+      .filter(Boolean);
   }
 
   /**
@@ -1513,6 +1525,16 @@ export class CustomerAssignmentsService {
         };
       }
       qb.andWhere('a.sale_id IN (:...userIds)', { userIds });
+    }
+    const managedSlugs = this.managerDepartmentSlugs(user);
+    if (managedSlugs !== undefined) {
+      if (managedSlugs.length === 0) {
+        return {
+          buffer: await this.writeAssignmentsWorkbook(ExcelJS, new Map()),
+          fileName,
+        };
+      }
+      qb.andWhere('a.department_slug IN (:...managedSlugs)', { managedSlugs });
     }
     if (query.saleId) {
       qb.andWhere('a.sale_id = :saleId', { saleId: query.saleId });

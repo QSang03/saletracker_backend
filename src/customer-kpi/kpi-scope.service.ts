@@ -10,7 +10,11 @@ import { User } from '../users/user.entity';
 export interface KpiUser {
   id?: number;
   roles?: Array<string | { name?: string }>;
-  departments?: Array<{ id?: number; server_ip?: string | null }>;
+  departments?: Array<{
+    id?: number;
+    slug?: string;
+    server_ip?: string | null;
+  }>;
 }
 
 /**
@@ -45,6 +49,17 @@ export class KpiScopeService {
   /** Quản lý phòng ban (`manager-<slug>`) — chỉ thấy người trong phòng có server_ip. */
   isManager(user: KpiUser | null | undefined): boolean {
     return this.roleNames(user).some((role) => role.startsWith('manager-'));
+  }
+
+  /**
+   * Slug các phòng ban CÓ `server_ip` mà user thuộc về. Phòng không có IP chỉ
+   * mang tính tượng trưng (Chiến dịch, Dev...) — không thuộc phạm vi KPI.
+   */
+  managedDepartmentSlugs(user: KpiUser | null | undefined): string[] {
+    return (user?.departments ?? [])
+      .filter((d) => d?.server_ip && String(d.server_ip).trim() !== '')
+      .map((d) => String(d?.slug ?? '').trim())
+      .filter(Boolean);
   }
 
   /**
