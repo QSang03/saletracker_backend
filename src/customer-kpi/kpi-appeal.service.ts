@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { FindOptionsWhere, In, Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { KpiAppeal, KpiAppealStatus } from './kpi-appeal.entity';
 import { KpiSlaViolation } from './kpi-sla-violation.entity';
 import { KpiScopeService, KpiUser } from './kpi-scope.service';
@@ -24,6 +24,11 @@ export interface KpiAppealQuery {
   period?: string;
   saleId?: number;
   status?: KpiAppealStatus;
+  /** Khớp một phần tên/mã sale, tên/mã khách, tên Zalo hoặc lý do. */
+  search?: string;
+  /** Chỉ phân trang khi truyền một trong hai; bỏ trống = trả toàn bộ kỳ. */
+  page?: number;
+  limit?: number;
 }
 
 export interface ReviewKpiAppealInput {
@@ -69,6 +74,14 @@ export class KpiAppealService {
     if (violation.is_waived) {
       throw new BadRequestException('Vi phạm này đã được miễn');
     }
+    // Hạn gửi: hết ngày 05 tháng sau của kỳ vi phạm. Admin được gửi bổ sung
+    // sau hạn (giống nút bypass trên FE); role khác bị chặn.
+    const deadline = this.appealDeadline(violation.period);
+    if (vnToday() > deadline && !this.scope.roleNames(user).includes('admin')) {
+      throw new BadRequestException(
+        `Đã quá hạn gửi giải trình (hạn ${deadline}). Vui lòng liên hệ admin.`,
+      );
+    }
 
     const existing = await this.appealRepo.findOne({
       where: {
@@ -103,22 +116,57 @@ export class KpiAppealService {
       this.scope.assertSaleInScope(query.saleId, userIds);
     }
 
-    const where: FindOptionsWhere<KpiAppeal> = { period };
-    if (query.saleId !== undefined) {
-      where.sale_id = query.saleId;
-    } else if (userIds !== undefined) {
-      if (userIds.length === 0) return { period, total: 0, items: [] };
-      where.sale_id = In(userIds);
-    }
-    if (query.status) {
-      where.status = query.status;
+    const page = Math.max(1, Number(query.page) || 1);
+    const limit = Math.min(200, Math.max(1, Number(query.limit) || 50));
+    const paged = query.page !== undefined || query.limit !== undefined;
+
+    if (userIds !== undefined && userIds.length === 0) {
+      return { period, total: 0, page, limit, items: [] };
     }
 
-    const [rows, total] = await this.appealRepo.findAndCount({
-      where,
-      relations: ['violation'],
-      order: { created_at: 'DESC' },
-    });
+    const qb = this.appealRepo
+      .createQueryBuilder('a')
+      .leftJoinAndSelect('a.violation', 'v')
+      .where('a.period = :period', { period });
+    if (query.saleId !== undefined) {
+      qb.andWhere('a.sale_id = :saleId', { saleId: query.saleId });
+    } else if (userIds !== undefined) {
+      qb.andWhere('a.sale_id IN (:...userIds)', { userIds });
+    }
+    if (query.status) {
+      qb.andWhere('a.status = :status', { status: query.status });
+    }
+
+    const search = query.search?.trim();
+    if (search) {
+      qb.andWhere(
+        `(
+          a.sale_id IN (
+            SELECT u.id FROM users u
+            WHERE u.deleted_at IS NULL
+              AND (u.full_name LIKE :like OR u.employee_code LIKE :like)
+          )
+          OR a.customer_code IN (
+            SELECT c.customer_code FROM customers c
+            WHERE c.status <> 'deleted'
+              AND (c.customer_code LIKE :like OR c.customer_name LIKE :like)
+          )
+          OR a.customer_code IN (
+            SELECT c2.customer_code
+            FROM customer_zalo z
+            JOIN customer_assignments ca ON ca.id = z.assignment_id
+            JOIN customers c2 ON c2.id = ca.customer_id
+            WHERE z.is_active = 1 AND z.matched_name LIKE :like
+          )
+          OR a.reason LIKE :like
+        )`,
+        { like: `%${this.escapeLike(search)}%` },
+      );
+    }
+
+    qb.orderBy('a.created_at', 'DESC');
+    if (paged) qb.skip((page - 1) * limit).take(limit);
+    const [rows, total] = await qb.getManyAndCount();
     const infos = await this.saleDirectory.loadSaleInfos([
       ...new Set(
         rows
@@ -132,6 +180,8 @@ export class KpiAppealService {
     return {
       period,
       total,
+      page,
+      limit,
       items: rows.map((row) => {
         const customerName = customerNames.get(row.customer_code) ?? null;
         return {
@@ -152,6 +202,18 @@ export class KpiAppealService {
         };
       }),
     };
+  }
+
+  /** Hạn gửi giải trình: hết ngày 05 của tháng sau kỳ vi phạm (YYYY-MM-DD). */
+  private appealDeadline(period: string): string {
+    const [year, month] = period.split('-').map(Number);
+    const nextMonth = month === 12 ? 1 : month + 1;
+    const nextYear = month === 12 ? year + 1 : year;
+    return `${nextYear}-${String(nextMonth).padStart(2, '0')}-05`;
+  }
+
+  private escapeLike(value: string): string {
+    return value.replace(/[\\%_]/g, (char) => `\\${char}`);
   }
 
   async review(

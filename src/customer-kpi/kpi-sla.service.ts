@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { FindOptionsWhere, In, Repository } from 'typeorm';
 import { KpiSlaViolation } from './kpi-sla-violation.entity';
 import { KpiSlaResponseType } from './kpi-sla-interval.entity';
+import { KpiAppeal, KpiAppealStatus } from './kpi-appeal.entity';
 import { KpiScopeService, KpiUser } from './kpi-scope.service';
 import { KpiSaleDirectoryService } from './kpi-sale-directory.service';
 import { KpiCustomerNamesService } from './kpi-customer-names.service';
@@ -36,6 +37,8 @@ export class KpiSlaService {
   constructor(
     @InjectRepository(KpiSlaViolation)
     private readonly violationRepo: Repository<KpiSlaViolation>,
+    @InjectRepository(KpiAppeal)
+    private readonly appealRepo: Repository<KpiAppeal>,
     private readonly customerNames: KpiCustomerNamesService,
     private readonly scope: KpiScopeService,
     private readonly saleDirectory: KpiSaleDirectoryService,
@@ -135,17 +138,35 @@ export class KpiSlaService {
     const customerNames = await this.customerNames.load([
       ...new Set(rows.map((row) => row.customer_code)),
     ]);
+    const appeals = rows.length
+      ? await this.appealRepo.find({
+          where: { violation_id: In(rows.map((row) => row.id)) },
+          order: { created_at: 'DESC' },
+        })
+      : [];
+    const appealByViolation = new Map<string, KpiAppeal>();
+    for (const appeal of appeals) {
+      const key = String(appeal.violation_id);
+      if (!appealByViolation.has(key)) appealByViolation.set(key, appeal);
+    }
     return {
       period,
       total,
       page,
       limit,
-      items: rows.map((row) => ({
-        ...row,
-        saleName: infos.get(row.sale_id)?.fullName ?? null,
-        customerName: customerNames.get(row.customer_code) ?? null,
-        delay_minutes: slaDelayMinutes(row),
-      })),
+      items: rows.map((row) => {
+        const appeal = appealByViolation.get(String(row.id));
+        const approved = appeal?.status === KpiAppealStatus.APPROVED;
+        return {
+          ...row,
+          saleName: infos.get(row.sale_id)?.fullName ?? null,
+          customerName: customerNames.get(row.customer_code) ?? null,
+          delay_minutes: slaDelayMinutes(row),
+          appeal_status: appeal?.status ?? 'none',
+          waive_reason: approved ? appeal.reason : null,
+          waived_at: approved ? appeal.reviewed_at : null,
+        };
+      }),
     };
   }
 

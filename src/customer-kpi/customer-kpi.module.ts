@@ -11,6 +11,7 @@ import { CustomerZalo } from './customer-zalo.entity';
 import { CustomerZaloScanResult } from './customer-zalo-scan-result.entity';
 import { ZaloPythonApiClient } from './zalo-python-api.client';
 import { CustomerActivityDaily } from './customer-activity-daily.entity';
+import { CustomerInteractionSummary } from './customer-interaction-summary.entity';
 import {
   CustomerAppointment,
   CustomerAppointmentSyncState,
@@ -91,6 +92,7 @@ import { KpiCustomerInteractionService } from './kpi-customer-interaction.servic
       CustomerZalo,
       CustomerZaloScanResult,
       CustomerActivityDaily,
+      CustomerInteractionSummary,
       CustomerAppointment,
       CustomerAppointmentSyncState,
       CustomerResponseDaily,

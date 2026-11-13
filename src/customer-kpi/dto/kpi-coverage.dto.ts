@@ -261,6 +261,28 @@ export class KpiAppealQueryDto {
   @IsOptional()
   @IsIn(['pending', 'approved', 'rejected'])
   status?: 'pending' | 'approved' | 'rejected';
+
+  /** Khớp một phần tên/mã sale, tên/mã khách, tên Zalo hoặc nội dung lý do. */
+  @IsOptional()
+  @IsString()
+  search?: string;
+
+  /**
+   * Phân trang TUỲ CHỌN: chỉ áp dụng khi truyền `page` hoặc `limit`; không
+   * truyền thì trả toàn bộ kỳ (giữ tương thích FE cũ đang tự đếm theo tab).
+   */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(200)
+  limit?: number;
 }
 
 /** PATCH /customer-kpi-appeals/:id/review */

@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { CustomerActivityDaily } from './customer-activity-daily.entity';
+import { CustomerInteractionSummary } from './customer-interaction-summary.entity';
 import { CustomerAppointment } from './customer-appointment.entity';
 import { CustomerZalo } from './customer-zalo.entity';
 import {
@@ -28,8 +29,11 @@ export interface CustomerInteractionInfo {
     inCount: number;
     outCount: number;
     lastMessageAt: string | null;
-    /** `day` = chỉ biết ngày từ customer_activity_daily, chưa có timestamp gốc. */
-    lastMessagePrecision: 'day' | 'none';
+    /**
+     * `timestamp` = giờ gốc từ customer_interaction_summary; `day` = chỉ biết
+     * ngày từ customer_activity_daily; `none` = chưa có dữ liệu.
+     */
+    lastMessagePrecision: 'timestamp' | 'day' | 'none';
     isActive: boolean;
     lastVerifiedAt: string | null;
   };
@@ -61,14 +65,17 @@ const toIso = (value: Date | string | null | undefined): string | null => {
  *   - "Báo giá" = order_details status quoted/cared (chưa chốt) + orders.sale_by
  *     + meta_customer_id khớp customer_zalo.
  *
- * `lastMessageAt` hiện chỉ có độ chính xác NGÀY vì customer_activity_daily là
- * grain ngày. Muốn timestamp gốc cần bảng summary do Python ghi.
+ * `lastMessageAt` ưu tiên `customer_interaction_summary` (Python ghi timestamp
+ * gốc); nếu assignment chưa có dòng summary mới fallback về grain NGÀY của
+ * `customer_activity_daily` với `lastMessagePrecision='day'`.
  */
 @Injectable()
 export class KpiCustomerInteractionService {
   constructor(
     @InjectRepository(CustomerActivityDaily)
     private readonly activityRepo: Repository<CustomerActivityDaily>,
+    @InjectRepository(CustomerInteractionSummary)
+    private readonly summaryRepo: Repository<CustomerInteractionSummary>,
     @InjectRepository(CustomerZalo)
     private readonly customerZaloRepo: Repository<CustomerZalo>,
     @InjectRepository(CustomerAppointment)
@@ -92,6 +99,7 @@ export class KpiCustomerInteractionService {
     ];
 
     const activity = await this.loadActivity(assignmentIds, from, to);
+    const summaries = await this.loadSummaries(assignmentIds);
     const zaloState = await this.loadZaloState(assignmentIds);
     const appointments = await this.loadAppointments(
       saleId,
@@ -103,6 +111,7 @@ export class KpiCustomerInteractionService {
 
     for (const customer of customers) {
       const act = activity.get(customer.assignmentId);
+      const summary = summaries.get(customer.assignmentId);
       const zalo = zaloState.get(customer.assignmentId);
       const appointment = appointments.get(customer.customerCode);
       const quote = quotes.get(customer.assignmentId);
@@ -127,10 +136,16 @@ export class KpiCustomerInteractionService {
         zalo: {
           inCount,
           outCount,
-          lastMessageAt: act?.lastDate
-            ? `${act.lastDate}T00:00:00+07:00`
-            : null,
-          lastMessagePrecision: act?.lastDate ? 'day' : 'none',
+          lastMessageAt: summary?.last_message_at
+            ? toIso(summary.last_message_at)
+            : act?.lastDate
+              ? `${act.lastDate}T00:00:00+07:00`
+              : null,
+          lastMessagePrecision: summary?.last_message_at
+            ? 'timestamp'
+            : act?.lastDate
+              ? 'day'
+              : 'none',
           isActive: zalo?.isActive ?? false,
           lastVerifiedAt: toIso(zalo?.lastVerifiedAt),
         },
@@ -186,6 +201,20 @@ export class KpiCustomerInteractionService {
           lastDate: row.lastDate ?? null,
         });
       }
+    }
+    return result;
+  }
+
+  private async loadSummaries(
+    assignmentIds: number[],
+  ): Promise<Map<number, CustomerInteractionSummary>> {
+    const result = new Map<number, CustomerInteractionSummary>();
+    for (let i = 0; i < assignmentIds.length; i += 1000) {
+      const chunk = assignmentIds.slice(i, i + 1000);
+      const rows = await this.summaryRepo.find({
+        where: { assignment_id: In(chunk) },
+      });
+      for (const row of rows) result.set(row.assignment_id, row);
     }
     return result;
   }

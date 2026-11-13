@@ -54,6 +54,9 @@ export class KpiAppealsController {
         period: query.period,
         saleId: query.saleId,
         status: query.status ? (query.status as KpiAppealStatus) : undefined,
+        search: query.search,
+        page: query.page,
+        limit: query.limit,
       },
       req.user,
     );
