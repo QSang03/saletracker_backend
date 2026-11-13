@@ -35,14 +35,14 @@ import {
   KpiCustomerInteractionService,
 } from './kpi-customer-interaction.service';
 import {
-  MONEY_SORT_KEYS,
-  isRevenueCriterionKey,
-  maskCustomer,
-  maskRevenueObject,
-  maskSaleCriteria,
-  maskSaleData,
+  ABSOLUTE_MONEY_SORT_KEYS,
+  maskCustomerPercent,
+  maskRevenueObjectPercent,
+  maskSaleCriteriaPercent,
+  maskSaleDataPercent,
   maskSuggestions,
 } from './kpi-mask.helper';
+import { KpiRevenueViewService } from './kpi-revenue-view.service';
 import { diffDateStr, shiftDateStr, vnToday } from './vn-date';
 import {
   ActivityDayRow,
@@ -276,6 +276,7 @@ export class CustomerKpiReportsService {
     private readonly kpiScope: KpiScopeService,
     private readonly slaService: KpiSlaService,
     private readonly interactionService: KpiCustomerInteractionService,
+    private readonly revenueView: KpiRevenueViewService,
   ) {}
 
   /**
@@ -1999,14 +2000,7 @@ export class CustomerKpiReportsService {
       .trim()
       .toLowerCase();
     const filters = this.parseOverviewFilters(query);
-    // Chỉ khi phạm vi đúng là của chính viewer mới coi là self; còn lại
-    // (manager/pm/view/admin hoặc xem sale khác) là outcome.
-    const outcome = !this.kpiScope.isSelf(user, query.saleId);
-    if (outcome && filters.minRatio !== undefined) {
-      throw new BadRequestException(
-        'Không hỗ trợ lọc theo % đạt khi xem sale khác — chỉ dùng status',
-      );
-    }
+    const revenueView = await this.revenueView.getMode();
 
     // Tập sale đang xem = trong phạm vi (hoặc đúng `saleId`) và khớp `search`.
     // Cả `summary`, `groups` lẫn `company` đều tính trên tập này.
@@ -2040,20 +2034,16 @@ export class CustomerKpiReportsService {
       inView.length > 0 &&
       inView.every((sale) => this.kpiScope.isSelf(user, sale.saleId));
     let hasSelf = false;
+    const percent = !onlySelf && revenueView === 'percent';
     for (const sale of sales) {
       const self = this.kpiScope.isSelf(user, sale.saleId);
       (sale as any).visibility = self ? 'self' : 'outcome';
       if (self) hasSelf = true;
-      else maskSaleData(sale);
+      else if (percent) maskSaleDataPercent(sale);
     }
-    if (!onlySelf) {
-      for (const group of groups) maskRevenueObject(group);
-      maskRevenueObject(company);
-      // avgActualValue của tiêu chí doanh số = % đạt bình quân → cũng là
-      // thông tin suy ra từ doanh thu.
-      for (const item of summary) {
-        if (isRevenueCriterionKey(item.key)) item.avgActualValue = null;
-      }
+    if (percent) {
+      for (const group of groups) maskRevenueObjectPercent(group);
+      maskRevenueObjectPercent(company);
     }
 
     return {
@@ -2066,6 +2056,7 @@ export class CustomerKpiReportsService {
       // Ngày dữ liệu hoạt động mới nhất — FE hiện độ tươi dữ liệu
       dataThrough: dataThrough ?? null,
       visibility: onlySelf ? 'self' : hasSelf ? 'mixed' : 'outcome',
+      revenueView,
       summary,
       sales,
       groups,
@@ -2314,7 +2305,9 @@ export class CustomerKpiReportsService {
     // Chính sale xem của mình → full; mọi role khác (manager/pm/view/admin)
     // chỉ thấy đạt/không đạt, không thấy số tiền.
     const outcome = !this.kpiScope.isSelf(user, query.saleId);
-    if (outcome) this.assertOutcomeCustomerFilters(filters);
+    const revenueView = await this.revenueView.getMode();
+    const percent = outcome && revenueView === 'percent';
+    if (percent) this.assertOutcomeCustomerFilters(filters);
     // Công nợ chỉ nạp khi bộ lọc/sắp xếp cần — chấm điểm tự lo phần còn lại
     const needsDebt =
       filters.minDebt !== undefined ||
@@ -2477,10 +2470,10 @@ export class CustomerKpiReportsService {
       revenue: this.saleRevenueRow(entry),
       customers: paged,
     };
-    if (outcome) {
-      maskSaleCriteria(sale.criteria);
-      maskRevenueObject(sale.revenue);
-      for (const customer of sale.customers) maskCustomer(customer);
+    if (percent) {
+      maskSaleCriteriaPercent(sale.criteria);
+      maskRevenueObjectPercent(sale.revenue);
+      for (const customer of sale.customers) maskCustomerPercent(customer);
     }
     return {
       from: window.from,
@@ -2491,6 +2484,7 @@ export class CustomerKpiReportsService {
       // Ngày dữ liệu hoạt động mới nhất — FE hiện độ tươi dữ liệu
       dataThrough: dataThrough ?? null,
       visibility: outcome ? 'outcome' : 'self',
+      revenueView,
       page,
       pageSize,
       total,
@@ -2623,28 +2617,23 @@ export class CustomerKpiReportsService {
   }
 
   /**
-   * Chặn bộ lọc/sắp xếp có thể suy ra doanh thu/công nợ khi xem sale khác.
-   * `status` pass/fail vẫn cho phép — chỉ là kết luận, không phải con số.
+   * Chặn bộ lọc/sắp xếp theo số tiền TUYỆT ĐỐI ở chế độ percent.
+   * `minRatio` và sort theo tiêu chí doanh số vẫn cho phép vì chỉ là %.
    */
   private assertOutcomeCustomerFilters(filters: KpiCustomerFilters) {
     if (filters.minRevenue !== undefined) {
       throw new BadRequestException(
-        'Không hỗ trợ lọc theo doanh thu khi xem sale khác',
+        'Không hỗ trợ lọc theo doanh thu tuyệt đối khi chỉ xem %',
       );
     }
     if (filters.minDebt !== undefined || filters.hasDebt !== undefined) {
       throw new BadRequestException(
-        'Không hỗ trợ lọc theo công nợ khi xem sale khác',
+        'Không hỗ trợ lọc theo công nợ tuyệt đối khi chỉ xem %',
       );
     }
-    if (filters.minRatio !== undefined) {
+    if (filters.sortBy && ABSOLUTE_MONEY_SORT_KEYS.has(filters.sortBy)) {
       throw new BadRequestException(
-        'Không hỗ trợ lọc theo % đạt khi xem sale khác — chỉ dùng status',
-      );
-    }
-    if (filters.sortBy && MONEY_SORT_KEYS.has(filters.sortBy)) {
-      throw new BadRequestException(
-        'Không hỗ trợ sắp xếp theo doanh thu/công nợ khi xem sale khác',
+        'Không hỗ trợ sắp xếp theo công nợ tuyệt đối khi chỉ xem %',
       );
     }
   }
@@ -2689,13 +2678,15 @@ export class CustomerKpiReportsService {
   async suggestions(saleId: number | undefined, user: any) {
     const userIds = await this.scopeUserIds(user);
     const result: any = await this.buildSuggestions(saleId, userIds);
-    // Doanh thu trong gợi ý chỉ trả cho chính sale đó.
-    maskSuggestions(result, Number(user?.id));
+    const revenueView = await this.revenueView.getMode();
+    // Doanh thu trong gợi ý chỉ trả đầy đủ ở chế độ full; percent thì null.
+    maskSuggestions(result, Number(user?.id), revenueView);
     const onlySelf = (result.sales ?? []).every(
       (sale: any) => Number(sale.saleId) === Number(user?.id),
     );
     result.visibility = onlySelf ? 'self' : 'outcome';
-    result.masked = !onlySelf;
+    result.revenueView = revenueView;
+    result.masked = !onlySelf && revenueView === 'percent';
     return result;
   }
 

@@ -41,10 +41,12 @@ import {
 } from './kpi-sale-directory.service';
 import { WorkingDaysService } from './working-days.service';
 import {
+  RevenueViewMode,
   maskDailyTracking,
-  maskMonthlyRow,
+  maskMonthlySalary,
   maskQuarterRow,
 } from './kpi-mask.helper';
+import { KpiRevenueViewService } from './kpi-revenue-view.service';
 import { shiftDateStr, vnToday } from './vn-date';
 
 const DEFAULT_COVERAGE_RATE = 60;
@@ -107,6 +109,7 @@ export class KpiCoverageService {
     private readonly scope: KpiScopeService,
     private readonly saleDirectory: KpiSaleDirectoryService,
     private readonly workingDays: WorkingDaysService,
+    private readonly revenueView: KpiRevenueViewService,
   ) {}
 
   // --------------------------------------------------------------- helpers
@@ -366,21 +369,22 @@ export class KpiCoverageService {
       ...row,
       visibility: self ? 'self' : 'outcome',
     };
-    if (!self) maskMonthlyRow(result);
+    if (!self) maskMonthlySalary(result);
     return result;
   }
 
-  /** Quyết toán quý: mask target/actual/bonus/clawback/snapshot với người khác. */
+  /** Quyết toán quý: lương luôn mask; doanh số theo công tắc full/percent. */
   private quarterRowForView<T extends { sale_id: number }>(
     row: T,
     user: KpiUser,
+    mode: RevenueViewMode,
   ): T {
     const self = this.scope.isSelf(user, row.sale_id);
     const result: T & { visibility: 'self' | 'outcome' } = {
       ...row,
       visibility: self ? 'self' : 'outcome',
     };
-    if (!self) maskQuarterRow(result);
+    if (!self) maskQuarterRow(result, mode);
     return result;
   }
 
@@ -652,8 +656,10 @@ export class KpiCoverageService {
     const infos = await this.saleDirectory.loadSaleInfos(
       rows.map((row) => row.sale_id),
     );
+    const revenueView = await this.revenueView.getMode();
     return {
       quarter,
+      revenueView,
       results: rows.map((row) =>
         this.quarterRowForView(
           {
@@ -661,6 +667,7 @@ export class KpiCoverageService {
             saleName: infos.get(row.sale_id)?.fullName ?? null,
           },
           user,
+          revenueView,
         ),
       ),
     };
@@ -717,6 +724,7 @@ export class KpiCoverageService {
     const toSave: KpiQuarterlySettlement[] = [];
     const savedMeta: number[] = [];
     const results: any[] = [];
+    const revenueView = await this.revenueView.getMode();
     for (const saleId of saleIds) {
       const result = computed.get(saleId);
       if (!result) continue;
@@ -731,6 +739,7 @@ export class KpiCoverageService {
                 skipped: true,
               },
               options.user,
+              revenueView,
             ),
           );
           continue;
@@ -804,6 +813,7 @@ export class KpiCoverageService {
               skipped: false,
             },
             options.user,
+            revenueView,
           ),
         );
       }
@@ -811,7 +821,7 @@ export class KpiCoverageService {
     this.logger.log(
       `KPI ${quarter.label}: tính ${toSave.length}/${saleIds.length} sale`,
     );
-    return { quarter, results };
+    return { quarter, revenueView, results };
   }
 
   async finalizeQuarterSettlement(
@@ -840,9 +850,11 @@ export class KpiCoverageService {
     settlement.is_final = true;
     settlement.finalized_at = new Date();
     settlement.finalized_by = user?.id ?? null;
+    const revenueView = await this.revenueView.getMode();
     return this.quarterRowForView(
       await this.quarterRepo.save(settlement),
       user,
+      revenueView,
     );
   }
 
@@ -882,9 +894,11 @@ export class KpiCoverageService {
     settlement.is_final = false;
     settlement.finalized_at = null;
     settlement.finalized_by = null;
+    const revenueView = await this.revenueView.getMode();
     return this.quarterRowForView(
       await this.quarterRepo.save(settlement),
       user,
+      revenueView,
     );
   }
 
@@ -986,6 +1000,8 @@ export class KpiCoverageService {
       status = 'on_track';
     }
 
+    const self = this.scope.isSelf(query.user, saleId);
+    const revenueView = await this.revenueView.getMode();
     const response: Record<string, any> = {
       saleId,
       saleName: infos.get(saleId)?.fullName ?? null,
@@ -1005,11 +1021,11 @@ export class KpiCoverageService {
       targetSource: 'sale_revenue_target',
       actualSource: 'customer_revenue_daily',
       today,
-      visibility: this.scope.isSelf(query.user, saleId) ? 'self' : 'outcome',
+      visibility: self ? 'self' : 'outcome',
+      revenueView,
     };
-    if (!this.scope.isSelf(query.user, saleId)) {
-      maskDailyTracking(response);
-    }
+    // Thêm achievedPct; chỉ mask số tuyệt đối khi outcome + percent.
+    maskDailyTracking(response, self ? 'full' : revenueView);
     return response;
   }
 

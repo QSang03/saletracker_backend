@@ -22,6 +22,7 @@ import { CustomerActivityDaily } from './customer-activity-daily.entity';
 import { CustomerRevenueDaily } from './customer-revenue-daily.entity';
 import { KpiScopeService } from './kpi-scope.service';
 import { maskCustomerRevenue } from './kpi-mask.helper';
+import { KpiRevenueViewService } from './kpi-revenue-view.service';
 import { NkmSaleMap } from './nkm-sale-map.entity';
 import { CustomerRole } from './customer.entity';
 import { CustomerQueryDto } from './dto/customer-query.dto';
@@ -95,6 +96,7 @@ export class CustomersService {
     @InjectRepository(ApprovalRequestCustomerItem)
     private readonly approvalCustomerItemRepo: Repository<ApprovalRequestCustomerItem>,
     private readonly kpiScope: KpiScopeService,
+    private readonly revenueView: KpiRevenueViewService,
   ) {}
 
   /**
@@ -794,6 +796,8 @@ export class CustomersService {
       to,
     );
 
+    const self = this.kpiScope.isSelf(user, detail.sale?.id);
+    const revenueView = await this.revenueView.getMode();
     const result = {
       assignmentId,
       from,
@@ -802,13 +806,11 @@ export class CustomersService {
       activityDaily,
       revenueDaily,
       revenueTotal,
-      visibility: this.kpiScope.isSelf(user, detail.sale?.id)
-        ? 'self'
-        : 'outcome',
+      visibility: self ? 'self' : 'outcome',
+      revenueView,
     };
-    if (!this.kpiScope.isSelf(user, detail.sale?.id)) {
-      maskCustomerRevenue(result);
-    }
+    // Chỉ mask số tuyệt đối khi người khác xem và công tắc đang percent.
+    maskCustomerRevenue(result, self ? 'full' : revenueView);
     return result;
   }
 

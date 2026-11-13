@@ -294,3 +294,13 @@ export class ReviewKpiAppealDto {
   @IsString()
   reviewNote?: string;
 }
+
+/**
+ * PATCH /customer-kpi-reports/settings/revenue-visibility
+ * `true` = xem số doanh số (full, mặc định); `false` = chỉ xem %.
+ * Không ảnh hưởng lương/thưởng — luôn bị mask với người khác.
+ */
+export class SetRevenueVisibilityDto {
+  @IsBoolean()
+  enabled: boolean;
+}

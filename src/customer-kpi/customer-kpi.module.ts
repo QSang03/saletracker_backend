@@ -67,6 +67,7 @@ import { KpiScopeService } from './kpi-scope.service';
 import { WorkingDaysService } from './working-days.service';
 import { KpiSaleDirectoryService } from './kpi-sale-directory.service';
 import { KpiCustomerNamesService } from './kpi-customer-names.service';
+import { KpiRevenueViewService } from './kpi-revenue-view.service';
 import { KpiCoverageService } from './kpi-coverage.service';
 import { KpiCoverageCronjob } from './kpi-coverage.cronjob';
 import { KpiCareFunnelService } from './kpi-care-funnel.service';
@@ -161,6 +162,7 @@ import { KpiCustomerInteractionService } from './kpi-customer-interaction.servic
     WorkingDaysService,
     KpiSaleDirectoryService,
     KpiCustomerNamesService,
+    KpiRevenueViewService,
     KpiCoverageService,
     KpiCoverageCronjob,
     KpiCareFunnelService,

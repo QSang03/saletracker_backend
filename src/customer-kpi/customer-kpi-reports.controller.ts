@@ -35,7 +35,9 @@ import {
   KpiSlaSummaryQueryDto,
   ReopenQuarterDto,
   SetMonthlyBonusDto,
+  SetRevenueVisibilityDto,
 } from './dto/kpi-coverage.dto';
+import { KpiRevenueViewService } from './kpi-revenue-view.service';
 import { shiftDateStr, vnToday } from './vn-date';
 
 /**
@@ -58,6 +60,7 @@ export class CustomerKpiReportsController {
     private readonly coverageService: KpiCoverageService,
     private readonly careFunnelService: KpiCareFunnelService,
     private readonly slaService: KpiSlaService,
+    private readonly revenueViewService: KpiRevenueViewService,
   ) {}
 
   private normalizeRange(from?: string, to?: string) {
@@ -69,6 +72,27 @@ export class CustomerKpiReportsController {
         : shiftDateStr(today, -30),
       to: /^\d{4}-\d{2}-\d{2}$/.test(to ?? '') ? (to as string) : today,
     };
+  }
+
+  /**
+   * Công tắc xem doanh số của sale khác.
+   * - enabled = true (mặc định): xem số doanh số/doanh thu.
+   * - enabled = false: chỉ xem %.
+   * Lương/thưởng luôn bị mask, không phụ thuộc công tắc.
+   */
+  @Get('settings/revenue-visibility')
+  @Permission('khach-hang', 'read')
+  getRevenueVisibility() {
+    return this.revenueViewService.getSettings();
+  }
+
+  @Patch('settings/revenue-visibility')
+  @Permission('khach-hang', 'update')
+  setRevenueVisibility(
+    @Body() dto: SetRevenueVisibilityDto,
+    @Req() req: { user: KpiUser },
+  ) {
+    return this.revenueViewService.setEnabled(dto.enabled, req.user);
   }
 
   @Get('overview')

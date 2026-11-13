@@ -16,9 +16,9 @@ import { WorkingDaysService } from '../src/customer-kpi/working-days.service';
 import {
   maskCustomerRevenue,
   maskDailyTracking,
-  maskMonthlyRow,
+  maskMonthlySalary,
   maskQuarterRow,
-  maskSaleData,
+  maskSaleDataPercent,
   maskSuggestions,
 } from '../src/customer-kpi/kpi-mask.helper';
 
@@ -257,16 +257,18 @@ const workingDays = new WorkingDaysService(fakeRepo);
       },
     ],
   };
-  maskSaleData(sale);
-  assert.equal(sale.criteria[0].actualValue, null);
+  maskSaleDataPercent(sale);
+  // percent: giữ % (actualValue/keySharePct/achievedPct), ẩn số tuyệt đối
+  assert.equal(sale.criteria[0].actualValue, 67.98);
   assert.equal(sale.criteria[0].numerator, null);
   assert.equal(sale.criteria[0].targetValue, null);
   assert.equal(sale.criteria[0].revenue.dsoKey, null);
-  assert.equal(sale.criteria[0].revenue.achievedPct, null);
+  assert.equal(sale.criteria[0].revenue.achievedPct, 7.51);
   assert.equal(sale.criteria[0].revenue.verdict, 'fail'); // kết luận giữ
   assert.equal(sale.criteria[0].revenue.keyCustomers.total, 42); // đếm giữ
   assert.equal(sale.criteria[1].status, 'pass');
   assert.equal(sale.revenue.dsoKey, null);
+  assert.equal(sale.revenue.achievedPct, 7.51);
   assert.equal(sale.customers[0].totals.revenue, null);
   assert.equal(sale.customers[0].totals.nkmQuantity, null);
   assert.equal(sale.customers[0].totals.orders, 1);
@@ -276,44 +278,64 @@ const workingDays = new WorkingDaysService(fakeRepo);
   assert.equal(sale.customers[0].criteria[0].actualValue, 1);
 
   const monthly: any = { sale_id: 1, bonus_amount: 5000000, n_key: 10 };
-  maskMonthlyRow(monthly);
+  maskMonthlySalary(monthly);
   assert.equal(monthly.bonus_amount, null);
   assert.equal(monthly.n_key, 10);
 
   const quarter: any = {
     sale_id: 1,
-    target_value: 1,
-    actual_revenue: 2,
+    target_value: 100,
+    actual_revenue: 90,
     monthly_bonus_total: 3,
     clawback_amount: 4,
     n_key: 10,
-    status: 'PASSED',
-    snapshot: { targetValue: 1 },
+    status: 'FAILED_REVENUE',
+    snapshot: { targetValue: 100 },
   };
-  maskQuarterRow(quarter);
+  maskQuarterRow(quarter, 'percent');
   assert.equal(quarter.target_value, null);
   assert.equal(quarter.actual_revenue, null);
   assert.equal(quarter.monthly_bonus_total, null);
   assert.equal(quarter.clawback_amount, null);
   assert.equal(quarter.snapshot, null);
+  assert.equal(quarter.achievedPct, 90);
   assert.equal(quarter.n_key, 10);
-  assert.equal(quarter.status, 'PASSED');
+  assert.equal(quarter.status, 'FAILED_REVENUE');
+
+  // full: doanh số hiện, lương vẫn ẩn
+  const quarterFull: any = {
+    sale_id: 1,
+    target_value: 100,
+    actual_revenue: 90,
+    monthly_bonus_total: 3,
+    clawback_amount: 4,
+    status: 'FAILED_REVENUE',
+    snapshot: { targetValue: 100 },
+  };
+  maskQuarterRow(quarterFull, 'full');
+  assert.equal(quarterFull.target_value, 100);
+  assert.equal(quarterFull.actual_revenue, 90);
+  assert.equal(quarterFull.monthly_bonus_total, null);
+  assert.equal(quarterFull.clawback_amount, null);
+  assert.equal(quarterFull.snapshot?.targetValue, 100);
+  assert.equal(quarterFull.achievedPct, 90);
 
   const daily: any = {
-    target: 1,
-    actual: 2,
-    remainingTarget: 3,
-    expectedToDate: 4,
+    target: 100,
+    actual: 90,
+    remainingTarget: 10,
+    expectedToDate: 80,
     dailyTarget: 5,
-    status: 'lagging',
+    status: 'ahead',
   };
-  maskDailyTracking(daily);
+  maskDailyTracking(daily, 'percent');
   assert.equal(daily.target, null);
   assert.equal(daily.actual, null);
   assert.equal(daily.remainingTarget, null);
   assert.equal(daily.expectedToDate, null);
   assert.equal(daily.dailyTarget, null);
-  assert.equal(daily.status, 'lagging');
+  assert.equal(daily.achievedPct, 90);
+  assert.equal(daily.status, 'ahead');
 
   const suggestions: any = {
     sales: [
@@ -327,7 +349,7 @@ const workingDays = new WorkingDaysService(fakeRepo);
       },
     ],
   };
-  maskSuggestions(suggestions, 1);
+  maskSuggestions(suggestions, 1, 'percent');
   assert.equal(suggestions.sales[0].suggestions[0].revenueCurrent, 10);
   assert.equal(suggestions.sales[1].suggestions[0].revenueCurrent, null);
 
@@ -336,12 +358,21 @@ const workingDays = new WorkingDaysService(fakeRepo);
     revenueTotal: { quantity: 2, lineTotal: 100, mapped: true },
     activityDaily: [{ revenue: 100 }],
   };
-  maskCustomerRevenue(revenue);
+  maskCustomerRevenue(revenue, 'percent');
   assert.equal(revenue.revenueDaily[0].quantity, null);
   assert.equal(revenue.revenueDaily[0].lineTotal, null);
   assert.equal(revenue.revenueTotal.lineTotal, null);
   assert.equal(revenue.revenueTotal.mapped, true);
   assert.equal(revenue.activityDaily[0].revenue, null);
+
+  // full: không mask doanh thu
+  const revenueFull: any = {
+    revenueDaily: [{ quantity: 2, lineTotal: 100 }],
+    revenueTotal: { quantity: 2, lineTotal: 100, mapped: true },
+  };
+  maskCustomerRevenue(revenueFull, 'full');
+  assert.equal(revenueFull.revenueDaily[0].lineTotal, 100);
+  assert.equal(revenueFull.revenueTotal.lineTotal, 100);
 
   console.log('✅ test-kpi-coverage: tất cả assertion đã pass');
 })().catch((error) => {

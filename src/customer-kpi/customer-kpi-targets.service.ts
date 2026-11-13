@@ -18,6 +18,7 @@ import {
 } from './approval-request.entity';
 import { ApprovalRequestTargetItem } from './approval-request-target-item.entity';
 import { isRevenueCriterionKey } from './kpi-mask.helper';
+import { KpiRevenueViewService } from './kpi-revenue-view.service';
 import { AssignKpiTargetsDto, KpiTargetQueryDto } from './dto/kpi-target.dto';
 
 const roleNames = (user: any): string[] =>
@@ -62,6 +63,7 @@ export class CustomerKpiTargetsService {
     private readonly requestRepo: Repository<ApprovalRequest>,
     @InjectRepository(ApprovalRequestTargetItem)
     private readonly targetItemRepo: Repository<ApprovalRequestTargetItem>,
+    private readonly revenueView: KpiRevenueViewService,
   ) {}
 
   /**
@@ -172,6 +174,7 @@ export class CustomerKpiTargetsService {
       : [];
     const customerMap = new Map(customers.map((c) => [c.id, c]));
 
+    const revenueView = await this.revenueView.getMode();
     const data = targets.map((t) => ({
       id: t.id,
       criterionKey: t.criterion_key,
@@ -183,8 +186,9 @@ export class CustomerKpiTargetsService {
         t.customer_id > 0
           ? (customerMap.get(t.customer_id)?.customer_code ?? null)
           : null,
-      // Chỉ tiêu tiền của sale khác không được lộ; chỉ tiêu ratio/đếm vẫn xem.
+      // Chỉ tiêu tiền tuyệt đối chỉ ẩn ở chế độ percent; full thì xem bình thường.
       targetValue:
+        revenueView === 'percent' &&
         Number(user?.id) !== Number(t.sale_id) &&
         isRevenueCriterionKey(t.criterion_key)
           ? null
@@ -193,7 +197,7 @@ export class CustomerKpiTargetsService {
       createdAt: t.created_at,
     }));
 
-    return { data, total, page, pageSize };
+    return { data, total, page, pageSize, revenueView };
   }
 
   /**

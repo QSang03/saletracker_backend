@@ -455,6 +455,15 @@ export class SeedService implements OnModuleInit {
           status: 1,
         },
         {
+          name: 'kpi_revenue_visibility',
+          display_name:
+            'Quyền xem doanh số của sale khác: full (mặc định) hoặc percent',
+          value: 'full',
+          type: 'string',
+          section: 'kpi',
+          status: 1,
+        },
+        {
           name: 'kpi_sla_rest_time',
           display_name: 'Chu kỳ quét SLA 2h KPI customer (giây)',
           value: '300',
@@ -579,6 +588,15 @@ export class SeedService implements OnModuleInit {
           display_name: 'Ngưỡng độ phủ khách KEY tối thiểu mỗi tháng (%)',
           value: '60',
           type: 'number',
+          section: 'kpi',
+          status: 1,
+        },
+        {
+          name: 'kpi_revenue_visibility',
+          display_name:
+            'Quyền xem doanh số của sale khác: full (mặc định) hoặc percent',
+          value: 'full',
+          type: 'string',
           section: 'kpi',
           status: 1,
         },
