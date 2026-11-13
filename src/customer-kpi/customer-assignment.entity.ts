@@ -28,6 +28,12 @@ export enum CustomerTier {
 }
 
 @Entity('customer_assignments')
+// Mỗi khách chỉ thuộc MỘT sale trong một phòng ban (quyết định #1/#2 của kế
+// hoạch KPI). Unique pair là ràng buộc thật; index triple bên dưới trở thành
+// dư thừa nhưng giữ lại để không phải drop index khi deploy.
+@Index('uq_assignment_customer_dept', ['customer_id', 'department_slug'], {
+  unique: true,
+})
 @Index(
   'uq_assignment_customer_sale_dept',
   ['customer_id', 'sale_id', 'department_slug'],
