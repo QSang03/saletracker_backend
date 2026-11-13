@@ -473,6 +473,36 @@ export class KpiCoverageService {
         periodMonth,
         range,
       );
+      // Tính lại một tháng đã chốt phải có audit: ai, khi nào, lý do, số cũ.
+      if (
+        existing &&
+        existing.status !== KpiMonthlyStatus.PENDING &&
+        (options.force || options.reason)
+      ) {
+        const snapshot = entity.snapshot ?? {};
+        const history: Array<Record<string, unknown>> = Array.isArray(
+          snapshot.recomputeHistory,
+        )
+          ? (snapshot.recomputeHistory as Array<Record<string, unknown>>)
+          : [];
+        const entry = {
+          at: new Date().toISOString(),
+          by: options.user?.id ?? null,
+          reason: options.reason ?? null,
+          previous: {
+            status: existing.status,
+            nKey: existing.n_key,
+            coveredKey: existing.covered_key,
+            coverageRate: existing.coverage_rate,
+            computedAt: existing.computed_at,
+          },
+        };
+        entity.snapshot = {
+          ...snapshot,
+          lastRecompute: entry,
+          recomputeHistory: [...history, entry].slice(-20),
+        };
+      }
       entity.computed_at = new Date();
       toSave.push(entity);
       savedMeta.push(saleId);
@@ -677,6 +707,7 @@ export class KpiCoverageService {
         keyCoverageRate: result.keyCoverageRate,
         monthlyBonusMonths: bonus.months,
         computeNote: options.reason ?? null,
+        computeBy: options.user?.id ?? null,
         computedAt: new Date().toISOString(),
       };
       entity.computed_at = new Date();
