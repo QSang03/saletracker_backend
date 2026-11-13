@@ -1,4 +1,8 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import * as ExcelJS from 'exceljs';
@@ -30,6 +34,15 @@ import {
   CustomerInteractionInput,
   KpiCustomerInteractionService,
 } from './kpi-customer-interaction.service';
+import {
+  MONEY_SORT_KEYS,
+  isRevenueCriterionKey,
+  maskCustomer,
+  maskRevenueObject,
+  maskSaleCriteria,
+  maskSaleData,
+  maskSuggestions,
+} from './kpi-mask.helper';
 import { diffDateStr, shiftDateStr, vnToday } from './vn-date';
 import {
   ActivityDayRow,
@@ -1986,6 +1999,14 @@ export class CustomerKpiReportsService {
       .trim()
       .toLowerCase();
     const filters = this.parseOverviewFilters(query);
+    // Chỉ khi phạm vi đúng là của chính viewer mới coi là self; còn lại
+    // (manager/pm/view/admin hoặc xem sale khác) là outcome.
+    const outcome = !this.kpiScope.isSelf(user, query.saleId);
+    if (outcome && filters.minRatio !== undefined) {
+      throw new BadRequestException(
+        'Không hỗ trợ lọc theo % đạt khi xem sale khác — chỉ dùng status',
+      );
+    }
 
     // Tập sale đang xem = trong phạm vi (hoặc đúng `saleId`) và khớp `search`.
     // Cả `summary`, `groups` lẫn `company` đều tính trên tập này.
@@ -2012,6 +2033,28 @@ export class CustomerKpiReportsService {
     // `company` cũng tính trên tập đầy đủ vì đây là số liệu tổng quan.
     const summary = summarizeKpiSales(inView.map((sale) => sale.criteria));
     const { groups, company } = await this.rollupGroups(inView, window);
+    const sales = filterKpiSales(inView, filters);
+
+    // Chỉ full số khi toàn bộ phạm vi là chính viewer; còn lại mask tiền.
+    const onlySelf =
+      inView.length > 0 &&
+      inView.every((sale) => this.kpiScope.isSelf(user, sale.saleId));
+    let hasSelf = false;
+    for (const sale of sales) {
+      const self = this.kpiScope.isSelf(user, sale.saleId);
+      (sale as any).visibility = self ? 'self' : 'outcome';
+      if (self) hasSelf = true;
+      else maskSaleData(sale);
+    }
+    if (!onlySelf) {
+      for (const group of groups) maskRevenueObject(group);
+      maskRevenueObject(company);
+      // avgActualValue của tiêu chí doanh số = % đạt bình quân → cũng là
+      // thông tin suy ra từ doanh thu.
+      for (const item of summary) {
+        if (isRevenueCriterionKey(item.key)) item.avgActualValue = null;
+      }
+    }
 
     return {
       from: window.from,
@@ -2022,8 +2065,9 @@ export class CustomerKpiReportsService {
       provisionalDates: revenue?.provisionalDates ?? [],
       // Ngày dữ liệu hoạt động mới nhất — FE hiện độ tươi dữ liệu
       dataThrough: dataThrough ?? null,
+      visibility: onlySelf ? 'self' : hasSelf ? 'mixed' : 'outcome',
       summary,
-      sales: filterKpiSales(inView, filters),
+      sales,
       groups,
       company,
     };
@@ -2267,6 +2311,10 @@ export class CustomerKpiReportsService {
     const page = Math.max(1, Number(query.page) || 1);
     const pageSize = Math.min(200, Math.max(1, Number(query.pageSize) || 100));
     const filters = this.parseCustomerFilters(query);
+    // Chính sale xem của mình → full; mọi role khác (manager/pm/view/admin)
+    // chỉ thấy đạt/không đạt, không thấy số tiền.
+    const outcome = !this.kpiScope.isSelf(user, query.saleId);
+    if (outcome) this.assertOutcomeCustomerFilters(filters);
     // Công nợ chỉ nạp khi bộ lọc/sắp xếp cần — chấm điểm tự lo phần còn lại
     const needsDebt =
       filters.minDebt !== undefined ||
@@ -2420,6 +2468,20 @@ export class CustomerKpiReportsService {
       };
     });
 
+    const sale = {
+      saleId: query.saleId,
+      saleName: entry.saleName,
+      zaloLinked: entry.zaloLinked,
+      visibility: outcome ? 'outcome' : 'self',
+      criteria: entry.criteria,
+      revenue: this.saleRevenueRow(entry),
+      customers: paged,
+    };
+    if (outcome) {
+      maskSaleCriteria(sale.criteria);
+      maskRevenueObject(sale.revenue);
+      for (const customer of sale.customers) maskCustomer(customer);
+    }
     return {
       from: window.from,
       to: window.to,
@@ -2428,19 +2490,11 @@ export class CustomerKpiReportsService {
       provisionalDates: revenue?.provisionalDates ?? [],
       // Ngày dữ liệu hoạt động mới nhất — FE hiện độ tươi dữ liệu
       dataThrough: dataThrough ?? null,
+      visibility: outcome ? 'outcome' : 'self',
       page,
       pageSize,
       total,
-      sales: [
-        {
-          saleId: query.saleId,
-          saleName: entry.saleName,
-          zaloLinked: entry.zaloLinked,
-          criteria: entry.criteria,
-          revenue: this.saleRevenueRow(entry),
-          customers: paged,
-        },
-      ],
+      sales: [sale],
     };
   }
 
@@ -2568,6 +2622,33 @@ export class CustomerKpiReportsService {
     }
   }
 
+  /**
+   * Chặn bộ lọc/sắp xếp có thể suy ra doanh thu/công nợ khi xem sale khác.
+   * `status` pass/fail vẫn cho phép — chỉ là kết luận, không phải con số.
+   */
+  private assertOutcomeCustomerFilters(filters: KpiCustomerFilters) {
+    if (filters.minRevenue !== undefined) {
+      throw new BadRequestException(
+        'Không hỗ trợ lọc theo doanh thu khi xem sale khác',
+      );
+    }
+    if (filters.minDebt !== undefined || filters.hasDebt !== undefined) {
+      throw new BadRequestException(
+        'Không hỗ trợ lọc theo công nợ khi xem sale khác',
+      );
+    }
+    if (filters.minRatio !== undefined) {
+      throw new BadRequestException(
+        'Không hỗ trợ lọc theo % đạt khi xem sale khác — chỉ dùng status',
+      );
+    }
+    if (filters.sortBy && MONEY_SORT_KEYS.has(filters.sortBy)) {
+      throw new BadRequestException(
+        'Không hỗ trợ sắp xếp theo doanh thu/công nợ khi xem sale khác',
+      );
+    }
+  }
+
   private assertCriterionFilters(
     filters: KpiCustomerFilters,
     criterionKeys: string[],
@@ -2607,7 +2688,15 @@ export class CustomerKpiReportsService {
    */
   async suggestions(saleId: number | undefined, user: any) {
     const userIds = await this.scopeUserIds(user);
-    return this.buildSuggestions(saleId, userIds);
+    const result: any = await this.buildSuggestions(saleId, userIds);
+    // Doanh thu trong gợi ý chỉ trả cho chính sale đó.
+    maskSuggestions(result, Number(user?.id));
+    const onlySelf = (result.sales ?? []).every(
+      (sale: any) => Number(sale.saleId) === Number(user?.id),
+    );
+    result.visibility = onlySelf ? 'self' : 'outcome';
+    result.masked = !onlySelf;
+    return result;
   }
 
   /**
@@ -2923,6 +3012,13 @@ export class CustomerKpiReportsService {
       window.quarter,
     );
     const saleRows = [...scored.entries()].sort((a, b) => a[0] - b[0]);
+    // Export chứa doanh số/thưởng: chỉ cho phép khi toàn bộ phạm vi là chính
+    // người xuất (sale tự xuất báo cáo của mình). Manager/admin/pm/view → 403.
+    if (saleRows.some(([saleId]) => !this.kpiScope.isSelf(user, saleId))) {
+      throw new ForbiddenException(
+        'Chỉ được xuất báo cáo KPI cho chính mình — dữ liệu doanh số của sale khác được bảo mật',
+      );
+    }
     const { from, to } = window;
 
     const wb = new ExcelJS.Workbook();

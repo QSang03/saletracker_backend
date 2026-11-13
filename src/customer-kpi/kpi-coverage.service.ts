@@ -40,6 +40,11 @@ import {
   KpiSaleInfo,
 } from './kpi-sale-directory.service';
 import { WorkingDaysService } from './working-days.service';
+import {
+  maskDailyTracking,
+  maskMonthlyRow,
+  maskQuarterRow,
+} from './kpi-mask.helper';
 import { shiftDateStr, vnToday } from './vn-date';
 
 const DEFAULT_COVERAGE_RATE = 60;
@@ -118,6 +123,18 @@ export class KpiCoverageService {
     if (!this.scope.isAdminOrPm(user)) {
       throw new ForbiddenException(
         'Chỉ admin / pm-khach-hang được chốt hoặc mở lại quý',
+      );
+    }
+  }
+
+  /**
+   * Nhập thưởng tháng là write-only: không role nào được đọc lại số thưởng
+   * của sale khác (kể cả admin/pm). Chỉ admin được ghi.
+   */
+  private requireSalaryWriter(user: KpiUser): void {
+    if (!this.scope.roleNames(user).includes('admin')) {
+      throw new ForbiddenException(
+        'Chỉ admin được nhập thưởng tháng (write-only)',
       );
     }
   }
@@ -336,6 +353,37 @@ export class KpiCoverageService {
 
   // ------------------------------------------------------------- monthly
 
+  /**
+   * Chỉ chính sale của dòng mới thấy `bonus_amount`; mọi role khác (kể cả
+   * admin/pm/manager) nhận `null`.
+   */
+  private monthlyRowForView<T extends { sale_id: number }>(
+    row: T,
+    user: KpiUser,
+  ): T {
+    const self = this.scope.isSelf(user, row.sale_id);
+    const result: T & { visibility: 'self' | 'outcome' } = {
+      ...row,
+      visibility: self ? 'self' : 'outcome',
+    };
+    if (!self) maskMonthlyRow(result);
+    return result;
+  }
+
+  /** Quyết toán quý: mask target/actual/bonus/clawback/snapshot với người khác. */
+  private quarterRowForView<T extends { sale_id: number }>(
+    row: T,
+    user: KpiUser,
+  ): T {
+    const self = this.scope.isSelf(user, row.sale_id);
+    const result: T & { visibility: 'self' | 'outcome' } = {
+      ...row,
+      visibility: self ? 'self' : 'outcome',
+    };
+    if (!self) maskQuarterRow(result);
+    return result;
+  }
+
   async listMonthlyResults(
     query: { period?: string; saleId?: number },
     user: KpiUser,
@@ -365,10 +413,15 @@ export class KpiCoverageService {
     );
     return {
       periodMonth,
-      results: rows.map((row) => ({
-        ...row,
-        saleName: infos.get(row.sale_id)?.fullName ?? null,
-      })),
+      results: rows.map((row) =>
+        this.monthlyRowForView(
+          {
+            ...row,
+            saleName: infos.get(row.sale_id)?.fullName ?? null,
+          },
+          user,
+        ),
+      ),
     };
   }
 
@@ -376,17 +429,12 @@ export class KpiCoverageService {
     id: number,
     body: { bonusAmount: number; reason?: string },
     user: KpiUser,
-  ): Promise<KpiMonthlyResult> {
-    this.requireWriter(user);
+  ): Promise<any> {
+    this.requireSalaryWriter(user);
     const row = await this.monthlyRepo.findOne({ where: { id } });
     if (!row) {
       throw new NotFoundException('Không tìm thấy kết quả KPI tháng');
     }
-    // Manager chỉ được nhập thưởng cho sale trong phòng mình.
-    this.scope.assertSaleInScope(
-      row.sale_id,
-      await this.scope.scopeUserIds(user),
-    );
     row.bonus_amount = round2(Number(body.bonusAmount) || 0);
     const snapshot = row.snapshot ?? {};
     row.snapshot = {
@@ -395,7 +443,12 @@ export class KpiCoverageService {
       bonusUpdatedBy: user.id ?? null,
       bonusNote: body.reason ?? null,
     };
-    return this.monthlyRepo.save(row);
+    await this.monthlyRepo.save(row);
+    // Write-only: không trả lại số thưởng để tránh lộ lương qua response.
+    this.logger.log(
+      `KPI tháng ${row.period_month}: cập nhật thưởng sale ${row.sale_id} bởi user ${user.id ?? 0}`,
+    );
+    return { id: row.id, updated: true };
   }
 
   async computeMonthlyResults(options: ComputeMonthlyOptions): Promise<any> {
@@ -449,11 +502,16 @@ export class KpiCoverageService {
         !options.force &&
         !options.reason;
       if (skipped) {
-        results.push({
-          ...existing,
-          saleName: infos.get(saleId)?.fullName ?? null,
-          skipped: true,
-        });
+        results.push(
+          this.monthlyRowForView(
+            {
+              ...existing,
+              saleName: infos.get(saleId)?.fullName ?? null,
+              skipped: true,
+            },
+            options.user,
+          ),
+        );
         continue;
       }
 
@@ -516,11 +574,16 @@ export class KpiCoverageService {
       for (const saleId of savedMeta) {
         const entity = savedBySale.get(saleId);
         if (!entity) continue;
-        results.push({
-          ...entity,
-          saleName: infos.get(saleId)?.fullName ?? null,
-          skipped: false,
-        });
+        results.push(
+          this.monthlyRowForView(
+            {
+              ...entity,
+              saleName: infos.get(saleId)?.fullName ?? null,
+              skipped: false,
+            },
+            options.user,
+          ),
+        );
       }
     }
     this.logger.log(
@@ -591,10 +654,15 @@ export class KpiCoverageService {
     );
     return {
       quarter,
-      results: rows.map((row) => ({
-        ...row,
-        saleName: infos.get(row.sale_id)?.fullName ?? null,
-      })),
+      results: rows.map((row) =>
+        this.quarterRowForView(
+          {
+            ...row,
+            saleName: infos.get(row.sale_id)?.fullName ?? null,
+          },
+          user,
+        ),
+      ),
     };
   }
 
@@ -655,11 +723,16 @@ export class KpiCoverageService {
       const existing = existingBySale.get(saleId);
       if (existing?.is_final) {
         if (options.skipFinalized) {
-          results.push({
-            ...existing,
-            saleName: infos.get(saleId)?.fullName ?? null,
-            skipped: true,
-          });
+          results.push(
+            this.quarterRowForView(
+              {
+                ...existing,
+                saleName: infos.get(saleId)?.fullName ?? null,
+                skipped: true,
+              },
+              options.user,
+            ),
+          );
           continue;
         }
         throw new BadRequestException(
@@ -723,11 +796,16 @@ export class KpiCoverageService {
       for (const saleId of savedMeta) {
         const entity = savedBySale.get(saleId);
         if (!entity) continue;
-        results.push({
-          ...entity,
-          saleName: infos.get(saleId)?.fullName ?? null,
-          skipped: false,
-        });
+        results.push(
+          this.quarterRowForView(
+            {
+              ...entity,
+              saleName: infos.get(saleId)?.fullName ?? null,
+              skipped: false,
+            },
+            options.user,
+          ),
+        );
       }
     }
     this.logger.log(
@@ -762,7 +840,10 @@ export class KpiCoverageService {
     settlement.is_final = true;
     settlement.finalized_at = new Date();
     settlement.finalized_by = user?.id ?? null;
-    return this.quarterRepo.save(settlement);
+    return this.quarterRowForView(
+      await this.quarterRepo.save(settlement),
+      user,
+    );
   }
 
   async reopenQuarterSettlement(
@@ -801,7 +882,10 @@ export class KpiCoverageService {
     settlement.is_final = false;
     settlement.finalized_at = null;
     settlement.finalized_by = null;
-    return this.quarterRepo.save(settlement);
+    return this.quarterRowForView(
+      await this.quarterRepo.save(settlement),
+      user,
+    );
   }
 
   // -------------------------------------------------------- daily tracking
@@ -902,7 +986,7 @@ export class KpiCoverageService {
       status = 'on_track';
     }
 
-    return {
+    const response: Record<string, any> = {
       saleId,
       saleName: infos.get(saleId)?.fullName ?? null,
       slpCodes,
@@ -921,7 +1005,12 @@ export class KpiCoverageService {
       targetSource: 'sale_revenue_target',
       actualSource: 'customer_revenue_daily',
       today,
+      visibility: this.scope.isSelf(query.user, saleId) ? 'self' : 'outcome',
     };
+    if (!this.scope.isSelf(query.user, saleId)) {
+      maskDailyTracking(response);
+    }
+    return response;
   }
 
   // ---------------------------------------------------------------- cron

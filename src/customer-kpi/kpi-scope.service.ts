@@ -46,6 +46,20 @@ export class KpiScopeService {
     return roles.includes('admin') || roles.includes('pm-khach-hang');
   }
 
+  /** Viewer có phải chính sale của dòng dữ liệu không (view `self`). */
+  isSelf(
+    user: KpiUser | null | undefined,
+    saleId: number | null | undefined,
+  ): boolean {
+    return (
+      user?.id !== undefined &&
+      user?.id !== null &&
+      saleId !== undefined &&
+      saleId !== null &&
+      Number(user.id) === Number(saleId)
+    );
+  }
+
   /** Quản lý phòng ban (`manager-<slug>`) — chỉ thấy người trong phòng có server_ip. */
   isManager(user: KpiUser | null | undefined): boolean {
     return this.roleNames(user).some((role) => role.startsWith('manager-'));

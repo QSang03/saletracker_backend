@@ -21,6 +21,7 @@ import { CustomerResponseDaily } from './customer-response-daily.entity';
 import { CustomerActivityDaily } from './customer-activity-daily.entity';
 import { CustomerRevenueDaily } from './customer-revenue-daily.entity';
 import { KpiScopeService } from './kpi-scope.service';
+import { maskCustomerRevenue } from './kpi-mask.helper';
 import { NkmSaleMap } from './nkm-sale-map.entity';
 import { CustomerRole } from './customer.entity';
 import { CustomerQueryDto } from './dto/customer-query.dto';
@@ -793,7 +794,7 @@ export class CustomersService {
       to,
     );
 
-    return {
+    const result = {
       assignmentId,
       from,
       to,
@@ -801,7 +802,14 @@ export class CustomersService {
       activityDaily,
       revenueDaily,
       revenueTotal,
+      visibility: this.kpiScope.isSelf(user, detail.sale?.id)
+        ? 'self'
+        : 'outcome',
     };
+    if (!this.kpiScope.isSelf(user, detail.sale?.id)) {
+      maskCustomerRevenue(result);
+    }
+    return result;
   }
 
   /**

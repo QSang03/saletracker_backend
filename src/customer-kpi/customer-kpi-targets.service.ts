@@ -17,6 +17,7 @@ import {
   ApprovalStatus,
 } from './approval-request.entity';
 import { ApprovalRequestTargetItem } from './approval-request-target-item.entity';
+import { isRevenueCriterionKey } from './kpi-mask.helper';
 import { AssignKpiTargetsDto, KpiTargetQueryDto } from './dto/kpi-target.dto';
 
 const roleNames = (user: any): string[] =>
@@ -182,7 +183,12 @@ export class CustomerKpiTargetsService {
         t.customer_id > 0
           ? (customerMap.get(t.customer_id)?.customer_code ?? null)
           : null,
-      targetValue: t.target_value,
+      // Chỉ tiêu tiền của sale khác không được lộ; chỉ tiêu ratio/đếm vẫn xem.
+      targetValue:
+        Number(user?.id) !== Number(t.sale_id) &&
+        isRevenueCriterionKey(t.criterion_key)
+          ? null
+          : t.target_value,
       createdBy: t.created_by,
       createdAt: t.created_at,
     }));
