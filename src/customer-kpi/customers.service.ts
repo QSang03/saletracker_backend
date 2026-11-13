@@ -355,6 +355,9 @@ export class CustomersService {
     }
     const managedSlugs = this.managerDepartmentSlugs(user);
     if (managedSlugs !== undefined) {
+      if (managedSlugs.length === 0) {
+        return { data: [], total: 0, page, pageSize };
+      }
       qb.andWhere('a.department_slug IN (:...managedSlugs)', { managedSlugs });
     }
     if (query.saleId) {
@@ -553,6 +556,9 @@ export class CustomersService {
     }
     const unmatchedManagedSlugs = this.managerDepartmentSlugs(user);
     if (unmatchedManagedSlugs !== undefined) {
+      if (unmatchedManagedSlugs.length === 0) {
+        return { data: [], total: 0, page, pageSize };
+      }
       qb.andWhere('a.department_slug IN (:...managedSlugs)', {
         managedSlugs: unmatchedManagedSlugs,
       });
