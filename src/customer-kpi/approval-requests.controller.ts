@@ -39,8 +39,8 @@ export class ApprovalRequestsController {
 
   @Get(':id')
   @Permission('khach-hang', 'read')
-  detail(@Param('id', ParseIntPipe) id: number) {
-    return this.approvalsService.getDetail(id);
+  detail(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return this.approvalsService.getDetail(id, req.user);
   }
 
   @Post(':id/decide')

@@ -19,6 +19,8 @@ import { ApprovalCustomerAction } from './approval-request-customer-item.entity'
 import { ApprovalRequestCustomerItem } from './approval-request-customer-item.entity';
 import { ApprovalRequestTargetItem } from './approval-request-target-item.entity';
 import { REVENUE_TARGET_CRITERION_KEYS } from './customer-kpi-targets.service';
+import { isRevenueCriterionKey } from './kpi-mask.helper';
+import { KpiRevenueViewService } from './kpi-revenue-view.service';
 import {
   ApprovalRequestQueryDto,
   DecideApprovalDto,
@@ -56,6 +58,7 @@ export class ApprovalRequestsService {
     private readonly kpiTargetRepo: Repository<KpiTarget>,
     @InjectDataSource()
     private readonly dataSource: DataSource,
+    private readonly revenueView: KpiRevenueViewService,
   ) {}
 
   /**
@@ -172,12 +175,26 @@ export class ApprovalRequestsService {
     return { data, total, page, pageSize };
   }
 
-  async getDetail(id: number) {
+  async getDetail(id: number, user: any) {
     const request = await this.requestRepo.findOne({
       where: { id },
       relations: ['requested_by'],
     });
     if (!request) throw new NotFoundException('Không tìm thấy đề xuất');
+
+    // Trước đây detail không kiểm tra phạm vi — bất kỳ ai có quyền read đều
+    // xem được đề xuất của phòng khác (kèm target tiền).
+    const visibleIds = await this.visibleUserIds(user);
+    if (visibleIds !== undefined) {
+      const canSee =
+        (request.target_user_id != null &&
+          visibleIds.includes(request.target_user_id)) ||
+        (request.requested_by?.id != null &&
+          visibleIds.includes(request.requested_by.id));
+      if (!canSee) {
+        throw new ForbiddenException('Đề xuất không thuộc phạm vi của bạn');
+      }
+    }
 
     // Cả hai loại đề xuất trả CÙNG hình dạng diff (old_data/new_data/action)
     // để màn hình hàng chờ duyệt render một bộ code. Dòng chỉ tiêu chưa từng
@@ -194,19 +211,33 @@ export class ApprovalRequestsService {
         where: { request_id: id },
         order: { created_at: 'ASC' },
       });
-      items = targetItems.map((item) => ({
-        ...item,
-        action: item.old_target_value != null ? 'update' : 'create',
-        old_data:
-          item.old_target_value != null
-            ? { target_value: Number(item.old_target_value) }
-            : null,
-        new_data:
-          item.new_target_value != null
-            ? { target_value: Number(item.new_target_value) }
-            : null,
-        target_value: item.new_target_value,
-      }));
+      const revenueView = await this.revenueView.getMode();
+      items = targetItems.map((item) => {
+        const mapped: any = {
+          ...item,
+          action: item.old_target_value != null ? 'update' : 'create',
+          old_data:
+            item.old_target_value != null
+              ? { target_value: Number(item.old_target_value) }
+              : null,
+          new_data:
+            item.new_target_value != null
+              ? { target_value: Number(item.new_target_value) }
+              : null,
+          target_value: item.new_target_value,
+        };
+        // Target của tiêu chí doanh số là số tiền tuyệt đối → ẩn ở percent.
+        if (
+          revenueView === 'percent' &&
+          Number(item.sale_id) !== Number(user?.id) &&
+          isRevenueCriterionKey(item.criterion_key)
+        ) {
+          mapped.target_value = null;
+          mapped.old_data = null;
+          mapped.new_data = null;
+        }
+        return mapped;
+      });
     }
 
     // Tên người trong phòng bị tác động (nếu có)
