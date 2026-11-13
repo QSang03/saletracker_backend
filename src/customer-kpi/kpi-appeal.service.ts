@@ -121,7 +121,13 @@ export class KpiAppealService {
     const paged = query.page !== undefined || query.limit !== undefined;
 
     if (userIds !== undefined && userIds.length === 0) {
-      return { period, total: 0, page, limit, items: [] };
+      return {
+        period,
+        total: 0,
+        page: paged ? page : 1,
+        limit: paged ? limit : 0,
+        items: [],
+      };
     }
 
     const qb = this.appealRepo
@@ -180,8 +186,8 @@ export class KpiAppealService {
     return {
       period,
       total,
-      page,
-      limit,
+      page: paged ? page : 1,
+      limit: paged ? limit : total,
       items: rows.map((row) => {
         const customerName = customerNames.get(row.customer_code) ?? null;
         return {
