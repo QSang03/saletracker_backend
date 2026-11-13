@@ -106,10 +106,18 @@ export class KpiCoverageService {
 
   // --------------------------------------------------------------- helpers
 
-  private requireManager(user: KpiUser): void {
+  private requireWriter(user: KpiUser): void {
+    if (!this.scope.canWriteKpi(user)) {
+      throw new ForbiddenException(
+        'Chỉ admin / pm-khach-hang / quản lý phòng được tính lại KPI',
+      );
+    }
+  }
+
+  private requireFinalApprover(user: KpiUser): void {
     if (!this.scope.isAdminOrPm(user)) {
       throw new ForbiddenException(
-        'Chỉ admin / pm-khach-hang được tính lại KPI',
+        'Chỉ admin / pm-khach-hang được chốt hoặc mở lại quý',
       );
     }
   }
@@ -369,11 +377,16 @@ export class KpiCoverageService {
     body: { bonusAmount: number; reason?: string },
     user: KpiUser,
   ): Promise<KpiMonthlyResult> {
-    this.requireManager(user);
+    this.requireWriter(user);
     const row = await this.monthlyRepo.findOne({ where: { id } });
     if (!row) {
       throw new NotFoundException('Không tìm thấy kết quả KPI tháng');
     }
+    // Manager chỉ được nhập thưởng cho sale trong phòng mình.
+    this.scope.assertSaleInScope(
+      row.sale_id,
+      await this.scope.scopeUserIds(user),
+    );
     row.bonus_amount = round2(Number(body.bonusAmount) || 0);
     const snapshot = row.snapshot ?? {};
     row.snapshot = {
@@ -386,7 +399,7 @@ export class KpiCoverageService {
   }
 
   async computeMonthlyResults(options: ComputeMonthlyOptions): Promise<any> {
-    if (!options.system) this.requireManager(options.user);
+    if (!options.system) this.requireWriter(options.user);
     const periodMonth = options.periodMonth || this.previousMonth();
     const range = this.monthRange(periodMonth);
     const targetRate = await this.getCoverageTargetRate();
@@ -558,7 +571,7 @@ export class KpiCoverageService {
   async computeQuarterSettlements(
     options: ComputeQuarterOptions,
   ): Promise<any> {
-    if (!options.system) this.requireManager(options.user);
+    if (!options.system) this.requireWriter(options.user);
     const quarter = fiscalQuarterRange(options.fiscalYear, options.quarter);
     if (!quarter) {
       throw new BadRequestException('fiscal_year/quarter không hợp lệ');
@@ -696,7 +709,7 @@ export class KpiCoverageService {
     body: { fiscalYear: number; quarter: number; saleId: number },
     user: KpiUser,
   ): Promise<any> {
-    this.requireManager(user);
+    this.requireFinalApprover(user);
     const quarter = fiscalQuarterRange(body.fiscalYear, body.quarter);
     if (!quarter)
       throw new BadRequestException('fiscal_year/quarter không hợp lệ');
@@ -730,7 +743,7 @@ export class KpiCoverageService {
     },
     user: KpiUser,
   ): Promise<any> {
-    this.requireManager(user);
+    this.requireFinalApprover(user);
     const quarter = fiscalQuarterRange(body.fiscalYear, body.quarter);
     if (!quarter)
       throw new BadRequestException('fiscal_year/quarter không hợp lệ');

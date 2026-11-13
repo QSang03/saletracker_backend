@@ -10,6 +10,8 @@ import { KpiAppeal, KpiAppealStatus } from './kpi-appeal.entity';
 import { KpiSlaViolation } from './kpi-sla-violation.entity';
 import { KpiScopeService, KpiUser } from './kpi-scope.service';
 import { KpiSaleDirectoryService } from './kpi-sale-directory.service';
+import { KpiCustomerNamesService } from './kpi-customer-names.service';
+import { slaDelayMinutes } from './kpi-sla-delay';
 import { vnToday } from './vn-date';
 
 export interface CreateKpiAppealInput {
@@ -44,6 +46,7 @@ export class KpiAppealService {
     private readonly violationRepo: Repository<KpiSlaViolation>,
     private readonly scope: KpiScopeService,
     private readonly saleDirectory: KpiSaleDirectoryService,
+    private readonly customerNames: KpiCustomerNamesService,
   ) {}
 
   private normalizePeriod(period?: string): string {
@@ -117,7 +120,14 @@ export class KpiAppealService {
       order: { created_at: 'DESC' },
     });
     const infos = await this.saleDirectory.loadSaleInfos([
-      ...new Set(rows.map((row) => row.sale_id)),
+      ...new Set(
+        rows
+          .flatMap((row) => [row.sale_id, row.reviewer_id])
+          .filter((id): id is number => id != null),
+      ),
+    ]);
+    const customerNames = await this.customerNames.load([
+      ...new Set(rows.map((row) => row.customer_code)),
     ]);
     return {
       period,
@@ -125,6 +135,13 @@ export class KpiAppealService {
       items: rows.map((row) => ({
         ...row,
         saleName: infos.get(row.sale_id)?.fullName ?? null,
+        customerName: customerNames.get(row.customer_code) ?? null,
+        reviewerName: row.reviewer_id
+          ? (infos.get(row.reviewer_id)?.fullName ?? null)
+          : null,
+        violation: row.violation
+          ? { ...row.violation, delay_minutes: slaDelayMinutes(row.violation) }
+          : null,
       })),
     };
   }
@@ -134,9 +151,9 @@ export class KpiAppealService {
     input: ReviewKpiAppealInput,
     user: KpiUser,
   ): Promise<any> {
-    if (!this.scope.isAdminOrPm(user)) {
+    if (!this.scope.canWriteKpi(user)) {
       throw new ForbiddenException(
-        'Chỉ admin / pm-khach-hang được duyệt khiếu nại',
+        'Chỉ admin / pm-khach-hang / quản lý phòng được duyệt khiếu nại',
       );
     }
     const appeal = await this.appealRepo.findOne({
@@ -146,6 +163,11 @@ export class KpiAppealService {
     if (!appeal) {
       throw new NotFoundException('Không tìm thấy khiếu nại');
     }
+    // Manager chỉ duyệt được khiếu nại của sale thuộc phòng mình.
+    this.scope.assertSaleInScope(
+      appeal.sale_id,
+      await this.scope.scopeUserIds(user),
+    );
     if (appeal.status !== KpiAppealStatus.PENDING) {
       throw new BadRequestException('Khiếu nại này đã được xử lý');
     }

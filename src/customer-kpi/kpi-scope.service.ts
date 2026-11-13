@@ -42,6 +42,20 @@ export class KpiScopeService {
     return roles.includes('admin') || roles.includes('pm-khach-hang');
   }
 
+  /** Quản lý phòng ban (`manager-<slug>`) — chỉ thấy người trong phòng có server_ip. */
+  isManager(user: KpiUser | null | undefined): boolean {
+    return this.roleNames(user).some((role) => role.startsWith('manager-'));
+  }
+
+  /**
+   * Quyền ghi KPI (tính lại, nhập thưởng, duyệt khiếu nại):
+   * admin / pm-khach-hang / manager-<phòng>. Manager vẫn bị giới hạn bởi
+   * `scopeUserIds` khi thao tác trên một sale cụ thể.
+   */
+  canWriteKpi(user: KpiUser | null | undefined): boolean {
+    return this.isAdminOrPm(user) || this.isManager(user);
+  }
+
   async scopeUserIds(
     user: KpiUser | null | undefined,
   ): Promise<number[] | undefined> {

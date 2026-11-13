@@ -5,7 +5,8 @@ import { KpiSlaViolation } from './kpi-sla-violation.entity';
 import { KpiSlaResponseType } from './kpi-sla-interval.entity';
 import { KpiScopeService, KpiUser } from './kpi-scope.service';
 import { KpiSaleDirectoryService } from './kpi-sale-directory.service';
-import { Customer } from './customer.entity';
+import { KpiCustomerNamesService } from './kpi-customer-names.service';
+import { slaDelayMinutes } from './kpi-sla-delay';
 import { vnToday } from './vn-date';
 
 export interface KpiSlaQuery {
@@ -35,8 +36,7 @@ export class KpiSlaService {
   constructor(
     @InjectRepository(KpiSlaViolation)
     private readonly violationRepo: Repository<KpiSlaViolation>,
-    @InjectRepository(Customer)
-    private readonly customerRepo: Repository<Customer>,
+    private readonly customerNames: KpiCustomerNamesService,
     private readonly scope: KpiScopeService,
     private readonly saleDirectory: KpiSaleDirectoryService,
   ) {}
@@ -132,7 +132,7 @@ export class KpiSlaService {
     const infos = await this.saleDirectory.loadSaleInfos([
       ...new Set(rows.map((row) => row.sale_id)),
     ]);
-    const customerNames = await this.loadCustomerNames([
+    const customerNames = await this.customerNames.load([
       ...new Set(rows.map((row) => row.customer_code)),
     ]);
     return {
@@ -144,6 +144,7 @@ export class KpiSlaService {
         ...row,
         saleName: infos.get(row.sale_id)?.fullName ?? null,
         customerName: customerNames.get(row.customer_code) ?? null,
+        delay_minutes: slaDelayMinutes(row),
       })),
     };
   }
@@ -151,38 +152,6 @@ export class KpiSlaService {
   /** Escape ký tự đại diện để `%`/`_` người dùng gõ không thành wildcard. */
   private escapeLike(value: string): string {
     return value.replace(/[\\%_]/g, (char) => `\\${char}`);
-  }
-
-  private async loadCustomerNames(
-    customerCodes: string[],
-  ): Promise<Map<string, string>> {
-    const result = new Map<string, string>();
-    if (customerCodes.length === 0) return result;
-
-    // customer_name của bảng customers chỉ có một phần; đa số tên thật nằm ở
-    // customer_zalo.matched_name (tên hiển thị Zalo do Python đồng bộ).
-    const placeholders = customerCodes.map(() => '?').join(',');
-    const rows: Array<{
-      customer_code: string;
-      customer_name: string | null;
-      matched_name: string | null;
-    }> = await this.customerRepo.manager.query(
-      `SELECT c.customer_code, c.customer_name, z.matched_name
-       FROM customers c
-       LEFT JOIN customer_assignments a ON a.customer_id = c.id
-       LEFT JOIN customer_zalo z ON z.assignment_id = a.id AND z.is_active = 1
-       WHERE c.customer_code IN (${placeholders})
-       ORDER BY z.id ASC`,
-      customerCodes,
-    );
-    for (const row of rows) {
-      if (row.customer_name) {
-        result.set(row.customer_code, row.customer_name);
-      } else if (!result.has(row.customer_code) && row.matched_name) {
-        result.set(row.customer_code, row.matched_name);
-      }
-    }
-    return result;
   }
 
   async summary(query: KpiSlaSummaryQuery, user: KpiUser): Promise<any> {
