@@ -132,17 +132,25 @@ export class KpiAppealService {
     return {
       period,
       total,
-      items: rows.map((row) => ({
-        ...row,
-        saleName: infos.get(row.sale_id)?.fullName ?? null,
-        customerName: customerNames.get(row.customer_code) ?? null,
-        reviewerName: row.reviewer_id
-          ? (infos.get(row.reviewer_id)?.fullName ?? null)
-          : null,
-        violation: row.violation
-          ? { ...row.violation, delay_minutes: slaDelayMinutes(row.violation) }
-          : null,
-      })),
+      items: rows.map((row) => {
+        const customerName = customerNames.get(row.customer_code) ?? null;
+        return {
+          ...row,
+          saleName: infos.get(row.sale_id)?.fullName ?? null,
+          customerName,
+          // FE cũ đọc snake_case; giữ cả hai để không phải sửa ngay.
+          customer_name: customerName,
+          reviewerName: row.reviewer_id
+            ? (infos.get(row.reviewer_id)?.fullName ?? null)
+            : null,
+          violation: row.violation
+            ? {
+                ...row.violation,
+                delay_minutes: slaDelayMinutes(row.violation),
+              }
+            : null,
+        };
+      }),
     };
   }
 
