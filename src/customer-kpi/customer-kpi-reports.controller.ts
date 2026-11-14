@@ -36,6 +36,7 @@ import {
   ReopenQuarterDto,
   SetMonthlyBonusDto,
   SetRevenueVisibilityDto,
+  WaiveSlaViolationDto,
 } from './dto/kpi-coverage.dto';
 import { KpiRevenueViewService } from './kpi-revenue-view.service';
 import { shiftDateStr, vnToday } from './vn-date';
@@ -180,6 +181,32 @@ export class CustomerKpiReportsController {
   @Permission('khach-hang', 'read')
   slaViolations(@Query() query: KpiSlaQueryDto, @Req() req: { user: KpiUser }) {
     return this.slaService.listViolations(query, req.user);
+  }
+
+  /** Tin nhắn quanh thời điểm vi phạm — ngữ cảnh để sale viết giải trình. */
+  @Get('sla-violations/:id/messages')
+  @Permission('khach-hang', 'read')
+  slaViolationMessages(
+    @Param('id', ParseIntPipe) id: number,
+    @Query('limit') limit: string | undefined,
+    @Req() req: { user: KpiUser },
+  ) {
+    return this.slaService.getMessagesForViolation(
+      id,
+      req.user,
+      limit ? Number(limit) : 100,
+    );
+  }
+
+  /** Admin hủy/miễn vi phạm thủ công (SLA ghi nhận sai). */
+  @Patch('sla-violations/:id/waive')
+  @Permission('khach-hang', 'approve')
+  waiveSlaViolation(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: WaiveSlaViolationDto,
+    @Req() req: { user: KpiUser },
+  ) {
+    return this.slaService.setWaived(id, dto, req.user);
   }
 
   @Get('sla-summary')

@@ -112,6 +112,35 @@ export class ZaloPythonApiClient {
   }
 
   /**
+   * Nội dung nhiều tin nhắn theo id (tối đa 200/lần).
+   *
+   * Dùng cho danh sách vi phạm SLA: mỗi vi phạm chỉ cần tin khách gửi đầu tiên
+   * để sale nhận ra ngữ cảnh. Batch một request thay vì gọi theo hội thoại.
+   */
+  async getMessagesByIds(
+    messageIds: Array<number | string>,
+    timeoutMs: number = 15000,
+  ): Promise<any[]> {
+    const ids = [
+      ...new Set(
+        messageIds
+          .map((id) => String(id ?? '').trim())
+          .filter((id) => Boolean(id) && id !== '0'),
+      ),
+    ];
+    const result: any[] = [];
+    for (let i = 0; i < ids.length; i += 200) {
+      const chunk = ids.slice(i, i + 200);
+      const rows = await this.getData(
+        `/web/messages/by-ids?ids=${encodeURIComponent(chunk.join(','))}`,
+        timeoutMs,
+      );
+      result.push(...rows);
+    }
+    return result;
+  }
+
+  /**
    * Tin nhắn của một hội thoại trong khung giờ chính xác đến giây.
    *
    * Dùng cho drill-down "khoảng chờ" của trang thời gian phản hồi: truyền

@@ -8,6 +8,12 @@ import {
 } from 'typeorm';
 import { KpiSlaResponseType } from './kpi-sla-interval.entity';
 
+/** Nguồn miễn vi phạm: duyệt khiếu nại hay admin hủy thủ công. */
+export enum KpiSlaWaiveSource {
+  APPEAL = 'appeal',
+  ADMIN = 'admin',
+}
+
 /**
  * Sự kiện vi phạm SLA 2 giờ — nguồn để chấm tiêu chí `sla_phan_hoi_2h`.
  *
@@ -62,6 +68,24 @@ export class KpiSlaViolation {
 
   @Column({ type: 'boolean', default: false })
   is_waived: boolean;
+
+  /** Người miễn vi phạm: reviewer duyệt khiếu nại hoặc admin hủy thủ công. */
+  @Column({ type: 'int', nullable: true })
+  waived_by: number | null;
+
+  @Column({
+    type: 'enum',
+    enum: KpiSlaWaiveSource,
+    nullable: true,
+  })
+  waive_source: KpiSlaWaiveSource | null;
+
+  /** Lý do miễn — bắt buộc khi admin hủy thủ công để có dấu vết. */
+  @Column({ type: 'varchar', length: 500, nullable: true })
+  waive_reason: string | null;
+
+  @Column({ type: 'datetime', nullable: true })
+  waived_at: Date | null;
 
   @CreateDateColumn()
   created_at: Date;

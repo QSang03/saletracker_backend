@@ -7,7 +7,10 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { KpiAppeal, KpiAppealStatus } from './kpi-appeal.entity';
-import { KpiSlaViolation } from './kpi-sla-violation.entity';
+import {
+  KpiSlaViolation,
+  KpiSlaWaiveSource,
+} from './kpi-sla-violation.entity';
 import { KpiScopeService, KpiUser } from './kpi-scope.service';
 import { KpiSaleDirectoryService } from './kpi-sale-directory.service';
 import { KpiCustomerNamesService } from './kpi-customer-names.service';
@@ -257,6 +260,10 @@ export class KpiAppealService {
 
       if (input.status === KpiAppealStatus.APPROVED) {
         appeal.violation.is_waived = true;
+        appeal.violation.waived_by = user.id ?? null;
+        appeal.violation.waive_source = KpiSlaWaiveSource.APPEAL;
+        appeal.violation.waive_reason = appeal.reason;
+        appeal.violation.waived_at = appeal.reviewed_at;
         await manager.save(appeal.violation);
       }
     });

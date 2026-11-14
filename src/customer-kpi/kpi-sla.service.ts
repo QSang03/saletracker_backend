@@ -1,12 +1,22 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { FindOptionsWhere, In, Repository } from 'typeorm';
-import { KpiSlaViolation } from './kpi-sla-violation.entity';
+import {
+  KpiSlaViolation,
+  KpiSlaWaiveSource,
+} from './kpi-sla-violation.entity';
 import { KpiSlaResponseType } from './kpi-sla-interval.entity';
 import { KpiAppeal, KpiAppealStatus } from './kpi-appeal.entity';
 import { KpiScopeService, KpiUser } from './kpi-scope.service';
 import { KpiSaleDirectoryService } from './kpi-sale-directory.service';
 import { KpiCustomerNamesService } from './kpi-customer-names.service';
+import { ZaloPythonApiClient } from './zalo-python-api.client';
 import { slaDelayMinutes } from './kpi-sla-delay';
 import { vnToday } from './vn-date';
 
@@ -34,6 +44,8 @@ export interface KpiSlaSummaryQuery {
  */
 @Injectable()
 export class KpiSlaService {
+  private readonly logger = new Logger(KpiSlaService.name);
+
   constructor(
     @InjectRepository(KpiSlaViolation)
     private readonly violationRepo: Repository<KpiSlaViolation>,
@@ -42,6 +54,7 @@ export class KpiSlaService {
     private readonly customerNames: KpiCustomerNamesService,
     private readonly scope: KpiScopeService,
     private readonly saleDirectory: KpiSaleDirectoryService,
+    private readonly zaloApi: ZaloPythonApiClient,
   ) {}
 
   private normalizePeriod(period?: string): string {
@@ -132,12 +145,20 @@ export class KpiSlaService {
       .skip((page - 1) * limit)
       .take(limit)
       .getManyAndCount();
+    const waivedByIds = [
+      ...new Set(
+        rows
+          .map((row) => row.waived_by)
+          .filter((id): id is number => id !== null && id !== undefined),
+      ),
+    ];
     const infos = await this.saleDirectory.loadSaleInfos([
-      ...new Set(rows.map((row) => row.sale_id)),
+      ...new Set([...rows.map((row) => row.sale_id), ...waivedByIds]),
     ]);
     const customerNames = await this.customerNames.load([
       ...new Set(rows.map((row) => row.customer_code)),
     ]);
+    const previews = await this.loadInboundPreviews(rows);
     const appeals = rows.length
       ? await this.appealRepo.find({
           where: { violation_id: In(rows.map((row) => row.id)) },
@@ -157,16 +178,238 @@ export class KpiSlaService {
       items: rows.map((row) => {
         const appeal = appealByViolation.get(String(row.id));
         const approved = appeal?.status === KpiAppealStatus.APPROVED;
+        const preview = previews.get(String(row.first_inbound_message_id));
         return {
           ...row,
           saleName: infos.get(row.sale_id)?.fullName ?? null,
           customerName: customerNames.get(row.customer_code) ?? null,
           delay_minutes: slaDelayMinutes(row),
           appeal_status: appeal?.status ?? 'none',
-          waive_reason: approved ? appeal.reason : null,
-          waived_at: approved ? appeal.reviewed_at : null,
+          waive_reason: row.is_waived
+            ? (row.waive_reason ?? (approved ? appeal.reason : null))
+            : null,
+          waived_at: row.is_waived
+            ? (row.waived_at ?? (approved ? appeal.reviewed_at : null))
+            : null,
+          waived_by_name:
+            row.is_waived && row.waived_by
+              ? (infos.get(row.waived_by)?.fullName ?? null)
+              : null,
+          /** appeal = duyệt khiếu nại; admin = admin hủy thủ công. */
+          waive_source: row.is_waived
+            ? (row.waive_source ??
+              (approved ? 'appeal' : row.waived_by ? 'admin' : null))
+            : null,
+          first_inbound_content: preview?.content ?? null,
+          first_inbound_content_type: preview?.contentType ?? null,
+          first_inbound_sender_name: preview?.senderName ?? null,
+          first_inbound_content_truncated: preview?.truncated ?? false,
         };
       }),
+    };
+  }
+
+  /**
+   * Tin nhắn Zalo lưu `content` dạng JSON (`{"text": ...}`, media có
+   * `caption`/`title`). Chỉ trả phần chữ để FE hiển thị, không trả JSON thô.
+   */
+  private normalizeMessageContent(content: unknown): string {
+    if (typeof content !== 'string') return '';
+    const raw = content.trim();
+    if (!raw.startsWith('{')) return raw;
+    try {
+      let data: any = JSON.parse(raw);
+      if (typeof data === 'string') return data;
+      if (!data || typeof data !== 'object') return raw;
+      for (const key of [
+        'text',
+        'caption',
+        'title',
+        'description',
+        'address',
+        'name',
+        'displayName',
+      ]) {
+        const value = data[key];
+        if (typeof value === 'string' && value.trim()) return value.trim();
+      }
+      return '';
+    } catch {
+      return raw;
+    }
+  }
+
+  /**
+   * Nội dung tin khách gửi đầu tiên của từng vi phạm (trích đoạn ≤ 500 ký tự).
+   *
+   * Gọi API Python theo lô id. Lỗi API Python không được làm hỏng danh sách
+   * vi phạm — chỉ log và trả `null` cho phần nội dung.
+   */
+  private async loadInboundPreviews(
+    rows: KpiSlaViolation[],
+  ): Promise<
+    Map<
+      string,
+      {
+        content: string | null;
+        contentType: string | null;
+        senderName: string | null;
+        truncated: boolean;
+      }
+    >
+  > {
+    const result = new Map<
+      string,
+      {
+        content: string | null;
+        contentType: string | null;
+        senderName: string | null;
+        truncated: boolean;
+      }
+    >();
+    const ids = [
+      ...new Set(
+        rows
+          .map((row) => row.first_inbound_message_id)
+          .filter((id) => id !== null && id !== undefined),
+      ),
+    ];
+    if (ids.length === 0) return result;
+    try {
+      const messages = await this.zaloApi.getMessagesByIds(ids, 5000);
+      for (const message of messages) {
+        const key = String(message?.id ?? '');
+        if (!key) continue;
+        const raw =
+          typeof message?.content === 'string' ? message.content.trim() : '';
+        const truncated = raw.length > 500;
+        result.set(key, {
+          content: raw ? (truncated ? `${raw.slice(0, 500)}…` : raw) : null,
+          contentType: message?.content_type ?? null,
+          senderName: message?.sender_name ?? null,
+          truncated,
+        });
+      }
+    } catch (error: any) {
+      this.logger.warn(
+        `Không tải được nội dung tin nhắn vi phạm SLA: ${error?.message ?? error}`,
+      );
+    }
+    return result;
+  }
+
+  /**
+   * Toàn bộ tin nhắn quanh thời điểm vi phạm để sale/admin đọc ngữ cảnh.
+   *
+   * Khung mặc định: trước tin khách 15 phút → sau phản hồi (hoặc hạn SLA + 2h)
+   * 15 phút, tối đa 100 tin. Chỉ người trong phạm vi được xem vi phạm đó.
+   */
+  async getMessagesForViolation(
+    id: number,
+    user: KpiUser,
+    limit = 100,
+  ): Promise<any> {
+    const row = await this.violationRepo.findOne({ where: { id } });
+    if (!row) {
+      throw new NotFoundException('Không tìm thấy vi phạm SLA');
+    }
+    this.scope.assertSaleInScope(
+      row.sale_id,
+      await this.scope.scopeUserIds(user),
+    );
+
+    const empty = {
+      violationId: row.id,
+      conversationId: row.conversation_id ?? null,
+      inboundTime: row.inbound_time,
+      slaDeadline: row.sla_deadline,
+      respondedTime: row.responded_time,
+      firstInboundMessageId: row.first_inbound_message_id,
+      messages: [] as any[],
+      totalCount: 0,
+    };
+    if (!row.conversation_id) return empty;
+
+    const inbound = new Date(row.inbound_time).getTime();
+    if (!Number.isFinite(inbound)) return empty;
+    const responded = row.responded_time
+      ? new Date(row.responded_time).getTime()
+      : null;
+    const endBase =
+      responded && responded > inbound
+        ? Math.min(responded, inbound + 24 * 60 * 60 * 1000)
+        : inbound + 2 * 60 * 60 * 1000;
+    const fromTs = new Date(inbound - 15 * 60 * 1000).toISOString();
+    const toTs = new Date(endBase + 15 * 60 * 1000).toISOString();
+
+    const { items, totalCount } = await this.zaloApi.getConversationMessages({
+      conversationId: Number(row.conversation_id),
+      fromTs,
+      toTs,
+      limit: Math.min(200, Math.max(1, Number(limit) || 100)),
+      sortOrder: 'asc',
+    });
+
+    return {
+      ...empty,
+      totalCount,
+      messages: items.map((message) => ({
+        id: message?.id ?? null,
+        content: this.normalizeMessageContent(message?.content),
+        content_type: message?.content_type ?? 'TEXT',
+        timestamp: message?.timestamp ?? null,
+        is_outgoing: !!message?.is_outgoing,
+        sender_name: message?.sender?.name ?? null,
+      })),
+    };
+  }
+
+  /**
+   * Admin miễn / bỏ miễn vi phạm thủ công (SLA ghi nhận sai, khách gọi điện...).
+   *
+   * Chỉ admin. Miễn thủ công bắt buộc có lý do và ghi đè kết quả khiếu nại
+   * (nếu có) — báo cáo KPI đọc `is_waived` nên có hiệu lực ngay.
+   */
+  async setWaived(
+    id: number,
+    input: { waived: boolean; reason?: string },
+    user: KpiUser,
+  ): Promise<any> {
+    if (!this.scope.roleNames(user).includes('admin')) {
+      throw new ForbiddenException('Chỉ admin được hủy/miễn vi phạm SLA');
+    }
+    const row = await this.violationRepo.findOne({ where: { id } });
+    if (!row) {
+      throw new NotFoundException('Không tìm thấy vi phạm SLA');
+    }
+
+    if (input.waived) {
+      const reason = (input.reason ?? '').trim();
+      if (reason.length < 3) {
+        throw new BadRequestException(
+          'Cần nhập lý do hủy vi phạm (ít nhất 3 ký tự)',
+        );
+      }
+      row.is_waived = true;
+      row.waived_by = user.id ?? null;
+      row.waive_source = KpiSlaWaiveSource.ADMIN;
+      row.waive_reason = reason.slice(0, 500);
+      row.waived_at = new Date();
+    } else {
+      row.is_waived = false;
+      row.waived_by = null;
+      row.waive_source = null;
+      row.waive_reason = null;
+      row.waived_at = null;
+    }
+    await this.violationRepo.save(row);
+    return {
+      id: row.id,
+      is_waived: row.is_waived,
+      waived_by: row.waived_by,
+      waive_source: row.waive_source,
+      waive_reason: row.waive_reason,
+      waived_at: row.waived_at,
     };
   }
 

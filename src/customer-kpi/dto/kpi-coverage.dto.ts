@@ -9,6 +9,7 @@ import {
   IsString,
   Matches,
   Max,
+  MaxLength,
   Min,
 } from 'class-validator';
 
@@ -229,6 +230,18 @@ export class KpiSlaSummaryQueryDto {
   @Type(() => Number)
   @IsInt()
   saleId?: number;
+}
+
+/** PATCH /customer-kpi-reports/sla-violations/:id/waive */
+export class WaiveSlaViolationDto {
+  @IsBoolean()
+  waived: boolean;
+
+  /** Bắt buộc khi waived=true; tối đa 500 ký tự. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  reason?: string;
 }
 
 /** POST /customer-kpi-appeals */

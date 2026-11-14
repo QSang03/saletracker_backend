@@ -12,6 +12,7 @@ import { SeedUserTriggerService } from './seed-user-trigger.service';
 import { SeedCustomerPermissionService } from './seed-customer-permission.service';
 import { SeedCustomerTriggerService } from './seed-customer-trigger.service';
 import { SeedOrderStatusTriggerService } from './seed-order-status-trigger.service';
+import { SeedQuotePermissionService } from './seed-quote-permission.service';
 
 @Injectable()
 export class SeedService implements OnModuleInit {
@@ -28,6 +29,7 @@ export class SeedService implements OnModuleInit {
     private readonly seedCustomerPermissionService: SeedCustomerPermissionService,
     private readonly seedCustomerTriggerService: SeedCustomerTriggerService,
     private readonly seedOrderStatusTriggerService: SeedOrderStatusTriggerService,
+    private readonly seedQuotePermissionService: SeedQuotePermissionService,
   ) {}
 
   async onModuleInit() {
@@ -35,6 +37,7 @@ export class SeedService implements OnModuleInit {
     await this.seedCampaignTriggerService.seedTriggers();
     await this.seedUserTriggerService.seedTriggers();
     await this.seedCustomerPermissionService.seedCustomerPermissions();
+    await this.seedQuotePermissionService.seedQuotePermissions();
     await this.seedCustomerTriggerService.seedCustomerTriggers();
     await this.seedOrderStatusTriggerService.seedTriggers();
 
