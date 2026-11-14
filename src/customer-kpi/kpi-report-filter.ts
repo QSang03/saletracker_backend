@@ -373,7 +373,8 @@ export const saleCriterionPct = (criterion: SaleCriterion): number | null => {
  * `null` = KHÔNG đủ dữ liệu kết luận (`status: no_data`): không xếp vào đạt
  * lẫn không đạt, để khỏi biến "sale chưa đăng nhập Zalo" thành "sale không
  * đạt". Luật khớp với cách engine đang chấm:
- * - binary: đúng theo `status` (pass = có ≥1 khách đạt).
+ * - binary: đúng theo `status` (TC3/TC4/TC6: ≥1 khách đạt; TC5: không còn
+ *   gợi ý chăm sóc tồn).
  * - doanh số: theo kết luận của TIÊU CHÍ QUÝ — `(Dso Key + Dso Non) / target
  *   quý ≥ 100%`. Khoảng xem là tuần/tháng thì không so target nên `null`.
  * - ratio: `actualValue` luôn là %, nên KHÔNG so với `targetValue` khi mẫu số

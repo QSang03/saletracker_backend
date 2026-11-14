@@ -62,6 +62,7 @@ import {
   SUGGESTION_KEY_GAP_DAYS,
   SUGGESTION_LOOKBACK_DAYS,
   SUGGESTION_NON_GAP_DAYS,
+  isCareSuggestionReason,
   normalizedTier,
   roundTo,
 } from './customer-kpi-scoring.service';
@@ -1476,21 +1477,30 @@ export class CustomerKpiReportsService {
       // tính khi khoảng xem CHẠM TỚI HÔM NAY: gợi ý luôn neo theo ngày hiện tại,
       // gắn vào một khoảng xem trong quá khứ sẽ sai (báo cáo tuần cũ hiện việc
       // của hôm nay). Khoá theo assignmentId — cùng quy tắc với cả báo cáo.
+      //
+      // TC5 chỉ chấm nhóm gợi ý CHĂM SÓC (chưa phản hồi / bỏ bê). Gợi ý doanh
+      // số (KEY rơi doanh số, KEY chưa có doanh số) vẫn hiện ở màn /suggestions
+      // nhưng không gắn vào ô TC5 và không làm trượt tiêu chí.
       const pendingSuggestions =
         toDate >= this.today() &&
         definitions.some(
           (definition) => definition.metric === SUGGESTION_ACK_METRIC,
         )
           ? new Map<number, CustomerSuggestion | null>(
-              saleCustomers.map((row) => [
-                row.assignmentId,
-                this.suggestForCustomer(
+              saleCustomers.map((row) => {
+                const suggestion = this.suggestForCustomer(
                   row,
                   activity.get(row.assignmentId) ?? [],
                   this.today(),
                   suggestionRevenue?.get(row.assignmentId),
-                ),
-              ]),
+                );
+                return [
+                  row.assignmentId,
+                  suggestion && isCareSuggestionReason(suggestion.reason)
+                    ? suggestion
+                    : null,
+                ];
+              }),
             )
           : undefined;
       const customerRows: {
@@ -1548,6 +1558,7 @@ export class CustomerKpiReportsService {
               revenueData(revenue, revenueFor(row)),
               orderSuggestions?.byAssignment.get(row.assignmentId) ?? null,
               appointmentReasons.get(row.assignmentId),
+              row.customerTier,
             ),
           };
         });
@@ -1599,14 +1610,6 @@ export class CustomerKpiReportsService {
           ),
         );
 
-        // Đầu bảng TC5: đếm số khách ĐANG có gợi ý chờ xử lý — khác
-        // `passedCriteria` (số khách đã xử lý xong trong khoảng xem).
-        if (pendingSuggestions && definition.metric === SUGGESTION_ACK_METRIC) {
-          saleCriteria[saleCriteria.length - 1].customersWithSuggestion = [
-            ...pendingSuggestions.values(),
-          ].filter((item) => item !== null).length;
-        }
-
         // ── Ghi đè thủ công (trưởng phòng cùng phòng / admin) ──
         // Ghi đè cả sale mạnh nhất: cả tiêu chí tháng đó không đạt cho mọi khách.
         const saleOverride = this.findOverride(
@@ -1651,8 +1654,29 @@ export class CustomerKpiReportsService {
               (criterion.passedCriteria ?? 0) - demoted,
             );
             criterion.numerator = criterion.passedCriteria;
-            criterion.status = criterion.passedCriteria > 0 ? 'pass' : 'fail';
+            // TC5 đạt khi KHÔNG còn khách nào tồn; các tiêu chí binary khác
+            // vẫn đạt khi còn ≥1 khách đạt.
+            criterion.status =
+              definition.metric === SUGGESTION_ACK_METRIC
+                ? criterion.passedCriteria >= (criterion.totalCriteria ?? 0)
+                  ? 'pass'
+                  : 'fail'
+                : criterion.passedCriteria > 0
+                  ? 'pass'
+                  : 'fail';
           }
+        }
+        // TC5: số khách còn gợi ý tồn = tổng - số khách không còn tồn, kể cả
+        // sau khi trừ ghi đè thủ công.
+        if (
+          definition.metric === SUGGESTION_ACK_METRIC &&
+          saleCriteria[saleCriteria.length - 1].totalCriteria !== null
+        ) {
+          const criterion = saleCriteria[saleCriteria.length - 1];
+          criterion.customersWithSuggestion = Math.max(
+            0,
+            (criterion.totalCriteria ?? 0) - (criterion.passedCriteria ?? 0),
+          );
         }
       }
 
@@ -1678,6 +1702,7 @@ export class CustomerKpiReportsService {
             revenueData(revenue, revenueRow),
             orderSuggestions?.byAssignment.get(row.assignmentId) ?? null,
             appointmentReasons.get(row.assignmentId),
+            row.customerTier,
           );
           // Cùng luật ghi đè với vòng chấm cấp sale: ghi đè cả sale ép mọi ô
           // khách, ghi đè từng khách chỉ hạ ô của khách đó

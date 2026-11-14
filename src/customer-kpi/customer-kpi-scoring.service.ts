@@ -56,12 +56,34 @@ export const SUGGESTION_KEY_GAP_DAYS = 3;
 export const SUGGESTION_NON_GAP_DAYS = 7;
 
 /**
- * Ngưỡng chấm tiêu chí "Gợi ý chăm sóc đã thực hiện": sale nhắn lại sau
- * ≥ SUGGESTION_ACK_GAP_DAYS ngày im lặng = đã xử lý gợi ý. Bằng ngưỡng bỏ bê
- * của KEY để gợi ý và tiêu chí nói chuyện với nhau (gợi ý bật sau 3 ngày
- * thì nhắn lại sau 3 ngày cũng phải được tính là xử lý).
+ * Tiêu chí 5 — "Gợi ý thực hiện" chấm theo trạng thái CÒN GỢI Ý TỒN tại thời
+ * điểm chấm: khách không còn rơi vào trạng thái cần chăm sóc nào thì đạt.
+ *
+ * Ba trạng thái cần chăm sóc (chỉ nhóm CHĂM SÓC — gợi ý doanh số như "KEY rơi
+ * doanh số" vẫn hiện ở `/suggestions` nhưng KHÔNG làm trượt TC5):
+ * - `chua_phan_hoi`: khách nhắn mà sale chưa có tin đi nào sau đó.
+ * - `key_chua_lien_lac`: KEY bị bỏ bê ≥3 ngày ĐO ĐƯỢC.
+ * - `non_don_moi_chua_cham`: NON có đơn trong 30 ngày nhưng bị bỏ bê ≥7 ngày
+ *   ĐO ĐƯỢC.
+ *
+ * Ngày sale offline (`zalo_linked = false`) không tính vào khoảng im lặng.
  */
-export const SUGGESTION_ACK_GAP_DAYS = 3;
+export type CareSuggestionReason =
+  | 'chua_phan_hoi'
+  | 'key_chua_lien_lac'
+  | 'non_don_moi_chua_cham';
+
+/** Các lý do gợi ý CHĂM SÓC — chỉ nhóm này tham gia tiêu chí 5. */
+export const CARE_SUGGESTION_REASONS: readonly CareSuggestionReason[] = [
+  'chua_phan_hoi',
+  'key_chua_lien_lac',
+  'non_don_moi_chua_cham',
+];
+
+export const isCareSuggestionReason = (
+  reason: string | null | undefined,
+): reason is CareSuggestionReason =>
+  !!reason && (CARE_SUGGESTION_REASONS as readonly string[]).includes(reason);
 
 /** Nhìn lại bao nhiêu ngày hoạt động để chấm gợi ý ở đầu khoảng xem. */
 export const SUGGESTION_LOOKBACK_DAYS = SUGGESTION_NON_GAP_DAYS;
@@ -161,6 +183,22 @@ export interface CustomerSuggestion {
   revenueCurrent?: number | null;
   /** Doanh số kỳ trước của khách — `null` = không có dữ liệu. */
   revenuePrevious?: number | null;
+}
+
+/**
+ * Trạng thái "còn gợi ý chăm sóc tồn" của MỘT khách tại thời điểm chấm (TC5).
+ * `null` ở hàm tính = khách không còn gợi ý nào → tiêu chí đạt.
+ */
+export interface PendingCareSuggestion {
+  reason: CareSuggestionReason;
+  /** Số ngày ĐO ĐƯỢC không có tin đi (chỉ nhóm bỏ bê). */
+  silentDays?: number;
+  /** Ngày khách nhắn gần nhất (nhóm chưa phản hồi). */
+  lastInboundDay?: string;
+  /** Ngày sale nhắn đi gần nhất — `null` = chưa từng. */
+  lastOutboundDay?: string | null;
+  /** Ngày có đơn gần nhất (nhóm NON có đơn mới). */
+  lastOrderDay?: string | null;
 }
 
 /** Số liệu gợi ý đơn hàng của MỘT khách (tiêu chí 6). */
@@ -386,9 +424,9 @@ export interface SaleCriterion {
    */
   byTier?: SaleTierBreakdown;
   /**
-   * Tiêu chí "Gợi ý thực hiện": số khách ĐANG có gợi ý chờ xử lý — KHÁC
-   * `passedCriteria` (số khách đã xử lý xong). Chỉ có khi khoảng xem chạm tới
-   * hôm nay (gợi ý luôn tính theo ngày hiện tại).
+   * Tiêu chí "Gợi ý thực hiện": số khách CÒN gợi ý chăm sóc tồn tại thời điểm
+   * chấm. `passedCriteria` = số khách không còn gợi ý tồn; hai số cộng lại
+   * bằng `totalCriteria`.
    */
   customersWithSuggestion?: number;
 }
@@ -522,6 +560,8 @@ export class CustomerKpiScoringService {
    * trong kỳ (báo cáo nạp sẵn từ `customer_revenue_daily`).
    * `openOrders`: chỉ cần cho tiêu chí gợi ý đơn hàng — số dòng đơn CHƯA CHỐT
    * trong N ngày gần nhất + tổng giá trị (báo cáo nạp sẵn từ `order_details`).
+   * `customerTier`: `KEY` / `NON` của dòng phân công — chỉ tiêu chí 5 dùng để
+   * chọn ngưỡng bỏ bê (KEY 3 ngày, NON 7 ngày).
    */
   scoreCustomer(
     definition: KpiDefinition,
@@ -532,6 +572,7 @@ export class CustomerKpiScoringService {
     revenue?: { tier: string | null; quantity: number; lineTotal: number },
     openOrders?: CustomerOrderSuggestion | null,
     appointmentUnavailableReason?: string,
+    customerTier?: string | null,
   ): CustomerCriterion {
     const base: CustomerCriterion = {
       key: definition.key,
@@ -617,12 +658,26 @@ export class CustomerKpiScoringService {
       };
     }
 
+    // Tiêu chí 5 — ĐẠT khi khách KHÔNG còn gợi ý chăm sóc tồn tại thời điểm
+    // chấm. Khách chăm đều (không bao giờ bị bỏ bê, không có tin chưa trả lời)
+    // luôn đạt; khách còn trạng thái cần chăm sóc thì chưa đạt.
     if (definition.metric === SUGGESTION_ACK_METRIC) {
-      const passed = this.countSuggestionHandled(days, fromDate);
+      const sorted = [...days].sort((a, b) =>
+        a.stat_date.localeCompare(b.stat_date),
+      );
+      const asOf = sorted[sorted.length - 1]?.stat_date ?? null;
+      const measured = sorted.some(
+        (row) => row.stat_date >= fromDate && row.zalo_linked,
+      );
+      if (!asOf || !measured) {
+        return { ...base, reason: REASON_NO_ZALO_LINK };
+      }
+      const pending = this.pendingCareSuggestion(sorted, customerTier, asOf);
       return {
         ...base,
-        status: passed > 0 ? 'pass' : 'fail',
-        actualValue: passed > 0 ? 1 : 0,
+        status: pending ? 'fail' : 'pass',
+        actualValue: pending ? 0 : 1,
+        reason: pending ? this.careSuggestionText(pending) : undefined,
       };
     }
 
@@ -905,35 +960,126 @@ export class CustomerKpiScoringService {
   }
 
   /**
-   * Số ngày trong khoảng xem mà sale "đã xử lý gợi ý": khách bị bỏ bê
-   * ≥ SUGGESTION_GAP_DAYS ngày (không có tin đi) rồi sale chủ động nhắn lại.
-   * Cần lịch sử hoạt động trước fromDate để xác định "bị bỏ bê".
+   * Trạng thái "còn gợi ý chăm sóc tồn" của MỘT khách tại ngày `asOf` (TC5).
+   *
+   * Một khách bị coi là còn gợi ý khi rơi vào một trong ba trạng thái:
+   * 1. `chua_phan_hoi` — khách nhắn mà sale chưa có tin đi nào sau đó.
+   * 2. `key_chua_lien_lac` — khách KEY bị bỏ bê ≥3 ngày ĐO ĐƯỢC.
+   * 3. `non_don_moi_chua_cham` — khách NON có đơn trong 30 ngày nhưng bị bỏ
+   *    bê ≥7 ngày ĐO ĐƯỢC.
+   *
+   * `days` phải sắp xếp tăng dần theo `stat_date`; chỉ xét dữ liệu đến `asOf`.
+   * Ngày sale offline (`zalo_linked = false`) không tính vào khoảng im lặng.
+   *
+   * Lưu ý: nhóm `chua_phan_hoi` KHÔNG giới hạn 3 ngày như danh sách gợi ý
+   * hằng ngày — KPI tháng phải thấy tin khách bị bỏ quên, không để nó tự hết
+   * hạn sau 3 ngày.
    */
-  countSuggestionHandled(days: ActivityDayRow[], fromDate: string): number {
-    const sorted = [...days].sort((a, b) =>
-      a.stat_date.localeCompare(b.stat_date),
+  private pendingCareSuggestion(
+    days: ActivityDayRow[],
+    tier: string | null | undefined,
+    asOf: string,
+  ): PendingCareSuggestion | null {
+    const lastOutboundDay = this.lastDayWhere(
+      days,
+      (row) => (Number(row.outbound_count) || 0) > 0,
     );
-    let handled = 0;
-    for (let i = 0; i < sorted.length; i += 1) {
-      const day = sorted[i];
-      if (day.stat_date < fromDate) continue;
-      if (!day.zalo_linked || !isOutbound(day)) continue;
-      // Khoảng im lặng tính bằng SỐ NGÀY ĐO ĐƯỢC ngay trước ngày này — ngày
-      // sale offline (không đo được dữ liệu Zalo) không phải là "bỏ bê".
-      const history: ActivityDayRow[] = [];
-      for (
-        let j = i - 1;
-        j >= 0 && history.length < SUGGESTION_ACK_GAP_DAYS;
-        j -= 1
-      ) {
-        if (sorted[j].zalo_linked) history.push(sorted[j]);
-      }
-      const stale =
-        history.length >= SUGGESTION_ACK_GAP_DAYS &&
-        history.every((row) => !isOutbound(row));
-      if (stale) handled += 1;
+    const lastInboundDay = this.lastDayWhere(
+      days,
+      (row) => (Number(row.inbound_count) || 0) > 0,
+    );
+
+    // Khách nhắn mà chưa có tin đi nào sau đó → còn chờ phản hồi.
+    if (
+      lastInboundDay &&
+      (!lastOutboundDay || lastOutboundDay < lastInboundDay)
+    ) {
+      return {
+        reason: 'chua_phan_hoi',
+        lastInboundDay,
+        lastOutboundDay,
+      };
     }
-    return handled;
+
+    const silentDays = this.measuredSilentDays(days);
+    const normalized = normalizedTier(tier);
+    if (normalized === 'KEY' && silentDays >= SUGGESTION_KEY_GAP_DAYS) {
+      return {
+        reason: 'key_chua_lien_lac',
+        silentDays,
+        lastOutboundDay,
+      };
+    }
+    if (normalized === 'NON') {
+      const lastOrderDay = this.lastDayWhere(
+        days,
+        (row) => (Number(row.order_count) || 0) > 0,
+      );
+      const daysSinceOrder = lastOrderDay
+        ? this.daysBetween(lastOrderDay, asOf)
+        : Number.POSITIVE_INFINITY;
+      if (daysSinceOrder <= 30 && silentDays >= SUGGESTION_NON_GAP_DAYS) {
+        return {
+          reason: 'non_don_moi_chua_cham',
+          silentDays,
+          lastOrderDay,
+          lastOutboundDay,
+        };
+      }
+    }
+    return null;
+  }
+
+  /** Ngày cuối cùng thỏa điều kiện trong mảng ĐÃ sắp xếp tăng dần. */
+  private lastDayWhere(
+    days: ActivityDayRow[],
+    predicate: (row: ActivityDayRow) => boolean,
+  ): string | null {
+    for (let i = days.length - 1; i >= 0; i -= 1) {
+      if (predicate(days[i])) return days[i].stat_date;
+    }
+    return null;
+  }
+
+  /**
+   * Số ngày ĐO ĐƯỢC không có tin đi sau lần nhắn gần nhất — ngày sale offline
+   * không tính (không đo được thì không kết luận bỏ bê).
+   */
+  private measuredSilentDays(days: ActivityDayRow[]): number {
+    let lastOutbound = -1;
+    for (let i = days.length - 1; i >= 0; i -= 1) {
+      if ((Number(days[i].outbound_count) || 0) > 0) {
+        lastOutbound = i;
+        break;
+      }
+    }
+    let silent = 0;
+    for (let i = lastOutbound + 1; i < days.length; i += 1) {
+      if (days[i].zalo_linked) silent += 1;
+    }
+    return silent;
+  }
+
+  /** Khoảng cách ngày lịch giữa hai chuỗi `YYYY-MM-DD`. */
+  private daysBetween(from: string, to: string): number {
+    const [fromYear, fromMonth, fromDay] = from.split('-').map(Number);
+    const [toYear, toMonth, toDay] = to.split('-').map(Number);
+    return Math.round(
+      (Date.UTC(toYear, toMonth - 1, toDay) -
+        Date.UTC(fromYear, fromMonth - 1, fromDay)) /
+        86_400_000,
+    );
+  }
+
+  /** Câu giải thích trạng thái còn tồn — trả trong `reason` của tiêu chí khách. */
+  private careSuggestionText(state: PendingCareSuggestion): string {
+    if (state.reason === 'chua_phan_hoi') {
+      return `Khách nhắn ngày ${state.lastInboundDay} chưa được phản hồi.`;
+    }
+    if (state.reason === 'key_chua_lien_lac') {
+      return `Khách KEY đã ${state.silentDays} ngày đo được không được liên lạc.`;
+    }
+    return `Khách NON có đơn gần đây nhưng đã ${state.silentDays} ngày đo được không được liên lạc.`;
   }
 
   /**
@@ -1238,10 +1384,11 @@ export class CustomerKpiScoringService {
       };
     }
 
+    // Tiêu chí 5 — sale ĐẠT khi KHÔNG còn khách nào có gợi ý chăm sóc tồn.
+    // Khác các tiêu chí binary khác (chỉ cần ≥1 khách đạt): TC5 đo "đã dọn hết
+    // việc chăm sóc", nên mẫu số là khách đo được và tử số là khách KHÔNG còn
+    // gợi ý tồn. Khách chăm đều → không có gợi ý → luôn đạt.
     if (definition.metric === SUGGESTION_ACK_METRIC) {
-      // Khách "được đánh giá" = có ngày đo được TRONG khoảng xem; nhưng bài
-      // test "bị bỏ bê ≥7 ngày rồi nhắn lại" cần LỊCH SỬ TRƯỚC fromDate —
-      // countSuggestionHandled tự chỉ tính ngày >= fromDate trên mảng đầy đủ
       const evaluated = customers.filter((c) =>
         c.days.some((row) => row.stat_date >= fromDate && row.zalo_linked),
       );
@@ -1251,18 +1398,35 @@ export class CustomerKpiScoringService {
           reason: saleOnline ? REASON_NO_ZALO_LINK : REASON_SALE_OFFLINE,
         };
       }
-      const handled = (c: (typeof evaluated)[number]) =>
-        this.countSuggestionHandled(c.days, fromDate) > 0;
-      const passed = evaluated.filter(handled);
+      const pendingCustomers = new Set<(typeof evaluated)[number]>();
+      for (const customer of evaluated) {
+        const sorted = [...customer.days].sort((a, b) =>
+          a.stat_date.localeCompare(b.stat_date),
+        );
+        const asOf = sorted[sorted.length - 1]?.stat_date;
+        if (asOf && this.pendingCareSuggestion(sorted, customer.tier, asOf)) {
+          pendingCustomers.add(customer);
+        }
+      }
+      const passedCount = evaluated.length - pendingCustomers.size;
       return {
         ...base,
-        status: passed.length > 0 ? 'pass' : 'fail',
-        actualValue: passed.length > 0 ? 1 : 0,
+        status: pendingCustomers.size === 0 ? 'pass' : 'fail',
+        actualValue: pendingCustomers.size === 0 ? 1 : 0,
         totalCriteria: evaluated.length,
-        passedCriteria: passed.length,
-        numerator: passed.length,
+        passedCriteria: passedCount,
+        numerator: passedCount,
         denominatorValue: evaluated.length,
-        byTier: tierBreakdown(evaluated, (c) => c.tier, handled),
+        customersWithSuggestion: pendingCustomers.size,
+        byTier: tierBreakdown(
+          evaluated,
+          (c) => c.tier,
+          (c) => !pendingCustomers.has(c),
+        ),
+        reason:
+          pendingCustomers.size > 0
+            ? `Còn ${pendingCustomers.size} khách chưa xử lý gợi ý chăm sóc.`
+            : undefined,
       };
     }
 
