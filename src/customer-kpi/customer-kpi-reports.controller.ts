@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   ParseIntPipe,
@@ -38,7 +39,13 @@ import {
   SetRevenueVisibilityDto,
   WaiveSlaViolationDto,
 } from './dto/kpi-coverage.dto';
+import {
+  AssignVisitTargetDto,
+  VisitCoverageQueryDto,
+  VisitTargetQueryDto,
+} from './dto/kpi-visit.dto';
 import { KpiRevenueViewService } from './kpi-revenue-view.service';
+import { KpiVisitCoverageService } from './kpi-visit-coverage.service';
 import { shiftDateStr, vnToday } from './vn-date';
 
 /**
@@ -62,6 +69,7 @@ export class CustomerKpiReportsController {
     private readonly careFunnelService: KpiCareFunnelService,
     private readonly slaService: KpiSlaService,
     private readonly revenueViewService: KpiRevenueViewService,
+    private readonly visitCoverageService: KpiVisitCoverageService,
   ) {}
 
   private normalizeRange(from?: string, to?: string) {
@@ -175,6 +183,43 @@ export class CustomerKpiReportsController {
     @Req() req: { user: KpiUser },
   ) {
     return this.careFunnelService.getStats({ ...query, user: req.user });
+  }
+
+  /** Tiến độ gặp khách tháng/quý + danh sách khách KEY/NON đã/chưa gặp. */
+  @Get('visit-coverage')
+  @Permission('khach-hang', 'read')
+  visitCoverage(
+    @Query() query: VisitCoverageQueryDto,
+    @Req() req: { user: KpiUser },
+  ) {
+    return this.visitCoverageService.getCoverage(query, req.user);
+  }
+
+  @Get('visit-targets')
+  @Permission('khach-hang', 'read')
+  visitTargets(
+    @Query() query: VisitTargetQueryDto,
+    @Req() req: { user: KpiUser },
+  ) {
+    return this.visitCoverageService.listTargets(query, req.user);
+  }
+
+  @Post('visit-targets')
+  @Permission('khach-hang', 'update')
+  assignVisitTarget(
+    @Body() dto: AssignVisitTargetDto,
+    @Req() req: { user: KpiUser },
+  ) {
+    return this.visitCoverageService.assignTarget(dto, req.user);
+  }
+
+  @Delete('visit-targets/:id')
+  @Permission('khach-hang', 'update')
+  deleteVisitTarget(
+    @Param('id', ParseIntPipe) id: number,
+    @Req() req: { user: KpiUser },
+  ) {
+    return this.visitCoverageService.deleteTarget(id, req.user);
   }
 
   @Get('sla-violations')

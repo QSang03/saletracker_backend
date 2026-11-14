@@ -324,7 +324,17 @@ export class KpiSlaService {
       inboundTime: row.inbound_time,
       slaDeadline: row.sla_deadline,
       respondedTime: row.responded_time,
+      /** `message` = sale trả lời bằng tin, `call` = gọi lại, `none` = chưa. */
+      responseType: row.response_type,
       firstInboundMessageId: row.first_inbound_message_id,
+      slaWindow: {
+        from: row.inbound_time,
+        to: row.sla_deadline,
+        durationMinutes: 120,
+      },
+      /** Tin sale trả lời muộn nhất sau hạn (nếu có). */
+      lateReply: null as any,
+      windowMessageCount: 0,
       messages: [] as any[],
       totalCount: 0,
     };
@@ -332,6 +342,7 @@ export class KpiSlaService {
 
     const inbound = new Date(row.inbound_time).getTime();
     if (!Number.isFinite(inbound)) return empty;
+    const deadline = new Date(row.sla_deadline).getTime();
     const responded = row.responded_time
       ? new Date(row.responded_time).getTime()
       : null;
@@ -350,17 +361,65 @@ export class KpiSlaService {
       sortOrder: 'asc',
     });
 
-    return {
-      ...empty,
-      totalCount,
-      messages: items.map((message) => ({
+    const messages = items.map((message) => {
+      const timestamp = message?.timestamp ?? null;
+      const at = timestamp ? new Date(timestamp).getTime() : NaN;
+      const phase =
+        !Number.isFinite(at) || !Number.isFinite(deadline)
+          ? 'unknown'
+          : at < inbound
+            ? 'before'
+            : at <= deadline
+              ? 'in_window'
+              : 'after_deadline';
+      return {
         id: message?.id ?? null,
         content: this.normalizeMessageContent(message?.content),
         content_type: message?.content_type ?? 'TEXT',
-        timestamp: message?.timestamp ?? null,
+        timestamp,
         is_outgoing: !!message?.is_outgoing,
         sender_name: message?.sender?.name ?? null,
-      })),
+        /** before = trước tin khách; in_window = trong 2h; after_deadline = sau hạn. */
+        phase,
+        is_first_inbound:
+          String(message?.id ?? '') === String(row.first_inbound_message_id),
+        is_late_reply: false as boolean,
+        delay_minutes: null as number | null,
+      };
+    });
+
+    let lateReply: any = null;
+    if (Number.isFinite(deadline)) {
+      const late = messages.find(
+        (message) =>
+          message.is_outgoing && message.phase === 'after_deadline',
+      );
+      if (late) {
+        const at = new Date(late.timestamp).getTime();
+        late.is_late_reply = true;
+        late.delay_minutes = Math.max(
+          0,
+          Math.round((at - deadline) / 60000),
+        );
+        lateReply = {
+          id: late.id,
+          content: late.content,
+          content_type: late.content_type,
+          timestamp: late.timestamp,
+          sender_name: late.sender_name,
+          delay_minutes: late.delay_minutes,
+        };
+      }
+    }
+
+    return {
+      ...empty,
+      totalCount,
+      lateReply,
+      windowMessageCount: messages.filter(
+        (message) => message.phase === 'in_window',
+      ).length,
+      messages,
     };
   }
 

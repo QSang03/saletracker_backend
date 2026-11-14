@@ -39,6 +39,7 @@ import { KpiQuarterlySettlement } from './kpi-quarterly-settlement.entity';
 import { KpiSlaInterval } from './kpi-sla-interval.entity';
 import { KpiSlaViolation } from './kpi-sla-violation.entity';
 import { KpiAppeal } from './kpi-appeal.entity';
+import { KpiVisitTarget } from './kpi-visit-target.entity';
 import { SystemConfig } from '../system_config/system_config.entity';
 import { OrderDetail } from '../order-details/order-detail.entity';
 import { Order } from '../orders/order.entity';
@@ -74,6 +75,7 @@ import { KpiCareFunnelService } from './kpi-care-funnel.service';
 import { KpiSlaService } from './kpi-sla.service';
 import { KpiAppealService } from './kpi-appeal.service';
 import { KpiCustomerInteractionService } from './kpi-customer-interaction.service';
+import { KpiVisitCoverageService } from './kpi-visit-coverage.service';
 
 /**
  * Module khách hàng & KPI (thiết kế: BAO-CAO-KPI-KHACH-HANG.md).
@@ -118,6 +120,7 @@ import { KpiCustomerInteractionService } from './kpi-customer-interaction.servic
       KpiSlaInterval,
       KpiSlaViolation,
       KpiAppeal,
+      KpiVisitTarget,
       SystemConfig,
       // Đơn Zalo (Sale Tracker) — CHỈ ĐỌC cho tiêu chí 6 "Gợi ý đơn hàng".
       // Entity đã có metadata từ OrderModule/OrderDetailModule; khai báo lại ở
@@ -169,6 +172,7 @@ import { KpiCustomerInteractionService } from './kpi-customer-interaction.servic
     KpiSlaService,
     KpiAppealService,
     KpiCustomerInteractionService,
+    KpiVisitCoverageService,
   ],
 })
 export class CustomerKpiModule {}
