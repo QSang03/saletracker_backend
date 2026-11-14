@@ -611,6 +611,8 @@ export class CustomerKpiScoringService {
       );
       return {
         ...base,
+        // Cấp khách chỉ hỏi "có gặp hay chưa"; ngưỡng số khách/% là cấp sale.
+        targetValue: 1,
         status: reported.length > 0 ? 'pass' : 'fail',
         actualValue: reported.length > 0 ? 1 : 0,
       };
@@ -653,6 +655,8 @@ export class CustomerKpiScoringService {
       const touched = windowed.filter(isOutbound).length;
       return {
         ...base,
+        // Cấp khách chỉ hỏi "có liên lạc hay chưa"; ngưỡng số khách/% là cấp sale.
+        targetValue: 1,
         status: touched > 0 ? 'pass' : 'fail',
         actualValue: touched > 0 ? 1 : 0,
       };
@@ -1348,16 +1352,19 @@ export class CustomerKpiScoringService {
           (row) => (row.movement_count ?? 0) > 0 && row.stat_date >= fromDate,
         );
       const passed = pool.filter(reported);
-      return {
-        ...base,
-        status: passed.length > 0 ? 'pass' : 'fail',
-        actualValue: passed.length > 0 ? 1 : 0,
-        numerator: passed.length,
-        denominatorValue: pool.length,
-        totalCriteria: pool.length,
-        passedCriteria: passed.length,
-        byTier: tierBreakdown(pool, (c) => c.tier, reported),
-      };
+      return this.scoreCountOrRatio(
+        definition,
+        base,
+        {
+          passed: passed.length,
+          total: pool.length,
+          byTier: tierBreakdown(pool, (c) => c.tier, reported),
+          // Lịch hẹn không cần khớp Zalo → mẫu số là TOÀN BỘ khách của sale.
+          denominator: KpiDenominator.ALL_CUSTOMERS,
+          unit: 'khách có lịch gặp',
+        },
+        saleTargetValue,
+      );
     }
 
     // Tiêu chí 4 — cùng mẫu số reachable với contacted_customers
@@ -1370,18 +1377,24 @@ export class CustomerKpiScoringService {
         };
       }
       const touched = (c: (typeof pool)[number]) =>
-        c.days.some((row) => row.zalo_linked && isOutbound(row));
+        c.days.some(
+          (row) =>
+            row.stat_date >= fromDate && row.zalo_linked && isOutbound(row),
+        );
       const passed = pool.filter(touched);
-      return {
-        ...base,
-        status: passed.length > 0 ? 'pass' : 'fail',
-        actualValue: passed.length > 0 ? 1 : 0,
-        numerator: passed.length,
-        denominatorValue: pool.length,
-        totalCriteria: pool.length,
-        passedCriteria: passed.length,
-        byTier: tierBreakdown(pool, (c) => c.tier, touched),
-      };
+      return this.scoreCountOrRatio(
+        definition,
+        base,
+        {
+          passed: passed.length,
+          total: pool.length,
+          byTier: tierBreakdown(pool, (c) => c.tier, touched),
+          // Cùng mẫu số với các tiêu chí Zalo: chỉ khách ĐO ĐƯỢC.
+          denominator: KpiDenominator.REACHABLE_CUSTOMERS,
+          unit: 'khách được liên lạc',
+        },
+        saleTargetValue,
+      );
     }
 
     // Tiêu chí 5 — sale ĐẠT khi KHÔNG còn khách nào có gợi ý chăm sóc tồn.
@@ -1433,6 +1446,67 @@ export class CustomerKpiScoringService {
     return {
       ...base,
       reason: `Chưa hỗ trợ metric "${definition.metric}".`,
+    };
+  }
+
+  /**
+   * Chấm tiêu chí đếm khách CÓ CẤU HÌNH:
+   * - `binary`: đạt khi SỐ KHÁCH đạt ngưỡng `target_value` (so `comparison`).
+   * - `ratio`: trả TỶ LỆ % khách đạt; `target_value` là % cần đạt.
+   *
+   * Dùng cho `support_khach` (mẫu số toàn bộ khách) và `lien_lac_phan_hoi`
+   * (mẫu số khách đo được Zalo). Mẫu số CỐ ĐỊNH theo metric, không lấy
+   * `definition.denominator` — tránh cấu hình `target_value` làm mẫu số khiến
+   * `criterionMet` so % với 100 thay vì ngưỡng % của tiêu chí.
+   */
+  private scoreCountOrRatio(
+    definition: KpiDefinition,
+    base: SaleCriterion,
+    input: {
+      passed: number;
+      total: number;
+      byTier: SaleTierBreakdown;
+      denominator: KpiDenominator;
+      unit: string;
+    },
+    saleTargetValue: number | null,
+  ): SaleCriterion {
+    const configuredTarget = saleTargetValue ?? definition.target_value ?? null;
+    const target =
+      configuredTarget != null
+        ? Number(configuredTarget)
+        : definition.scoring_mode === ScoringMode.RATIO
+          ? 100
+          : 1;
+    if (definition.scoring_mode === ScoringMode.RATIO) {
+      return {
+        ...base,
+        denominator: input.denominator,
+        status: 'ratio',
+        actualValue: pct(input.passed, input.total),
+        targetValue: target,
+        numerator: input.passed,
+        denominatorValue: input.total,
+        totalCriteria: input.total,
+        passedCriteria: input.passed,
+        byTier: input.byTier,
+      };
+    }
+    const met = this.compareValue(input.passed, target, definition.comparison);
+    return {
+      ...base,
+      denominator: input.denominator,
+      status: met ? 'pass' : 'fail',
+      actualValue: met ? 1 : 0,
+      targetValue: target,
+      numerator: input.passed,
+      denominatorValue: input.total,
+      totalCriteria: input.total,
+      passedCriteria: input.passed,
+      byTier: input.byTier,
+      reason: met
+        ? undefined
+        : `Có ${input.passed}/${input.total} ${input.unit}, chưa đạt ngưỡng ${target}.`,
     };
   }
 

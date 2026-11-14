@@ -70,7 +70,7 @@ const DEFAULT_KPI_DEFINITIONS: Array<Partial<KpiDefinition>> = [
     target_value: 1,
     sort_order: 3,
     description:
-      'Tiêu chí 3: có ít nhất một lịch hẹn completed và check-in trong toàn bộ kỳ báo cáo, theo ngày check-in; nguồn API lịch hẹn, không giới hạn bởi ngày triển khai.',
+      'Tiêu chí 3: cấu hình được — binary đạt khi số khách có lịch hẹn completed + matched + checkin_at ≥ target; ratio trả % khách có lịch hẹn / tổng khách phân công. Nguồn API lịch hẹn, theo ngày check-in.',
   },
   {
     team_group: 'kinh-doanh',
@@ -83,7 +83,7 @@ const DEFAULT_KPI_DEFINITIONS: Array<Partial<KpiDefinition>> = [
     target_value: 1,
     sort_order: 4,
     description:
-      'Tiêu chí 4: tháng đạt khi có ≥1 tin nhắn từ sale tới khách (outbound > 0)',
+      'Tiêu chí 4: cấu hình được — binary đạt khi số khách có ≥1 tin sale gửi đi ≥ target; ratio trả % khách được liên lạc / khách đo được Zalo.',
   },
   {
     team_group: 'kinh-doanh',
@@ -168,6 +168,7 @@ export class CustomerKpiDefinitionsService implements OnModuleInit {
     await this.upgradeRevenueCriteria();
     await this.ensureDefaultCriteria();
     await this.upgradeSuggestionAckDescription();
+    await this.upgradeVisitContactDescriptions();
     // Replace only the obsolete provider description, preserve admin settings.
     const legacy = await this.definitionRepo.find({
       where: { metric: 'movement_report' },
@@ -267,6 +268,41 @@ export class CustomerKpiDefinitionsService implements OnModuleInit {
     for (const row of stale) row.description = next;
     await this.definitionRepo.save(stale);
     this.logger.log(`Đã cập nhật mô tả TC5 cho ${stale.length} tiêu chí`);
+  }
+
+  /**
+   * Cập nhật mô tả TC3/TC4 từ luật hardcode "≥1 khách" sang luật cấu hình
+   * binary số khách / ratio %. Chỉ đè đúng mô tả mặc định cũ; admin đã sửa
+   * tay thì giữ nguyên.
+   */
+  private async upgradeVisitContactDescriptions() {
+    const rows = await this.definitionRepo.find({
+      where: [{ metric: 'movement_report' }, { metric: 'monthly_contact' }],
+    });
+    const next = new Map(
+      DEFAULT_KPI_DEFINITIONS.map((definition) => [
+        definition.metric,
+        definition.description!,
+      ]),
+    );
+    const stale = rows.filter((row) => {
+      const text = row.description?.trim() ?? '';
+      if (row.metric === 'movement_report') {
+        return text.includes('có ít nhất một lịch hẹn');
+      }
+      return (
+        text.includes('tháng đạt khi có ≥1 tin nhắn') ||
+        text.includes('có ≥1 tin nhắn từ sale tới khách')
+      );
+    });
+    if (stale.length === 0) return;
+    for (const row of stale) {
+      row.description = next.get(row.metric) ?? row.description;
+    }
+    await this.definitionRepo.save(stale);
+    this.logger.log(
+      `Đã cập nhật mô tả TC3/TC4 cho ${stale.length} tiêu chí`,
+    );
   }
 
   /**
