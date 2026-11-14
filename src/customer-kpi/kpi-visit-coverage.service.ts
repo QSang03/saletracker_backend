@@ -9,7 +9,7 @@ import { In, Repository } from 'typeorm';
 import { CustomerAppointment } from './customer-appointment.entity';
 import { CustomerAssignment, CustomerTier } from './customer-assignment.entity';
 import { CustomerStatus } from './customer.entity';
-import { KpiDefinition } from './kpi-definition.entity';
+import { KpiDefinition, ScoringMode } from './kpi-definition.entity';
 import {
   KpiVisitTarget,
   KpiVisitTargetPeriod,
@@ -38,6 +38,8 @@ const QUARTER_KEY_REGEX = /^\d{4}-Q[1-4]$/;
 const VISIT_CRITERION_KEY = 'support_khach';
 /** % mặc định khi chưa cấu hình target và definition cũng chưa có giá trị. */
 const DEFAULT_MONTHLY_PERCENT = 20;
+/** Số khách mặc định khi definition chấm binary nhưng target_value không hợp lệ. */
+const DEFAULT_MONTHLY_COUNT = 1;
 
 interface AssignmentRow {
   assignmentId: number;
@@ -401,6 +403,22 @@ export class KpiVisitCoverageService {
       `${KpiVisitTargetPeriod.MONTH}|${KpiVisitTargetTier.ALL}`,
     );
     const fallbackValue = Number(definition?.target_value);
+    // Cùng một tiêu chí `support_khach`: đọc đúng mode đang cấu hình.
+    // - binary → target_value là SỐ KHÁCH (vd 60 khách)
+    // - ratio  → target_value là % (vd 60%)
+    // Trước đây luôn ép %, nên cấu hình 60 khách vẫn hiện "60%".
+    const fallbackType: 'count' | 'percent' =
+      definition?.scoring_mode === ScoringMode.BINARY ? 'count' : 'percent';
+    const fallbackTarget =
+      fallbackType === 'count'
+        ? Number.isFinite(fallbackValue) && fallbackValue >= 1
+          ? Math.round(fallbackValue)
+          : DEFAULT_MONTHLY_COUNT
+        : Number.isFinite(fallbackValue) &&
+            fallbackValue > 0 &&
+            fallbackValue <= 100
+          ? fallbackValue
+          : DEFAULT_MONTHLY_PERCENT;
     const month: TargetDefinition = configuredMonth
       ? {
           type:
@@ -411,15 +429,8 @@ export class KpiVisitCoverageService {
           source: 'sale_target',
         }
       : {
-          // Target toàn cục chỉ dùng dạng % (áp cho nhiều sale). Target số
-          // khách bắt buộc tạo riêng từng sale qua bảng kpi_visit_targets.
-          type: 'percent',
-          value:
-            Number.isFinite(fallbackValue) &&
-            fallbackValue > 0 &&
-            fallbackValue <= 100
-              ? fallbackValue
-              : DEFAULT_MONTHLY_PERCENT,
+          type: fallbackType,
+          value: fallbackTarget,
           source: 'kpi_definition',
         };
 

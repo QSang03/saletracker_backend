@@ -26,6 +26,12 @@ import { SaleRevenueTarget } from './sale-revenue-target.entity';
 import { KpiCriterionOverride } from './kpi-criterion-overrides.entity';
 import { KpiDefinition, ScoringMode } from './kpi-definition.entity';
 import { KpiTarget } from './kpi-target.entity';
+import {
+  KpiVisitTarget,
+  KpiVisitTargetPeriod,
+  KpiVisitTargetTier,
+  KpiVisitTargetType,
+} from './kpi-visit-target.entity';
 import { CustomersService } from './customers.service';
 import { KpiScopeService } from './kpi-scope.service';
 import { KpiSlaService } from './kpi-sla.service';
@@ -249,6 +255,8 @@ export class CustomerKpiReportsService {
     private readonly definitionRepo: Repository<KpiDefinition>,
     @InjectRepository(KpiTarget)
     private readonly targetRepo: Repository<KpiTarget>,
+    @InjectRepository(KpiVisitTarget)
+    private readonly visitTargetRepo: Repository<KpiVisitTarget>,
     @InjectRepository(CustomerAssignment)
     private readonly assignmentRepo: Repository<CustomerAssignment>,
     @InjectRepository(Customer)
@@ -883,6 +891,53 @@ export class CustomerKpiReportsService {
   }
 
   /**
+   * Target gặp khách theo TỪNG SALE (`kpi_visit_targets`) cho kỳ báo cáo.
+   *
+   * Cùng một tiêu chí `support_khach` dùng cho cả KPI Customer và trang Tiến
+   * độ gặp khách: dòng target riêng của sale phải áp cho cả hai. Chỉ nhận
+   * `customer_tier='ALL'` và đúng `target_type` với `scoring_mode`
+   * (binary → count, ratio → percent); lệch loại thì bỏ qua để không chấm sai.
+   */
+  private async loadVisitTargetValues(
+    saleIds: number[],
+    from: string,
+    to: string,
+    quarter: FiscalQuarter | null,
+    scoringMode: ScoringMode,
+  ): Promise<Map<number, number>> {
+    const result = new Map<number, number>();
+    if (saleIds.length === 0) return result;
+    let periodType: KpiVisitTargetPeriod;
+    let periodKey: string;
+    if (quarter) {
+      periodType = KpiVisitTargetPeriod.QUARTER;
+      periodKey = `${quarter.fiscalYear}-Q${quarter.quarter}`;
+    } else if (from.slice(0, 7) === to.slice(0, 7)) {
+      periodType = KpiVisitTargetPeriod.MONTH;
+      periodKey = from.slice(0, 7);
+    } else {
+      // Khoảng không trọn tháng/quý → không có target per-sale rõ ràng.
+      return result;
+    }
+    const rows = await this.visitTargetRepo.find({
+      where: {
+        sale_id: In([...new Set(saleIds)]),
+        period_type: periodType,
+        period_key: periodKey,
+        customer_tier: KpiVisitTargetTier.ALL,
+        target_type:
+          scoringMode === ScoringMode.BINARY
+            ? KpiVisitTargetType.COUNT
+            : KpiVisitTargetType.PERCENT,
+      },
+    });
+    for (const row of rows) {
+      result.set(row.sale_id, Number(row.target_value));
+    }
+    return result;
+  }
+
+  /**
    * Ghi đè thủ công theo (sale_id, customer_id, criterion_key, period_month).
    * `customer_id = 0` là ghi đè CẢ DANH SÁCH của sale — mạnh nhất, áp cho mọi
    * khách; >0 là ghi đè riêng từng khách. Chỉ áp cho 2 tiêu chí hành vi
@@ -1406,6 +1461,8 @@ export class CustomerKpiReportsService {
     assignments: AssignmentRow[],
     activity: Map<number, ActivityDayRow[]>,
     targets: Map<string, number>,
+    /** Target gặp khách riêng từng sale (`kpi_visit_targets`, tier ALL). */
+    visitTargets: Map<number, number>,
     definitions: KpiDefinition[],
     saleInfos: Map<
       number,
@@ -1574,6 +1631,12 @@ export class CustomerKpiReportsService {
           customerTargets,
           targets.get(`${saleId}|0|${definition.key}`) ?? null,
         );
+        // support_khach: target riêng của sale (kpi_visit_targets) thắng target
+        // chung — cùng nguồn với trang Tiến độ gặp khách.
+        const effectiveSaleTarget =
+          definition.metric === 'movement_report'
+            ? (visitTargets.get(saleId) ?? saleTarget)
+            : saleTarget;
 
         saleCriteria.push(
           this.scoring.scoreSale(
@@ -1585,7 +1648,7 @@ export class CustomerKpiReportsService {
               // Loại khách của dòng phân công — để tách "đạt x/y" theo KEY/NON
               tier: c.row.customerTier,
             })),
-            saleTarget,
+            effectiveSaleTarget,
             saleInfo?.zaloLinked ?? false,
             fromDate,
             // Tiêu chí doanh số cần doanh thu từng khách + chỉ tiêu quý; các
@@ -1897,11 +1960,27 @@ export class CustomerKpiReportsService {
         )
       : new Map<number, number>();
 
+    // Target gặp khách theo sale (kpi_visit_targets) — cùng nguồn với trang
+    // Tiến độ gặp khách; chỉ nạp khi tiêu chí support_khach đang bật.
+    const visitDefinition = definitions.find(
+      (definition) => definition.metric === 'movement_report',
+    );
+    const visitTargets = visitDefinition
+      ? await this.loadVisitTargetValues(
+          [...new Set(saleIds)],
+          from,
+          to,
+          quarter,
+          visitDefinition.scoring_mode,
+        )
+      : new Map<number, number>();
+
     return {
       scored: this.buildScoredData(
         assignments,
         activity,
         targets,
+        visitTargets,
         definitions,
         saleInfos,
         from,
