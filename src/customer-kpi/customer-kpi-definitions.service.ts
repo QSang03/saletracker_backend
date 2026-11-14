@@ -95,7 +95,8 @@ const DEFAULT_KPI_DEFINITIONS: Array<Partial<KpiDefinition>> = [
     period: KpiPeriod.DAY,
     target_value: 1,
     sort_order: 5,
-    description: 'Tổng hợp từ hoạt động: đã xử lý gợi ý hay chưa',
+    description:
+      'Tiêu chí 5: khách không còn gợi ý chăm sóc tồn tại thời điểm chấm — chưa phản hồi (tin khách chưa được trả lời), KEY bỏ bê ≥3 ngày ĐO ĐƯỢC, NON có đơn ≤30 ngày bị bỏ bê ≥7 ngày ĐO ĐƯỢC. Gợi ý doanh số không tham gia TC5. Khách chăm đều → không có gợi ý → đạt.',
   },
   {
     team_group: 'kinh-doanh',
@@ -125,6 +126,22 @@ const DEFAULT_KPI_DEFINITIONS: Array<Partial<KpiDefinition>> = [
   },
 ];
 
+/**
+ * Metric CỐ ĐỊNH của từng tiêu chí hệ thống — key và adapter là một cặp.
+ * Đổi metric dưới cùng key sẽ làm tiêu chí chấm bằng thuật toán khác (ví dụ
+ * `support_khach` chuyển sang chấm tin nhắn thay vì lịch hẹn), nên BE chặn
+ * để không phá nghĩa của KPI. Tiêu chí custom (key ngoài map) vẫn tự chọn.
+ */
+const SYSTEM_METRIC_BY_KEY: Record<string, string> = {
+  support_khach: 'movement_report',
+  lien_lac_phan_hoi: 'monthly_contact',
+  goi_y_thuc_hien: 'suggestion_ack',
+  goi_y_don_hang: 'open_order_suggestion',
+  sla_phan_hoi_2h: 'sla_compliance',
+  doanh_so_key: 'revenue_key',
+  doanh_so_non: 'revenue_non',
+};
+
 /** CRUD cấu hình tiêu chí KPI — làm đủ hôm nay (bảng + seed mặc định). */
 @Injectable()
 export class CustomerKpiDefinitionsService implements OnModuleInit {
@@ -150,6 +167,7 @@ export class CustomerKpiDefinitionsService implements OnModuleInit {
     await this.upgradeBehaviorCriteria();
     await this.upgradeRevenueCriteria();
     await this.ensureDefaultCriteria();
+    await this.upgradeSuggestionAckDescription();
     // Replace only the obsolete provider description, preserve admin settings.
     const legacy = await this.definitionRepo.find({
       where: { metric: 'movement_report' },
@@ -231,6 +249,27 @@ export class CustomerKpiDefinitionsService implements OnModuleInit {
   }
 
   /**
+   * Cập nhật mô tả TC5 từ luật cũ “đã xử lý gợi ý” sang luật “không còn gợi ý
+   * chăm sóc tồn”. Chỉ đè đúng mô tả mặc định cũ; admin đã sửa tay thì giữ.
+   */
+  private async upgradeSuggestionAckDescription() {
+    const oldDefault = 'Tổng hợp từ hoạt động: đã xử lý gợi ý hay chưa';
+    const next = DEFAULT_KPI_DEFINITIONS.find(
+      (definition) => definition.key === 'goi_y_thuc_hien',
+    )!.description!;
+    const rows = await this.definitionRepo.find({
+      where: { metric: 'suggestion_ack' },
+    });
+    const stale = rows.filter(
+      (row) => row.description?.trim() === oldDefault,
+    );
+    if (stale.length === 0) return;
+    for (const row of stale) row.description = next;
+    await this.definitionRepo.save(stale);
+    this.logger.log(`Đã cập nhật mô tả TC5 cho ${stale.length} tiêu chí`);
+  }
+
+  /**
    * Nâng cấp hai tiêu chí doanh số từ "chờ API" (chu kỳ tháng, mô tả tạm) sang
    * chu kỳ QUÝ + mô tả đúng luật API NKM — cho môi trường ĐÃ seed trước khi làm
    * module doanh số. Idempotent, chỉ đè dòng còn đúng định dạng CŨ; ai đã sửa
@@ -302,6 +341,12 @@ export class CustomerKpiDefinitionsService implements OnModuleInit {
 
   async create(dto: CreateKpiDefinitionDto, user: any) {
     this.assertAdmin(user);
+    const lockedMetric = SYSTEM_METRIC_BY_KEY[dto.key];
+    if (lockedMetric && dto.metric !== lockedMetric) {
+      throw new BadRequestException(
+        `Tiêu chí hệ thống "${dto.key}" phải dùng metric "${lockedMetric}", không phải "${dto.metric}".`,
+      );
+    }
     const existed = await this.definitionRepo.findOne({
       where: { team_group: dto.team_group ?? 'kinh-doanh', key: dto.key },
     });
@@ -325,6 +370,12 @@ export class CustomerKpiDefinitionsService implements OnModuleInit {
     this.assertAdmin(user);
     const definition = await this.definitionRepo.findOne({ where: { id } });
     if (!definition) throw new NotFoundException('Không tìm thấy tiêu chí');
+    const lockedMetric = SYSTEM_METRIC_BY_KEY[definition.key];
+    if (lockedMetric && dto.metric && dto.metric !== lockedMetric) {
+      throw new BadRequestException(
+        `Tiêu chí "${definition.key}" là tiêu chí hệ thống — phải dùng metric "${lockedMetric}", không được đổi sang "${dto.metric}".`,
+      );
+    }
 
     if (dto.scoring_mode === 'binary') {
       // binary không dùng mẫu số
