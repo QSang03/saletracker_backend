@@ -335,8 +335,10 @@ export class KpiSlaService {
       /** Tin sale trả lời muộn nhất sau hạn (nếu có). */
       lateReply: null as any,
       windowMessageCount: 0,
+      omittedAfterDeadlineCount: 0,
       messages: [] as any[],
       totalCount: 0,
+      providerTotalCount: 0,
     };
     if (!row.conversation_id) return empty;
 
@@ -389,6 +391,7 @@ export class KpiSlaService {
     });
 
     let lateReply: any = null;
+    let lateMessageId: any = null;
     if (Number.isFinite(deadline)) {
       const late = messages.find(
         (message) =>
@@ -401,6 +404,7 @@ export class KpiSlaService {
           0,
           Math.round((at - deadline) / 60000),
         );
+        lateMessageId = late.id;
         lateReply = {
           id: late.id,
           content: late.content,
@@ -412,14 +416,36 @@ export class KpiSlaService {
       }
     }
 
+    // Timeline gọn: context trước tin khách + toàn bộ khung 2h + đúng tin sale
+    // trả lời trễ đầu tiên. Các tin sau hạn khác (nếu có) chỉ đếm để FE báo
+    // "N tin sau hạn", không đổ hết vào modal.
+    const afterDeadline = messages.filter(
+      (message) => message.phase === 'after_deadline',
+    );
+    const timeline = messages.filter(
+      (message) =>
+        message.phase === 'before' ||
+        message.phase === 'in_window' ||
+        message.phase === 'unknown',
+    );
+    const lateMessage = messages.find(
+      (message) => message.id === lateMessageId,
+    );
+    if (lateMessage) timeline.push(lateMessage);
+
     return {
       ...empty,
-      totalCount,
+      totalCount: timeline.length,
+      providerTotalCount: totalCount,
+      omittedAfterDeadlineCount: Math.max(
+        0,
+        afterDeadline.length - (lateMessage ? 1 : 0),
+      ),
       lateReply,
       windowMessageCount: messages.filter(
         (message) => message.phase === 'in_window',
       ).length,
-      messages,
+      messages: timeline,
     };
   }
 
