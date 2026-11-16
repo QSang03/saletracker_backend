@@ -601,60 +601,163 @@ export class SaleExcelCatalogService {
   }
 
   // =========================================================================
-  // TẢI FILE MẪU EXCEL (CHO TỪNG MẪU 1..4)
+  // TẢI FILE MẪU EXCEL (CHO TỪNG MẪU 1..4 - CHỈ RENDER THUẦN CẤU TRÚC CỘT & TAB)
   // =========================================================================
-  getTemplateDownload(templateType: number) {
-    const map: Record<number, { fileName: string; fallbacks: string[] }> = {
-      1: {
-        fileName: 'Mau_1_BAO_GIA_NUC_LCD_ASUS.xlsx',
-        fallbacks: [
-          'P:/07.11.2026 BÁO GIÁ NUC-LCD ASUS (1).xlsx',
-          'P:\\07.11.2026 BÁO GIÁ NUC-LCD ASUS (1).xlsx',
-          path.join(process.cwd(), '..', '07.11.2026 BÁO GIÁ NUC-LCD ASUS (1).xlsx'),
-          path.join(process.cwd(), '07.11.2026 BÁO GIÁ NUC-LCD ASUS (1).xlsx'),
-        ],
-      },
-      2: {
-        fileName: 'Mau_2_BBG_Quy_Dinh_Asus.xlsx',
-        fallbacks: [
-          'P:/BBG Quy Định Asus T10.2026 (1).xlsx',
-          'P:\\BBG Quy Định Asus T10.2026 (1).xlsx',
-          path.join(process.cwd(), '..', 'BBG Quy Định Asus T10.2026 (1).xlsx'),
-          path.join(process.cwd(), 'BBG Quy Định Asus T10.2026 (1).xlsx'),
-        ],
-      },
-      3: {
-        fileName: 'Mau_3_BG_noi_bo_PC_MSI.xlsx',
-        fallbacks: [
-          'P:/BG nội bộ - PC MSI - T10.2026 (1).xlsx',
-          'P:\\BG nội bộ - PC MSI - T10.2026 (1).xlsx',
-          path.join(process.cwd(), '..', 'BG nội bộ - PC MSI - T10.2026 (1).xlsx'),
-          path.join(process.cwd(), 'BG nội bộ - PC MSI - T10.2026 (1).xlsx'),
-        ],
-      },
-      4: {
-        fileName: 'Mau_4_BG_Silicon_Nikatei_FujiE.xlsx',
-        fallbacks: [
-          'P:/BG Silicon-Nikatei-FujiE Máy hủy, máy đếm tiền, máy hút-lọc không khí, tháng 09.2025 (1).xlsx',
-          'P:\\BG Silicon-Nikatei-FujiE Máy hủy, máy đếm tiền, máy hút-lọc không khí, tháng 09.2025 (1).xlsx',
-          path.join(process.cwd(), '..', 'BG Silicon-Nikatei-FujiE Máy hủy, máy đếm tiền, máy hút-lọc không khí, tháng 09.2025 (1).xlsx'),
-          path.join(process.cwd(), 'BG Silicon-Nikatei-FujiE Máy hủy, máy đếm tiền, máy hút-lọc không khí, tháng 09.2025 (1).xlsx'),
-        ],
-      },
+  async generateSampleTemplate(
+    templateType: number,
+  ): Promise<{ buffer: Buffer; fileName: string }> {
+    const fileNames: Record<number, string> = {
+      1: 'Mau_1_BAO_GIA_NUC_LCD_ASUS.xlsx',
+      2: 'Mau_2_BBG_Quy_Dinh_Asus.xlsx',
+      3: 'Mau_3_BG_noi_bo_PC_MSI.xlsx',
+      4: 'Mau_4_BG_Silicon_Nikatei_FujiE.xlsx',
     };
 
-    const target = map[templateType];
-    if (!target) {
+    const fileName = fileNames[templateType];
+    if (!fileName) {
       throw new NotFoundException('Mẫu Excel không tồn tại');
     }
 
-    for (const p of target.fallbacks) {
-      if (fs.existsSync(p)) {
-        return { filePath: p, fileName: target.fileName };
-      }
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'SaleTracker System';
+    workbook.created = new Date();
+
+    if (templateType === 1) {
+      // Mẫu 1: ASUS NUC & LCD (Header ở dòng 2)
+      const ws1 = workbook.addWorksheet('NUC-MINi');
+      ws1.addRow([]); // Dòng 1 trống
+      const hRow1 = ws1.addRow([
+        'NO',
+        'PRODUCT CODE HT',
+        'MODEL NAME',
+        'PRODUCT CODE 1',
+        'PRODUCT CODE',
+        'WARRANTY',
+        'UNIT PRICE',
+        'PRODUCT STATUS',
+        'FUND',
+        'NPP',
+      ]);
+      this.formatTemplateHeader(hRow1);
+
+      const ws2 = workbook.addWorksheet('LCD');
+      ws2.addRow([]); // Dòng 1 trống
+      const hRow2 = ws2.addRow([
+        'NO',
+        'PRODUCT CODE HT',
+        'MODEL NAME',
+        'PRODUCT CODE',
+        'WARRANTY',
+        'UNIT PRICE',
+        'PRODUCT STATUS',
+        'FUND',
+      ]);
+      this.formatTemplateHeader(hRow2);
+    } else if (templateType === 2) {
+      // Mẫu 2: Bảng Giá Quy Định ASUS Hãng (Header ở dòng 2 - dữ liệu từ dòng 4)
+      const ws = workbook.addWorksheet('Sheet1');
+      ws.addRow([]); // Dòng 1 trống
+      const hRow = ws.addRow([
+        'STT',
+        'Model Name',
+        'Chi Tiết',
+        'TGBH',
+        'Giá Bán Có Vat',
+        'Thông tin Hàng',
+        'Funding',
+      ]);
+      this.formatTemplateHeader(hRow);
+      ws.addRow([]); // Dòng 3 để trống
+    } else if (templateType === 3) {
+      // Mẫu 3: Báo Giá Nội Bộ PC MSI (Header ở dòng 1)
+      const ws = workbook.addWorksheet('BG');
+      const hRow = ws.addRow([
+        'STT',
+        'Model Name',
+        'Mã kho S1',
+        'Loại máy',
+        'Cấu hình',
+        'Bảo hành',
+        'Giá',
+        'Noted',
+        'Fund',
+      ]);
+      this.formatTemplateHeader(hRow);
+    } else if (templateType === 4) {
+      // Mẫu 4: Thiết Bị Văn Phòng & Gia Dụng
+      const ws1 = workbook.addWorksheet('Gia Dealer');
+      ws1.addRow([]); // Dòng 1 trống
+      const hRow1 = ws1.addRow([
+        'STT',
+        'Mã kho NK / Model Mã',
+        'Sản phẩm + Hãng + Models',
+        'TGBH / Warranty',
+        'GíaNK.Dealer FULL VAT / End User',
+        'Giá Bán Lẻ',
+        'Ghi chú',
+      ]);
+      this.formatTemplateHeader(hRow1);
+
+      const ws2 = workbook.addWorksheet('shredder-SILICON');
+      ws2.addRow([]); // Dòng 1 trống
+      const hRow2 = ws2.addRow([
+        'STT',
+        'Model Mã',
+        'Sản phẩm',
+        'TGBH',
+        'GíaNK.Dealer FULL VAT',
+      ]);
+      this.formatTemplateHeader(hRow2);
+
+      const ws3 = workbook.addWorksheet('Cash-Silicon');
+      ws3.addRow([]); // Dòng 1 trống
+      const hRow3 = ws3.addRow([
+        'STT',
+        'Model Mã',
+        'Sản phẩm',
+        'TGBH',
+        'GíaNK.Dealer FULL VAT',
+      ]);
+      this.formatTemplateHeader(hRow3);
     }
 
-    throw new NotFoundException('Không tìm thấy file mẫu trên máy chủ');
+    // Tự động căn chỉnh độ rộng cột theo tiêu đề
+    workbook.worksheets.forEach((sheet) => {
+      sheet.columns.forEach((col: any) => {
+        let maxLen = 14;
+        col.eachCell?.({ includeEmpty: false }, (cell: any) => {
+          const val = cell.value ? String(cell.value) : '';
+          if (val.length > maxLen) maxLen = Math.min(val.length + 4, 45);
+        });
+        col.width = maxLen;
+      });
+    });
+
+    const rawBuffer = await workbook.xlsx.writeBuffer();
+    const buffer = Buffer.from(rawBuffer);
+    return { buffer, fileName };
+  }
+
+  /**
+   * Helper format dòng header của file mẫu (tô màu nền nhẹ, in đậm, border mỏng)
+   */
+  private formatTemplateHeader(row: ExcelJS.Row) {
+    row.height = 28;
+    row.eachCell({ includeEmpty: true }, (cell) => {
+      cell.font = { bold: true, color: { argb: 'FF0F172A' }, size: 10 };
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFF1F5F9' },
+      };
+      cell.alignment = { vertical: 'middle', horizontal: 'center' };
+      cell.border = {
+        top: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+        left: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+        bottom: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+        right: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+      };
+    });
   }
 
   // =========================================================================

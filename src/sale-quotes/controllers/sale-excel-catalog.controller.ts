@@ -107,9 +107,17 @@ export class SaleExcelCatalogController {
     @Param('templateType', ParseIntPipe) templateType: number,
     @Res() res: Response,
   ) {
-    const { filePath, fileName } =
-      this.excelService.getTemplateDownload(templateType);
-    return res.download(filePath, fileName);
+    const { buffer, fileName } =
+      await this.excelService.generateSampleTemplate(templateType);
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${encodeURIComponent(fileName)}"`,
+    );
+    return res.send(buffer);
   }
 
   // =========================================================================
