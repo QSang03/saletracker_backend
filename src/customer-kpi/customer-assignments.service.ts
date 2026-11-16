@@ -440,8 +440,15 @@ export class CustomerAssignmentsService {
     const criteriaCount = await this.definitionRepo.count({
       where: { team_group: 'kinh-doanh' },
     });
+    // Lỗi đọc/định dạng file (thiếu sheet, thiếu cột, file hỏng...) là lỗi dữ
+    // liệu người dùng nạp lên → phải trả 400 kèm thông báo đọc được. Trước đây
+    // parseImportWorkbook throw Error thường nên Nest trả 500.
     const parsed = await parseImportWorkbook(buffer, {
       requireCriteria: criteriaCount === 0,
+    }).catch((e: any) => {
+      throw new BadRequestException(
+        `File Excel không hợp lệ: ${e?.message || 'không đọc được file'}`,
+      );
     });
 
     // 1) Mã nhân viên trong file -> users.id (không tự tạo user).

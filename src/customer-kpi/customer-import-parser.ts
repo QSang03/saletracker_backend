@@ -16,10 +16,10 @@ export interface ParsedCustomerRow {
   customer_code: string;
   sap_code: string;
   /**
-   * Role đọc từ cột "LOẠI MÃ" — CHINH/PHU, hoặc null khi cột vắng trong file
-   * (tùy chọn) hoặc ô dòng đó để trống. Null KHÔNG phải lỗi: bước sinh diff
-   * tự quyết — tạo mới khách → mặc định CHINH; cập nhật → giữ role cũ, cũ
-   * null mới đề xuất gán CHINH.
+   * Role đọc từ cột "LOẠI MÃ" (CHINH/PHU), hoặc từ cột "Mã" của format mới
+   * (MẸ = CHÍNH, CON = PHỤ). Null khi cột vắng trong file (tùy chọn) hoặc ô
+   * dòng đó để trống. Null KHÔNG phải lỗi: bước sinh diff tự quyết — tạo mới
+   * khách → mặc định CHINH; cập nhật → giữ role cũ, cũ null mới đề xuất CHINH.
    */
   customer_role: CustomerRoleValue | null;
   credit_days: number | null;
@@ -96,6 +96,93 @@ const DEPT_BY_EMP_HEADER: Record<string, string> = {
   'S1-PTKH2': 'ptkh2',
 };
 
+/**
+ * Header cột mã khách. File chuẩn dùng "MÃ KH", nhưng file thật do manager
+ * xuất từ nguồn khác có thể chỉ còn "MÃ" (đã gặp file update 16/11/2026).
+ * Các biến thể đều chuẩn hoá về cùng một dạng không dấu.
+ */
+const CODE_HEADER_ALIASES = new Set([
+  'MA KH',
+  'MA KHACH HANG',
+  'MA KHACH',
+  'MA',
+]);
+const CODE_HEADER_CANONICAL = 'MA KH';
+
+/**
+ * Chọn cột mã khách khi file có nhiều cột cùng chuẩn hoá thành "MA".
+ *
+ * Ví dụ file thật: cột C header "Mã" (giá trị MẸ/CON — phân nhóm) đứng cạnh
+ * cột D header "MÃ" (mã khách). Sau khi bỏ dấu cả hai đều thành "MA", nên
+ * không thể chọn theo header. Chọn theo dữ liệu:
+ * - mã khách luôn chứa "_" (xem customer.entity.ts) → ưu tiên tỉ lệ này;
+ * - cột phân nhóm chỉ lặp vài giá trị → độ đa dạng thấp.
+ * Cột không đạt ngưỡng tin cậy bị loại để báo thiếu cột thay vì đọc rác.
+ */
+function pickCodeColumn(
+  ws: ExcelJS.Worksheet,
+  headerRowNum: number,
+  candidates: Array<{ col: number; header: string }>,
+): number {
+  if (!candidates.length) return 0;
+  const canonical = candidates.find((c) => c.header === CODE_HEADER_CANONICAL);
+  if (canonical) return canonical.col;
+
+  const lastRow = Math.min(ws.rowCount, headerRowNum + 500);
+  let best: { col: number; score: number } | null = null;
+  for (const { col } of candidates) {
+    let nonEmpty = 0;
+    let withUnderscore = 0;
+    const distinct = new Set<string>();
+    for (let r = headerRowNum + 1; r <= lastRow; r++) {
+      const v = cellText(ws.getRow(r).getCell(col));
+      if (!v) continue;
+      nonEmpty++;
+      distinct.add(v);
+      if (v.includes('_')) withUnderscore++;
+    }
+    if (!nonEmpty) continue;
+    const score =
+      (withUnderscore / nonEmpty) * 2 + distinct.size / nonEmpty;
+    if (!best || score > best.score) best = { col, score };
+  }
+  return best && best.score >= 0.5 ? best.col : 0;
+}
+
+/**
+ * Cột "Mã" của format mới chứa LOẠI MÃ dạng MẸ/CON (MẸ = CHÍNH, CON = PHỤ),
+ * không phải mã khách. Sau khi chọn cột mã khách, cột "MA" còn lại chỉ được
+ * nhận là cột role nếu dữ liệu gần như toàn bộ là các giá trị role.
+ */
+const ROLE_VALUE_TOKENS = new Set(['ME', 'CON', 'CHINH', 'PHU']);
+
+function pickRoleColumn(
+  ws: ExcelJS.Worksheet,
+  headerRowNum: number,
+  candidates: Array<{ col: number; header: string }>,
+  codeCol: number,
+): number {
+  const lastRow = Math.min(ws.rowCount, headerRowNum + 500);
+  let best: { col: number; ratio: number } | null = null;
+  for (const { col } of candidates) {
+    if (col === codeCol) continue;
+    let nonEmpty = 0;
+    let roleLike = 0;
+    for (let r = headerRowNum + 1; r <= lastRow; r++) {
+      const v = cellText(ws.getRow(r).getCell(col));
+      if (!v) continue;
+      nonEmpty++;
+      if (ROLE_VALUE_TOKENS.has(norm(v))) roleLike++;
+    }
+    if (!nonEmpty) continue;
+    const ratio = roleLike / nonEmpty;
+    if (ratio >= 0.9 && (!best || ratio > best.ratio)) {
+      best = { col, ratio };
+    }
+  }
+  return best?.col ?? 0;
+}
+
 /** Đọc giá trị ô về chuỗi — xử lý richText, công thức (lấy result nếu có). */
 function cellText(cell: ExcelJS.Cell): string {
   const v = cell.value;
@@ -133,7 +220,8 @@ function cellNumber(cell: ExcelJS.Cell): number | null {
  *
  * Cột "LOẠI MÃ" tùy chọn: file cũ thiếu cột này, hoặc dòng nào để trống, đều
  * đọc được — customer_role = null, không báo lỗi (quy tắc mặc định nằm ở bước
- * sinh diff/apply). Sai giá trị (non-empty lạ) mới là lỗi của dòng.
+ * sinh diff/apply). Format mới dùng cột "Mã" với MẸ = CHÍNH, CON = PHỤ; parser
+ * nhận cả hai kiểu. Sai giá trị (non-empty lạ) mới là lỗi của dòng.
  *
  * Gộp trùng: 2 dòng cùng (mã, SAP) → một khách, phòng nào chưa có thì nhận thêm,
  * trùng phòng nhưng khác nhân viên → giữ dòng ĐẦU + ghi cảnh báo.
@@ -171,23 +259,37 @@ export async function parseImportWorkbook(
     );
   }
 
-  // Dò dòng tiêu đề trong 10 dòng đầu — file mẫu nằm ở dòng 1 nhưng không cố định cứng
+  // Dò dòng tiêu đề trong 10 dòng đầu — file mẫu nằm ở dòng 1 nhưng không cố định cứng.
+  // Ưu tiên dòng có cả cột SAP lẫn cột mã khách: alias "MÃ" dễ trùng với một ô
+  // dữ liệu nào đó ở đầu sheet hơn "MÃ KH" cũ.
   let headerRowNum = -1;
+  let codeOnlyRow = -1;
+  let sapOnlyRow = -1;
   for (let i = 1; i <= Math.min(10, ws.rowCount); i++) {
     const texts: string[] = [];
     ws.getRow(i).eachCell({ includeEmpty: false }, (c) =>
-      texts.push(norm(c.value)),
+      // cellText thay vì String(c.value): header rich text là object, String()
+      // sẽ ra "[OBJECT OBJECT]" và không bao giờ khớp.
+      texts.push(norm(cellText(c))),
     );
     // Cột "LOẠI MÃ" KHÔNG bắt buộc để dò dòng tiêu đề nữa — file thiếu nó
     // vẫn nạp được (role trống → middleware xử lý theo quy tắc mặc định ở
     // bước sinh diff/apply, xem customer-assignments.service.ts).
-    if (texts.includes('MA KH')) {
+    const hasCode = texts.some((t) => CODE_HEADER_ALIASES.has(t));
+    const hasSap = texts.includes('MA DOI TAC SAP');
+    if (hasCode && hasSap) {
       headerRowNum = i;
       break;
     }
+    if (hasCode && codeOnlyRow < 0) codeOnlyRow = i;
+    if (hasSap && sapOnlyRow < 0) sapOnlyRow = i;
   }
+  if (headerRowNum < 0) headerRowNum = codeOnlyRow;
+  if (headerRowNum < 0) headerRowNum = sapOnlyRow;
   if (headerRowNum < 0) {
-    throw new Error('Không tìm thấy dòng tiêu đề (cần cột "MÃ KH")');
+    throw new Error(
+      'Không tìm thấy dòng tiêu đề (cần cột "MÃ KH" hoặc "MÃ")',
+    );
   }
 
   // Ghép cột theo header
@@ -199,11 +301,13 @@ export async function parseImportWorkbook(
   };
   const tierCols: Array<{ col: number; slug: string }> = [];
   const empCols: Array<{ col: number; slug: string }> = [];
+  const codeCandidates: Array<{ col: number; header: string }> = [];
   ws.getRow(headerRowNum).eachCell({ includeEmpty: false }, (cell, col) => {
-    const n = norm(cell.value);
+    const n = norm(cellText(cell));
     if (!n) return;
     if (n === 'MA DOI TAC SAP') cols.sap = col;
-    else if (n === 'MA KH') cols.code = col;
+    else if (CODE_HEADER_ALIASES.has(n))
+      codeCandidates.push({ col, header: n });
     else if (n === 'LOAI MA') cols.loai = col;
     else if (n === 'HAN MUC') cols.hanMuc = col;
     else if (DEPT_BY_TIER_HEADER[n])
@@ -211,6 +315,11 @@ export async function parseImportWorkbook(
     else if (DEPT_BY_EMP_HEADER[n])
       empCols.push({ col, slug: DEPT_BY_EMP_HEADER[n] });
   });
+  cols.code = pickCodeColumn(ws, headerRowNum, codeCandidates);
+  // Format mới dùng cột "Mã" (MẸ/CON) làm LOẠI MÃ; cột chuẩn "LOẠI MÃ" được ưu tiên.
+  if (!cols.loai) {
+    cols.loai = pickRoleColumn(ws, headerRowNum, codeCandidates, cols.code);
+  }
 
   const missing: string[] = [];
   if (!cols.code) missing.push('"MÃ KH"');
@@ -240,11 +349,15 @@ export async function parseImportWorkbook(
     // giá trị mặc định do bước sinh diff/apply quyết (tạo mới → CHÍNH,
     // cập nhật → giữ cũ, cũ null mới gán CHÍNH). Sai giá trị vẫn là lỗi.
     let customer_role: CustomerRoleValue | null = null;
-    const roleRaw = norm(cols.loai ? cellText(row.getCell(cols.loai)) : '');
-    if (roleRaw === 'CHINH') customer_role = 'CHINH';
-    else if (roleRaw === 'PHU') customer_role = 'PHU';
+    const roleText = cols.loai ? cellText(row.getCell(cols.loai)) : '';
+    const roleRaw = norm(roleText);
+    // CHÍNH/PHỤ (file chuẩn) hoặc MẸ/CON (cột "Mã" format mới)
+    if (roleRaw === 'CHINH' || roleRaw === 'ME') customer_role = 'CHINH';
+    else if (roleRaw === 'PHU' || roleRaw === 'CON') customer_role = 'PHU';
     else if (roleRaw) {
-      errors.push(`LOẠI MÃ sai giá trị "${roleRaw}" (chỉ nhận CHINH/PHU)`);
+      errors.push(
+        `LOẠI MÃ sai giá trị "${roleText}" (chỉ nhận CHINH/PHU hoặc MẸ/CON)`,
+      );
     }
 
     // Cột HẠN MỨC = Số ngày công nợ (đã đối chiếu với sheet CNO), không phải tiền
@@ -257,15 +370,24 @@ export async function parseImportWorkbook(
     for (const { col, slug } of empCols) {
       const raw = cellText(row.getCell(col));
       if (!raw) continue; // phòng không có nhân viên trong dòng này
+      // Ô nhân viên bị công thức trả về 0 khi không có người (đã gặp file thật)
+      // — coi như trống, không phải mã nhân viên "0".
+      if (raw === '0') continue;
       const empCode = norm(raw.split('-')[0]);
       if (!empCode) continue;
       const tierCol = tierCols.find((t) => t.slug === slug);
       const tierRaw = tierCol
         ? cellText(row.getCell(tierCol.col)).toLowerCase()
         : '';
-      if (tierRaw !== 'key' && tierRaw !== 'non') {
+      let tier: CustomerTierValue;
+      if (tierRaw === 'key') tier = 'KEY';
+      else if (tierRaw === 'non' || !tierRaw) {
+        // Ô phân loại để trống = không ghi KEY → mặc định NON (quy tắc nghiệp vụ).
+        // Chỉ giá trị lạ (non-empty, không phải key/non) mới là lỗi dòng.
+        tier = 'NON';
+      } else {
         errors.push(
-          `Phòng ${slug}: giá trị phân loại "${tierRaw || '(trống)'}" phải là KEY hoặc NON`,
+          `Phòng ${slug}: giá trị phân loại "${tierRaw}" phải là KEY hoặc NON`,
         );
         // Nhớ lại phòng có ô nhưng sai — không suy ra được là "file bỏ phòng này"
         if (!invalidDepts.includes(slug)) invalidDepts.push(slug);
@@ -274,7 +396,7 @@ export async function parseImportWorkbook(
       assignments.push({
         department_slug: slug,
         employee_code: empCode,
-        tier: tierRaw.toUpperCase() as CustomerTierValue,
+        tier,
       });
     }
 
