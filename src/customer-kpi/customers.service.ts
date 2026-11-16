@@ -721,7 +721,18 @@ export class CustomersService {
     const qb = this.userRepo
       .createQueryBuilder('u')
       .leftJoinAndSelect('u.departments', 'd')
-      .where('u.deleted_at IS NULL');
+      .where('u.deleted_at IS NULL')
+      // Loại tài khoản chỉ-xem (role `view` và role con `view_<username>`) khỏi
+      // dropdown chọn Sale: họ không phải sale, không có khách hàng/KPI để giao.
+      // Dùng NOT EXISTS (không join roles) để không nhân dòng theo số role.
+      .andWhere(
+        `NOT EXISTS (
+           SELECT 1 FROM users_roles ur
+           INNER JOIN roles r ON r.id = ur.role_id
+           WHERE ur.user_id = u.id
+             AND (LOWER(r.name) = 'view' OR LOWER(r.name) LIKE 'view\\_%')
+         )`,
+      );
 
     if (userIds !== undefined) {
       qb.andWhere('u.id IN (:...userIds)', { userIds });
