@@ -14,6 +14,7 @@ import { SaleExcelCatalog } from './entities/sale-excel-catalog.entity';
 import { SaleExcelSheet } from './entities/sale-excel-sheet.entity';
 import { SaleExcelItem } from './entities/sale-excel-item.entity';
 import { SaleExcelPermission } from './entities/sale-excel-permission.entity';
+import { SaleExcelTemplate } from './entities/sale-excel-template.entity';
 import { User } from '../users/user.entity';
 
 import { SaleSettingsService } from './services/sale-settings.service';
@@ -51,6 +52,7 @@ import { SaleExcelCatalogController } from './controllers/sale-excel-catalog.con
       SaleExcelSheet,
       SaleExcelItem,
       SaleExcelPermission,
+      SaleExcelTemplate,
     ]),
   ],
   controllers: [

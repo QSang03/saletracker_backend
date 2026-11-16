@@ -14,6 +14,10 @@ import { SaleExcelCatalog } from '../entities/sale-excel-catalog.entity';
 import { SaleExcelSheet } from '../entities/sale-excel-sheet.entity';
 import { SaleExcelItem } from '../entities/sale-excel-item.entity';
 import { SaleExcelPermission } from '../entities/sale-excel-permission.entity';
+import {
+  SaleExcelTemplate,
+  SheetGroupMapping,
+} from '../entities/sale-excel-template.entity';
 import { Product } from '../../products/product.entity';
 import { User } from '../../users/user.entity';
 import {
@@ -41,6 +45,8 @@ export class SaleExcelCatalogService {
     private readonly itemRepo: Repository<SaleExcelItem>,
     @InjectRepository(SaleExcelPermission)
     private readonly permissionRepo: Repository<SaleExcelPermission>,
+    @InjectRepository(SaleExcelTemplate)
+    private readonly templateRepo: Repository<SaleExcelTemplate>,
     @InjectRepository(Product)
     private readonly productRepo: Repository<Product>,
     @InjectRepository(User)
@@ -176,11 +182,34 @@ export class SaleExcelCatalogService {
     const cleanName = (customName || file.originalname.replace(/\.[^/.]+$/, ''))
       .trim();
 
-    // Parse Excel Buffer trực tiếp từ bộ nhớ
-    const parsed = await this.parserService.parseBuffer(
-      file.buffer,
-      templateType,
-    );
+    // 1. Kiểm tra xem có template động tương ứng trong DB không
+    const dynamicTemplate = await this.templateRepo.findOne({
+      where: { id: Number(templateType) },
+    });
+
+    let parsed;
+    if (dynamicTemplate) {
+      // Xác thực cấu trúc file trước khi nạp: phát hiện Tab nào bị sai lệch cột
+      const validation =
+        await this.parserService.validateFileAgainstTemplate(
+          file.buffer,
+          dynamicTemplate,
+        );
+      if (!validation.isValid) {
+        throw new BadRequestException({
+          message: 'Cấu trúc file không khớp với mẫu đã chọn',
+          errors: validation.errors,
+        });
+      }
+      parsed = await this.parserService.parseBufferWithTemplate(
+        file.buffer,
+        dynamicTemplate,
+      );
+    } else {
+      // Fallback
+      parsed = await this.parserService.parseBuffer(file.buffer, templateType);
+    }
+
     if (parsed.sheets.length === 0 || parsed.totalItems === 0) {
       throw new BadRequestException(
         'Không tìm thấy dữ liệu hợp lệ trong file Excel theo mẫu đã chọn',
@@ -290,8 +319,32 @@ export class SaleExcelCatalogService {
 
     const tType = templateType ? Number(templateType) : catalog.templateType;
 
-    // Parse Excel Buffer
-    const parsed = await this.parserService.parseBuffer(file.buffer, tType);
+    // 1. Kiểm tra template động
+    const dynamicTemplate = await this.templateRepo.findOne({
+      where: { id: tType },
+    });
+
+    let parsed;
+    if (dynamicTemplate) {
+      const validation =
+        await this.parserService.validateFileAgainstTemplate(
+          file.buffer,
+          dynamicTemplate,
+        );
+      if (!validation.isValid) {
+        throw new BadRequestException({
+          message: 'Cấu trúc file không khớp với mẫu đã chọn',
+          errors: validation.errors,
+        });
+      }
+      parsed = await this.parserService.parseBufferWithTemplate(
+        file.buffer,
+        dynamicTemplate,
+      );
+    } else {
+      parsed = await this.parserService.parseBuffer(file.buffer, tType);
+    }
+
     if (parsed.sheets.length === 0 || parsed.totalItems === 0) {
       throw new BadRequestException(
         'Không tìm thấy dữ liệu hợp lệ trong file Excel mới',
@@ -886,5 +939,132 @@ export class SaleExcelCatalogService {
     }
 
     return s1Map;
+  }
+
+  // =========================================================================
+  // QUẢN LÝ MẪU CẤU TRÚC ĐỘNG (DYNAMIC TEMPLATES)
+  // =========================================================================
+  async inspectTemplateFile(file: Express.Multer.File) {
+    if (!file) {
+      throw new BadRequestException('Vui lòng tải lên file Excel');
+    }
+    return this.parserService.inspectTemplateBuffer(file.buffer);
+  }
+
+  async createTemplate(
+    dto: {
+      name: string;
+      description?: string;
+      sheetGroups: SheetGroupMapping[];
+    },
+    userId?: number,
+  ) {
+    if (!dto.name || !dto.name.trim()) {
+      throw new BadRequestException('Vui lòng nhập tên mẫu');
+    }
+    if (!dto.sheetGroups || dto.sheetGroups.length === 0) {
+      throw new BadRequestException(
+        'Vui lòng định nghĩa ít nhất 1 nhóm cấu trúc cột',
+      );
+    }
+
+    const t = this.templateRepo.create({
+      name: dto.name.trim(),
+      description: dto.description?.trim() || null,
+      sheetGroups: dto.sheetGroups,
+      createdById: userId || null,
+    });
+    return this.templateRepo.save(t);
+  }
+
+  async getAllTemplates() {
+    return this.templateRepo.find({
+      order: { updatedAt: 'DESC' },
+    });
+  }
+
+  async getTemplateById(id: number) {
+    const t = await this.templateRepo.findOne({ where: { id } });
+    if (!t) throw new NotFoundException('Không tìm thấy mẫu cấu trúc Excel');
+    return t;
+  }
+
+  async updateTemplate(
+    id: number,
+    dto: {
+      name?: string;
+      description?: string;
+      sheetGroups?: SheetGroupMapping[];
+    },
+  ) {
+    const t = await this.getTemplateById(id);
+    if (dto.name !== undefined) t.name = dto.name.trim();
+    if (dto.description !== undefined)
+      t.description = dto.description?.trim() || null;
+    if (dto.sheetGroups !== undefined) t.sheetGroups = dto.sheetGroups;
+    return this.templateRepo.save(t);
+  }
+
+  async deleteTemplate(id: number) {
+    const t = await this.getTemplateById(id);
+    await this.templateRepo.remove(t);
+    return { success: true };
+  }
+
+  async renderDynamicTemplateSample(
+    templateId: number,
+  ): Promise<{ buffer: Buffer; fileName: string }> {
+    const template = await this.getTemplateById(templateId);
+
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'SaleTracker System';
+    workbook.created = new Date();
+
+    for (const group of template.sheetGroups) {
+      const sheets =
+        group.appliedSheets && group.appliedSheets.length > 0
+          ? group.appliedSheets
+          : ['Sheet1'];
+
+      for (const sheetName of sheets) {
+        const ws = workbook.addWorksheet(sheetName);
+
+        const headerRowIdx = group.headerRow || 1;
+        for (let r = 1; r < headerRowIdx; r++) {
+          ws.addRow([]);
+        }
+
+        let colsToAdd =
+          group.excelColumns && group.excelColumns.length > 0
+            ? group.excelColumns
+            : Object.values(group.columns).filter(Boolean);
+
+        if (colsToAdd.length === 0) {
+          colsToAdd = ['STT', 'Mã Sản Phẩm', 'Tên Sản Phẩm', 'Đơn Giá'];
+        }
+
+        const hRow = ws.addRow(colsToAdd);
+        this.formatTemplateHeader(hRow);
+      }
+    }
+
+    workbook.worksheets.forEach((sheet) => {
+      sheet.columns.forEach((col: any) => {
+        let maxLen = 14;
+        col.eachCell?.({ includeEmpty: false }, (cell: any) => {
+          const val = cell.value ? String(cell.value) : '';
+          if (val.length > maxLen) maxLen = Math.min(val.length + 4, 45);
+        });
+        col.width = maxLen;
+      });
+    });
+
+    const rawBuffer = await workbook.xlsx.writeBuffer();
+    const buffer = Buffer.from(rawBuffer);
+    const safeName = template.name.replace(
+      /[^a-zA-Z0-9_\u00C0-\u024F\u1EA0-\u1EF9]/g,
+      '_',
+    );
+    return { buffer, fileName: `${safeName}_Mau_Excel.xlsx` };
   }
 }

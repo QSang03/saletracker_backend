@@ -1,5 +1,49 @@
 import { Injectable, Logger } from '@nestjs/common';
 import * as ExcelJS from 'exceljs';
+import {
+  SaleExcelTemplate,
+  SheetGroupMapping,
+} from '../entities/sale-excel-template.entity';
+
+export interface InspectedSheetColumn {
+  name: string;
+  colIndex: number;
+  sampleVal: string;
+}
+
+export interface InspectedColumnCompat {
+  name: string;
+  index: number;
+  sampleValue: string;
+}
+
+export interface InspectedSheetGroup {
+  id: string;
+  groupId: string;
+  name: string;
+  groupName: string;
+  sheets: string[];
+  appliedSheets: string[];
+  headerRow: number;
+  columns: InspectedColumnCompat[];
+  excelColumns: string[];
+  columnsDetail: InspectedSheetColumn[];
+  sampleRows: Record<string, string>[];
+}
+
+export interface InspectTemplateResult {
+  totalSheets: number;
+  allSheets: string[];
+  isAllSame: boolean;
+  sheetGroups: InspectedSheetGroup[];
+}
+
+export interface TemplateValidationErrorItem {
+  sheetName: string;
+  groupName?: string;
+  missingRequiredColumns: Array<{ field: string; expectedColumn: string }>;
+  foundColumns: string[];
+}
 
 export interface ParsedItemRow {
   rowIndex: number;
@@ -463,6 +507,433 @@ export class SaleExcelParserService {
     }
 
     return items;
+  }
+
+  // =========================================================================
+  // PHÂN TÍCH FILE EXCEL ĐỂ TẠO MẪU MỚI (INSPECT TEMPLATE)
+  // Tự động gom nhóm các Tab Sheet có cấu trúc cột giống nhau
+  // =========================================================================
+  async inspectTemplateBuffer(buffer: Buffer): Promise<InspectTemplateResult> {
+    const workbook = new ExcelJS.Workbook();
+    // @ts-ignore
+    await workbook.xlsx.load(buffer);
+
+    const sheetSummaries: Array<{
+      sheetName: string;
+      headerRow: number;
+      columns: string[];
+      columnsDetail: InspectedSheetColumn[];
+      sampleRows: Record<string, string>[];
+      signature: string;
+    }> = [];
+
+    workbook.worksheets.forEach((ws) => {
+      if (ws.state === 'hidden' || ws.state === 'veryHidden') return;
+
+      // 1. Tìm dòng header tốt nhất trong 5 dòng đầu
+      let bestHeaderRow = 1;
+      let maxColsWithText = 0;
+      for (let r = 1; r <= Math.min(5, ws.rowCount); r++) {
+        const row = ws.getRow(r);
+        let count = 0;
+        row.eachCell({ includeEmpty: false }, (cell) => {
+          const val = this.getCellValue(cell).trim();
+          if (val.length > 0 && isNaN(Number(val))) count++;
+        });
+        if (count > maxColsWithText) {
+          maxColsWithText = count;
+          bestHeaderRow = r;
+        }
+      }
+
+      // 2. Đọc các cột tại dòng header
+      const headerRowObj = ws.getRow(bestHeaderRow);
+      const colsDetail: InspectedSheetColumn[] = [];
+      const colNames: string[] = [];
+
+      // Tìm dòng dữ liệu sản phẩm thật đầu tiên bên dưới header để lấy sample value chuẩn
+      // (Bỏ qua các dòng phân cách danh mục chỉ có 1 ô như "PC Mini Cubi MSI", "PC MSI", "AIO MSI"...)
+      let firstDataRowIdx = bestHeaderRow + 1;
+      for (let r = bestHeaderRow + 1; r <= Math.min(bestHeaderRow + 10, ws.rowCount); r++) {
+        const testRow = ws.getRow(r);
+        let filledCount = 0;
+        testRow.eachCell({ includeEmpty: false }, (cell) => {
+          if (this.getCellValue(cell).trim()) filledCount++;
+        });
+        if (filledCount >= 3) {
+          firstDataRowIdx = r;
+          break;
+        }
+      }
+
+      headerRowObj.eachCell({ includeEmpty: false }, (cell, colNumber) => {
+        const name = this.getCellValue(cell).trim();
+        if (!name) return;
+
+        // Lấy giá trị mẫu ở dòng dữ liệu sản phẩm thật
+        let sampleVal = this.getCellValue(
+          ws.getRow(firstDataRowIdx).getCell(colNumber),
+        ).trim();
+
+        // Fallback: Nếu ô ở dòng firstDataRowIdx rỗng, tìm ô đầu tiên có giá trị trong 10 dòng kế tiếp
+        if (!sampleVal) {
+          for (let r = bestHeaderRow + 1; r <= Math.min(bestHeaderRow + 12, ws.rowCount); r++) {
+            const val = this.getCellValue(ws.getRow(r).getCell(colNumber)).trim();
+            if (val) {
+              sampleVal = val;
+              break;
+            }
+          }
+        }
+
+        colsDetail.push({
+          name,
+          colIndex: colNumber,
+          sampleVal: sampleVal || '—',
+        });
+        colNames.push(name);
+      });
+
+      // Đọc 1-2 dòng demo thực tế (chỉ lấy dòng sản phẩm thật có từ 3 ô dữ liệu trở lên)
+      const sampleRows: Record<string, string>[] = [];
+      for (let r = bestHeaderRow + 1; r <= Math.min(bestHeaderRow + 15, ws.rowCount); r++) {
+        const rowObj = ws.getRow(r);
+        let filledCount = 0;
+        rowObj.eachCell({ includeEmpty: false }, (cell) => {
+          if (this.getCellValue(cell).trim()) filledCount++;
+        });
+
+        // Bỏ qua dòng section phân chia danh mục
+        if (filledCount < 3) continue;
+
+        const rowData: Record<string, string> = {};
+        colsDetail.forEach((c) => {
+          rowData[c.name] = this.getCellValue(rowObj.getCell(c.colIndex)).trim();
+        });
+        if (Object.values(rowData).some((v) => v.length > 0)) {
+          sampleRows.push(rowData);
+          if (sampleRows.length >= 3) break;
+        }
+      }
+
+      // Chữ ký đại diện để so sánh cấu trúc cột giữa các tab
+      const signature = colNames
+        .map((c) => c.toUpperCase().replace(/\s+/g, ''))
+        .sort()
+        .join('|');
+
+      sheetSummaries.push({
+        sheetName: ws.name.trim(),
+        headerRow: bestHeaderRow,
+        columns: colNames,
+        columnsDetail: colsDetail,
+        sampleRows,
+        signature,
+      });
+    });
+
+    if (sheetSummaries.length === 0) {
+      return {
+        totalSheets: 0,
+        allSheets: [],
+        isAllSame: true,
+        sheetGroups: [],
+      };
+    }
+
+    // 3. Tự động gom nhóm các tab có cùng cấu trúc cột
+    const groupMap = new Map<string, InspectedSheetGroup>();
+    let groupCounter = 1;
+
+    sheetSummaries.forEach((s) => {
+      if (!groupMap.has(s.signature)) {
+        const gId = `group_${groupCounter++}`;
+        const gName = `Nhóm ${groupCounter - 1}: Áp dụng cho [${s.sheetName}]`;
+        const columnsCompat: InspectedColumnCompat[] = s.columnsDetail.map((c) => ({
+          name: c.name,
+          index: c.colIndex,
+          sampleValue: c.sampleVal,
+        }));
+
+        groupMap.set(s.signature, {
+          id: gId,
+          groupId: gId,
+          name: gName,
+          groupName: gName,
+          sheets: [s.sheetName],
+          appliedSheets: [s.sheetName],
+          headerRow: s.headerRow,
+          columns: columnsCompat,
+          excelColumns: s.columns,
+          columnsDetail: s.columnsDetail,
+          sampleRows: s.sampleRows,
+        });
+      } else {
+        const existing = groupMap.get(s.signature)!;
+        existing.sheets.push(s.sheetName);
+        existing.appliedSheets.push(s.sheetName);
+        const updatedName = `Nhóm ${existing.groupId.replace('group_', '')}: Áp dụng cho [${existing.appliedSheets.join(', ')}]`;
+        existing.name = updatedName;
+        existing.groupName = updatedName;
+      }
+    });
+
+    const sheetGroups = Array.from(groupMap.values());
+    const isAllSame = sheetGroups.length === 1;
+
+    return {
+      totalSheets: sheetSummaries.length,
+      allSheets: sheetSummaries.map((s) => s.sheetName),
+      isAllSame,
+      sheetGroups,
+    };
+  }
+
+  // =========================================================================
+  // KIỂM TRA HỢP LỆ KHI NẠP FILE THEO MẪU (PRE-UPLOAD VALIDATION)
+  // Nếu có Tab nào trong file nạp lên bị sai cấu trúc so với Mẫu thì báo lỗi chi tiết
+  // =========================================================================
+  async validateFileAgainstTemplate(
+    buffer: Buffer,
+    template: SaleExcelTemplate,
+  ): Promise<{ isValid: boolean; errors: TemplateValidationErrorItem[] }> {
+    const workbook = new ExcelJS.Workbook();
+    // @ts-ignore
+    await workbook.xlsx.load(buffer);
+
+    const errors: TemplateValidationErrorItem[] = [];
+
+    workbook.worksheets.forEach((ws) => {
+      if (ws.state === 'hidden' || ws.state === 'veryHidden') return;
+
+      const sheetName = ws.name.trim();
+
+      // Tìm nhóm mapping áp dụng cho sheet này
+      const mapping =
+        template.sheetGroups.find((g) => g.appliedSheets.includes(sheetName)) ||
+        template.sheetGroups[0];
+
+      if (!mapping || !mapping.columns) return;
+
+      // Đọc toàn bộ các cột thực tế có trong sheet tại headerRow (hoặc quét 5 dòng đầu)
+      const foundCols: string[] = [];
+      const hRow = ws.getRow(mapping.headerRow || 1);
+      hRow.eachCell({ includeEmpty: false }, (cell) => {
+        const val = this.getCellValue(cell).trim();
+        if (val) foundCols.push(val);
+      });
+
+      // Chuẩn hóa tên cột để so khớp không phân biệt hoa thường
+      const normalize = (str: string) => str.trim().toUpperCase().replace(/\s+/g, ' ');
+      const normalizedFound = foundCols.map(normalize);
+
+      const missing: Array<{ field: string; expectedColumn: string }> = [];
+
+      // Kiểm tra cột Mã sản phẩm (Bắt buộc)
+      if (mapping.columns.productCode) {
+        const exp = mapping.columns.productCode;
+        if (!normalizedFound.includes(normalize(exp))) {
+          missing.push({ field: 'Mã Sản Phẩm', expectedColumn: exp });
+        }
+      }
+
+      // Kiểm tra cột Tên sản phẩm (Bắt buộc)
+      if (mapping.columns.productName) {
+        const exp = mapping.columns.productName;
+        if (!normalizedFound.includes(normalize(exp))) {
+          missing.push({ field: 'Tên Sản Phẩm', expectedColumn: exp });
+        }
+      }
+
+      // Kiểm tra Đơn giá nếu có map
+      if (mapping.columns.price) {
+        const exp = mapping.columns.price;
+        if (!normalizedFound.includes(normalize(exp))) {
+          missing.push({ field: 'Đơn Giá', expectedColumn: exp });
+        }
+      }
+
+      if (missing.length > 0) {
+        errors.push({
+          sheetName,
+          groupName: mapping.groupName,
+          missingRequiredColumns: missing,
+          foundColumns: foundCols,
+        });
+      }
+    });
+
+    return {
+      isValid: errors.length === 0,
+      errors,
+    };
+  }
+
+  // =========================================================================
+  // PARSE FILE EXCEL BẰNG TEMPLATE ĐỘNG TỪ DATABASE
+  // =========================================================================
+  async parseBufferWithTemplate(
+    buffer: Buffer,
+    template: SaleExcelTemplate,
+  ): Promise<ParsedWorkbookResult> {
+    const workbook = new ExcelJS.Workbook();
+    // @ts-ignore
+    await workbook.xlsx.load(buffer);
+
+    const sheets: ParsedSheet[] = [];
+    let totalItems = 0;
+
+    const normalize = (str: string) => str.trim().toUpperCase().replace(/\s+/g, ' ');
+
+    workbook.worksheets.forEach((ws, sheetIdx) => {
+      if (ws.state === 'hidden' || ws.state === 'veryHidden') return;
+
+      const sheetName = ws.name.trim();
+
+      // Tìm nhóm mapping tương ứng
+      const mapping =
+        template.sheetGroups.find((g) => g.appliedSheets.includes(sheetName)) ||
+        template.sheetGroups[0];
+
+      if (!mapping || !mapping.columns) return;
+
+      // Xác định số thứ tự cột (colNumber) của từng trường trong worksheet
+      const headerRow = ws.getRow(mapping.headerRow || 1);
+      const colMap: Record<string, number> = {};
+
+      headerRow.eachCell({ includeEmpty: false }, (cell, colNumber) => {
+        const cellName = normalize(this.getCellValue(cell));
+        if (mapping.columns.productCode && cellName === normalize(mapping.columns.productCode)) {
+          colMap['productCode'] = colNumber;
+        }
+        if (mapping.columns.productName && cellName === normalize(mapping.columns.productName)) {
+          colMap['productName'] = colNumber;
+        }
+        if (mapping.columns.modelName && cellName === normalize(mapping.columns.modelName)) {
+          colMap['modelName'] = colNumber;
+        }
+        if (mapping.columns.warranty && cellName === normalize(mapping.columns.warranty)) {
+          colMap['warranty'] = colNumber;
+        }
+        if (mapping.columns.price && cellName === normalize(mapping.columns.price)) {
+          colMap['price'] = colNumber;
+        }
+        if (mapping.columns.rawStatus && cellName === normalize(mapping.columns.rawStatus)) {
+          colMap['rawStatus'] = colNumber;
+        }
+      });
+
+      const startRow = mapping.dataStartRow || (mapping.headerRow || 1) + 1;
+      const parsedItems: ParsedItemRow[] = [];
+
+      for (let r = startRow; r <= ws.rowCount; r++) {
+        const row = ws.getRow(r);
+
+        // Đếm số lượng cell có nội dung trên dòng
+        let nonEmptyCellCount = 0;
+        row.eachCell({ includeEmpty: false }, (cell) => {
+          if (this.getCellValue(cell).trim()) nonEmptyCellCount++;
+        });
+
+        // 1. Bỏ qua dòng trống hoàn toàn hoặc chỉ có duy nhất 1 ô
+        // (Đây là các dòng phân cách danh mục như "PC Mini Cubi MSI", "PC MSI", "AIO MSI"...)
+        if (nonEmptyCellCount <= 1) continue;
+
+        const productCodeRaw = colMap['productCode']
+          ? this.getCellValue(row.getCell(colMap['productCode'])).trim()
+          : '';
+        const productNameRaw = colMap['productName']
+          ? this.getCellValue(row.getCell(colMap['productName'])).trim()
+          : '';
+        const modelName = colMap['modelName']
+          ? this.getCellValue(row.getCell(colMap['modelName'])).trim()
+          : null;
+        const warranty = colMap['warranty']
+          ? this.getCellValue(row.getCell(colMap['warranty'])).trim()
+          : null;
+        const priceRaw = colMap['price']
+          ? this.getCellValue(row.getCell(colMap['price'])).trim()
+          : '';
+        const rawStatus = colMap['rawStatus']
+          ? this.getCellValue(row.getCell(colMap['rawStatus'])).trim()
+          : null;
+
+        // 2. Nếu cả mã và tên đều rỗng -> Bỏ qua
+        if (!productCodeRaw && !productNameRaw) continue;
+
+        // 3. Bỏ qua nếu dòng lặp lại tên Header
+        const normCode = productCodeRaw.toUpperCase();
+        const normName = productNameRaw.toUpperCase();
+        if (
+          normCode === 'PRODUCT CODE' ||
+          normCode === 'MÃ KHO S1' ||
+          normCode === 'MODEL NAME' ||
+          normCode === 'STT' ||
+          normCode === 'NO' ||
+          normName === 'CẤU HÌNH' ||
+          normName === 'TÊN SẢN PHẨM'
+        ) {
+          continue;
+        }
+
+        const price = this.parsePrice(priceRaw);
+        const hasPrice = price > 0;
+        const hasWarranty = !!warranty && warranty.length > 0;
+
+        // 4. LỌC BỎ DÒNG PHÂN CHIA DANH MỤC / TIÊU ĐỀ SECTION:
+        // (Ví dụ: "PC Mini Cubi MSI", "PC MSI", "AIO MSI"...)
+        if (!hasPrice && !hasWarranty) {
+          // TH a: Dòng banner gộp ô hoặc một trong 2 ô mã/tên rỗng
+          if (
+            productCodeRaw === productNameRaw ||
+            !productCodeRaw ||
+            !productNameRaw
+          ) {
+            continue;
+          }
+          // TH b: Số ô có dữ liệu trên dòng <= 2
+          if (nonEmptyCellCount <= 2) {
+            continue;
+          }
+        }
+
+        // TH c: Mẫu có nối cột giá mà ô giá rỗng, và tên không mang thông số cấu hình máy tính
+        if (colMap['price'] && !hasPrice && !hasWarranty) {
+          const isSpec =
+            /gb|ram|ssd|hdd|core|intel|amd|ryzen|fhd|hz|inch|vga|ti|rtx|wifi|bt|usb|nuc|mini|desktop/i.test(
+              productNameRaw,
+            );
+          if (!isSpec) {
+            continue;
+          }
+        }
+
+        parsedItems.push({
+          rowIndex: r,
+          productCode: productCodeRaw || productNameRaw,
+          productName: productNameRaw || productCodeRaw,
+          modelName: modelName || null,
+          warranty: this.normalizeWarranty(warranty || ''),
+          price,
+          rawStatus: rawStatus || null,
+        });
+      }
+
+      if (parsedItems.length > 0) {
+        totalItems += parsedItems.length;
+        sheets.push({
+          sheetName,
+          sheetIndex: sheetIdx,
+          items: parsedItems,
+        });
+      }
+    });
+
+    return {
+      totalSheets: sheets.length,
+      totalItems,
+      sheets,
+    };
   }
 
   // =========================================================================

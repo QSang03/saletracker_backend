@@ -100,6 +100,81 @@ export class SaleExcelCatalogController {
   }
 
   // =========================================================================
+  // QUẢN LÝ MẪU EXCEL ĐỘNG (DYNAMIC TEMPLATES)
+  // =========================================================================
+  @Post('templates/inspect')
+  @UseGuards(AuthGuard)
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: 30 * 1024 * 1024 },
+    }),
+  )
+  async inspectTemplateFile(@UploadedFile() file: Express.Multer.File) {
+    const data = await this.excelService.inspectTemplateFile(file);
+    return { success: true, data };
+  }
+
+  @Post('templates')
+  @UseGuards(AuthGuard)
+  async createTemplate(
+    @Body() dto: any,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    const data = await this.excelService.createTemplate(dto, req.user?.id);
+    return { success: true, data };
+  }
+
+  @Get('templates')
+  @UseGuards(AuthGuard)
+  async getAllTemplates() {
+    const data = await this.excelService.getAllTemplates();
+    return { success: true, data };
+  }
+
+  @Get('templates/:id')
+  @UseGuards(AuthGuard)
+  async getTemplateById(@Param('id', ParseIntPipe) id: number) {
+    const data = await this.excelService.getTemplateById(id);
+    return { success: true, data };
+  }
+
+  @Put('templates/:id')
+  @UseGuards(AuthGuard)
+  async updateTemplate(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: any,
+  ) {
+    const data = await this.excelService.updateTemplate(id, dto);
+    return { success: true, data };
+  }
+
+  @Delete('templates/:id')
+  @UseGuards(AuthGuard)
+  async deleteTemplate(@Param('id', ParseIntPipe) id: number) {
+    const data = await this.excelService.deleteTemplate(id);
+    return { success: true, data };
+  }
+
+  @Get('templates/:id/download-sample')
+  async downloadDynamicTemplateSample(
+    @Param('id', ParseIntPipe) id: number,
+    @Res() res: Response,
+  ) {
+    const { buffer, fileName } =
+      await this.excelService.renderDynamicTemplateSample(id);
+    const safeFileName = encodeURIComponent(fileName);
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${safeFileName}"; filename*=UTF-8''${safeFileName}`,
+    );
+    return res.send(buffer);
+  }
+
+  // =========================================================================
   // TẢI FILE MẪU EXCEL (CHO TỪNG MẪU 1..4 - PUBLIC TẢI FILE MẪU)
   // =========================================================================
   @Get('template-download/:templateType')
