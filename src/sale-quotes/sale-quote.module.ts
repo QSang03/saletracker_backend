@@ -10,6 +10,11 @@ import { SaleBuild } from './entities/sale-build.entity';
 import { SaleBuildItem } from './entities/sale-build-item.entity';
 import { SaleQuickQuoteCase } from './entities/sale-quick-quote-case.entity';
 import { SaleQuickQuoteItem } from './entities/sale-quick-quote-item.entity';
+import { SaleExcelCatalog } from './entities/sale-excel-catalog.entity';
+import { SaleExcelSheet } from './entities/sale-excel-sheet.entity';
+import { SaleExcelItem } from './entities/sale-excel-item.entity';
+import { SaleExcelPermission } from './entities/sale-excel-permission.entity';
+import { User } from '../users/user.entity';
 
 import { SaleSettingsService } from './services/sale-settings.service';
 import { SalePricingService } from './services/sale-pricing.service';
@@ -19,11 +24,14 @@ import { SaleQuoteService } from './services/sale-quote.service';
 import { SaleBuildService } from './services/sale-build.service';
 import { SaleQuickCaseService } from './services/sale-quick-case.service';
 import { SaleExcelService } from './services/sale-excel.service';
+import { SaleExcelParserService } from './services/sale-excel-parser.service';
+import { SaleExcelCatalogService } from './services/sale-excel-catalog.service';
 
 import { SaleCatalogController } from './controllers/sale-catalog.controller';
 import { SaleQuoteController } from './controllers/sale-quote.controller';
 import { SaleBuildController } from './controllers/sale-build.controller';
 import { SaleQuickCaseController } from './controllers/sale-quick-case.controller';
+import { SaleExcelCatalogController } from './controllers/sale-excel-catalog.controller';
 
 @Module({
   imports: [
@@ -31,6 +39,7 @@ import { SaleQuickCaseController } from './controllers/sale-quick-case.controlle
     TypeOrmModule.forFeature([
       Product,
       Category,
+      User,
       SaleQuoteSetting,
       SaleQuote,
       SaleQuoteItem,
@@ -38,6 +47,10 @@ import { SaleQuickCaseController } from './controllers/sale-quick-case.controlle
       SaleBuildItem,
       SaleQuickQuoteCase,
       SaleQuickQuoteItem,
+      SaleExcelCatalog,
+      SaleExcelSheet,
+      SaleExcelItem,
+      SaleExcelPermission,
     ]),
   ],
   controllers: [
@@ -45,6 +58,7 @@ import { SaleQuickCaseController } from './controllers/sale-quick-case.controlle
     SaleQuoteController,
     SaleBuildController,
     SaleQuickCaseController,
+    SaleExcelCatalogController,
   ],
   providers: [
     SaleSettingsService,
@@ -55,6 +69,8 @@ import { SaleQuickCaseController } from './controllers/sale-quick-case.controlle
     SaleBuildService,
     SaleQuickCaseService,
     SaleExcelService,
+    SaleExcelParserService,
+    SaleExcelCatalogService,
   ],
   exports: [
     SaleSettingsService,
@@ -65,6 +81,8 @@ import { SaleQuickCaseController } from './controllers/sale-quick-case.controlle
     SaleBuildService,
     SaleQuickCaseService,
     SaleExcelService,
+    SaleExcelParserService,
+    SaleExcelCatalogService,
   ],
 })
 export class SaleQuoteModule {}
