@@ -35,6 +35,9 @@ export class SaleExcelSheet {
   @Column({ name: 'item_count', type: 'int', default: 0 })
   itemCount: number;
 
+  @Column({ name: 'excel_columns', type: 'json', nullable: true })
+  excelColumns?: string[] | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

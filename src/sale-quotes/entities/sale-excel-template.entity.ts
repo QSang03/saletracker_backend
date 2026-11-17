@@ -15,7 +15,8 @@ export interface SheetGroupMapping {
   dataStartRow: number; // Dòng bắt đầu đọc dữ liệu (vd: header dòng 2 thì data dòng 3)
   columns: {
     productCode: string; // Tên cột trong Excel dùng làm Mã SP (Bắt buộc)
-    productName: string; // Tên cột trong Excel dùng làm Tên SP (Bắt buộc)
+    productName: string; // Tên cột trong Excel dùng làm Tên SP (Bắt buộc - Cột 1)
+    productName2?: string; // Tên cột thứ 2 nối tiếp vào Tên SP (Tùy chọn)
     modelName?: string;
     warranty?: string;
     price?: string;

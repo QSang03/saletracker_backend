@@ -228,6 +228,7 @@ export class SaleExcelCatalogService {
       items: previewItems.slice(0, 5000), // Preview tối đa 5000 dòng để hiển thị trọn vẹn file
       errors: parsed.allRowErrors || [],
       s1MatchCount,
+      allExcelColumns: parsed.allExcelColumns || [],
     };
   }
 
@@ -327,6 +328,7 @@ export class SaleExcelCatalogService {
             sheetName: s.sheetName,
             sheetIndex: s.sheetIndex,
             itemCount: s.items.length,
+            excelColumns: s.excelColumns || null,
           });
           const savedSheet = await queryRunner.manager.save(sheet);
 
@@ -347,6 +349,7 @@ export class SaleExcelCatalogService {
               s1ProductId: s1 ? s1.id : null,
               s1StockQuantity: s1 ? (s1.stock ?? 0) : null,
               isCustom: !s1,
+              rawData: i.rawData || null,
             });
           });
 
@@ -479,6 +482,7 @@ export class SaleExcelCatalogService {
             sheetName: s.sheetName,
             sheetIndex: s.sheetIndex,
             itemCount: s.items.length,
+            excelColumns: s.excelColumns || null,
           });
           const savedSheet = await queryRunner.manager.save(sheet);
 
@@ -499,6 +503,7 @@ export class SaleExcelCatalogService {
               s1ProductId: s1 ? s1.id : null,
               s1StockQuantity: s1 ? (s1.stock ?? 0) : null,
               isCustom: !s1,
+              rawData: i.rawData || null,
             });
           });
 
@@ -988,6 +993,10 @@ export class SaleExcelCatalogService {
     qb.orderBy('item.row_index', 'ASC');
 
     const [items, total] = await qb.skip(skip).take(limit).getManyAndCount();
+    const sheet = await this.sheetRepo.findOne({
+      where: { id: sheetId },
+      select: ['id', 'excelColumns'],
+    });
 
     return {
       items: items.map((i) => ({
@@ -1005,7 +1014,9 @@ export class SaleExcelCatalogService {
         s1ProductId: i.s1ProductId,
         s1StockQuantity: i.s1StockQuantity,
         isCustom: i.isCustom,
+        rawData: i.rawData || null,
       })),
+      excelColumns: sheet?.excelColumns || [],
       pagination: {
         page,
         limit,

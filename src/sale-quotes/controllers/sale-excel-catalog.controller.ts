@@ -28,6 +28,7 @@ import {
   SaleExcelCatalogService,
   UserPermissionDto,
 } from '../services/sale-excel-catalog.service';
+import { SaleDataSyncService } from '../services/sale-data-sync.service';
 
 function normalizeRoles(user: AuthenticatedUser): { name: string }[] {
   if (!user?.roles || !Array.isArray(user.roles)) return [];
@@ -43,7 +44,24 @@ function checkAdmin(user: AuthenticatedUser): boolean {
 
 @Controller('sale-excel')
 export class SaleExcelCatalogController {
-  constructor(private readonly excelService: SaleExcelCatalogService) {}
+  constructor(
+    private readonly excelService: SaleExcelCatalogService,
+    private readonly syncService: SaleDataSyncService,
+  ) {}
+
+  // =========================================================================
+  // ĐỒNG BỘ TỒN KHO & TÌNH TRẠNG KHO S1 CHO BẢNG GIÁ EXCEL
+  // =========================================================================
+  @Post('sync-s1')
+  @UseGuards(AuthGuard)
+  async syncS1Inventory() {
+    const data = await this.syncService.syncExcelItemsBatch(200);
+    return {
+      success: true,
+      message: `Đã đồng bộ lại tồn kho S1 cho ${data.updatedItems}/${data.totalMatched} sản phẩm`,
+      data,
+    };
+  }
 
   // =========================================================================
   // CÂY DANH MỤC 2 CẤP

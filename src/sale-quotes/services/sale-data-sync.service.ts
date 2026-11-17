@@ -9,6 +9,7 @@ import { SaleQuickQuoteCase } from '../entities/sale-quick-quote-case.entity';
 import { SaleQuickQuoteItem } from '../entities/sale-quick-quote-item.entity';
 import { SaleQuote } from '../entities/sale-quote.entity';
 import { SaleQuoteItem } from '../entities/sale-quote-item.entity';
+import { SaleExcelItem } from '../entities/sale-excel-item.entity';
 import { SalePricingService } from './sale-pricing.service';
 import { SaleSettingsService } from './sale-settings.service';
 
@@ -47,6 +48,8 @@ export class SaleDataSyncService {
     private readonly quoteRepo: Repository<SaleQuote>,
     @InjectRepository(SaleQuoteItem)
     private readonly quoteItemRepo: Repository<SaleQuoteItem>,
+    @InjectRepository(SaleExcelItem)
+    private readonly excelItemRepo: Repository<SaleExcelItem>,
     @InjectRepository(Product)
     private readonly productRepo: Repository<Product>,
     private readonly pricingService: SalePricingService,
@@ -54,7 +57,7 @@ export class SaleDataSyncService {
   ) {}
 
   /**
-   * Kích hoạt quét đồng bộ dữ liệu S1 cho toàn bộ Báo giá, Cấu hình máy ráp & Quick Case
+   * Kích hoạt quét đồng bộ dữ liệu S1 cho toàn bộ Báo giá, Cấu hình máy ráp, Quick Case & Bảng giá Excel phân tầng
    * Chạy tự động sau khi S1 sync hoàn tất, chia theo từng Batch để tối ưu hiệu năng.
    */
   async syncAllSaleDataFromS1(batchSize = 50): Promise<{
@@ -81,14 +84,18 @@ export class SaleDataSyncService {
       // 3. Đồng bộ Báo giá thông thường (SaleQuote)
       const quoteStats = await this.syncQuotesBatch(batchSize);
 
+      // 4. Đồng bộ Bảng giá Excel Phân Tầng (SaleExcelItem) - KHÔNG ĐỔI GIÁ, CHỈ ĐỔI TỒN KHO & TÌNH TRẠNG KHO
+      const excelStats = await this.syncExcelItemsBatch(100);
+
       const elapsedMs = Date.now() - startTime;
-      const stats = { buildStats, caseStats, quoteStats, elapsedMs };
+      const stats = { buildStats, caseStats, quoteStats, excelStats, elapsedMs };
 
       this.logger.log(
         `>>> [SaleDataSync] Hoàn tất đồng bộ S1 trong ${elapsedMs}ms! ` +
         `Cấu hình máy ráp: ${buildStats.updatedBuilds}/${buildStats.totalBuilds} (${buildStats.updatedItems} items), ` +
         `Báo giá theo yêu cầu: ${caseStats.updatedCases}/${caseStats.totalCases} (${caseStats.updatedItems} items), ` +
-        `Báo giá thông thường: ${quoteStats.updatedQuotes}/${quoteStats.totalQuotes} (${quoteStats.updatedItems} items)`
+        `Báo giá thông thường: ${quoteStats.updatedQuotes}/${quoteStats.totalQuotes} (${quoteStats.updatedItems} items), ` +
+        `Bảng giá Excel phân tầng: ${excelStats.updatedItems}/${excelStats.totalMatched} items`
       );
 
       return {
@@ -483,6 +490,104 @@ export class SaleDataSyncService {
     }
 
     return { totalQuotes, updatedQuotes, updatedItems };
+  }
+
+  /**
+   * Đồng bộ số lượng tồn kho và tình trạng kho cho các sản phẩm trong Bảng Giá Excel Phân Tầng
+   * LƯU Ý BẤT BIẾN: TUYỆT ĐỐI KHÔNG CHỈNH ĐƠN GIÁ (item.price), CHỈ CẬP NHẬT TỒN KHO VÀ TÌNH TRẠNG KHO.
+   */
+  async syncExcelItemsBatch(batchSize = 200): Promise<{
+    totalMatched: number;
+    updatedItems: number;
+  }> {
+    let offset = 0;
+    let totalMatched = 0;
+    let updatedItems = 0;
+
+    while (true) {
+      // Quét các sản phẩm có khớp S1 (s1Matched = true hoặc s1ProductId != null)
+      const excelItems = await this.excelItemRepo.find({
+        where: [
+          { s1Matched: true },
+          { isCustom: false },
+        ],
+        order: { id: 'ASC' },
+        skip: offset,
+        take: batchSize,
+      });
+
+      if (!excelItems || excelItems.length === 0) break;
+      totalMatched += excelItems.length;
+
+      const productIds = new Set<number>();
+      const productCodes = new Set<string>();
+
+      for (const item of excelItems) {
+        if (item.s1ProductId) productIds.add(item.s1ProductId);
+        if (item.productCode?.trim()) productCodes.add(item.productCode.trim());
+      }
+
+      const prodMap = await this.loadS1Products(
+        Array.from(productIds),
+        Array.from(productCodes),
+      );
+
+      const itemsToSave: SaleExcelItem[] = [];
+
+      for (const item of excelItems) {
+        const prod = this.findProduct(prodMap, item.s1ProductId, item.productCode);
+        if (prod) {
+          const stock = prod.stock !== null && prod.stock !== undefined ? Math.max(0, Number(prod.stock)) : 0;
+          let changed = false;
+
+          // 1. Cập nhật số lượng tồn kho S1
+          if (item.s1StockQuantity !== stock) {
+            item.s1StockQuantity = stock;
+            changed = true;
+          }
+
+          if (!item.s1ProductId && prod.id) {
+            item.s1ProductId = prod.id;
+            changed = true;
+          }
+
+          if (!item.s1Matched) {
+            item.s1Matched = true;
+            item.isCustom = false;
+            changed = true;
+          }
+
+          // 2. Cập nhật tình trạng kho:
+          // Nếu tồn > 0: "SẴN HÀNG"
+          // Nếu tồn = 0: "TẠM HẾT HÀNG"
+          const newStatus = stock > 0 ? 'SẴN HÀNG' : 'TẠM HẾT HÀNG';
+          if (item.rawStatus !== newStatus) {
+            item.rawStatus = newStatus;
+            changed = true;
+          }
+
+          // TUYỆT ĐỐI KHÔNG CHẠM VÀO ĐƠN GIÁ item.price!
+
+          if (changed) {
+            itemsToSave.push(item);
+          }
+        }
+      }
+
+      if (itemsToSave.length > 0) {
+        await this.excelItemRepo.save(itemsToSave);
+        updatedItems += itemsToSave.length;
+      }
+
+      offset += batchSize;
+      await this.sleep(20);
+    }
+
+    this.logger.log(
+      `>>> [SaleDataSync] Đồng bộ Bảng Giá Excel: Đã quét ${totalMatched} sản phẩm khớp S1, cập nhật tồn/trạng thái cho ${updatedItems} sản phẩm (Giữ nguyên đơn giá).`
+    );
+
+    return { totalMatched, updatedItems };
   }
 
   /**

@@ -55,12 +55,14 @@ export interface ParsedItemRow {
   price: number;
   rawStatus?: string | null;
   isAutoCode?: boolean;
+  rawData?: Record<string, any>;
 }
 
 export interface ParsedSheet {
   sheetName: string;
   sheetIndex: number;
   items: ParsedItemRow[];
+  excelColumns?: string[];
 }
 
 export interface ParsedWorkbookResult {
@@ -72,12 +74,14 @@ export interface ParsedWorkbookResult {
   invalidCount?: number;
   allRowErrors?: RowValidationErrorItem[];
   previewRows?: any[];
+  allExcelColumns?: string[];
   sheetSummaries?: Array<{
     sheetName: string;
     sheetIndex: number;
     totalRows: number;
     validCount: number;
     invalidCount: number;
+    excelColumns?: string[];
   }>;
 }
 
@@ -157,22 +161,79 @@ export class SaleExcelParserService {
   }
 
   // =========================================================================
-  // HELPER LẤY GIÁ TRỊ Ô
+  // HELPER LẤY GIÁ TRỊ Ô AN TOÀN (KHÔNG BAO GIỜ TRẢ VỀ "[object Object]")
   // =========================================================================
   private getCellValue(cell: ExcelJS.Cell | undefined): string {
     if (!cell || cell.value === null || cell.value === undefined) return '';
-    let val: any = cell.value;
-    if (typeof val === 'object') {
-      if (Array.isArray(val.richText)) {
-        val = val.richText.map((t: any) => t.text).join('');
-      } else if (val.result !== undefined) {
-        val = val.result;
-      } else if (val.text !== undefined) {
-        val = val.text;
-      }
+
+    // Ưu tiên text thuần nếu ExcelJS đã tính sẵn
+    if (typeof (cell as any).text === 'string' && (cell as any).text.trim()) {
+      const t = (cell as any).text.trim();
+      if (t !== '[object Object]') return t.replace(/\s+/g, ' ');
     }
-    const str = String(val ?? '').trim();
-    return str.replace(/\s+/g, ' ');
+
+    return this.extractCellString(cell.value);
+  }
+
+  private extractCellString(val: any): string {
+    if (val === null || val === undefined) return '';
+
+    if (typeof val === 'string') {
+      const trimmed = val.trim();
+      return trimmed === '[object Object]' ? '' : trimmed.replace(/\s+/g, ' ');
+    }
+
+    if (typeof val === 'number' || typeof val === 'boolean') {
+      return String(val);
+    }
+
+    if (val instanceof Date) {
+      return val.toISOString();
+    }
+
+    if (typeof val === 'object') {
+      // 1. RichText: { richText: [{ text: '...' }] }
+      if (Array.isArray(val.richText)) {
+        return val.richText
+          .map((t: any) => this.extractCellString(t?.text ?? t))
+          .join('')
+          .trim()
+          .replace(/\s+/g, ' ');
+      }
+
+      // 2. Formula result: { formula: '...', result: ... }
+      if (val.result !== undefined && val.result !== null) {
+        return this.extractCellString(val.result);
+      }
+
+      // 3. Hyperlink: { text: '...', hyperlink: '...' }
+      if (val.text !== undefined && val.text !== null) {
+        return this.extractCellString(val.text);
+      }
+
+      // 4. Error value: { error: '#N/A' }
+      if (val.error !== undefined) {
+        return '';
+      }
+
+      // 5. Value lồng nhau: { value: ... }
+      if (val.value !== undefined && val.value !== null && val.value !== val) {
+        return this.extractCellString(val.value);
+      }
+
+      // 6. Quét các thuộc tính text phổ biến
+      for (const k of ['text', 'result', 'name', 'label', 'val']) {
+        if (typeof val[k] === 'string' && val[k].trim() && val[k] !== '[object Object]') {
+          return val[k].trim().replace(/\s+/g, ' ');
+        }
+      }
+
+      // Không thể parse object -> Trả về rỗng, TUYỆT ĐỐI không để String(val) trả về "[object Object]"
+      return '';
+    }
+
+    const str = String(val).trim();
+    return str === '[object Object]' ? '' : str.replace(/\s+/g, ' ');
   }
 
   private parsePrice(raw: string): number {
@@ -919,6 +980,7 @@ export class SaleExcelParserService {
       totalRows: number;
       validCount: number;
       invalidCount: number;
+      excelColumns?: string[];
     }> = [];
     let validCount = 0;
 
@@ -987,9 +1049,14 @@ export class SaleExcelParserService {
       // Xác định số thứ tự cột (colNumber) của từng trường trong worksheet
       const headerRow = ws.getRow(mapping.headerRow || 1);
       const colMap: Record<string, number> = {};
+      const headerColumns: Array<{ colNumber: number; colName: string }> = [];
 
       headerRow.eachCell({ includeEmpty: false }, (cell, colNumber) => {
-        const cellName = normalize(this.getCellValue(cell));
+        const rawName = this.getCellValue(cell).trim();
+        if (rawName && rawName !== '[object Object]') {
+          headerColumns.push({ colNumber, colName: rawName });
+        }
+        const cellName = normalize(rawName);
         if (
           mapping.columns.productCode &&
           cellName === normalize(mapping.columns.productCode)
@@ -1001,6 +1068,12 @@ export class SaleExcelParserService {
           cellName === normalize(mapping.columns.productName)
         ) {
           colMap['productName'] = colNumber;
+        }
+        if (
+          (mapping.columns as any).productName2 &&
+          cellName === normalize((mapping.columns as any).productName2)
+        ) {
+          colMap['productName2'] = colNumber;
         }
         if (
           mapping.columns.modelName &&
@@ -1045,12 +1118,31 @@ export class SaleExcelParserService {
         // (Đây là các dòng phân cách danh mục như "PC Mini Cubi MSI", "PC MSI", "AIO MSI"...)
         if (rowCellCount <= 1) continue;
 
-        const productCodeRaw = colMap['productCode']
+        // Bóc tách toàn bộ dữ liệu cột gốc của dòng này
+        const rawData: Record<string, any> = {};
+        for (const hc of headerColumns) {
+          const val = this.getCellValue(row.getCell(hc.colNumber)).trim();
+          if (val) {
+            rawData[hc.colName] = val;
+          }
+        }
+
+        let productCodeRaw = colMap['productCode']
           ? this.getCellValue(row.getCell(colMap['productCode'])).trim()
           : '';
-        const productNameRaw = colMap['productName']
+        let pName1 = colMap['productName']
           ? this.getCellValue(row.getCell(colMap['productName'])).trim()
           : '';
+        let pName2 = colMap['productName2']
+          ? this.getCellValue(row.getCell(colMap['productName2'])).trim()
+          : '';
+        if (productCodeRaw === '[object Object]') productCodeRaw = '';
+        if (pName1 === '[object Object]') pName1 = '';
+        if (pName2 === '[object Object]') pName2 = '';
+
+        // Nối 2 cột theo thứ tự: Cột 1 trước, Cột 2 sau
+        let productNameRaw = [pName1, pName2].filter(Boolean).join(' ');
+
         const modelName = colMap['modelName']
           ? this.getCellValue(row.getCell(colMap['modelName'])).trim()
           : null;
@@ -1086,17 +1178,11 @@ export class SaleExcelParserService {
         const hasPrice = price > 0;
         const hasWarranty = !!warranty && warranty.length > 0;
 
-        // 4. LỌC BỎ DÒNG PHÂN CHIA DANH MỤC / TIÊU ĐỀ SECTION:
+        // 4. LỌC BỎ DÒNG PHÂN CHIA DANH MỤC / TIÊU ĐỀ SECTION / GHI CHÚ PHÂN ĐOẠN:
+        // Nếu dòng không có Đơn Giá và không có Bảo Hành, mà lại thiếu Tên SP hoặc thiếu Mã SP -> Chắc chắn là dòng phân cách danh mục, bỏ qua
         if (!hasPrice && !hasWarranty) {
-          if (
-            productCodeRaw === productNameRaw ||
-            !productCodeRaw ||
-            !productNameRaw
-          ) {
-            // Nếu dòng chỉ có 1 ô hoặc không có giá và không có bảo hành -> kiểm tra tiếp
-            if (rowCellCount <= 2) {
-              continue;
-            }
+          if (!productNameRaw || !productCodeRaw || productCodeRaw === productNameRaw || rowCellCount <= 3) {
+            continue;
           }
         }
 
@@ -1143,6 +1229,7 @@ export class SaleExcelParserService {
               isAutoCode: false,
               errorMessage: errItem.message,
               errorField: errItem.field,
+              rawData,
             });
           }
 
@@ -1174,6 +1261,7 @@ export class SaleExcelParserService {
             rawStatus: rawStatus ? rawStatus.slice(0, 5000) : null,
             isValid: true,
             isAutoCode,
+            rawData,
           });
         }
         if (sampleValidItems.length < 100) {
@@ -1189,6 +1277,7 @@ export class SaleExcelParserService {
               : undefined,
             rawStatus: rawStatus ? rawStatus.slice(0, 5000) : undefined,
             isAutoCode,
+            rawData,
           });
         }
 
@@ -1203,15 +1292,18 @@ export class SaleExcelParserService {
           price: Number(price) || 0,
           rawStatus: rawStatus ? rawStatus.slice(0, 5000) : null,
           isAutoCode,
+          rawData,
         });
       }
 
+      const sheetCols = headerColumns.map((c) => c.colName);
       if (parsedItems.length > 0) {
         totalItems += parsedItems.length;
         sheets.push({
           sheetName,
           sheetIndex: sheetIdx,
           items: parsedItems,
+          excelColumns: sheetCols,
         });
       }
 
@@ -1221,6 +1313,7 @@ export class SaleExcelParserService {
         totalRows: parsedItems.length + sheetRowErrors,
         validCount: parsedItems.length,
         invalidCount: sheetRowErrors,
+        excelColumns: sheetCols,
       });
     });
 
@@ -1237,6 +1330,10 @@ export class SaleExcelParserService {
       });
     }
 
+    const allExcelColumns = Array.from(
+      new Set(sheetSummaries.flatMap((s) => s.excelColumns || [])),
+    );
+
     return {
       totalSheets: sheets.length,
       totalItems,
@@ -1247,6 +1344,7 @@ export class SaleExcelParserService {
       allRowErrors,
       previewRows,
       sheetSummaries,
+      allExcelColumns,
     };
   }
 
