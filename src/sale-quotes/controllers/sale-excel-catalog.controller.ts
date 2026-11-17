@@ -209,12 +209,15 @@ export class SaleExcelCatalogController {
     @UploadedFile() file: Express.Multer.File,
     @Body('templateType') templateTypeRaw: string,
     @Body('name') customName: string,
+    @Body('allowSkipInvalid') allowSkipInvalidRaw: string,
     @Req() req: AuthenticatedRequest,
   ) {
     if (!file) {
       throw new BadRequestException('Vui lòng chọn file Excel');
     }
     const templateType = parseInt(templateTypeRaw, 10) || 1;
+    const allowSkipInvalid =
+      allowSkipInvalidRaw === 'true' || allowSkipInvalidRaw === '1';
     const roles = normalizeRoles(req.user);
 
     const data = await this.excelService.uploadCatalog(
@@ -222,6 +225,7 @@ export class SaleExcelCatalogController {
       templateType,
       customName,
       { id: req.user.id, roles },
+      allowSkipInvalid,
     );
     return { success: true, data };
   }
@@ -240,6 +244,7 @@ export class SaleExcelCatalogController {
     @Param('id', ParseIntPipe) id: number,
     @UploadedFile() file: Express.Multer.File,
     @Body('templateType') templateTypeRaw: string,
+    @Body('allowSkipInvalid') allowSkipInvalidRaw: string,
     @Req() req: AuthenticatedRequest,
   ) {
     if (!file) {
@@ -248,6 +253,8 @@ export class SaleExcelCatalogController {
     const templateType = templateTypeRaw
       ? parseInt(templateTypeRaw, 10)
       : undefined;
+    const allowSkipInvalid =
+      allowSkipInvalidRaw === 'true' || allowSkipInvalidRaw === '1';
     const roles = normalizeRoles(req.user);
 
     const data = await this.excelService.reuploadCatalog(
@@ -255,6 +262,7 @@ export class SaleExcelCatalogController {
       file,
       templateType,
       { id: req.user.id, roles },
+      allowSkipInvalid,
     );
     return { success: true, data };
   }

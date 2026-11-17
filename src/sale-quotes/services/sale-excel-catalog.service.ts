@@ -3,6 +3,8 @@ import {
   NotFoundException,
   ForbiddenException,
   BadRequestException,
+  InternalServerErrorException,
+  HttpException,
   Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -165,130 +167,149 @@ export class SaleExcelCatalogService {
     templateType: number,
     customName?: string,
     user?: { id: number; roles?: { name: string }[] },
+    allowSkipInvalid?: boolean,
   ) {
     if (!file) {
       throw new BadRequestException('Vui lòng chọn file Excel');
     }
 
-    const hasPerm = await this.checkUserPermission(
-      user?.id || 0,
-      'upload',
-      user?.roles,
-    );
-    if (!hasPerm) {
-      throw new ForbiddenException('Bạn không có quyền tải lên file Excel');
-    }
+    try {
+      const hasPerm = await this.checkUserPermission(
+        user?.id || 0,
+        'upload',
+        user?.roles,
+      );
+      if (!hasPerm) {
+        throw new ForbiddenException('Bạn không có quyền tải lên file Excel');
+      }
 
-    const cleanName = (customName || file.originalname.replace(/\.[^/.]+$/, ''))
-      .trim();
+      const cleanName = (
+        customName || file.originalname.replace(/\.[^/.]+$/, '')
+      ).trim();
 
-    // 1. Kiểm tra xem có template động tương ứng trong DB không
-    const dynamicTemplate = await this.templateRepo.findOne({
-      where: { id: Number(templateType) },
-    });
+      // 1. Kiểm tra xem có template động tương ứng trong DB không
+      const dynamicTemplate = await this.templateRepo.findOne({
+        where: { id: Number(templateType) },
+      });
 
-    let parsed;
-    if (dynamicTemplate) {
-      // Xác thực cấu trúc file trước khi nạp: phát hiện Tab nào bị sai lệch cột
-      const validation =
-        await this.parserService.validateFileAgainstTemplate(
+      let parsed;
+      if (dynamicTemplate) {
+        // Xác thực cấu trúc file trước khi nạp: phát hiện Tab nào bị sai lệch cột
+        const validation =
+          await this.parserService.validateFileAgainstTemplate(
+            file.buffer,
+            dynamicTemplate,
+          );
+        if (!validation.isValid) {
+          throw new BadRequestException({
+            message: 'Cấu trúc file không khớp với mẫu đã chọn',
+            errors: validation.errors,
+          });
+        }
+        parsed = await this.parserService.parseBufferWithTemplate(
           file.buffer,
           dynamicTemplate,
+          { allowSkipInvalid },
         );
-      if (!validation.isValid) {
-        throw new BadRequestException({
-          message: 'Cấu trúc file không khớp với mẫu đã chọn',
-          errors: validation.errors,
-        });
+      } else {
+        // Fallback
+        parsed = await this.parserService.parseBuffer(file.buffer, templateType);
       }
-      parsed = await this.parserService.parseBufferWithTemplate(
-        file.buffer,
-        dynamicTemplate,
-      );
-    } else {
-      // Fallback
-      parsed = await this.parserService.parseBuffer(file.buffer, templateType);
-    }
 
-    if (parsed.sheets.length === 0 || parsed.totalItems === 0) {
-      throw new BadRequestException(
-        'Không tìm thấy dữ liệu hợp lệ trong file Excel theo mẫu đã chọn',
-      );
-    }
+      if (parsed.sheets.length === 0 || parsed.totalItems === 0) {
+        throw new BadRequestException(
+          'Không tìm thấy dữ liệu hợp lệ trong file Excel theo mẫu đã chọn',
+        );
+      }
 
-    // Matching kho S1
-    const s1Map = await this.batchMatchInventory(parsed.sheets);
+      // Matching kho S1
+      const s1Map = await this.batchMatchInventory(parsed.sheets);
 
-    // Lưu vào database trong Transaction
-    const queryRunner = this.dataSource.createQueryRunner();
-    await queryRunner.connect();
-    await queryRunner.startTransaction();
+      // Lưu vào database trong Transaction
+      const queryRunner = this.dataSource.createQueryRunner();
+      await queryRunner.connect();
+      await queryRunner.startTransaction();
 
-    try {
-      const catalog = queryRunner.manager.create(SaleExcelCatalog, {
-        name: cleanName,
-        originalFileName: file.originalname,
-        filePath: null,
-        fileSize: file.size,
-        templateType: Number(templateType),
-        totalSheets: parsed.totalSheets,
-        totalItems: parsed.totalItems,
-        createdByUserId: user?.id,
-        updatedByUserId: user?.id,
-      });
-      const savedCatalog = await queryRunner.manager.save(catalog);
+      try {
+        const safeTemplateType =
+          Number(templateType) >= 1 && Number(templateType) <= 127
+            ? Number(templateType)
+            : 1;
 
-      for (const s of parsed.sheets) {
-        const sheet = queryRunner.manager.create(SaleExcelSheet, {
-          catalogId: savedCatalog.id,
-          sheetName: s.sheetName,
-          sheetIndex: s.sheetIndex,
-          itemCount: s.items.length,
+        const catalog = queryRunner.manager.create(SaleExcelCatalog, {
+          name: cleanName,
+          originalFileName: file.originalname,
+          filePath: null,
+          fileSize: file.size,
+          templateType: safeTemplateType,
+          totalSheets: parsed.totalSheets,
+          totalItems: parsed.totalItems,
+          createdByUserId: user?.id,
+          updatedByUserId: user?.id,
         });
-        const savedSheet = await queryRunner.manager.save(sheet);
+        const savedCatalog = await queryRunner.manager.save(catalog);
 
-        const itemEntities = s.items.map((i) => {
-          const s1 = s1Map.get(i.productCode.toUpperCase());
-          return queryRunner.manager.create(SaleExcelItem, {
+        for (const s of parsed.sheets) {
+          const sheet = queryRunner.manager.create(SaleExcelSheet, {
             catalogId: savedCatalog.id,
-            sheetId: savedSheet.id,
-            rowIndex: i.rowIndex,
-            productCode: i.productCode,
-            productName: i.productName,
-            modelName: i.modelName || null,
-            warranty: i.warranty || null,
-            price: i.price,
-            rawStatus: i.rawStatus || null,
-            s1Matched: !!s1,
-            s1ProductId: s1 ? s1.id : null,
-            s1StockQuantity: s1 ? (s1.stock ?? 0) : null,
-            isCustom: !s1,
+            sheetName: s.sheetName,
+            sheetIndex: s.sheetIndex,
+            itemCount: s.items.length,
           });
-        });
+          const savedSheet = await queryRunner.manager.save(sheet);
 
-        // Insert batch chunk 500
-        const chunkSize = 500;
-        for (let idx = 0; idx < itemEntities.length; idx += chunkSize) {
-          await queryRunner.manager.save(
-            itemEntities.slice(idx, idx + chunkSize),
-          );
+          const itemEntities = s.items.map((i) => {
+            const codeStr = String(i.productCode || '').trim();
+            const s1 = codeStr ? s1Map.get(codeStr.toUpperCase()) : undefined;
+            return queryRunner.manager.create(SaleExcelItem, {
+              catalogId: savedCatalog.id,
+              sheetId: savedSheet.id,
+              rowIndex: i.rowIndex,
+              productCode: (codeStr || 'SP').slice(0, 250),
+              productName: String(i.productName || 'Sản phẩm').slice(0, 10000),
+              modelName: i.modelName ? String(i.modelName).slice(0, 250) : null,
+              warranty: i.warranty ? String(i.warranty).slice(0, 95) : null,
+              price: Number(i.price) || 0,
+              rawStatus: i.rawStatus ? String(i.rawStatus).slice(0, 5000) : null,
+              s1Matched: !!s1,
+              s1ProductId: s1 ? s1.id : null,
+              s1StockQuantity: s1 ? (s1.stock ?? 0) : null,
+              isCustom: !s1,
+            });
+          });
+
+          // Insert batch chunk 500
+          const chunkSize = 500;
+          for (let idx = 0; idx < itemEntities.length; idx += chunkSize) {
+            await queryRunner.manager.save(
+              itemEntities.slice(idx, idx + chunkSize),
+            );
+          }
         }
+
+        await queryRunner.commitTransaction();
+
+        return {
+          id: savedCatalog.id,
+          name: savedCatalog.name,
+          totalSheets: savedCatalog.totalSheets,
+          totalItems: savedCatalog.totalItems,
+        };
+      } catch (err) {
+        await queryRunner.rollbackTransaction();
+        this.logger.error('Lỗi khi lưu dữ liệu Excel catalog', err);
+        throw err;
+      } finally {
+        await queryRunner.release();
       }
-
-      await queryRunner.commitTransaction();
-
-      return {
-        id: savedCatalog.id,
-        name: savedCatalog.name,
-        totalSheets: savedCatalog.totalSheets,
-        totalItems: savedCatalog.totalItems,
-      };
-    } catch (err) {
-      await queryRunner.rollbackTransaction();
-      this.logger.error('Lỗi khi lưu dữ liệu Excel catalog', err);
-      throw err;
-    } finally {
-      await queryRunner.release();
+    } catch (err: any) {
+      this.logger.error('=== LỖI UPLOAD CATALOG ===', err?.stack || err);
+      if (err instanceof HttpException) {
+        throw err;
+      }
+      throw new InternalServerErrorException(
+        `Lỗi xử lý file Excel: ${err?.message || 'Không thể lưu vào cơ sở dữ liệu'}`,
+      );
     }
   }
 
@@ -300,137 +321,153 @@ export class SaleExcelCatalogService {
     file: Express.Multer.File,
     templateType?: number,
     user?: { id: number; roles?: { name: string }[] },
+    allowSkipInvalid?: boolean,
   ) {
-    const catalog = await this.catalogRepo.findOne({
-      where: { id: catalogId },
-    });
-    if (!catalog) {
-      throw new NotFoundException('Không tìm thấy danh mục bảng giá');
-    }
+    try {
+      const catalog = await this.catalogRepo.findOne({
+        where: { id: catalogId },
+      });
+      if (!catalog) {
+        throw new NotFoundException('Không tìm thấy danh mục bảng giá');
+      }
 
-    const hasPerm = await this.checkUserPermission(
-      user?.id || 0,
-      'update',
-      user?.roles,
-    );
-    if (!hasPerm) {
-      throw new ForbiddenException('Bạn không có quyền cập nhật bảng giá này');
-    }
+      const hasPerm = await this.checkUserPermission(
+        user?.id || 0,
+        'update',
+        user?.roles,
+      );
+      if (!hasPerm) {
+        throw new ForbiddenException('Bạn không có quyền cập nhật bảng giá này');
+      }
 
-    const tType = templateType ? Number(templateType) : catalog.templateType;
+      const tType = templateType ? Number(templateType) : catalog.templateType;
 
-    // 1. Kiểm tra template động
-    const dynamicTemplate = await this.templateRepo.findOne({
-      where: { id: tType },
-    });
+      // 1. Kiểm tra template động
+      const dynamicTemplate = await this.templateRepo.findOne({
+        where: { id: tType },
+      });
 
-    let parsed;
-    if (dynamicTemplate) {
-      const validation =
-        await this.parserService.validateFileAgainstTemplate(
+      let parsed;
+      if (dynamicTemplate) {
+        const validation =
+          await this.parserService.validateFileAgainstTemplate(
+            file.buffer,
+            dynamicTemplate,
+          );
+        if (!validation.isValid) {
+          throw new BadRequestException({
+            message: 'Cấu trúc file không khớp với mẫu đã chọn',
+            errors: validation.errors,
+          });
+        }
+        parsed = await this.parserService.parseBufferWithTemplate(
           file.buffer,
           dynamicTemplate,
+          { allowSkipInvalid },
         );
-      if (!validation.isValid) {
-        throw new BadRequestException({
-          message: 'Cấu trúc file không khớp với mẫu đã chọn',
-          errors: validation.errors,
-        });
+      } else {
+        parsed = await this.parserService.parseBuffer(file.buffer, tType);
       }
-      parsed = await this.parserService.parseBufferWithTemplate(
-        file.buffer,
-        dynamicTemplate,
-      );
-    } else {
-      parsed = await this.parserService.parseBuffer(file.buffer, tType);
-    }
 
-    if (parsed.sheets.length === 0 || parsed.totalItems === 0) {
-      throw new BadRequestException(
-        'Không tìm thấy dữ liệu hợp lệ trong file Excel mới',
-      );
-    }
+      if (parsed.sheets.length === 0 || parsed.totalItems === 0) {
+        throw new BadRequestException(
+          'Không tìm thấy dữ liệu hợp lệ trong file Excel mới',
+        );
+      }
 
-    const oldFilePath = catalog.filePath;
+      const oldFilePath = catalog.filePath;
 
-    // Matching kho S1
-    const s1Map = await this.batchMatchInventory(parsed.sheets);
+      // Matching kho S1
+      const s1Map = await this.batchMatchInventory(parsed.sheets);
 
-    const queryRunner = this.dataSource.createQueryRunner();
-    await queryRunner.connect();
-    await queryRunner.startTransaction();
+      const queryRunner = this.dataSource.createQueryRunner();
+      await queryRunner.connect();
+      await queryRunner.startTransaction();
 
-    try {
-      // Xóa sheets và items cũ của catalog này (cascade)
-      await queryRunner.manager.delete(SaleExcelSheet, { catalogId });
+      try {
+        // Xóa sheets và items cũ của catalog này (cascade)
+        await queryRunner.manager.delete(SaleExcelSheet, { catalogId });
 
-      catalog.originalFileName = file.originalname;
-      catalog.filePath = null;
-      catalog.fileSize = file.size;
-      catalog.templateType = tType;
-      catalog.totalSheets = parsed.totalSheets;
-      catalog.totalItems = parsed.totalItems;
-      catalog.updatedByUserId = user?.id;
+        const safeTemplateType =
+          Number(tType) >= 1 && Number(tType) <= 127 ? Number(tType) : 1;
 
-      await queryRunner.manager.save(catalog);
+        catalog.originalFileName = file.originalname;
+        catalog.filePath = null;
+        catalog.fileSize = file.size;
+        catalog.templateType = safeTemplateType;
+        catalog.totalSheets = parsed.totalSheets;
+        catalog.totalItems = parsed.totalItems;
+        catalog.updatedByUserId = user?.id;
 
-      for (const s of parsed.sheets) {
-        const sheet = queryRunner.manager.create(SaleExcelSheet, {
-          catalogId: catalog.id,
-          sheetName: s.sheetName,
-          sheetIndex: s.sheetIndex,
-          itemCount: s.items.length,
-        });
-        const savedSheet = await queryRunner.manager.save(sheet);
+        await queryRunner.manager.save(catalog);
 
-        const itemEntities = s.items.map((i) => {
-          const s1 = s1Map.get(i.productCode.toUpperCase());
-          return queryRunner.manager.create(SaleExcelItem, {
+        for (const s of parsed.sheets) {
+          const sheet = queryRunner.manager.create(SaleExcelSheet, {
             catalogId: catalog.id,
-            sheetId: savedSheet.id,
-            rowIndex: i.rowIndex,
-            productCode: i.productCode,
-            productName: i.productName,
-            modelName: i.modelName || null,
-            warranty: i.warranty || null,
-            price: i.price,
-            rawStatus: i.rawStatus || null,
-            s1Matched: !!s1,
-            s1ProductId: s1 ? s1.id : null,
-            s1StockQuantity: s1 ? (s1.stock ?? 0) : null,
-            isCustom: !s1,
+            sheetName: s.sheetName,
+            sheetIndex: s.sheetIndex,
+            itemCount: s.items.length,
           });
-        });
+          const savedSheet = await queryRunner.manager.save(sheet);
 
-        const chunkSize = 500;
-        for (let idx = 0; idx < itemEntities.length; idx += chunkSize) {
-          await queryRunner.manager.save(
-            itemEntities.slice(idx, idx + chunkSize),
-          );
+          const itemEntities = s.items.map((i) => {
+            const codeStr = String(i.productCode || '').trim();
+            const s1 = codeStr ? s1Map.get(codeStr.toUpperCase()) : undefined;
+            return queryRunner.manager.create(SaleExcelItem, {
+              catalogId: catalog.id,
+              sheetId: savedSheet.id,
+              rowIndex: i.rowIndex,
+              productCode: (codeStr || 'SP').slice(0, 250),
+              productName: String(i.productName || 'Sản phẩm').slice(0, 10000),
+              modelName: i.modelName ? String(i.modelName).slice(0, 250) : null,
+              warranty: i.warranty ? String(i.warranty).slice(0, 95) : null,
+              price: Number(i.price) || 0,
+              rawStatus: i.rawStatus ? String(i.rawStatus).slice(0, 5000) : null,
+              s1Matched: !!s1,
+              s1ProductId: s1 ? s1.id : null,
+              s1StockQuantity: s1 ? (s1.stock ?? 0) : null,
+              isCustom: !s1,
+            });
+          });
+
+          const chunkSize = 500;
+          for (let idx = 0; idx < itemEntities.length; idx += chunkSize) {
+            await queryRunner.manager.save(
+              itemEntities.slice(idx, idx + chunkSize),
+            );
+          }
         }
+
+        await queryRunner.commitTransaction();
+
+        // Xóa file cũ
+        if (oldFilePath && fs.existsSync(oldFilePath)) {
+          try {
+            await fs.promises.unlink(oldFilePath);
+          } catch (_) {}
+        }
+
+        return {
+          id: catalog.id,
+          name: catalog.name,
+          totalSheets: catalog.totalSheets,
+          totalItems: catalog.totalItems,
+        };
+      } catch (err) {
+        await queryRunner.rollbackTransaction();
+        this.logger.error('Lỗi khi re-upload catalog', err);
+        throw err;
+      } finally {
+        await queryRunner.release();
       }
-
-      await queryRunner.commitTransaction();
-
-      // Xóa file cũ
-      if (oldFilePath && fs.existsSync(oldFilePath)) {
-        try {
-          await fs.promises.unlink(oldFilePath);
-        } catch (_) {}
+    } catch (err: any) {
+      this.logger.error('=== LỖI REUPLOAD CATALOG ===', err?.stack || err);
+      if (err instanceof HttpException) {
+        throw err;
       }
-
-      return {
-        id: catalog.id,
-        name: catalog.name,
-        totalSheets: catalog.totalSheets,
-        totalItems: catalog.totalItems,
-      };
-    } catch (err) {
-      await queryRunner.rollbackTransaction();
-      this.logger.error('Lỗi khi re-upload catalog', err);
-      throw err;
-    } finally {
-      await queryRunner.release();
+      throw new InternalServerErrorException(
+        `Lỗi xử lý file Excel nạp đè: ${err?.message || 'Không thể lưu vào cơ sở dữ liệu'}`,
+      );
     }
   }
 
