@@ -201,7 +201,7 @@ export class SaleExcelCatalogService {
     }
 
     // 2. So khớp nhanh tồn kho S1
-    const s1Map = await this.batchMatchInventory(parsed.sheets);
+    const s1Map = await this.batchMatchInventory(parsed.sheets, parsed.previewRows);
     let s1MatchCount = 0;
 
     const previewItems = (parsed.previewRows || []).map((item: any) => {
@@ -225,7 +225,7 @@ export class SaleExcelCatalogService {
       invalidCount: parsed.invalidCount ?? 0,
       totalSheets: parsed.totalSheets,
       sheets: parsed.sheetSummaries ?? [],
-      items: previewItems.slice(0, 1500), // Preview tối đa 1500 dòng
+      items: previewItems.slice(0, 5000), // Preview tối đa 5000 dòng để hiển thị trọn vẹn file
       errors: parsed.allRowErrors || [],
       s1MatchCount,
     };
@@ -1018,32 +1018,50 @@ export class SaleExcelCatalogService {
   // =========================================================================
   // SO KHỚP TỒN KHO S1 (INTERNAL BATCH HELPER)
   // =========================================================================
-  private async batchMatchInventory(sheets: { items: ParsedItemRow[] }[]) {
+  private async batchMatchInventory(
+    sheets: { items: ParsedItemRow[] }[],
+    previewRows?: any[],
+  ) {
     const rawCodes = new Set<string>();
-    sheets.forEach((s) => {
-      s.items.forEach((i) => {
+    (sheets || []).forEach((s) => {
+      (s.items || []).forEach((i) => {
         if (i.productCode) rawCodes.add(i.productCode.trim().toUpperCase());
       });
     });
+    (previewRows || []).forEach((r) => {
+      if (r.productCode) rawCodes.add(String(r.productCode).trim().toUpperCase());
+    });
 
-    const codeList = Array.from(rawCodes);
-    const s1Map = new Map<string, { id: number; stock: number | null }>();
+    const codeList = Array.from(rawCodes).filter((c) => c.length > 0);
+    const s1Map = new Map<string, { id: number; stock: number | null; price?: number | null }>();
 
     if (codeList.length === 0) return s1Map;
 
-    // Query theo chunk 1000 mã
-    const chunkSize = 1000;
+    // Query theo chunk 500 mã
+    const chunkSize = 500;
     for (let i = 0; i < codeList.length; i += chunkSize) {
       const chunk = codeList.slice(i, i + chunkSize);
+      const queryCodes = Array.from(
+        new Set([
+          ...chunk,
+          ...chunk.map((c) => c.toLowerCase()),
+        ]),
+      );
+
+      // KHÔNG lọc isActive: true vì nhiều mã sản phẩm trong kho S1 có thể có isActive = false/null nhưng vẫn có tồn kho
       const products = await this.productRepo.find({
-        where: { productCode: In(chunk), isActive: true },
-        select: ['id', 'productCode', 'stock', 'isInStock'],
+        where: { productCode: In(queryCodes) },
+        select: ['id', 'productCode', 'stock', 'price', 'isInStock'],
       });
+
       products.forEach((p) => {
-        s1Map.set(p.productCode.toUpperCase(), {
-          id: p.id,
-          stock: p.stock ?? 0,
-        });
+        if (p.productCode) {
+          s1Map.set(p.productCode.trim().toUpperCase(), {
+            id: p.id,
+            stock: p.stock ?? 0,
+            price: p.price ?? 0,
+          });
+        }
       });
     }
 

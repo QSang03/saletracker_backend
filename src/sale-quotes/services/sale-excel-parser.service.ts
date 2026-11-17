@@ -4,6 +4,7 @@ import {
   SaleExcelTemplate,
   SheetGroupMapping,
 } from '../entities/sale-excel-template.entity';
+import { generateAutoProductCode } from '../utils/text.util';
 
 export interface InspectedSheetColumn {
   name: string;
@@ -53,6 +54,7 @@ export interface ParsedItemRow {
   warranty?: string | null;
   price: number;
   rawStatus?: string | null;
+  isAutoCode?: boolean;
 }
 
 export interface ParsedSheet {
@@ -65,6 +67,18 @@ export interface ParsedWorkbookResult {
   totalSheets: number;
   totalItems: number;
   sheets: ParsedSheet[];
+  totalRows?: number;
+  validCount?: number;
+  invalidCount?: number;
+  allRowErrors?: RowValidationErrorItem[];
+  previewRows?: any[];
+  sheetSummaries?: Array<{
+    sheetName: string;
+    sheetIndex: number;
+    totalRows: number;
+    validCount: number;
+    invalidCount: number;
+  }>;
 }
 
 export interface RowValidationErrorItem {
@@ -898,6 +912,14 @@ export class SaleExcelParserService {
     let totalItems = 0;
     const allRowErrors: RowValidationErrorItem[] = [];
     const sampleValidItems: any[] = [];
+    const previewRows: any[] = [];
+    const sheetSummaries: Array<{
+      sheetName: string;
+      sheetIndex: number;
+      totalRows: number;
+      validCount: number;
+      invalidCount: number;
+    }> = [];
     let validCount = 0;
 
     // Parse an toàn template.sheetGroups phòng trường hợp MySQL trả về chuỗi JSON
@@ -1008,6 +1030,7 @@ export class SaleExcelParserService {
 
       const startRow = mapping.dataStartRow || (mapping.headerRow || 1) + 1;
       const parsedItems: ParsedItemRow[] = [];
+      let sheetRowErrors = 0;
 
       for (let r = startRow; r <= ws.rowCount; r++) {
         const row = ws.getRow(r);
@@ -1077,20 +1100,20 @@ export class SaleExcelParserService {
           }
         }
 
-        // 5. KIỂM TRA BẮT BUỘC MÃ SẢN PHẨM VÀ TÊN SẢN PHẨM:
+        // 5. KIỂM TRA MÃ SẢN PHẨM VÀ TÊN SẢN PHẨM:
         const code = productCodeRaw.trim();
         const name = productNameRaw.trim();
         const isMissingCode = !code || code.length === 0;
         const isMissingName = !name || name.length === 0;
 
-        if (isMissingCode || isMissingName) {
-          allRowErrors.push({
+        // Nếu thiếu TÊN SẢN PHẨM -> Đây là lỗi dữ liệu thực sự (không thể xác định sản phẩm là gì)
+        if (isMissingName) {
+          sheetRowErrors++;
+          const errItem: RowValidationErrorItem = {
             sheetName,
             rowIndex: r,
-            field: isMissingCode ? 'productCode' : 'productName',
-            message: isMissingCode
-              ? 'Thiếu Mã Sản Phẩm (ô trong file Excel bị để trống)'
-              : 'Thiếu Tên Sản Phẩm / Cấu hình (ô trong file Excel bị để trống)',
+            field: 'productName',
+            message: 'Thiếu Tên Sản Phẩm / Cấu hình (ô trong file Excel bị để trống)',
             rowData: {
               productCode: code,
               productName: name,
@@ -1101,19 +1124,63 @@ export class SaleExcelParserService {
                 : undefined,
               rawStatus: rawStatus ? rawStatus.slice(0, 5000) : undefined,
             },
-          });
+          };
+          allRowErrors.push(errItem);
+
+          if (previewRows.length < 5000) {
+            previewRows.push({
+              sheetName,
+              rowIndex: r,
+              productCode: code.slice(0, 250),
+              productName: name,
+              modelName: modelName ? modelName.slice(0, 250) : null,
+              warranty: warranty
+                ? this.normalizeWarranty(warranty).slice(0, 95)
+                : null,
+              price: Number(price) || 0,
+              rawStatus: rawStatus ? rawStatus.slice(0, 5000) : null,
+              isValid: false,
+              isAutoCode: false,
+              errorMessage: errItem.message,
+              errorField: errItem.field,
+            });
+          }
 
           // Bỏ qua không thêm vào danh sách nạp
           continue;
         }
 
-        // Dòng HỢP LỆ (có cả mã và tên đầy đủ)
+        // Nếu CÓ TÊN nhưng THIẾU MÃ SẢN PHẨM -> Tự động sinh mã sản phẩm, KHÔNG báo lỗi, chuyển thành dòng hợp lệ
+        let finalCode = code;
+        let isAutoCode = false;
+        if (isMissingCode) {
+          finalCode = generateAutoProductCode(name, r);
+          isAutoCode = true;
+        }
+
+        // Dòng HỢP LỆ (có mã hoặc được tự động sinh mã)
         validCount++;
-        if (sampleValidItems.length < 50) {
+        if (previewRows.length < 5000) {
+          previewRows.push({
+            sheetName,
+            rowIndex: r,
+            productCode: finalCode.slice(0, 250),
+            productName: name,
+            modelName: modelName ? modelName.slice(0, 250) : null,
+            warranty: warranty
+              ? this.normalizeWarranty(warranty).slice(0, 95)
+              : null,
+            price: Number(price) || 0,
+            rawStatus: rawStatus ? rawStatus.slice(0, 5000) : null,
+            isValid: true,
+            isAutoCode,
+          });
+        }
+        if (sampleValidItems.length < 100) {
           sampleValidItems.push({
             sheetName,
             rowIndex: r,
-            productCode: code.slice(0, 250),
+            productCode: finalCode.slice(0, 250),
             productName: name,
             modelName: modelName ? modelName.slice(0, 250) : undefined,
             price: Number(price) || 0,
@@ -1121,12 +1188,13 @@ export class SaleExcelParserService {
               ? this.normalizeWarranty(warranty).slice(0, 95)
               : undefined,
             rawStatus: rawStatus ? rawStatus.slice(0, 5000) : undefined,
+            isAutoCode,
           });
         }
 
         parsedItems.push({
           rowIndex: r,
-          productCode: code.slice(0, 250),
+          productCode: finalCode.slice(0, 250),
           productName: name,
           modelName: modelName ? modelName.slice(0, 250) : null,
           warranty: warranty
@@ -1134,6 +1202,7 @@ export class SaleExcelParserService {
             : null,
           price: Number(price) || 0,
           rawStatus: rawStatus ? rawStatus.slice(0, 5000) : null,
+          isAutoCode,
         });
       }
 
@@ -1145,10 +1214,18 @@ export class SaleExcelParserService {
           items: parsedItems,
         });
       }
+
+      sheetSummaries.push({
+        sheetName,
+        sheetIndex: sheetIdx,
+        totalRows: parsedItems.length + sheetRowErrors,
+        validCount: parsedItems.length,
+        invalidCount: sheetRowErrors,
+      });
     });
 
-    // NẾU CÓ DÒNG LỖI VÀ NGƯỜI DÙNG CHƯA CHỌN BỎ QUA DÒNG LỖI -> NÉM LỖI ROW VALIDATION CHI TIẾT
-    if (options?.allowSkipInvalid !== true && allRowErrors.length > 0) {
+    // NẾU CÓ DÒNG LỖI VÀ NGƯỜI DÙNG CHƯA CHỌN BỎ QUA DÒNG LỖI VÀ KHÔNG PHẢI CHẾ ĐỘ PREVIEW -> NÉM LỖI ROW VALIDATION
+    if (!options?.isPreview && options?.allowSkipInvalid !== true && allRowErrors.length > 0) {
       throw new BadRequestException({
         errorType: 'ROW_VALIDATION_ERROR',
         message: `Phát hiện ${allRowErrors.length} dòng dữ liệu bị thiếu Mã Sản Phẩm hoặc Tên Sản Phẩm`,
@@ -1164,6 +1241,12 @@ export class SaleExcelParserService {
       totalSheets: sheets.length,
       totalItems,
       sheets,
+      totalRows: validCount + allRowErrors.length,
+      validCount,
+      invalidCount: allRowErrors.length,
+      allRowErrors,
+      previewRows,
+      sheetSummaries,
     };
   }
 
