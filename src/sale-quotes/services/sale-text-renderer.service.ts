@@ -270,15 +270,16 @@ export class SaleTextRendererService {
       const lines = raw.split('\n');
       for (const line of lines) {
         const trimmed = line.trim();
+        const normKey = trimmed.toLowerCase().replace(/\s+/g, ' ');
         if (
           !trimmed ||
-          trimmed.toLowerCase() === 'giá đã bao gồm vat.' ||
-          trimmed.toLowerCase() === 'giá đã bao gồm vat'
+          normKey === 'giá đã bao gồm vat.' ||
+          normKey === 'giá đã bao gồm vat'
         ) {
           continue;
         }
-        if (!seenLines.has(trimmed)) {
-          seenLines.add(trimmed);
+        if (!seenLines.has(normKey)) {
+          seenLines.add(normKey);
           footerLines.push(trimmed);
         }
       }

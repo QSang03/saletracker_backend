@@ -7,6 +7,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, Repository } from 'typeorm';
 import { Product } from '../../products/product.entity';
+import { SaleExcelItem } from '../entities/sale-excel-item.entity';
 import { SaleQuote } from '../entities/sale-quote.entity';
 import { SaleQuoteItem } from '../entities/sale-quote-item.entity';
 import {
@@ -42,6 +43,8 @@ export class SaleQuoteService {
     private readonly itemRepo: Repository<SaleQuoteItem>,
     @InjectRepository(Product)
     private readonly productRepo: Repository<Product>,
+    @InjectRepository(SaleExcelItem)
+    private readonly excelItemRepo: Repository<SaleExcelItem>,
     private readonly dataSource: DataSource,
     private readonly settingsService: SaleSettingsService,
     private readonly pricingService: SalePricingService,
@@ -161,60 +164,120 @@ export class SaleQuoteService {
     }
     this.assertCanRead(quote, user);
 
+    const userId = getUserId(user);
+    const rules = await this.settingsService.getEffectiveRules(userId);
     const productMap = await this.loadProductsForItems(quote.items || []);
 
-    return {
-      ...quote,
-      items: (quote.items || []).map((item) => {
-        const prod = productMap.get(item.productId, item.productCode);
-        const resolvedStock =
-          prod?.stock !== null && prod?.stock !== undefined
-            ? Number(prod.stock)
-            : item.metadata?.stock !== undefined && item.metadata?.stock !== null
-            ? Number(item.metadata.stock)
-            : 0;
+    const itemsToPersist: SaleQuoteItem[] = [];
 
-        const resolvedCostPrice =
-          item.costPrice !== null && item.costPrice !== undefined
-            ? Number(item.costPrice)
-            : prod?.price !== null && prod?.price !== undefined
-            ? Number(prod.price)
-            : null;
+    const updatedItems = (quote.items || []).map((item) => {
+      const prod = productMap.get(item.productId, item.productCode);
 
-        const resolvedWarranty = item.warranty || (prod ? productWarrantyText(prod) : null);
+      // 1. Tồn kho mới nhất
+      const resolvedStock =
+        prod?.stock !== null && prod?.stock !== undefined
+          ? Number(prod.stock)
+          : item.metadata?.stock !== undefined && item.metadata?.stock !== null
+          ? Number(item.metadata.stock)
+          : 0;
 
-        let resolvedStatusText = item.statusText;
-        if (!item.isManual) {
-          const upper = (item.statusText || '').toUpperCase();
-          const isStandard =
-            !upper ||
-            upper.includes('SẴN') ||
-            upper.includes('GẦN HẾT') ||
-            upper.includes('CHỜ') ||
-            upper.includes('CHECK');
-          if (isStandard) {
+      // 2. Giá vốn mới nhất từ kho (ưu tiên giá kho mới cập nhật)
+      let resolvedCostPrice = item.costPrice;
+      if (prod?.costPrice !== null && prod?.costPrice !== undefined && Number(prod.costPrice) > 0) {
+        resolvedCostPrice = Number(prod.costPrice);
+      }
+
+      // 3. Đơn giá bán mới nhất
+      let resolvedUnitPrice = item.unitPrice;
+      if (!item.isManual && resolvedCostPrice !== null && resolvedCostPrice !== undefined && Number(resolvedCostPrice) > 0) {
+        const wasEqualCost = !item.unitPrice || item.unitPrice === item.costPrice;
+        if (wasEqualCost) {
+          resolvedUnitPrice = resolvedCostPrice;
+        } else {
+          const suggested = this.pricingService.suggestSalePrice(resolvedCostPrice, rules);
+          resolvedUnitPrice = suggested || resolvedCostPrice;
+        }
+      }
+
+      // 4. Thành tiền mới nhất
+      const qty = Math.max(1, Number(item.quantity) || 1);
+      const resolvedLineTotal =
+        resolvedUnitPrice !== null && resolvedUnitPrice !== undefined
+          ? resolvedUnitPrice * qty
+          : null;
+
+      // 5. Bảo hành
+      const resolvedWarranty = item.warranty || prod?.warranty || null;
+
+      // 6. Tự động đồng bộ tình trạng kho theo số lượng tồn kho mới nhất
+      let resolvedStatusText = item.statusText;
+      if (!item.isManual) {
+        const upper = (item.statusText || '').toUpperCase();
+        const isStandard =
+          !upper ||
+          upper.includes('SẴN') ||
+          upper.includes('GẦN HẾT') ||
+          upper.includes('CHỜ') ||
+          upper.includes('CHECK');
+        if (isStandard) {
+          if (prod?.rawStatus && !prod.isS1 && resolvedStock === 0) {
+            resolvedStatusText = prod.rawStatus;
+          } else {
             resolvedStatusText = computeStockStatus(resolvedStock, item.statusText || undefined);
           }
         }
+      }
 
-        // Auto-heal pn cho sản phẩm S1 nếu bị kẹt P/N của linh kiện cũ trước khi đổi
-        let resolvedPn = item.pn;
-        if (!item.isManual && (item.productId || prod)) {
-          const effectiveCode = item.productCode || prod?.productCode;
-          if (resolvedPn && effectiveCode && resolvedPn !== effectiveCode) {
-            resolvedPn = effectiveCode;
-          }
+      // 7. Auto-heal pn cho sản phẩm S1 nếu bị kẹt P/N của linh kiện cũ trước khi đổi
+      let resolvedPn = item.pn;
+      if (!item.isManual && (item.productId || prod)) {
+        const effectiveCode = item.productCode || prod?.productCode;
+        if (resolvedPn && effectiveCode && resolvedPn !== effectiveCode) {
+          resolvedPn = effectiveCode;
         }
+      }
 
-        return {
-          ...item,
-          pn: resolvedPn,
-          stock: resolvedStock,
-          costPrice: resolvedCostPrice,
-          warranty: resolvedWarranty,
-          statusText: resolvedStatusText,
-        };
-      }),
+      // Kiểm tra thay đổi để lưu ngầm
+      const hasChanged =
+        (resolvedCostPrice !== null && resolvedCostPrice !== item.costPrice) ||
+        (resolvedUnitPrice !== null && resolvedUnitPrice !== item.unitPrice) ||
+        (resolvedLineTotal !== null && resolvedLineTotal !== item.lineTotal) ||
+        (resolvedStatusText && resolvedStatusText !== item.statusText);
+
+      if (hasChanged && item.id) {
+        item.costPrice = resolvedCostPrice;
+        item.unitPrice = resolvedUnitPrice;
+        item.lineTotal = resolvedLineTotal;
+        item.statusText = resolvedStatusText;
+        itemsToPersist.push(item);
+      }
+
+      return {
+        ...item,
+        pn: resolvedPn,
+        stock: resolvedStock,
+        costPrice: resolvedCostPrice,
+        unitPrice: resolvedUnitPrice,
+        lineTotal: resolvedLineTotal,
+        warranty: resolvedWarranty,
+        statusText: resolvedStatusText,
+      };
+    });
+
+    if (itemsToPersist.length > 0) {
+      this.itemRepo.save(itemsToPersist).then(() => {
+        this.recalculateTotals(quote.id);
+      }).catch((err) => {
+        console.error('Lỗi khi lưu đồng bộ kho cho quote:', err);
+      });
+    }
+
+    const calculatedTotal = updatedItems.reduce((sum, it) => sum + (it.lineTotal || 0), 0);
+
+    return {
+      ...quote,
+      totalAmount: calculatedTotal > 0 ? calculatedTotal : quote.totalAmount,
+      items: updatedItems,
     };
   }
 
@@ -591,16 +654,35 @@ export class SaleQuoteService {
       ),
     );
 
-    const byId = new Map<number, Product>();
-    const byCode = new Map<string, Product>();
+    interface InventoryResolvedInfo {
+      costPrice?: number;
+      stock?: number;
+      warranty?: string | null;
+      productName?: string;
+      productCode?: string;
+      rawStatus?: string | null;
+      isS1: boolean;
+    }
 
+    const byId = new Map<number, InventoryResolvedInfo>();
+    const byCode = new Map<string, InventoryResolvedInfo>();
+
+    // 1. Quét từ Product (Kho S1)
     if (productIds.length > 0) {
       const prodsById = await this.productRepo.find({
         where: { id: In(productIds) },
       });
       for (const p of prodsById) {
-        byId.set(p.id, p);
-        if (p.productCode) byCode.set(p.productCode.trim().toLowerCase(), p);
+        const info: InventoryResolvedInfo = {
+          costPrice: p.price !== null && p.price !== undefined ? Number(p.price) : 0,
+          stock: p.stock !== null && p.stock !== undefined ? Number(p.stock) : 0,
+          warranty: productWarrantyText(p),
+          productName: p.productName,
+          productCode: p.productCode,
+          isS1: true,
+        };
+        byId.set(p.id, info);
+        if (p.productCode) byCode.set(p.productCode.trim().toLowerCase(), info);
       }
     }
 
@@ -609,13 +691,72 @@ export class SaleQuoteService {
         where: { productCode: In(productCodes) },
       });
       for (const p of prodsByCode) {
-        byId.set(p.id, p);
-        if (p.productCode) byCode.set(p.productCode.trim().toLowerCase(), p);
+        const info: InventoryResolvedInfo = {
+          costPrice: p.price !== null && p.price !== undefined ? Number(p.price) : 0,
+          stock: p.stock !== null && p.stock !== undefined ? Number(p.stock) : 0,
+          warranty: productWarrantyText(p),
+          productName: p.productName,
+          productCode: p.productCode,
+          isS1: true,
+        };
+        if (!byId.has(p.id)) byId.set(p.id, info);
+        if (p.productCode) byCode.set(p.productCode.trim().toLowerCase(), info);
+      }
+
+      // 2. Quét từ SaleExcelItem (Bảng giá Excel Catalog mới nhất)
+      try {
+        const excelItems = await this.excelItemRepo
+          .createQueryBuilder('ei')
+          .where('UPPER(ei.productCode) IN (:...codes)', {
+            codes: productCodes.map((c) => c.toUpperCase()),
+          })
+          .orderBy('ei.id', 'DESC')
+          .getMany();
+
+        for (const ei of excelItems) {
+          const key = ei.productCode.trim().toLowerCase();
+          const existing = byCode.get(key);
+
+          const excelPrice =
+            ei.price !== null && ei.price !== undefined ? Number(ei.price) : 0;
+          const excelStock =
+            ei.s1Matched && ei.s1StockQuantity !== null && ei.s1StockQuantity !== undefined
+              ? Number(ei.s1StockQuantity)
+              : undefined;
+
+          if (existing) {
+            if (excelPrice > 0) {
+              existing.costPrice = excelPrice;
+            }
+            if (excelStock !== undefined) {
+              existing.stock = excelStock;
+            }
+            if (ei.rawStatus) {
+              existing.rawStatus = ei.rawStatus;
+            }
+          } else {
+            const info: InventoryResolvedInfo = {
+              costPrice: excelPrice,
+              stock: excelStock ?? 0,
+              warranty: ei.warranty || null,
+              productName: ei.productName,
+              productCode: ei.productCode,
+              rawStatus: ei.rawStatus,
+              isS1: false,
+            };
+            byCode.set(key, info);
+          }
+        }
+      } catch (err) {
+        // Safe check phòng lỗi query
       }
     }
 
     return {
-      get: (productId?: number | null, productCode?: string | null): Product | undefined => {
+      get: (
+        productId?: number | null,
+        productCode?: string | null,
+      ): InventoryResolvedInfo | undefined => {
         if (productId && byId.has(Number(productId))) {
           return byId.get(Number(productId));
         }

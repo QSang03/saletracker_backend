@@ -27,6 +27,7 @@ import { SaleQuickCaseService } from './services/sale-quick-case.service';
 import { SaleExcelService } from './services/sale-excel.service';
 import { SaleExcelParserService } from './services/sale-excel-parser.service';
 import { SaleExcelCatalogService } from './services/sale-excel-catalog.service';
+import { SaleDataSyncService } from './services/sale-data-sync.service';
 
 import { SaleCatalogController } from './controllers/sale-catalog.controller';
 import { SaleQuoteController } from './controllers/sale-quote.controller';
@@ -73,6 +74,7 @@ import { SaleExcelCatalogController } from './controllers/sale-excel-catalog.con
     SaleExcelService,
     SaleExcelParserService,
     SaleExcelCatalogService,
+    SaleDataSyncService,
   ],
   exports: [
     SaleSettingsService,
@@ -85,6 +87,7 @@ import { SaleExcelCatalogController } from './controllers/sale-excel-catalog.con
     SaleExcelService,
     SaleExcelParserService,
     SaleExcelCatalogService,
+    SaleDataSyncService,
   ],
 })
 export class SaleQuoteModule {}

@@ -15,6 +15,7 @@ import { Request } from 'express';
 import { AuthGuard } from '../../common/guards/auth.guard';
 import { SaleCatalogService } from '../services/sale-catalog.service';
 import { SaleSettingsService } from '../services/sale-settings.service';
+import { SaleDataSyncService } from '../services/sale-data-sync.service';
 import {
   CatalogQueryDto,
   PricingPreviewDto,
@@ -29,7 +30,13 @@ export class SaleCatalogController {
   constructor(
     private readonly catalogService: SaleCatalogService,
     private readonly settingsService: SaleSettingsService,
+    private readonly dataSyncService: SaleDataSyncService,
   ) {}
+
+  @Post('sync-s1-data')
+  async triggerS1DataSync() {
+    return this.dataSyncService.syncAllSaleDataFromS1();
+  }
 
   @Get('catalog')
   search(@Query() query: CatalogQueryDto, @Req() req: AuthenticatedRequest) {

@@ -35,6 +35,7 @@ import { UserModule } from '../users/user.module';
 import { ActivityLog } from '../activity-logs/activity-log.entity';
 import { ActivityLogCleanupCronjobService } from './activity-log-cleanup.cronjob.service';
 import { DbAnalyzeCronjobService } from './db-analyze.cronjob.service';
+import { SaleQuoteModule } from '../sale-quotes/sale-quote.module';
 
 @Module({
   imports: [
@@ -42,6 +43,7 @@ import { DbAnalyzeCronjobService } from './db-analyze.cronjob.service';
     HttpModule,
     PermissionModule,
     UserModule, // Import UserModule để có UserStatusObserver
+    SaleQuoteModule,
     TypeOrmModule.forFeature([
       NKCProduct,
       Product,

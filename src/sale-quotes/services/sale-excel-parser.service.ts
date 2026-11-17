@@ -888,7 +888,7 @@ export class SaleExcelParserService {
   async parseBufferWithTemplate(
     buffer: Buffer,
     template: SaleExcelTemplate,
-    options?: { allowSkipInvalid?: boolean },
+    options?: { allowSkipInvalid?: boolean; isPreview?: boolean },
   ): Promise<ParsedWorkbookResult> {
     const workbook = new ExcelJS.Workbook();
     // @ts-ignore

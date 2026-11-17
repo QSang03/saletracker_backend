@@ -160,6 +160,78 @@ export class SaleExcelCatalogService {
   }
 
   // =========================================================================
+  // XEM TRƯỚC DỮ LIỆU NẠP FILE THEO MẪU (PREVIEW UPLOAD)
+  // =========================================================================
+  async previewUploadCatalog(
+    file: Express.Multer.File,
+    templateType: number,
+  ) {
+    if (!file) {
+      throw new BadRequestException('Vui lòng chọn file Excel');
+    }
+
+    const tType = Number(templateType) || 1;
+    const dynamicTemplate = await this.templateRepo.findOne({
+      where: { id: tType },
+    });
+
+    let parsed: any;
+    if (dynamicTemplate) {
+      // 1. Kiểm tra cấu trúc cột
+      const validation =
+        await this.parserService.validateFileAgainstTemplate(
+          file.buffer,
+          dynamicTemplate,
+        );
+      if (!validation.isValid) {
+        throw new BadRequestException({
+          errorType: 'TEMPLATE_COLUMN_MISMATCH',
+          message: 'Cấu trúc file không khớp với mẫu đã chọn',
+          errors: validation.errors,
+        });
+      }
+
+      parsed = await this.parserService.parseBufferWithTemplate(
+        file.buffer,
+        dynamicTemplate,
+        { isPreview: true },
+      );
+    } else {
+      parsed = await this.parserService.parseBuffer(file.buffer, tType);
+    }
+
+    // 2. So khớp nhanh tồn kho S1
+    const s1Map = await this.batchMatchInventory(parsed.sheets);
+    let s1MatchCount = 0;
+
+    const previewItems = (parsed.previewRows || []).map((item: any) => {
+      const codeStr = String(item.productCode || '').trim();
+      const s1 = codeStr ? s1Map.get(codeStr.toUpperCase()) : undefined;
+      if (s1 && item.isValid) {
+        s1MatchCount++;
+      }
+      return {
+        ...item,
+        s1Matched: !!s1,
+        s1Stock: s1 ? (s1.stock ?? 0) : null,
+      };
+    });
+
+    return {
+      fileName: file.originalname,
+      fileSize: file.size,
+      totalRows: parsed.totalRows ?? parsed.totalItems,
+      validCount: parsed.validCount ?? parsed.totalItems,
+      invalidCount: parsed.invalidCount ?? 0,
+      totalSheets: parsed.totalSheets,
+      sheets: parsed.sheetSummaries ?? [],
+      items: previewItems.slice(0, 1500), // Preview tối đa 1500 dòng
+      errors: parsed.allRowErrors || [],
+      s1MatchCount,
+    };
+  }
+
+  // =========================================================================
   // UPLOAD CATALOG MỚI
   // =========================================================================
   async uploadCatalog(

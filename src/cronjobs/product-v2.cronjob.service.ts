@@ -13,6 +13,7 @@ import slugify from 'slugify';
 import * as fs from 'fs';
 import * as path from 'path';
 import { WinstonLogger } from '../common/winston.logger';
+import { SaleDataSyncService } from '../sale-quotes/services/sale-data-sync.service';
 
 interface ApiProduct {
   MaHH?: string | null;
@@ -86,6 +87,7 @@ export class ProductV2CronjobService {
     @InjectRepository(Category)
     private readonly categoryRepo: Repository<Category>,
     private readonly permissionService: PermissionService,
+    private readonly saleDataSyncService: SaleDataSyncService,
   ) {}
 
   @Cron(process.env.CRON_PRODUCT_TIME || '0 */6 * * *', {
@@ -246,6 +248,16 @@ export class ProductV2CronjobService {
           `updated=${updated}, unchanged=${unchanged}, priceChanged=${priceChanged}, ` +
           `missingPrice=${missingPrice}`,
       );
+
+      // Kích hoạt đồng bộ Đơn giá, Tồn kho và Tình trạng kho cho toàn bộ Báo giá & Cấu hình lắp ráp theo lô
+      try {
+        await this.saleDataSyncService.syncAllSaleDataFromS1();
+      } catch (syncErr: any) {
+        this.logger.error(
+          'Lỗi khi đồng bộ giá và tồn kho báo giá sau khi S1 sync:',
+          syncErr?.stack || String(syncErr),
+        );
+      }
     } catch (error) {
       this.logger.error(
         'Failed to sync products V2',

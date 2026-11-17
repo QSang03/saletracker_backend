@@ -196,6 +196,28 @@ export class SaleExcelCatalogController {
   }
 
   // =========================================================================
+  // XEM TRƯỚC DỮ LIỆU NẠP FILE THEO MẪU (PREVIEW UPLOAD)
+  // =========================================================================
+  @Post('preview')
+  @UseGuards(AuthGuard)
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: 30 * 1024 * 1024 }, // 30MB
+    }),
+  )
+  async previewUpload(
+    @UploadedFile() file: Express.Multer.File,
+    @Body('templateType') templateTypeRaw: string,
+  ) {
+    if (!file) {
+      throw new BadRequestException('Vui lòng chọn file Excel');
+    }
+    const templateType = parseInt(templateTypeRaw, 10) || 1;
+    const data = await this.excelService.previewUploadCatalog(file, templateType);
+    return { success: true, data };
+  }
+
+  // =========================================================================
   // UPLOAD CATALOG MỚI
   // =========================================================================
   @Post('upload')

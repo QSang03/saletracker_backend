@@ -7,6 +7,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, Repository } from 'typeorm';
 import { Product } from '../../products/product.entity';
+import { SaleExcelItem } from '../entities/sale-excel-item.entity';
 import { SaleQuickQuoteCase } from '../entities/sale-quick-quote-case.entity';
 import { SaleQuickQuoteItem } from '../entities/sale-quick-quote-item.entity';
 import {
@@ -43,6 +44,8 @@ export class SaleQuickCaseService {
     private readonly itemRepo: Repository<SaleQuickQuoteItem>,
     @InjectRepository(Product)
     private readonly productRepo: Repository<Product>,
+    @InjectRepository(SaleExcelItem)
+    private readonly excelItemRepo: Repository<SaleExcelItem>,
     private readonly dataSource: DataSource,
     private readonly settingsService: SaleSettingsService,
     private readonly pricingService: SalePricingService,
@@ -191,33 +194,101 @@ export class SaleQuickCaseService {
     }
     this.assertCanRead(quickCase, user);
 
+    const userId = getUserId(user);
+    const rules = await this.settingsService.getEffectiveRules(userId);
     const { idMap, codeMap } = await this.loadProductsForItems(quickCase.items || []);
+
+    const itemsToPersist: SaleQuickQuoteItem[] = [];
+
+    const updatedItems = (quickCase.items || []).map((item) => {
+      const prod =
+        (item.productId ? idMap.get(item.productId) : undefined) ||
+        (item.productCode ? codeMap.get(item.productCode.trim().toLowerCase()) : undefined);
+
+      // 1. Tồn kho mới nhất
+      const resolvedStock =
+        prod?.stock !== null && prod?.stock !== undefined ? Number(prod.stock) : 0;
+
+      // 2. Giá vốn mới nhất từ kho
+      let resolvedCostPrice = item.costPrice;
+      if (prod?.costPrice !== null && prod?.costPrice !== undefined && Number(prod.costPrice) > 0) {
+        resolvedCostPrice = Number(prod.costPrice);
+      }
+
+      // 3. Đơn giá bán mới nhất theo quy tắc giá
+      let resolvedSalePrice = item.salePrice;
+      if (resolvedCostPrice !== null && resolvedCostPrice !== undefined && Number(resolvedCostPrice) > 0) {
+        const wasEqualCost = !item.salePrice || item.salePrice === item.costPrice;
+        if (wasEqualCost) {
+          resolvedSalePrice = resolvedCostPrice;
+        } else {
+          const suggested = this.pricingService.suggestSalePrice(resolvedCostPrice, rules);
+          resolvedSalePrice = suggested || resolvedCostPrice;
+        }
+      }
+
+      // 4. Thành tiền mới nhất
+      const qty = Math.max(1, Number(item.quantity) || 1);
+      const resolvedLineTotal =
+        resolvedSalePrice !== null && resolvedSalePrice !== undefined
+          ? resolvedSalePrice * qty
+          : null;
+
+      // 5. Tình trạng kho mới nhất
+      let resolvedStatusText = item.statusText;
+      const upper = (item.statusText || '').toUpperCase();
+      const isStandard =
+        !upper ||
+        upper.includes('SẴN') ||
+        upper.includes('GẦN HẾT') ||
+        upper.includes('CHỜ') ||
+        upper.includes('CHECK');
+      if (isStandard && prod) {
+        if (prod.rawStatus && !prod.isS1 && resolvedStock === 0) {
+          resolvedStatusText = prod.rawStatus;
+        } else {
+          resolvedStatusText = computeStockStatus(resolvedStock, item.statusText || undefined);
+        }
+      }
+
+      // 6. Bảo hành
+      const resolvedWarranty = item.warranty || prod?.warranty || null;
+
+      // Kiểm tra thay đổi để lưu ngầm
+      const hasChanged =
+        (resolvedCostPrice !== null && resolvedCostPrice !== item.costPrice) ||
+        (resolvedSalePrice !== null && resolvedSalePrice !== item.salePrice) ||
+        (resolvedLineTotal !== null && resolvedLineTotal !== item.lineTotal) ||
+        (resolvedStatusText && resolvedStatusText !== item.statusText);
+
+      if (hasChanged && item.id) {
+        item.costPrice = resolvedCostPrice;
+        item.salePrice = resolvedSalePrice;
+        item.lineTotal = resolvedLineTotal;
+        item.statusText = resolvedStatusText;
+        itemsToPersist.push(item);
+      }
+
+      return {
+        ...item,
+        stock: resolvedStock,
+        costPrice: resolvedCostPrice,
+        salePrice: resolvedSalePrice,
+        lineTotal: resolvedLineTotal,
+        warranty: resolvedWarranty,
+        statusText: resolvedStatusText,
+      };
+    });
+
+    if (itemsToPersist.length > 0) {
+      this.itemRepo.save(itemsToPersist).catch((err) => {
+        console.error('Lỗi khi lưu đồng bộ kho cho quick case:', err);
+      });
+    }
 
     return {
       ...quickCase,
-      items: (quickCase.items || []).map((item) => {
-        const prod =
-          (item.productId ? idMap.get(item.productId) : undefined) ||
-          (item.productCode ? codeMap.get(item.productCode.trim().toLowerCase()) : undefined);
-        const resolvedStock = prod?.stock !== null && prod?.stock !== undefined ? Number(prod.stock) : 0;
-        let resolvedStatusText = item.statusText;
-        const upper = (item.statusText || '').toUpperCase();
-        const isStandard =
-          !upper ||
-          upper.includes('SẴN') ||
-          upper.includes('GẦN HẾT') ||
-          upper.includes('CHỜ') ||
-          upper.includes('CHECK');
-        if (isStandard && prod) {
-          resolvedStatusText = computeStockStatus(resolvedStock, item.statusText || undefined);
-        }
-
-        return {
-          ...item,
-          stock: resolvedStock,
-          statusText: resolvedStatusText,
-        };
-      }),
+      items: updatedItems,
     };
   }
 
@@ -580,18 +651,100 @@ export class SaleQuickCaseService {
       new Set(items.map((i) => i.productCode?.trim()).filter((c): c is string => Boolean(c))),
     );
 
+    interface InventoryResolvedInfo {
+      costPrice?: number;
+      stock?: number;
+      warranty?: string | null;
+      productName?: string;
+      productCode?: string;
+      rawStatus?: string | null;
+      isS1: boolean;
+    }
+
     const [byIds, byCodes] = await Promise.all([
       pids.length > 0 ? this.productRepo.find({ where: { id: In(pids) } }) : [],
       pcodes.length > 0 ? this.productRepo.find({ where: { productCode: In(pcodes) } }) : [],
     ]);
 
-    const idMap = new Map<number, Product>();
-    const codeMap = new Map<string, Product>();
-    for (const p of byIds) idMap.set(p.id, p);
-    for (const p of byCodes) {
-      if (p.productCode) codeMap.set(p.productCode.trim().toLowerCase(), p);
-      if (!idMap.has(p.id)) idMap.set(p.id, p);
+    const idMap = new Map<number, InventoryResolvedInfo>();
+    const codeMap = new Map<string, InventoryResolvedInfo>();
+
+    for (const p of byIds) {
+      const info: InventoryResolvedInfo = {
+        costPrice: p.price !== null && p.price !== undefined ? Number(p.price) : 0,
+        stock: p.stock !== null && p.stock !== undefined ? Number(p.stock) : 0,
+        warranty: productWarrantyText(p),
+        productName: p.productName,
+        productCode: p.productCode,
+        isS1: true,
+      };
+      idMap.set(p.id, info);
+      if (p.productCode) codeMap.set(p.productCode.trim().toLowerCase(), info);
     }
+
+    for (const p of byCodes) {
+      const info: InventoryResolvedInfo = {
+        costPrice: p.price !== null && p.price !== undefined ? Number(p.price) : 0,
+        stock: p.stock !== null && p.stock !== undefined ? Number(p.stock) : 0,
+        warranty: productWarrantyText(p),
+        productName: p.productName,
+        productCode: p.productCode,
+        isS1: true,
+      };
+      if (!idMap.has(p.id)) idMap.set(p.id, info);
+      if (p.productCode) codeMap.set(p.productCode.trim().toLowerCase(), info);
+    }
+
+    // Quét bổ sung từ SaleExcelItem (Bảng giá Excel Catalog mới nhất)
+    if (pcodes.length > 0) {
+      try {
+        const excelItems = await this.excelItemRepo
+          .createQueryBuilder('ei')
+          .where('UPPER(ei.productCode) IN (:...codes)', {
+            codes: pcodes.map((c) => c.toUpperCase()),
+          })
+          .orderBy('ei.id', 'DESC')
+          .getMany();
+
+        for (const ei of excelItems) {
+          const key = ei.productCode.trim().toLowerCase();
+          const existing = codeMap.get(key);
+
+          const excelPrice =
+            ei.price !== null && ei.price !== undefined ? Number(ei.price) : 0;
+          const excelStock =
+            ei.s1Matched && ei.s1StockQuantity !== null && ei.s1StockQuantity !== undefined
+              ? Number(ei.s1StockQuantity)
+              : undefined;
+
+          if (existing) {
+            if (excelPrice > 0) {
+              existing.costPrice = excelPrice;
+            }
+            if (excelStock !== undefined) {
+              existing.stock = excelStock;
+            }
+            if (ei.rawStatus) {
+              existing.rawStatus = ei.rawStatus;
+            }
+          } else {
+            const info: InventoryResolvedInfo = {
+              costPrice: excelPrice,
+              stock: excelStock ?? 0,
+              warranty: ei.warranty || null,
+              productName: ei.productName,
+              productCode: ei.productCode,
+              rawStatus: ei.rawStatus,
+              isS1: false,
+            };
+            codeMap.set(key, info);
+          }
+        }
+      } catch (err) {
+        // Safe check phòng lỗi query
+      }
+    }
+
     return { idMap, codeMap };
   }
 
