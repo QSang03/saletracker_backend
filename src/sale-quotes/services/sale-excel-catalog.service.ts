@@ -229,6 +229,7 @@ export class SaleExcelCatalogService {
       errors: parsed.allRowErrors || [],
       s1MatchCount,
       allExcelColumns: parsed.allExcelColumns || [],
+      mappedColumns: parsed.mappedColumns || [],
     };
   }
 
@@ -329,6 +330,7 @@ export class SaleExcelCatalogService {
             sheetIndex: s.sheetIndex,
             itemCount: s.items.length,
             excelColumns: s.excelColumns || null,
+            mappedColumns: s.mappedColumns || null,
           });
           const savedSheet = await queryRunner.manager.save(sheet);
 
@@ -483,6 +485,7 @@ export class SaleExcelCatalogService {
             sheetIndex: s.sheetIndex,
             itemCount: s.items.length,
             excelColumns: s.excelColumns || null,
+            mappedColumns: s.mappedColumns || null,
           });
           const savedSheet = await queryRunner.manager.save(sheet);
 
@@ -995,8 +998,65 @@ export class SaleExcelCatalogService {
     const [items, total] = await qb.skip(skip).take(limit).getManyAndCount();
     const sheet = await this.sheetRepo.findOne({
       where: { id: sheetId },
-      select: ['id', 'excelColumns'],
+      select: ['id', 'catalogId', 'sheetName', 'excelColumns', 'mappedColumns'],
     });
+
+    let mappedCols: string[] = sheet?.mappedColumns || [];
+    let excelCols: string[] = sheet?.excelColumns || [];
+
+    // Tự động khôi phục mappedColumns & excelColumns từ Template nếu sheet chưa có (ví dụ file upload từ trước)
+    if ((!mappedCols || mappedCols.length === 0) && sheet?.catalogId) {
+      try {
+        const catalog = await this.catalogRepo.findOne({
+          where: { id: sheet.catalogId },
+          select: ['id', 'templateType'],
+        });
+        if (catalog?.templateType) {
+          const template = await this.templateRepo.findOne({
+            where: { id: catalog.templateType },
+          });
+          if (template?.sheetGroups && template.sheetGroups.length > 0) {
+            const currentSheetName = (sheet.sheetName || '').trim().toUpperCase();
+            const matchedGroup =
+              template.sheetGroups.find((g) => {
+                const sList = Array.isArray(g.appliedSheets)
+                  ? g.appliedSheets
+                  : Array.isArray((g as any).sheets)
+                    ? (g as any).sheets
+                    : [];
+                return sList.some(
+                  (s: string) => String(s || '').trim().toUpperCase() === currentSheetName,
+                );
+              }) || template.sheetGroups[0];
+
+            if (matchedGroup?.columns) {
+              const cols = matchedGroup.columns;
+              mappedCols = [
+                cols.productCode,
+                cols.productName,
+                (cols as any).productName2,
+                cols.modelName,
+                cols.warranty,
+                cols.price,
+                cols.rawStatus,
+              ].filter(Boolean) as string[];
+
+              if (matchedGroup.excelColumns && matchedGroup.excelColumns.length > 0) {
+                excelCols = matchedGroup.excelColumns;
+              }
+
+              // Lưu ngược lại vào database để các lần truy vấn sau không cần query template nữa
+              await this.sheetRepo.update(sheetId, {
+                mappedColumns: mappedCols,
+                ...(excelCols.length > 0 ? { excelColumns: excelCols } : {}),
+              });
+            }
+          }
+        }
+      } catch (err: any) {
+        this.logger.warn(`Không thể tự động khôi phục mappedColumns cho sheet ${sheetId}: ${err?.message}`);
+      }
+    }
 
     return {
       items: items.map((i) => ({
@@ -1016,7 +1076,8 @@ export class SaleExcelCatalogService {
         isCustom: i.isCustom,
         rawData: i.rawData || null,
       })),
-      excelColumns: sheet?.excelColumns || [],
+      excelColumns: excelCols,
+      mappedColumns: mappedCols,
       pagination: {
         page,
         limit,

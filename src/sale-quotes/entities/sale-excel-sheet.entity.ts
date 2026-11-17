@@ -38,6 +38,9 @@ export class SaleExcelSheet {
   @Column({ name: 'excel_columns', type: 'json', nullable: true })
   excelColumns?: string[] | null;
 
+  @Column({ name: 'mapped_columns', type: 'json', nullable: true })
+  mappedColumns?: string[] | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

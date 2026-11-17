@@ -63,6 +63,7 @@ export interface ParsedSheet {
   sheetIndex: number;
   items: ParsedItemRow[];
   excelColumns?: string[];
+  mappedColumns?: string[];
 }
 
 export interface ParsedWorkbookResult {
@@ -75,6 +76,7 @@ export interface ParsedWorkbookResult {
   allRowErrors?: RowValidationErrorItem[];
   previewRows?: any[];
   allExcelColumns?: string[];
+  mappedColumns?: string[];
   sheetSummaries?: Array<{
     sheetName: string;
     sheetIndex: number;
@@ -82,6 +84,7 @@ export interface ParsedWorkbookResult {
     validCount: number;
     invalidCount: number;
     excelColumns?: string[];
+    mappedColumns?: string[];
   }>;
 }
 
@@ -981,6 +984,7 @@ export class SaleExcelParserService {
       validCount: number;
       invalidCount: number;
       excelColumns?: string[];
+      mappedColumns?: string[];
     }> = [];
     let validCount = 0;
 
@@ -1297,6 +1301,16 @@ export class SaleExcelParserService {
       }
 
       const sheetCols = headerColumns.map((c) => c.colName);
+      const mappedCols = [
+        mapping.columns.productCode,
+        mapping.columns.productName,
+        (mapping.columns as any).productName2,
+        mapping.columns.modelName,
+        mapping.columns.warranty,
+        mapping.columns.price,
+        mapping.columns.rawStatus,
+      ].filter(Boolean) as string[];
+
       if (parsedItems.length > 0) {
         totalItems += parsedItems.length;
         sheets.push({
@@ -1304,6 +1318,7 @@ export class SaleExcelParserService {
           sheetIndex: sheetIdx,
           items: parsedItems,
           excelColumns: sheetCols,
+          mappedColumns: mappedCols,
         });
       }
 
@@ -1314,6 +1329,7 @@ export class SaleExcelParserService {
         validCount: parsedItems.length,
         invalidCount: sheetRowErrors,
         excelColumns: sheetCols,
+        mappedColumns: mappedCols,
       });
     });
 
@@ -1333,6 +1349,21 @@ export class SaleExcelParserService {
     const allExcelColumns = Array.from(
       new Set(sheetSummaries.flatMap((s) => s.excelColumns || [])),
     );
+    const allMappedColumns = Array.from(
+      new Set(
+        groups.flatMap((g) =>
+          [
+            g.columns.productCode,
+            g.columns.productName,
+            (g.columns as any).productName2,
+            g.columns.modelName,
+            g.columns.warranty,
+            g.columns.price,
+            g.columns.rawStatus,
+          ].filter(Boolean),
+        ),
+      ),
+    );
 
     return {
       totalSheets: sheets.length,
@@ -1345,6 +1376,7 @@ export class SaleExcelParserService {
       previewRows,
       sheetSummaries,
       allExcelColumns,
+      mappedColumns: allMappedColumns,
     };
   }
 
