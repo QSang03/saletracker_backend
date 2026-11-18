@@ -239,10 +239,84 @@ export class SaleExcelParserService {
     return str === '[object Object]' ? '' : str.replace(/\s+/g, ' ');
   }
 
-  private parsePrice(raw: string): number {
-    if (!raw) return 0;
-    // Bỏ ký tự phân cách nghìn, đơn vị tiền tệ
-    const clean = raw.replace(/[,\.₫đVND\s]/gi, '').trim();
+  private parsePrice(raw: any): number {
+    if (raw === null || raw === undefined) return 0;
+    if (typeof raw === 'number') {
+      return isNaN(raw) || raw < 0 ? 0 : Math.round(raw);
+    }
+
+    let str = String(raw).trim();
+    if (!str) return 0;
+
+    // Bỏ ký tự tiền tệ và khoảng trắng: ₫, đ, VND, vn, $, khoảng trắng
+    str = str.replace(/[₫đVNDvn\$\s]/gi, '').trim();
+    if (!str) return 0;
+
+    // Nếu parse trực tiếp bằng Number() là số hợp lệ (ví dụ "23831500.000000004", "14200000")
+    // Lưu ý: "23.831.500" sẽ là NaN vì có nhiều dấu chấm
+    const directNum = Number(str);
+    if (!isNaN(directNum) && isFinite(directNum)) {
+      return directNum < 0 ? 0 : Math.round(directNum);
+    }
+
+    const hasComma = str.includes(',');
+    const hasDot = str.includes('.');
+
+    if (hasDot && hasComma) {
+      const lastDotIndex = str.lastIndexOf('.');
+      const lastCommaIndex = str.lastIndexOf(',');
+      if (lastDotIndex > lastCommaIndex) {
+        // "23,831,500.00" -> phẩy là nghìn, chấm là thập phân
+        const clean = str.replace(/,/g, '');
+        const n = parseFloat(clean);
+        return isNaN(n) || n < 0 ? 0 : Math.round(n);
+      } else {
+        // "23.831.500,00" -> chấm là nghìn, phẩy là thập phân
+        const clean = str.replace(/\./g, '').replace(',', '.');
+        const n = parseFloat(clean);
+        return isNaN(n) || n < 0 ? 0 : Math.round(n);
+      }
+    } else if (hasDot) {
+      const dotCount = (str.match(/\./g) || []).length;
+      if (dotCount > 1) {
+        // Nhiều dấu chấm: "23.831.500" -> chắc chắn là phân cách nghìn
+        const clean = str.replace(/\./g, '');
+        const n = parseInt(clean, 10);
+        return isNaN(n) || n < 0 ? 0 : n;
+      } else {
+        // Đúng 1 dấu chấm: phân biệt "23831500.000000004" (thập phân) vs "18.500" (nghìn)
+        const parts = str.split('.');
+        const decPart = parts[1];
+        if (decPart.length !== 3) {
+          const n = parseFloat(str);
+          return isNaN(n) || n < 0 ? 0 : Math.round(n);
+        } else {
+          // Đúng 3 chữ số sau dấu chấm: "18.500" -> 18.500 đồng
+          const clean = str.replace(/\./g, '');
+          const n = parseInt(clean, 10);
+          return isNaN(n) || n < 0 ? 0 : n;
+        }
+      }
+    } else if (hasComma) {
+      const commaCount = (str.match(/,/g) || []).length;
+      if (commaCount > 1) {
+        const clean = str.replace(/,/g, '');
+        const n = parseInt(clean, 10);
+        return isNaN(n) || n < 0 ? 0 : n;
+      } else {
+        const parts = str.split(',');
+        if (parts[1].length !== 3) {
+          const n = parseFloat(parts[0] + '.' + parts[1]);
+          return isNaN(n) || n < 0 ? 0 : Math.round(n);
+        } else {
+          const clean = str.replace(/,/g, '');
+          const n = parseInt(clean, 10);
+          return isNaN(n) || n < 0 ? 0 : n;
+        }
+      }
+    }
+
+    const clean = str.replace(/[^\d]/g, '');
     const num = parseInt(clean, 10);
     return isNaN(num) || num < 0 ? 0 : num;
   }

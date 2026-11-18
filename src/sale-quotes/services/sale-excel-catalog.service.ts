@@ -1058,6 +1058,55 @@ export class SaleExcelCatalogService {
       }
     }
 
+    const isSttColBackend = (col: string): boolean => {
+      if (!col) return true;
+      const stripped = String(col).replace(/[\uFEFF\u200B-\u200F\u00A0\r\n\t]/g, '').trim();
+      if (!stripped) return true;
+      const normalized = stripped.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+      const cleaned = normalized.replace(/[^a-z0-9]/g, '');
+      return (
+        cleaned === 'stt' ||
+        cleaned === 'no' ||
+        cleaned === 'num' ||
+        cleaned === 'number' ||
+        cleaned === 'tt' ||
+        cleaned === 'sott' ||
+        cleaned === 'sothutu' ||
+        cleaned === 'thutu' ||
+        cleaned === 'order' ||
+        cleaned === 'index' ||
+        cleaned.startsWith('stt') ||
+        cleaned.endsWith('stt') ||
+        cleaned.includes('sothutu') ||
+        cleaned.includes('sott') ||
+        cleaned.includes('thutu') ||
+        /^[\s\-_()./\\\[\]:#*]*((so|số)?\s*(thứ\s*tự|thu\s*tu|tt|stt)|stt|no\.?|tt\.?|num|number|order|index|#)[\s\-_()./\\\[\]:#*]*$/i.test(stripped)
+      );
+    };
+
+    if (excelCols && excelCols.length > 0) {
+      excelCols = excelCols.filter((c) => !isSttColBackend(c));
+    }
+
+    const sanitizePrice = (val: number | string, id?: number): number => {
+      let num = Number(val) || 0;
+      if (num <= 0) return 0;
+      // Tự động sửa các giá trị sai số do lỗi dấu chấm thập phân IEEE 754 từ Excel
+      // Ví dụ: 23831500000000004 -> 23831500 (23.831.500 đ)
+      if (num > 10_000_000_000) {
+        const str = String(num);
+        const m = str.match(/^(\d{5,10})0{5,}\d*$/);
+        if (m && m[1]) {
+          const fixedPrice = Number(m[1]);
+          if (id) {
+            this.itemRepo.update(id, { price: fixedPrice }).catch(() => {});
+          }
+          return fixedPrice;
+        }
+      }
+      return num;
+    };
+
     return {
       items: items.map((i) => ({
         id: i.id,
@@ -1068,7 +1117,7 @@ export class SaleExcelCatalogService {
         productName: i.productName,
         modelName: i.modelName,
         warranty: i.warranty,
-        price: i.price,
+        price: sanitizePrice(i.price, i.id),
         rawStatus: i.rawStatus,
         s1Matched: i.s1Matched,
         s1ProductId: i.s1ProductId,
