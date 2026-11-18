@@ -980,11 +980,24 @@ export class SaleExcelCatalogService {
       .where('item.sheet_id = :sheetId', { sheetId });
 
     if (params.keyword && params.keyword.trim()) {
-      const kw = `%${params.keyword.trim()}%`;
-      qb.andWhere(
-        '(item.product_code LIKE :kw OR item.product_name LIKE :kw OR item.model_name LIKE :kw)',
-        { kw },
-      );
+      const tokens = params.keyword
+        .trim()
+        .toLowerCase()
+        .split(/\s+/)
+        .filter(Boolean)
+        .slice(0, 10);
+
+      tokens.forEach((token, index) => {
+        const key = `token_${index}`;
+        const escaped = token.replace(/[\\%_]/g, (char) => `\\${char}`);
+        qb.andWhere(
+          `(LOWER(item.product_code) LIKE :${key}
+            OR LOWER(item.product_name) LIKE :${key}
+            OR LOWER(item.model_name) LIKE :${key}
+            OR LOWER(item.warranty) LIKE :${key})`,
+          { [key]: `%${escaped}%` },
+        );
+      });
     }
 
     if (params.filterS1 === 's1_only') {
