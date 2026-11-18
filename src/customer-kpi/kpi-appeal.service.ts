@@ -129,48 +129,78 @@ export class KpiAppealService {
         total: 0,
         page: paged ? page : 1,
         limit: paged ? limit : 0,
+        totalPages: 1,
+        counts: { all: 0, pending: 0, approved: 0, rejected: 0 },
         items: [],
       };
     }
 
+    const search = query.search?.trim();
+    const applyCommonFilters = (q: any) => {
+      q.where('a.period = :period', { period });
+      if (query.saleId !== undefined) {
+        q.andWhere('a.sale_id = :saleId', { saleId: query.saleId });
+      } else if (userIds !== undefined) {
+        q.andWhere('a.sale_id IN (:...userIds)', { userIds });
+      }
+      if (search) {
+        q.andWhere(
+          `(
+            a.sale_id IN (
+              SELECT u.id FROM users u
+              WHERE u.deleted_at IS NULL
+                AND (u.full_name LIKE :like OR u.employee_code LIKE :like)
+            )
+            OR a.customer_code IN (
+              SELECT c.customer_code FROM customers c
+              WHERE c.status <> 'deleted'
+                AND (c.customer_code LIKE :like OR c.customer_name LIKE :like)
+            )
+            OR a.customer_code IN (
+              SELECT c2.customer_code
+              FROM customer_zalo z
+              JOIN customer_assignments ca ON ca.id = z.assignment_id
+              JOIN customers c2 ON c2.id = ca.customer_id
+              WHERE z.is_active = 1 AND z.matched_name LIKE :like
+            )
+            OR a.reason LIKE :like
+          )`,
+          { like: `%${this.escapeLike(search)}%` },
+        );
+      }
+    };
+
+    // Đếm số lượng theo từng status để các tab trên FE luôn hiển thị đúng
+    const countQb = this.appealRepo
+      .createQueryBuilder('a')
+      .select('a.status', 'status')
+      .addSelect('COUNT(*)', 'cnt');
+    applyCommonFilters(countQb);
+    countQb.groupBy('a.status');
+
+    const statusCountsRaw = await countQb.getRawMany();
+    const counts = {
+      all: 0,
+      pending: 0,
+      approved: 0,
+      rejected: 0,
+    };
+    for (const sc of statusCountsRaw) {
+      const c = Number(sc.cnt) || 0;
+      if (sc.status === KpiAppealStatus.PENDING) counts.pending = c;
+      else if (sc.status === KpiAppealStatus.APPROVED) counts.approved = c;
+      else if (sc.status === KpiAppealStatus.REJECTED) counts.rejected = c;
+    }
+    counts.all = counts.pending + counts.approved + counts.rejected;
+
+    // Lấy dữ liệu danh sách khiếu nại (áp dụng lọc status và phân trang nếu có)
     const qb = this.appealRepo
       .createQueryBuilder('a')
-      .leftJoinAndSelect('a.violation', 'v')
-      .where('a.period = :period', { period });
-    if (query.saleId !== undefined) {
-      qb.andWhere('a.sale_id = :saleId', { saleId: query.saleId });
-    } else if (userIds !== undefined) {
-      qb.andWhere('a.sale_id IN (:...userIds)', { userIds });
-    }
+      .leftJoinAndSelect('a.violation', 'v');
+    applyCommonFilters(qb);
+
     if (query.status) {
       qb.andWhere('a.status = :status', { status: query.status });
-    }
-
-    const search = query.search?.trim();
-    if (search) {
-      qb.andWhere(
-        `(
-          a.sale_id IN (
-            SELECT u.id FROM users u
-            WHERE u.deleted_at IS NULL
-              AND (u.full_name LIKE :like OR u.employee_code LIKE :like)
-          )
-          OR a.customer_code IN (
-            SELECT c.customer_code FROM customers c
-            WHERE c.status <> 'deleted'
-              AND (c.customer_code LIKE :like OR c.customer_name LIKE :like)
-          )
-          OR a.customer_code IN (
-            SELECT c2.customer_code
-            FROM customer_zalo z
-            JOIN customer_assignments ca ON ca.id = z.assignment_id
-            JOIN customers c2 ON c2.id = ca.customer_id
-            WHERE z.is_active = 1 AND z.matched_name LIKE :like
-          )
-          OR a.reason LIKE :like
-        )`,
-        { like: `%${this.escapeLike(search)}%` },
-      );
     }
 
     qb.orderBy('a.created_at', 'DESC');
@@ -191,6 +221,8 @@ export class KpiAppealService {
       total,
       page: paged ? page : 1,
       limit: paged ? limit : total,
+      totalPages: paged ? Math.ceil(total / limit) || 1 : 1,
+      counts,
       items: rows.map((row) => {
         const customerName = customerNames.get(row.customer_code) ?? null;
         return {
