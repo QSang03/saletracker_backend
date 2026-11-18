@@ -25,8 +25,10 @@ import { KpiUser } from './kpi-scope.service';
 /**
  * Khiếu nại vi phạm SLA 2h.
  *
- * Sale gửi cho đúng một vi phạm của mình; Leader/Admin duyệt. Duyệt xong
- * `is_waived=1` nên báo cáo KPI thấy ngay, không cần recompute.
+ * Sale gửi cho đúng một vi phạm của mình; Leader/Admin duyệt. Trưởng phòng
+ * không được tự duyệt giải trình của chính mình — trường hợp đó do
+ * PM Khách Hàng hoặc Admin xử lý. Duyệt xong `is_waived=1` nên báo cáo KPI
+ * thấy ngay, không cần recompute.
  */
 @Controller('customer-kpi-appeals')
 @UseGuards(JwtAuthGuard, PermissionGuard)

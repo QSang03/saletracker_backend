@@ -216,6 +216,10 @@ export class KpiAppealService {
     const customerNames = await this.customerNames.load([
       ...new Set(rows.map((row) => row.customer_code)),
     ]);
+    // FE dùng cờ này để ẩn nút duyệt khi người xem chính là sale của khiếu nại
+    // và không phải admin/pm-khach-hang (trưởng phòng không được tự duyệt).
+    const canWrite = this.scope.canWriteKpi(user);
+    const canReviewAny = this.scope.isAdminOrPm(user);
     return {
       period,
       total,
@@ -234,6 +238,10 @@ export class KpiAppealService {
           reviewerName: row.reviewer_id
             ? (infos.get(row.reviewer_id)?.fullName ?? null)
             : null,
+          canReview:
+            row.status === KpiAppealStatus.PENDING &&
+            canWrite &&
+            (canReviewAny || Number(row.sale_id) !== Number(user.id)),
           violation: row.violation
             ? {
                 ...row.violation,
@@ -279,8 +287,18 @@ export class KpiAppealService {
       appeal.sale_id,
       await this.scope.scopeUserIds(user),
     );
+    // Không cho tự duyệt giải trình của chính mình (trưởng phòng cũng là sale
+    // trong KPI). Trường hợp này chỉ PM Khách Hàng hoặc Admin được xử lý.
     if (appeal.status !== KpiAppealStatus.PENDING) {
       throw new BadRequestException('Khiếu nại này đã được xử lý');
+    }
+    if (
+      Number(appeal.sale_id) === Number(user.id) &&
+      !this.scope.isAdminOrPm(user)
+    ) {
+      throw new ForbiddenException(
+        'Bạn không thể tự duyệt giải trình của chính mình. Vui lòng chuyển PM Khách Hàng hoặc Admin duyệt.',
+      );
     }
 
     await this.appealRepo.manager.transaction(async (manager) => {
