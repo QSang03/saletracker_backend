@@ -1471,7 +1471,7 @@ export class DebtStatisticService {
     // Phase 1.4: Tối ưu hóa - Gộp kết quả trong database thay vì application layer
     const finalQuery = `
       SELECT 
-        bucket as range,
+        bucket as \`range\`,
         SUM(count) as count,
         SUM(amount) as amount
       FROM (${unionQuery}) as combined_pay_later
