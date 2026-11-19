@@ -12,7 +12,7 @@ const timezone = require('dayjs/plugin/timezone');
 dayjs.extend(utc);
 dayjs.extend(timezone);
 
-const FIELDS = [
+const FIELDS_SET = new Set([
   'createdAt',
   'updatedAt',
   'lastLogin',
@@ -40,87 +40,115 @@ const FIELDS = [
   'start_time',
   'end_time',
   'occurred_at',
-];
+]);
 
-function convertDates(obj: any, seen = new WeakSet<any>()): any {
-  // Handle undefined/null case
-  if (obj === undefined || obj === null) {
-    return obj === undefined ? {} : null;
+// Bỏ qua các key chứa dữ liệu bảng thô cực lớn (như rawData của Excel, metadata cột)
+// giúp giữ nguyên dữ liệu gốc và không tốn RAM duyệt vô ích hàng chục nghìn ô dữ liệu
+const SKIP_KEYS_SET = new Set([
+  'rawData',
+  'raw_data',
+  'excelColumns',
+  'mappedColumns',
+  'allExcelColumns',
+  'previewRows',
+  'buffer',
+  'tokens',
+]);
+
+/**
+ * Định dạng ngày giờ trực tiếp tại chỗ (In-Place Mutation).
+ * Không clone hay tạo mới đối tượng {} giúp triệt tiêu hoàn toàn áp lực RAM (OOM).
+ */
+function convertDatesInPlace(
+  obj: any,
+  depth = 0,
+  seen = new WeakSet<any>(),
+): any {
+  // Bỏ qua nếu là null, undefined hoặc kiểu nguyên thủy
+  if (!obj || typeof obj !== 'object') {
+    return obj;
   }
 
-  // Date KHÔNG nằm trong whitelist FIELDS (ví dụ lastVerifiedAt, decidedAt)
-  // từng rơi vào nhánh object bên dưới: Object.keys(date) rỗng → Date bị biến
-  // thành {} → FE new Date({}) → "Invalid Date". Field nào không cần đổi
-  // timezone thì giữ nguyên Date, để JSON.stringify ra ISO string chuẩn.
+  // Khống chế độ sâu tối đa 6 cấp (quá đủ cho REST API, chống đệ quy quá sâu)
+  if (depth > 6) {
+    return obj;
+  }
+
+  // Giữ nguyên Date nếu không nằm trong danh sách cần đổi
   if (obj instanceof Date) {
     return obj;
   }
 
-  // Skip Buffer/ArrayBuffer/Uint8Array/Streams to avoid corrupting binary responses
+  // Bỏ qua Buffer/ArrayBuffer/Uint8Array/Streams để tránh corrupt dữ liệu nhị phân
   if (
     (typeof Buffer !== 'undefined' && Buffer.isBuffer(obj)) ||
     obj instanceof ArrayBuffer ||
     obj instanceof Uint8Array ||
-    (typeof obj === 'object' && typeof obj.pipe === 'function')
+    typeof obj.pipe === 'function'
   ) {
     return obj;
   }
 
-  // Prevent infinite recursion on circular structures
-  if (typeof obj === 'object') {
-    if (seen.has(obj)) {
-      return obj;
-    }
-    seen.add(obj);
+  // Chống đệ quy vô hạn khi gặp tham chiếu tròn (circular reference)
+  if (seen.has(obj)) {
+    return obj;
   }
+  seen.add(obj);
 
+  // Xử lý Mảng: duyệt và sửa in-place từng phần tử
   if (Array.isArray(obj)) {
-    return obj.map((item) => convertDates(item, seen));
+    for (let i = 0; i < obj.length; i++) {
+      convertDatesInPlace(obj[i], depth + 1, seen);
+    }
+    return obj;
   }
 
-  if (obj && typeof obj === 'object') {
-    const result: any = {};
-    for (const key of Object.keys(obj)) {
-      const value = obj[key];
-      if (
-        FIELDS.includes(key) &&
-        (value instanceof Date ||
-          (typeof value === 'string' && !isNaN(Date.parse(value))))
-      ) {
-        result[key] = dayjs(value)
-          .tz('Asia/Ho_Chi_Minh')
-          .format('YYYY-MM-DD HH:mm:ss');
-      } else if (typeof value === 'object' && value !== null) {
-        result[key] = convertDates(value, seen);
-      } else {
-        result[key] = value;
-      }
+  // Xử lý Đối tượng: gán đè trực tiếp lên thuộc tính, KHÔNG tạo object mới
+  for (const key of Object.keys(obj)) {
+    // Bỏ qua các key dữ liệu thô lớn
+    if (SKIP_KEYS_SET.has(key)) {
+      continue;
     }
-    return result;
+
+    const value = obj[key];
+    if (value === null || value === undefined) {
+      continue;
+    }
+
+    if (
+      FIELDS_SET.has(key) &&
+      (value instanceof Date ||
+        (typeof value === 'string' &&
+          value.length >= 10 &&
+          !isNaN(Date.parse(value))))
+    ) {
+      obj[key] = dayjs(value)
+        .tz('Asia/Ho_Chi_Minh')
+        .format('YYYY-MM-DD HH:mm:ss');
+    } else if (typeof value === 'object') {
+      convertDatesInPlace(value, depth + 1, seen);
+    }
   }
+
   return obj;
 }
 
 @Injectable()
 export class DatetimeInterceptor implements NestInterceptor {
   intercept(context: ExecutionContext, next: CallHandler): Observable<any> {
-    const request = context.switchToHttp().getRequest();
+    // Chỉ áp dụng cho các HTTP REST request thông thường, bỏ qua WebSocket / RPC
+    if (context.getType() !== 'http') {
+      return next.handle();
+    }
 
     return next.handle().pipe(
       map((data) => {
-        // Log để debug
+        // Đảm bảo không return undefined
         if (data === undefined || data === null) {
-          console.warn(
-            `[DatetimeInterceptor] Undefined/null response for ${request.method} ${request.url}`,
-          );
+          return data === undefined ? {} : null;
         }
 
-        // Fix: ensure không bao giờ return undefined
-        if (data === undefined) {
-          return {};
-        }
-
-        return convertDates(data);
+        return convertDatesInPlace(data);
       }),
     );
   }
