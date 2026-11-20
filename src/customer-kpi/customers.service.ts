@@ -399,8 +399,8 @@ export class CustomersService {
       );
     }
 
-    // Nhóm khách gộp đứng cạnh nhau: groupId (MẸ id) → MẸ trước CON → mã KH
-    // → phòng ban. Cột STT trên UI vẫn là STT dòng như cũ.
+    // Nhóm khách gộp đứng cạnh nhau: groupId (MẸ id) → cùng sale_id → MẸ trước CON
+    // → mã KH → phòng ban. Cột STT trên UI vẫn là STT dòng như cũ.
     // ORDER BY phải dùng alias của addSelect — TypeORM coi chuỗi có dấu ngoặc
     // là alias nếu truyền thẳng vào orderBy.
     qb.addSelect('COALESCE(c.parent_customer_id, c.id)', 'group_order')
@@ -409,6 +409,7 @@ export class CustomersService {
         'group_role_order',
       )
       .orderBy('group_order', 'ASC')
+      .addOrderBy('a.sale_id', 'ASC')
       .addOrderBy('group_role_order', 'ASC')
       .addOrderBy('c.customer_code', 'ASC')
       .addOrderBy('a.department_slug', 'ASC')
@@ -442,28 +443,58 @@ export class CustomersService {
       linkCounts.map((r) => [Number(r.assignment_id), Number(r.link_count)]),
     );
 
-    // Số khách trong từng nhóm để FE hiện "Nhóm N" — đếm toàn cục, không chỉ
-    // trang hiện tại (nhóm có thể nằm vắt qua trang).
+    // Kiểm tra từng cặp (sale_id, groupId) xem sale đó có đồng thời cả MẸ và CON hay không.
+    // Điều kiện ghép mẹ-con: phải khớp cả saleId VÀ groupId, tức cùng một sale
+    // phải được phân công cả khách MẸ và ít nhất một khách CON.
+    const saleIdsInPage = [...new Set(assignments.map((a) => a.sale_id))];
     const groupIds = [
       ...new Set(
         assignments.map((a) => a.customer.parent_customer_id ?? a.customer.id),
       ),
     ];
-    const groupSizeMap = new Map<number, number>();
-    if (groupIds.length > 0) {
-      const sizeRows = await this.customerRepo
-        .createQueryBuilder('gc')
-        .select('COALESCE(gc.parent_customer_id, gc.id)', 'groupId')
-        .addSelect('COUNT(*)', 'count')
-        .where('gc.status != :deleted', { deleted: CustomerStatus.DELETED })
+    const saleGroupStatsMap = new Map<
+      string,
+      { size: number; hasMother: boolean; hasChild: boolean }
+    >();
+    if (saleIdsInPage.length > 0 && groupIds.length > 0) {
+      const statsRows = await this.assignmentRepo
+        .createQueryBuilder('ga')
+        .innerJoin('ga.customer', 'gc')
+        .select('ga.sale_id', 'saleId')
+        .addSelect('COALESCE(gc.parent_customer_id, gc.id)', 'groupId')
+        .addSelect('COUNT(DISTINCT ga.customer_id)', 'customerCount')
+        .addSelect(
+          'SUM(CASE WHEN gc.parent_customer_id IS NULL THEN 1 ELSE 0 END)',
+          'motherCount',
+        )
+        .addSelect(
+          'SUM(CASE WHEN gc.parent_customer_id IS NOT NULL THEN 1 ELSE 0 END)',
+          'childCount',
+        )
+        .where('ga.sale_id IN (:...saleIdsInPage)', { saleIdsInPage })
+        .andWhere('gc.status != :deleted', { deleted: CustomerStatus.DELETED })
         .andWhere(
           '(gc.id IN (:...groupIds) OR gc.parent_customer_id IN (:...groupIds))',
           { groupIds },
         )
-        .groupBy('COALESCE(gc.parent_customer_id, gc.id)')
-        .getRawMany<{ groupId: number | string; count: string }>();
-      for (const row of sizeRows) {
-        groupSizeMap.set(Number(row.groupId), Number(row.count));
+        .groupBy('ga.sale_id')
+        .addGroupBy('COALESCE(gc.parent_customer_id, gc.id)')
+        .getRawMany<{
+          saleId: number | string;
+          groupId: number | string;
+          customerCount: string;
+          motherCount: string;
+          childCount: string;
+        }>();
+      for (const row of statsRows) {
+        const key = `${row.saleId}_${row.groupId}`;
+        const motherCount = Number(row.motherCount) || 0;
+        const childCount = Number(row.childCount) || 0;
+        saleGroupStatsMap.set(key, {
+          size: Number(row.customerCount) || 0,
+          hasMother: motherCount > 0,
+          hasChild: childCount > 0,
+        });
       }
     }
 
@@ -472,19 +503,22 @@ export class CustomersService {
       const linkCount = countMap.get(a.id) ?? 0;
       const parentCustomerId = a.customer.parent_customer_id ?? null;
       const groupId = parentCustomerId ?? a.customer.id;
-      const groupSize = groupSizeMap.get(groupId) ?? 1;
-      // Khách đứng riêng (không có MẸ, nhóm 1 khách) → không trả group để FE
+      const groupStats = saleGroupStatsMap.get(`${a.sale_id}_${groupId}`);
+      // Chỉ ghép mẹ-con khi cùng sale đó có CẢ MẸ VÀ CON (hasMother && hasChild)
+      const isGroupedInSale = Boolean(
+        groupStats && groupStats.hasMother && groupStats.hasChild,
+      );
+      // Khách đứng riêng hoặc sale chỉ có riêng Mẹ hoặc riêng Con → không trả group để FE
       // không hiện badge MẸ/CON hoặc đường phân cách nhóm.
-      const groupInfo =
-        parentCustomerId != null || groupSize > 1
-          ? {
-              id: groupId,
-              parentCustomerId,
-              parentCustomerCode: a.customer.parent?.customer_code ?? null,
-              role: groupRoleOf(parentCustomerId, a.customer.customer_role),
-              size: groupSize,
-            }
-          : null;
+      const groupInfo = isGroupedInSale
+        ? {
+            id: groupId,
+            parentCustomerId,
+            parentCustomerCode: a.customer.parent?.customer_code ?? null,
+            role: groupRoleOf(parentCustomerId, a.customer.customer_role),
+            size: groupStats?.size ?? 1,
+          }
+        : null;
       return {
         assignmentId: a.id,
         departmentSlug: a.department_slug,
@@ -536,47 +570,60 @@ export class CustomersService {
       order: { created_at: 'DESC' },
     });
 
-    // Nhóm khách gộp: lấy MẸ + toàn bộ CON còn hoạt động để modal chi tiết
-    // hiển thị đủ danh sách thành viên.
+    // Nhóm khách gộp: chỉ ghép khi sale này có cả MẸ và CON
     const parentCustomerId = assignment.customer.parent_customer_id ?? null;
     const groupId = parentCustomerId ?? assignment.customer.id;
-    const groupRows = await this.customerRepo.find({
-      where: [{ id: groupId }, { parent_customer_id: groupId }],
-      select: [
-        'id',
-        'customer_code',
-        'sap_code',
-        'customer_role',
-        'parent_customer_id',
-        'status',
-      ],
-      order: { customer_code: 'ASC' },
+    const saleAssignments = await this.assignmentRepo.find({
+      where: { sale_id: assignment.sale_id },
+      relations: ['customer', 'customer.parent'],
     });
-    const activeGroupRows = groupRows.filter(
-      (row) => row.status !== CustomerStatus.DELETED,
+    const groupCustomerMap = new Map<number, Customer>();
+    for (const sa of saleAssignments) {
+      if (sa.customer && sa.customer.status !== CustomerStatus.DELETED) {
+        const cGroupId = sa.customer.parent_customer_id ?? sa.customer.id;
+        if (cGroupId === groupId) {
+          groupCustomerMap.set(sa.customer.id, sa.customer);
+        }
+      }
+    }
+    const saleGroupCustomers = Array.from(groupCustomerMap.values());
+    const hasMother = saleGroupCustomers.some(
+      (c) => c.parent_customer_id == null,
     );
-    const groupSize = activeGroupRows.length;
-    const group =
-      parentCustomerId != null || groupSize > 1
-        ? {
-            id: groupId,
+    const hasChild = saleGroupCustomers.some(
+      (c) => c.parent_customer_id != null,
+    );
+    const isGrouped = hasMother && hasChild;
+
+    const group = isGrouped
+      ? {
+          id: groupId,
+          parentCustomerId,
+          parentCustomerCode:
+            assignment.customer.parent?.customer_code ?? null,
+          role: groupRoleOf(
             parentCustomerId,
-            parentCustomerCode:
-              assignment.customer.parent?.customer_code ?? null,
-            role: groupRoleOf(
-              parentCustomerId,
-              assignment.customer.customer_role,
-            ),
-            size: groupSize,
-            members: activeGroupRows.map((row) => ({
+            assignment.customer.customer_role,
+          ),
+          size: saleGroupCustomers.length,
+          members: saleGroupCustomers
+            .sort((m1, m2) => {
+              const r1 = m1.parent_customer_id == null ? 0 : 1;
+              const r2 = m2.parent_customer_id == null ? 0 : 1;
+              if (r1 !== r2) return r1 - r2;
+              return (m1.customer_code || '').localeCompare(
+                m2.customer_code || '',
+              );
+            })
+            .map((row) => ({
               customerId: row.id,
               customerCode: row.customer_code,
               sapCode: row.sap_code,
               customerRole: row.customer_role,
               role: groupRoleOf(row.parent_customer_id, row.customer_role),
             })),
-          }
-        : null;
+        }
+      : null;
 
     return {
       assignmentId: assignment.id,

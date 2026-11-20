@@ -380,16 +380,40 @@ export class CustomerKpiReportsService {
         groupSize: 1,
       };
     });
-    // Số khách khác nhau trong nhóm ở phạm vi đang xem — dùng cho badge
-    // "Nhóm N" và sắp xếp. Một khách nhiều phòng ban chỉ đếm một lần.
-    const groupCustomerIds = new Map<number, Set<number>>();
+    // Nhóm mẹ - con chỉ ghép khi khớp cả saleId VÀ groupId:
+    // Cùng một sale phải có cả khách MẸ và ít nhất một khách CON.
+    const saleGroupCustomerIds = new Map<string, Set<number>>();
+    const saleGroupHasMother = new Map<string, boolean>();
+    const saleGroupHasChild = new Map<string, boolean>();
+
     for (const row of mapped) {
-      const set = groupCustomerIds.get(row.groupId) ?? new Set<number>();
+      const key = `${row.saleId}_${row.groupId}`;
+      const set = saleGroupCustomerIds.get(key) ?? new Set<number>();
       set.add(row.customerId);
-      groupCustomerIds.set(row.groupId, set);
+      saleGroupCustomerIds.set(key, set);
+
+      if (row.parentCustomerId == null) {
+        saleGroupHasMother.set(key, true);
+      } else {
+        saleGroupHasChild.set(key, true);
+      }
     }
+
     for (const row of mapped) {
-      row.groupSize = groupCustomerIds.get(row.groupId)?.size ?? 1;
+      const key = `${row.saleId}_${row.groupId}`;
+      const isGrouped = Boolean(
+        saleGroupHasMother.get(key) && saleGroupHasChild.get(key),
+      );
+      if (isGrouped) {
+        row.groupSize = saleGroupCustomerIds.get(key)?.size ?? 1;
+      } else {
+        // Không đủ cặp Mẹ-Con trong sale này -> coi như khách độc lập
+        row.groupId = row.customerId;
+        row.parentCustomerId = null;
+        row.parentCustomerCode = null;
+        row.groupRole = null;
+        row.groupSize = 1;
+      }
     }
     return mapped;
   }
