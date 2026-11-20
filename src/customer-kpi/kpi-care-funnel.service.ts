@@ -39,7 +39,21 @@ interface CustomerBucket {
   customerCode: string;
   tier: string | null;
   assignmentIds: number[];
+  /** Các nhóm khách gộp mà mã này thuộc (MẸ id). */
+  groupIds: Set<number>;
 }
+
+type FunnelStage = 'purchased' | 'quoted' | 'communicated' | 'unreached';
+
+const STAGE_RANK: Record<FunnelStage, number> = {
+  purchased: 3,
+  quoted: 2,
+  communicated: 1,
+  unreached: 0,
+};
+
+const maxStage = (a: FunnelStage, b: FunnelStage): FunnelStage =>
+  STAGE_RANK[a] >= STAGE_RANK[b] ? a : b;
 
 interface FunnelCounts {
   purchased: number;
@@ -133,6 +147,8 @@ export class KpiCareFunnelService {
       .innerJoin('a.sale', 'sale')
       .select('a.id', 'assignmentId')
       .addSelect('a.sale_id', 'saleId')
+      .addSelect('a.customer_id', 'customerId')
+      .addSelect('c.parent_customer_id', 'parentCustomerId')
       .addSelect('a.customer_tier', 'tier')
       .addSelect('c.customer_code', 'customerCode')
       .where('c.status <> :deleted', { deleted: 'deleted' })
@@ -147,6 +163,8 @@ export class KpiCareFunnelService {
     const assignmentRows = await assignmentQb.getRawMany<{
       assignmentId: number | string;
       saleId: number | string;
+      customerId: number | string;
+      parentCustomerId: number | string | null;
       tier: string | null;
       customerCode: string;
     }>();
@@ -162,11 +180,16 @@ export class KpiCareFunnelService {
         customerCode,
         tier: row.tier ?? null,
         assignmentIds: [],
+        groupIds: new Set<number>(),
       };
       // Trùng customer_code (nhiều sap_code) — giữ tier mạnh hơn để hiển thị.
       if (String(row.tier ?? '').toUpperCase() === 'KEY') {
         bucket.tier = 'KEY';
       }
+      const customerId = Number(row.customerId);
+      const parentCustomerId =
+        row.parentCustomerId == null ? null : Number(row.parentCustomerId);
+      bucket.groupIds.add(parentCustomerId ?? customerId);
       bucket.assignmentIds.push(Number(row.assignmentId));
       bucketMap.set(key, bucket);
     }
@@ -188,27 +211,52 @@ export class KpiCareFunnelService {
     );
     const appointments = await this.loadAppointments(saleIds, window);
 
-    const bySale = new Map<number, FunnelCounts>();
+    // Stage gốc của từng mã (sale × customer_code) theo đúng thứ tự ưu tiên.
+    const baseStage = new Map<string, FunnelStage>();
     for (const bucket of buckets) {
-      const counts = bySale.get(bucket.saleId) ?? emptyCounts();
-      if (purchased.has(`${bucket.saleId}|${bucket.customerCode}`)) {
-        counts.purchased += 1;
-      } else if (quoted.has(`${bucket.saleId}|${bucket.customerCode}`)) {
-        counts.quoted += 1;
+      const key = `${bucket.saleId}|${bucket.customerCode}`;
+      let stage: FunnelStage;
+      if (purchased.has(key)) {
+        stage = 'purchased';
+      } else if (quoted.has(key)) {
+        stage = 'quoted';
       } else {
         const activityCount = bucket.assignmentIds.reduce(
           (total, assignmentId) => total + (activity.get(assignmentId) ?? 0),
           0,
         );
-        const hasAppointment = appointments.has(
-          `${bucket.saleId}|${bucket.customerCode}`,
-        );
-        if (activityCount > 0 || hasAppointment) {
-          counts.communicated += 1;
-        } else {
-          counts.unreached += 1;
-        }
+        const hasAppointment = appointments.has(key);
+        stage =
+          activityCount > 0 || hasAppointment ? 'communicated' : 'unreached';
       }
+      baseStage.set(key, stage);
+    }
+
+    // Khách gộp: cả nhóm nhận stage CAO NHẤT của bất kỳ thành viên nào —
+    // MẸ đã mua thì CON cũng "đã bán", MẸ đã giao tiếp thì CON cũng vậy.
+    const groupStage = new Map<string, FunnelStage>();
+    for (const bucket of buckets) {
+      const stage =
+        baseStage.get(`${bucket.saleId}|${bucket.customerCode}`) ??
+        'unreached';
+      for (const groupId of bucket.groupIds) {
+        const key = `${bucket.saleId}|${groupId}`;
+        const current = groupStage.get(key);
+        groupStage.set(key, current ? maxStage(current, stage) : stage);
+      }
+    }
+
+    const bySale = new Map<number, FunnelCounts>();
+    for (const bucket of buckets) {
+      let stage =
+        baseStage.get(`${bucket.saleId}|${bucket.customerCode}`) ??
+        'unreached';
+      for (const groupId of bucket.groupIds) {
+        const group = groupStage.get(`${bucket.saleId}|${groupId}`);
+        if (group) stage = maxStage(stage, group);
+      }
+      const counts = bySale.get(bucket.saleId) ?? emptyCounts();
+      counts[stage] += 1;
       bySale.set(bucket.saleId, counts);
     }
 

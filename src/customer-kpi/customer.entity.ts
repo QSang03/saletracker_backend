@@ -40,6 +40,7 @@ export enum CustomerStatus {
 // (MySQL cho phép lặp vô hạn giá trị NULL trong index UNIQUE).
 @Index('uq_customers_code_sap', ['customer_code', 'sap_code'], { unique: true })
 @Index('idx_customers_status', ['status'])
+@Index('idx_customers_parent', ['parent_customer_id'])
 export class Customer {
   @PrimaryGeneratedColumn()
   id: number;
@@ -61,6 +62,23 @@ export class Customer {
 
   @Column({ type: 'enum', enum: CustomerRole, nullable: true })
   customer_role: CustomerRole | null;
+
+  /**
+   * Khách MẸ của nhóm khách gộp (ô STT merge nhiều dòng trong file import).
+   *
+   * - NULL: khách đứng riêng, hoặc chính là dòng MẸ của nhóm.
+   * - Có id: dòng CON trỏ về id của MẸ. Quan hệ chỉ 1 cấp (MẸ → nhiều CON),
+   *   đúng format file import; không dựng cây nhiều tầng.
+   *
+   * Dùng để gộp bằng chứng KPI theo nhóm trong CÙNG sale; doanh số/tiền vẫn
+   * giữ nguyên theo từng mã khách. Xem THIET-KE-KHACH-GOP-KPI.md.
+   */
+  @Column({ type: 'int', nullable: true })
+  parent_customer_id: number | null;
+
+  @ManyToOne(() => Customer, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'parent_customer_id' })
+  parent: Customer | null;
 
   /**
    * Số ngày công nợ (cột `HẠN MỨC` sheet "File Chi Tiết" — đã đối chiếu: khớp

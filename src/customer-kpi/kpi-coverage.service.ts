@@ -211,20 +211,31 @@ export class KpiCoverageService {
       .createQueryBuilder('a')
       .innerJoin('a.customer', 'c')
       .select('a.sale_id', 'saleId')
+      .addSelect('a.customer_id', 'customerId')
       .addSelect('c.customer_code', 'customerCode')
+      .addSelect('c.parent_customer_id', 'parentCustomerId')
       .addSelect('a.customer_tier', 'tier')
       .where('a.sale_id IN (:...saleIds)', { saleIds })
       .andWhere('c.status <> :deleted', { deleted: 'deleted' })
       .getRawMany<{
         saleId: number | string;
+        customerId: number | string;
         customerCode: string;
+        parentCustomerId: number | string | null;
         tier: string | null;
       }>();
-    return rows.map((row) => ({
-      saleId: Number(row.saleId),
-      customerCode: String(row.customerCode ?? ''),
-      tier: row.tier ?? null,
-    }));
+    return rows.map((row) => {
+      const customerId = Number(row.customerId);
+      const parentCustomerId =
+        row.parentCustomerId == null ? null : Number(row.parentCustomerId);
+      return {
+        saleId: Number(row.saleId),
+        customerCode: String(row.customerCode ?? ''),
+        tier: row.tier ?? null,
+        // CON cùng nhóm MẸ — calc dùng để cover toàn bộ CON cùng tier.
+        groupId: parentCustomerId ?? customerId,
+      };
+    });
   }
 
   private async loadRevenue(

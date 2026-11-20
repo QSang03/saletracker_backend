@@ -7,6 +7,13 @@ export interface ParsedAssignment {
   department_slug: string;
   employee_code: string;
   tier: CustomerTierValue;
+  /**
+   * Ô phân loại KEY/NON để TRỐNG trong file. Chỉ ô trống mới được kế thừa
+   * từ MẸ; ô ghi cụ thể (KEY/NON) luôn thắng — kể cả khi khác MẸ.
+   */
+  tier_blank: boolean;
+  /** Tier được lấy từ MẸ của nhóm khách gộp (chỉ CON + ô trống). */
+  tier_inherited: boolean;
 }
 
 /** Một khách hàng sau khi đọc + gộp trùng (mã, SAP). */
@@ -24,6 +31,17 @@ export interface ParsedCustomerRow {
   customer_role: CustomerRoleValue | null;
   credit_days: number | null;
   assignments: ParsedAssignment[];
+  /**
+   * Nhóm khách gộp theo ô STT merge. `group_key` = dòng master của vùng merge
+   * (null = dòng không thuộc nhóm gộp). Nhóm chỉ có ý nghĩa khi vùng merge
+   * phủ >= 2 dòng có mã khách.
+   */
+  group_key: number | null;
+  /** Vai trò trong nhóm: MẸ (CHÍNH) / CON (PHỤ) / null. */
+  group_role: 'ME' | 'CON' | null;
+  /** Mã + SAP của dòng MẸ — chỉ set cho CON (và chính dòng MẸ). */
+  group_main_code: string | null;
+  group_main_sap: string | null;
   /** Lỗi dòng — apply sẽ bỏ qua các change mang lỗi này, người nhập sửa file rồi nạp lại. */
   errors: string[];
   /**
@@ -36,6 +54,18 @@ export interface ParsedCustomerRow {
   warnings: string[];
 }
 
+export interface ParsedGroupSummary {
+  /** Dòng master của vùng STT merge. */
+  group_key: number;
+  main_code: string | null;
+  main_sap: string | null;
+  /** Số khách (mã, SAP) trong nhóm; >= 2 mới là nhóm gộp. */
+  customer_count: number;
+  child_count: number;
+  inherited_tier_cells: number;
+  warnings: string[];
+}
+
 export interface ParseResult {
   /** Tiêu chí đọc được từ sheet "TIÊU CHÍ" (rỗng nếu file không có sheet này). */
   criteria: string[];
@@ -44,6 +74,10 @@ export interface ParseResult {
   rowCount: number;
   /** Số cặp (mã, SAP) xuất hiện nhiều lần trong file. */
   duplicatePairs: number;
+  /** Nhóm khách gộp đọc từ STT merge (chỉ nhóm >= 2 khách). */
+  groups: ParsedGroupSummary[];
+  /** Tổng số ô KEY/NON của CON được kế thừa từ MẸ. */
+  inheritedTierCells: number;
 }
 
 /** Chuẩn hoá: bỏ dấu (NFD), gom khoảng trắng, uppercase — xử lý cả ký tự ghép "Phụ". */
@@ -108,6 +142,13 @@ const CODE_HEADER_ALIASES = new Set([
   'MA',
 ]);
 const CODE_HEADER_CANONICAL = 'MA KH';
+
+/**
+ * Cột STT — TÙY CHỌN. Khi ô STT được merge qua nhiều dòng, vùng merge đó
+ * định nghĩa một nhóm khách gộp (1 MẸ + nhiều CON). File cũ không có cột này
+ * vẫn nạp bình thường, chỉ không có khái niệm nhóm.
+ */
+const STT_HEADER_ALIASES = new Set(['STT', 'SO TT', 'SO THU TU']);
 
 /**
  * Chọn cột mã khách khi file có nhiều cột cùng chuẩn hoá thành "MA".
@@ -293,11 +334,18 @@ export async function parseImportWorkbook(
   }
 
   // Ghép cột theo header
-  const cols: { sap: number; code: number; loai: number; hanMuc: number } = {
+  const cols: {
+    sap: number;
+    code: number;
+    loai: number;
+    hanMuc: number;
+    stt: number;
+  } = {
     sap: 0,
     code: 0,
     loai: 0,
     hanMuc: 0,
+    stt: 0,
   };
   const tierCols: Array<{ col: number; slug: string }> = [];
   const empCols: Array<{ col: number; slug: string }> = [];
@@ -310,6 +358,7 @@ export async function parseImportWorkbook(
       codeCandidates.push({ col, header: n });
     else if (n === 'LOAI MA') cols.loai = col;
     else if (n === 'HAN MUC') cols.hanMuc = col;
+    else if (STT_HEADER_ALIASES.has(n)) cols.stt = col;
     else if (DEPT_BY_TIER_HEADER[n])
       tierCols.push({ col, slug: DEPT_BY_TIER_HEADER[n] });
     else if (DEPT_BY_EMP_HEADER[n])
@@ -344,6 +393,15 @@ export async function parseImportWorkbook(
     rowCount++;
 
     const sap = cols.sap ? cellText(row.getCell(cols.sap)) : '';
+    // Ô STT merge nhiều dòng = một nhóm khách gộp. Lấy dòng master của vùng
+    // merge làm group_key; dòng không merge / merge 1 dòng sẽ được bỏ nhóm ở
+    // bước tổng hợp (chỉ nhóm >= 2 khách mới có nghĩa).
+    let group_key: number | null = null;
+    if (cols.stt) {
+      const sttCell = row.getCell(cols.stt);
+      const master = (sttCell as any).master as ExcelJS.Cell | undefined;
+      if (sttCell.isMerged && master) group_key = Number(master.row);
+    }
     const errors: string[] = [];
     // LOẠI MÃ: cột vắng (cols.loai = 0) hoặc ô trống → null, KHÔNG báo lỗi —
     // giá trị mặc định do bước sinh diff/apply quyết (tạo mới → CHÍNH,
@@ -380,11 +438,15 @@ export async function parseImportWorkbook(
         ? cellText(row.getCell(tierCol.col)).toLowerCase()
         : '';
       let tier: CustomerTierValue;
+      // Ô trống = ứng viên kế thừa từ MẸ. Mặc định NON khi không có MẸ/phòng
+      // tương ứng (giữ đúng quy tắc cũ); bước group inheritance sẽ thay bằng
+      // tier của MẸ nếu tìm được.
+      let tier_blank = false;
       if (tierRaw === 'key') tier = 'KEY';
-      else if (tierRaw === 'non' || !tierRaw) {
-        // Ô phân loại để trống = không ghi KEY → mặc định NON (quy tắc nghiệp vụ).
-        // Chỉ giá trị lạ (non-empty, không phải key/non) mới là lỗi dòng.
+      else if (tierRaw === 'non') tier = 'NON';
+      else if (!tierRaw) {
         tier = 'NON';
+        tier_blank = true;
       } else {
         errors.push(
           `Phòng ${slug}: giá trị phân loại "${tierRaw}" phải là KEY hoặc NON`,
@@ -397,6 +459,8 @@ export async function parseImportWorkbook(
         department_slug: slug,
         employee_code: empCode,
         tier,
+        tier_blank,
+        tier_inherited: false,
       });
     }
 
@@ -404,12 +468,37 @@ export async function parseImportWorkbook(
     occurrences.set(key, (occurrences.get(key) ?? 0) + 1);
     const existed = customers.get(key);
     if (existed) {
+      // Dòng trùng có thể nằm trong cùng vùng STT merge. Giữ nhóm của dòng
+      // đầu; nếu dòng đầu chưa có nhóm mà dòng sau có thì bổ sung.
+      if (existed.group_key == null && group_key != null) {
+        existed.group_key = group_key;
+      } else if (
+        existed.group_key != null &&
+        group_key != null &&
+        existed.group_key !== group_key
+      ) {
+        existed.warnings.push(
+          `Dòng ${r}: trùng (mã, SAP) với dòng ${existed.row_num} nhưng thuộc nhóm STT khác — giữ nhóm dòng ${existed.row_num}`,
+        );
+      }
+      if (!existed.customer_role && customer_role) {
+        existed.customer_role = customer_role;
+      }
       for (const a of assignments) {
         const dup = existed.assignments.find(
           (x) => x.department_slug === a.department_slug,
         );
         if (!dup) {
           existed.assignments.push(a);
+        } else if (dup.tier_blank && !a.tier_blank && dup.employee_code === a.employee_code) {
+          // Dòng đầu để trống KEY/NON còn dòng trùng ghi cụ thể → giá trị cụ
+          // thể thắng (trước khi kế thừa từ MẸ).
+          dup.tier = a.tier;
+          dup.tier_blank = false;
+          dup.tier_inherited = false;
+          existed.warnings.push(
+            `Dòng ${r}: trùng (mã, SAP) với dòng ${existed.row_num}, phòng ${a.department_slug} — dùng phân loại "${a.tier}" thay cho ô trống`,
+          );
         } else if (
           dup.employee_code !== a.employee_code ||
           dup.tier !== a.tier
@@ -434,11 +523,22 @@ export async function parseImportWorkbook(
       customer_role,
       credit_days,
       assignments,
+      group_key,
+      group_role: null,
+      group_main_code: null,
+      group_main_sap: null,
       errors,
       invalid_depts: invalidDepts,
       warnings: [],
     });
   }
+
+  const groups = applyGroupInheritance(customers);
+  const inheritedTierCells = [...customers.values()].reduce(
+    (total, row) =>
+      total + row.assignments.filter((item) => item.tier_inherited).length,
+    0,
+  );
 
   return {
     criteria,
@@ -446,5 +546,110 @@ export async function parseImportWorkbook(
     rowCount,
     // Số CẶP (mã, SAP) xuất hiện nhiều hơn 1 dòng — khớp cách đếm của Phụ lục B
     duplicatePairs: [...occurrences.values()].filter((n) => n > 1).length,
+    groups,
+    inheritedTierCells,
   };
+}
+
+/**
+ * Áp kế thừa KEY/NON từ dòng MẸ cho các dòng CON trong từng nhóm STT merge.
+ *
+ * Quy tắc đã chốt:
+ * - Chỉ ô CON **trống** mới kế thừa; CON ghi KEY/NON cụ thể thì giữ nguyên.
+ * - Kế thừa theo TỪNG PHÒNG: MẸ có assignment phòng nào thì CON cùng phòng lấy
+ *   tier của MẸ phòng đó; MẸ không có phòng đó → giữ mặc định NON.
+ * - Nhóm không có MẸ / có nhiều MẸ / dòng thiếu LOẠI MÃ → cảnh báo, không
+ *   chặn import. Nhiều MẸ thì chỉ dòng MẸ ĐẦU được dùng làm nguồn kế thừa.
+ * - Nhóm chỉ có 1 khách (merge 1 dòng hoặc trùng mã) → không phải khách gộp;
+ *   xoá group_key để service không tạo liên kết cha-con.
+ *
+ * Hàm chạy SAU khi đã gộp trùng (mã, SAP), nên mỗi phần tử là một khách thật.
+ */
+function applyGroupInheritance(
+  customers: Map<string, ParsedCustomerRow>,
+): ParsedGroupSummary[] {
+  const byGroup = new Map<number, ParsedCustomerRow[]>();
+  for (const row of customers.values()) {
+    if (row.group_key == null) continue;
+    const list = byGroup.get(row.group_key) ?? [];
+    list.push(row);
+    byGroup.set(row.group_key, list);
+  }
+
+  const groups: ParsedGroupSummary[] = [];
+  for (const [groupKey, rows] of [...byGroup.entries()].sort(
+    (a, b) => a[0] - b[0],
+  )) {
+    if (rows.length < 2) {
+      for (const row of rows) {
+        row.group_key = null;
+        row.group_role = null;
+        row.group_main_code = null;
+        row.group_main_sap = null;
+      }
+      continue;
+    }
+
+    const warnings: string[] = [];
+    const mains = rows.filter((row) => row.customer_role === 'CHINH');
+    const main = mains[0] ?? null;
+    if (!main) {
+      warnings.push(
+        `Nhóm STT dòng ${groupKey}: không có dòng MẸ (CHÍNH) — bỏ qua kế thừa KEY/NON`,
+      );
+    } else if (mains.length > 1) {
+      warnings.push(
+        `Nhóm STT dòng ${groupKey}: có ${mains.length} dòng MẸ (CHÍNH) — chỉ dùng dòng ${main.row_num} làm MẸ`,
+      );
+    }
+
+    for (const row of rows) {
+      if (row === main) row.group_role = 'ME';
+      else if (row.customer_role === 'PHU') row.group_role = 'CON';
+      else if (row.customer_role === 'CHINH') row.group_role = 'ME';
+      else {
+        row.group_role = null;
+        warnings.push(
+          `Dòng ${row.row_num}: thuộc nhóm STT dòng ${groupKey} nhưng thiếu LOẠI MÃ — bỏ qua kế thừa KEY/NON`,
+        );
+      }
+      if (main) {
+        row.group_main_code = main.customer_code;
+        row.group_main_sap = main.sap_code;
+      }
+    }
+
+    let inheritedCells = 0;
+    if (main) {
+      for (const row of rows) {
+        if (row === main || row.customer_role !== 'PHU') continue;
+        for (const assignment of row.assignments) {
+          if (!assignment.tier_blank) continue;
+          const mainAssignment = main.assignments.find(
+            (item) => item.department_slug === assignment.department_slug,
+          );
+          if (!mainAssignment) continue; // MẸ không phụ trách phòng này → NON
+          assignment.tier = mainAssignment.tier;
+          assignment.tier_inherited = true;
+          assignment.tier_blank = false;
+          inheritedCells += 1;
+        }
+      }
+    }
+
+    // Gắn cảnh báo nhóm vào dòng đầu để API upload hiển thị (một lần).
+    if (warnings.length) rows[0].warnings.push(...warnings);
+
+    groups.push({
+      group_key: groupKey,
+      main_code: main?.customer_code ?? null,
+      main_sap: main?.sap_code ?? null,
+      customer_count: rows.length,
+      child_count: rows.filter((row) => row.group_role === 'CON').length,
+      inherited_tier_cells: inheritedCells,
+      warnings,
+    });
+  }
+
+  return groups;
 }

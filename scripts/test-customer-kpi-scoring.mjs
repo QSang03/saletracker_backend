@@ -25,6 +25,7 @@ import {
   employeeCodeOfLabel,
   saleNameOfLabel,
 } from '../dist/customer-kpi/nkm-label.js';
+import { buildGroupEvidence } from '../dist/customer-kpi/customer-group.helper.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 void path.join(__dirname, '../'); // giữ import path dùng cho build theo máy
@@ -405,9 +406,18 @@ r = engine.scoreCustomer(
 check('gợi ý: bỏ bê 7 ngày rồi nhắn lại → pass', r.status === 'pass', r);
 r = engine.scoreCustomer(
   def({ metric: 'suggestion_ack', scoring_mode: 'binary', target_value: 1 }),
-  [day('2026-10-08', { ob: 0 })],
+  [
+    day('2026-10-06', { ob: 0 }),
+    day('2026-10-07', { ob: 0 }),
+    day('2026-10-08', { ob: 0 }),
+  ],
   1,
   '2026-10-08',
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  'KEY', // KEY bỏ bê ≥3 ngày đo được → có gợi ý tồn
 );
 check('gợi ý: không nhắn → fail', r.status === 'fail', r);
 r = engine.scoreCustomer(
@@ -1239,6 +1249,111 @@ check(
   r.status === 'no_data' || r.byTier !== undefined,
   r,
 );
+
+// ── Khách gộp: doanh số CON nhờ MẸ (cùng tier) ──
+console.log('\n[group] revenue reached + rollup nhóm');
+r = engine.scoreCustomer(
+  def({
+    metric: 'revenue_key',
+    scoring_mode: 'binary',
+    comparison: 'gte',
+    target_value: 1,
+  }),
+  [], // không cần days cho tiêu chí doanh số
+  null,
+  FROM,
+  null,
+  {
+    tier: 'KEY',
+    quantity: 0,
+    lineTotal: 0,
+    reached: true,
+    groupQuantity: 5,
+    groupLineTotal: 500,
+  },
+  null,
+  undefined,
+  'KEY',
+);
+check('CON quantity 0 nhưng reached=true → pass', r.status === 'pass', r);
+check('lineTotal vẫn của riêng khách = 0', r.lineTotal === 0, r);
+check('groupLineTotal = 500 để FE hiện DS nhóm', r.groupLineTotal === 500, r);
+check('groupQuantity = 5', r.groupQuantity === 5, r);
+
+const groupRollup = rollupRevenue([
+  { customerId: 1, tier: 'KEY', quantity: 0, lineTotal: 0, reached: true },
+  { customerId: 2, tier: 'KEY', quantity: 1, lineTotal: 100 },
+  { customerId: 3, tier: 'NON', quantity: 0, lineTotal: 0 },
+]);
+check(
+  'rollup KEY reached đếm cả CON nhờ MẸ = 2/2',
+  groupRollup.keyCustomers.reached === 2 &&
+    groupRollup.keyCustomers.total === 2,
+  groupRollup.keyCustomers,
+);
+check(
+  'rollup NON không bị KEY cover = 0/1',
+  groupRollup.nonCustomers.reached === 0 &&
+    groupRollup.nonCustomers.total === 1,
+  groupRollup.nonCustomers,
+);
+check(
+  'rollup tiền vẫn cộng theo từng khách = 100',
+  groupRollup.dsoKey === 100,
+  groupRollup,
+);
+
+// ── buildGroupEvidence: gộp days/open orders/nợ, doanh số theo tier ──
+const evidence = buildGroupEvidence([
+  {
+    customerId: 1,
+    tier: 'KEY',
+    days: [day('2026-10-01', { ob: 3, ib: 1 })],
+    revenue: { quantity: 2, lineTotal: 200 },
+    openOrders: { count: 1, totalValue: 50, latestOrderDate: '2026-10-01' },
+    debtBalance: 10,
+  },
+  {
+    customerId: 2,
+    tier: 'KEY',
+    days: [day('2026-10-01', { ob: 0, linked: false })],
+    revenue: { quantity: 0, lineTotal: 0 },
+    openOrders: null,
+    debtBalance: 5,
+  },
+  {
+    customerId: 3,
+    tier: 'NON',
+    days: [],
+    revenue: { quantity: 0, lineTotal: 0 },
+    openOrders: { count: 2, totalValue: 70, latestOrderDate: '2026-10-02' },
+    debtBalance: null,
+  },
+]);
+check(
+  'group days cộng tin đi của MẸ cho CON',
+  evidence.days.find((d) => d.stat_date === '2026-10-01')?.outbound_count === 3,
+  evidence.days,
+);
+check(
+  'group revenue: KEY reached=true, NON reached=false',
+  evidence.revenue.keyReached === true &&
+    evidence.revenue.nonReached === false,
+  evidence.revenue,
+);
+check(
+  'group revenue hiển thị dedupe khách: 2 phiếu / 200',
+  evidence.revenue.quantity === 2 && evidence.revenue.lineTotal === 200,
+  evidence.revenue,
+);
+check(
+  'group open orders cộng dồn + latest mới nhất',
+  evidence.openOrders?.count === 3 &&
+    evidence.openOrders?.totalValue === 120 &&
+    evidence.openOrders?.latestOrderDate === '2026-10-02',
+  evidence.openOrders,
+);
+check('group debt cộng khách khác nhau = 15', evidence.debtBalance === 15, evidence.debtBalance);
 
 console.log(`
 ===== ${pass} pass, ${fail} fail =====`);

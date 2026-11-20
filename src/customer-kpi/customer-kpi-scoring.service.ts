@@ -284,8 +284,15 @@ export interface CustomerCriterion {
   quantity?: number;
   /** Doanh số của khách trong kỳ (`LineTotal`, chưa VAT). */
   lineTotal?: number;
-  /** Khách có phát sinh trong kỳ (≥1 phiếu) — chỉ tiêu chí doanh số trả. */
+  /**
+   * Khách có phát sinh trong kỳ (≥1 phiếu). Với khách gộp, cờ này lấy theo
+   * NHÓM cùng tier — CON không có doanh số riêng vẫn `true` nếu MẸ phát sinh.
+   */
   hasRevenue?: boolean;
+  /** Số phiếu của cả nhóm (hiển thị tooltip "DS nhóm"); tiền vẫn của riêng khách. */
+  groupQuantity?: number;
+  /** Doanh số của cả nhóm (hiển thị tooltip "DS nhóm"). */
+  groupLineTotal?: number;
   /** Tiêu chí gợi ý đơn hàng: số dòng đơn chưa chốt trong cửa sổ. */
   openOrderCount?: number;
   /** Tiêu chí gợi ý đơn hàng: tổng giá trị các đơn chưa chốt (chưa VAT). */
@@ -324,6 +331,11 @@ export interface RevenueCustomerInput {
   quantity: number;
   /** Doanh số trong kỳ (`LineTotal`, chưa VAT). */
   lineTotal: number;
+  /**
+   * Đã có phát sinh theo nhóm cùng tier. Khách gộp CON có thể có
+   * `quantity = 0` nhưng `reached = true` nhờ MẸ. Mặc định = `quantity > 0`.
+   */
+  reached?: boolean;
 }
 
 /** Dữ liệu cần cho adapter doanh số cấp SALE. */
@@ -529,11 +541,13 @@ export const rollupRevenue = (
     keySharePct: total > 0 ? roundTo((dsoKey / total) * 100, 2) : null,
     nonSharePct: total > 0 ? roundTo((dsoNon / total) * 100, 2) : null,
     keyCustomers: {
-      reached: keyRows.filter((row) => row.quantity > 0).length,
+      // `reached` là cờ đã gộp nhóm (CON nhờ MẸ); khách đứng riêng không
+      // truyền cờ thì giữ nguyên quantity > 0.
+      reached: keyRows.filter((row) => row.reached ?? row.quantity > 0).length,
       total: keyRows.length,
     },
     nonCustomers: {
-      reached: nonRows.filter((row) => row.quantity > 0).length,
+      reached: nonRows.filter((row) => row.reached ?? row.quantity > 0).length,
       total: nonRows.length,
     },
   };
@@ -704,7 +718,15 @@ export class CustomerKpiScoringService {
   private scoreCustomerRevenue(
     definition: KpiDefinition,
     base: CustomerCriterion,
-    revenue?: { tier: string | null; quantity: number; lineTotal: number },
+    revenue?: {
+      tier: string | null;
+      quantity: number;
+      lineTotal: number;
+      /** Đã gộp nhóm: CON nhờ MẸ phát sinh (cùng tier). */
+      reached?: boolean;
+      groupQuantity?: number;
+      groupLineTotal?: number;
+    },
   ): CustomerCriterion {
     const tierScope: 'KEY' | 'NON' =
       definition.metric === 'revenue_key' ? 'KEY' : 'NON';
@@ -730,7 +752,9 @@ export class CustomerKpiScoringService {
         reason: REASON_NO_CUSTOMER_TIER,
       };
     }
-    const occurred = revenue.quantity > 0;
+    // Cờ gộp nhóm thắng: CON có quantity 0 vẫn "có phát sinh" nếu MẸ cùng
+    // tier đã bán. quantity/lineTotal vẫn của riêng khách để không trộn tiền.
+    const occurred = revenue.reached ?? revenue.quantity > 0;
     return {
       ...base,
       tierScope,
@@ -739,6 +763,8 @@ export class CustomerKpiScoringService {
       quantity: revenue.quantity,
       lineTotal: revenue.lineTotal,
       hasRevenue: occurred,
+      groupQuantity: revenue.groupQuantity,
+      groupLineTotal: revenue.groupLineTotal,
     };
   }
 

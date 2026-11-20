@@ -38,11 +38,13 @@ const HEADERS_ALIAS = HEADERS_CANONICAL.map((h) => (h === 'MÃ KH' ? 'MÃ' : h))
 async function makeBuffer(
   headers: string[],
   rows: unknown[][],
+  merges: string[] = [],
 ): Promise<Buffer> {
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet('FILE CHI TIẾT');
   ws.addRow(headers);
   for (const row of rows) ws.addRow(row);
+  for (const range of merges) ws.mergeCells(range);
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
 
@@ -82,6 +84,7 @@ async function main() {
       [['may-in', 'NKDS01', 'NON']],
       'tier trống phải mặc định NON, ô nhân viên 0 phải bị bỏ qua',
     );
+    assert.strictEqual(parsed.groups.length, 0, 'không merge STT -> không có nhóm');
     console.log('OK 1: header "MÃ" + blank tier -> NON + bỏ qua ô 0');
   }
 
@@ -154,6 +157,196 @@ async function main() {
       /Không tìm thấy dòng tiêu đề|thiếu cột bắt buộc/,
     );
     console.log('OK 4: thiếu cột mã khách -> throw để service trả 400');
+  }
+
+  // 5) Nhóm STT merge: MẸ đứng SAU CON vẫn được nhận đúng; CON chỉ kế thừa ô
+  //    trống, ô ghi cụ thể giữ nguyên, phòng MẸ không có thì vẫn NON.
+  {
+    const buffer = await makeBuffer(
+      HEADERS_CANONICAL,
+      [
+        // CON đứng trước MẸ trong vùng merge — tìm MẸ theo LOẠI MÃ, không theo dòng.
+        [
+          1,
+          'C102',
+          'CON',
+          'CODE_CON',
+          'NKDS02-NV B', // may-in
+          'NKDS02-NV B', // pc
+          'NKDS02-NV B', // linh-kien (MẸ không có phòng này)
+          '',
+          '',
+          '',
+          '',
+          '',
+          '',
+          'NON', // PC - SERVER: ghi cụ thể -> giữ NON
+          '',
+          '',
+        ],
+        [
+          1,
+          'C101',
+          'MẸ',
+          'CODE_ME',
+          'NKDS01-NV A', // may-in
+          'NKDS01-NV A', // pc
+          '',
+          '',
+          '',
+          '',
+          '',
+          '',
+          'KEY', // MÁY IN
+          'KEY', // PC - SERVER
+          '',
+          '',
+        ],
+      ],
+      ['A2:A3'],
+    );
+    const parsed = await parseImportWorkbook(buffer);
+    assert.strictEqual(parsed.groups.length, 1);
+    const group = parsed.groups[0];
+    assert.strictEqual(group.customer_count, 2);
+    assert.strictEqual(group.child_count, 1);
+    assert.strictEqual(group.main_code, 'CODE_ME');
+    assert.strictEqual(group.inherited_tier_cells, 1);
+    const con = parsed.customers.find((c) => c.customer_code === 'CODE_CON')!;
+    assert.strictEqual(con.group_role, 'CON');
+    assert.strictEqual(con.group_main_code, 'CODE_ME');
+    assert.deepStrictEqual(
+      con.assignments.map((a) => [
+        a.department_slug,
+        a.tier,
+        a.tier_inherited,
+      ]),
+      [
+        ['may-in', 'KEY', true],
+        ['pc', 'NON', false],
+        ['linh-kien', 'NON', false],
+      ],
+      'chỉ ô trống + MẸ có phòng mới kế thừa; ô cụ thể và phòng MẸ không có giữ nguyên',
+    );
+    const me = parsed.customers.find((c) => c.customer_code === 'CODE_ME')!;
+    assert.strictEqual(me.group_role, 'ME');
+    console.log('OK 5: nhóm STT merge — kế thừa blank-only, MẸ không cần đứng đầu');
+  }
+
+  // 6) Nhóm thiếu dòng MẸ: cảnh báo, không kế thừa, không có mã MẸ.
+  {
+    const buffer = await makeBuffer(
+      HEADERS_CANONICAL,
+      [
+        [
+          1,
+          'C201',
+          'CON',
+          'CODE_CON_ONLY',
+          'NKDS02-NV B',
+          '',
+          '',
+          '',
+          '',
+          '',
+          '',
+          '',
+          '',
+          '',
+          '',
+          '',
+        ],
+        [1, 'C202', 'CON', 'CODE_CON_ONLY_2', '', '', '', '', '', '', '', '', '', '', '', ''],
+      ],
+      ['A2:A3'],
+    );
+    const parsed = await parseImportWorkbook(buffer);
+    assert.strictEqual(parsed.groups.length, 1);
+    assert.strictEqual(parsed.groups[0].main_code, null);
+    assert.ok(
+      parsed.groups[0].warnings.some((w) => w.includes('không có dòng MẸ')),
+      `phải cảnh báo thiếu MẸ: ${JSON.stringify(parsed.groups[0].warnings)}`,
+    );
+    const con = parsed.customers.find((c) => c.customer_code === 'CODE_CON_ONLY')!;
+    assert.strictEqual(con.group_role, 'CON');
+    assert.strictEqual(con.group_main_code, null);
+    assert.strictEqual(con.assignments[0].tier, 'NON');
+    assert.strictEqual(con.assignments[0].tier_inherited, false);
+    console.log('OK 6: nhóm thiếu MẸ -> cảnh báo, không kế thừa');
+  }
+
+  // 7) Nhóm nhiều MẸ: cảnh báo, chỉ dòng MẸ đầu làm nguồn kế thừa.
+  {
+    const buffer = await makeBuffer(
+      HEADERS_CANONICAL,
+      [
+        [
+          1,
+          'C301',
+          'MẸ',
+          'CODE_ME_1',
+          'NKDS01-NV A',
+          '',
+          '',
+          '',
+          '',
+          '',
+          '',
+          '',
+          'KEY',
+          '',
+          '',
+          '',
+        ],
+        [
+          1,
+          'C302',
+          'MẸ',
+          'CODE_ME_2',
+          'NKDS02-NV B',
+          '',
+          '',
+          '',
+          '',
+          '',
+          '',
+          '',
+          'NON',
+          '',
+          '',
+          '',
+        ],
+        [
+          1,
+          'C303',
+          'CON',
+          'CODE_CON_3',
+          'NKDS03-NV C',
+          '',
+          '',
+          '',
+          '',
+          '',
+          '',
+          '',
+          '',
+          '',
+          '',
+          '',
+        ],
+      ],
+      ['A2:A4'],
+    );
+    const parsed = await parseImportWorkbook(buffer);
+    assert.strictEqual(parsed.groups.length, 1);
+    assert.ok(
+      parsed.groups[0].warnings.some((w) => w.includes('2 dòng MẸ')),
+      `phải cảnh báo nhiều MẸ: ${JSON.stringify(parsed.groups[0].warnings)}`,
+    );
+    const con = parsed.customers.find((c) => c.customer_code === 'CODE_CON_3')!;
+    assert.strictEqual(con.assignments[0].tier, 'KEY');
+    assert.strictEqual(con.assignments[0].tier_inherited, true);
+    console.log('OK 7: nhóm nhiều MẸ -> cảnh báo, dùng MẸ đầu');
   }
 
   console.log('\nTất cả test parser import đã pass.');

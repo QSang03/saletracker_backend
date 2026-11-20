@@ -64,6 +64,9 @@ export function maskCustomerCriteriaPercent(criteria: any[]): void {
     if (isRevenueCriterionKey(criterion.key)) {
       if ('quantity' in criterion) criterion.quantity = null;
       if ('lineTotal' in criterion) criterion.lineTotal = null;
+      // Doanh số nhóm MẸ/CON cũng là tiền — mask cùng chế độ percent.
+      if ('groupQuantity' in criterion) criterion.groupQuantity = null;
+      if ('groupLineTotal' in criterion) criterion.groupLineTotal = null;
     }
     if ('openOrderValue' in criterion) criterion.openOrderValue = null;
   }
@@ -75,6 +78,10 @@ export function maskCustomerPercent(customer: any): void {
   if (customer.totals) {
     customer.totals.revenue = null;
     customer.totals.nkmQuantity = null;
+  }
+  if (customer.groupRevenue) {
+    customer.groupRevenue.quantity = null;
+    customer.groupRevenue.lineTotal = null;
   }
   if (customer.quote) customer.quote.lastQuoteAmount = null;
   maskCustomerCriteriaPercent(customer.criteria ?? []);

@@ -35,6 +35,14 @@ export interface KpiReportCustomer {
     customerRole: string | null;
     departmentSlug: string;
     sapCode: string;
+    /** id nhóm khách gộp (MẸ id) — sắp xếp để các thành viên nằm cạnh nhau. */
+    groupId?: number | null;
+    parentCustomerId?: number | null;
+    /** Mã khách MẸ — tìm kiếm theo mã MẸ trả về cả CON. */
+    parentCustomerCode?: string | null;
+    groupRole?: 'ME' | 'CON' | null;
+    /** Số khách khác nhau trong nhóm ở phạm vi đang xem. */
+    groupSize?: number;
   };
   zaloLinked: boolean;
   /** Kết luận theo loại khách: KEY = đạt cả 4 tiêu chí, NON = đếm x/4. */
@@ -54,6 +62,12 @@ export interface KpiReportCustomer {
    * khi khách thật sự không mua; 'no_data' khi sale chưa tra được mã NKM.
    */
   revenueStatus: 'has_revenue' | 'no_revenue' | 'no_data';
+  /** Doanh số cả nhóm (tooltip "DS nhóm"); `totals.revenue` vẫn của riêng khách. */
+  groupRevenue?: {
+    quantity: number;
+    lineTotal: number;
+    hasRevenue: boolean;
+  } | null;
 }
 
 /** Bộ lọc đã chuẩn hoá (boolean/number, không còn chuỗi query). */
@@ -116,6 +130,8 @@ export const KPI_SORT_KEYS = [
 
 const TIER_RANK: Record<string, number> = { KEY: 0, NON: 1 };
 const ROLE_RANK: Record<string, number> = { CHINH: 0, PHU: 1 };
+/** MẸ luôn đứng trước CON trong cùng nhóm. */
+const GROUP_ROLE_RANK: Record<string, number> = { ME: 0, CON: 1 };
 
 const matchesIdentity = (
   customer: KpiReportCustomer,
@@ -155,7 +171,9 @@ const matchesSearch = (
   return (
     customer.row.customerCode.toLowerCase().includes(search) ||
     (customer.row.customerName ?? '').toLowerCase().includes(search) ||
-    customer.row.sapCode.toLowerCase().includes(search)
+    customer.row.sapCode.toLowerCase().includes(search) ||
+    // Tìm mã MẸ trả về cả dòng CON cùng nhóm (mã MẸ nằm trên mọi dòng nhóm).
+    (customer.row.parentCustomerCode ?? '').toLowerCase().includes(search)
   );
 };
 
@@ -322,8 +340,12 @@ const sortValueOf = (
 };
 
 /**
- * Sắp xếp bản sao của danh sách (không mutate mảng của service). Không truyền
- * `sortBy` → giữ nguyên thứ tự hiện tại, tương thích response cũ.
+ * Sắp xếp bản sao của danh sách (không mutate mảng của service).
+ *
+ * LUÔN sắp nhóm khách gộp trước: groupId → MẸ trước CON → tiêu chí sort hiện
+ * tại. Nhờ vậy các thành viên cùng nhóm nằm cạnh nhau kể cả khi người dùng
+ * sort theo doanh số/tên/tiêu chí. Không truyền `sortBy` vẫn sort nhóm + mã
+ * khách (thay vì giữ thứ tự DB ngẫu nhiên).
  */
 export function sortKpiCustomers(
   customers: KpiReportCustomer[],
@@ -331,9 +353,47 @@ export function sortKpiCustomers(
   sortOrder: 'asc' | 'desc' | undefined,
   context: KpiFilterContext,
 ): KpiReportCustomer[] {
-  if (!sortBy) return customers;
   const direction = sortOrder === 'desc' ? -1 : 1;
+  // Tương thích response cũ / test cũ chưa có groupId: giữ nguyên hành vi
+  // (không sortBy = giữ thứ tự; có sortBy = sort toàn cục).
+  const hasGroupInfo = customers.some((customer) => customer.row.groupId != null);
+  if (!hasGroupInfo) {
+    if (!sortBy) return customers;
+    return [...customers].sort((a, b) => {
+      const va = sortValueOf(a, sortBy, context);
+      const vb = sortValueOf(b, sortBy, context);
+      if (va === null && vb === null) return 0;
+      if (va === null) return 1;
+      if (vb === null) return -1;
+      if (typeof va === 'number' && typeof vb === 'number') {
+        return (va - vb) * direction;
+      }
+      return String(va).localeCompare(String(vb), 'vi') * direction;
+    });
+  }
+
   return [...customers].sort((a, b) => {
+    const groupA = a.row.groupId ?? 0;
+    const groupB = b.row.groupId ?? 0;
+    if (groupA !== groupB) return groupA - groupB;
+
+    const roleA =
+      GROUP_ROLE_RANK[a.row.groupRole ?? ''] ??
+      ROLE_RANK[a.row.customerRole?.toUpperCase() ?? ''] ??
+      9;
+    const roleB =
+      GROUP_ROLE_RANK[b.row.groupRole ?? ''] ??
+      ROLE_RANK[b.row.customerRole?.toUpperCase() ?? ''] ??
+      9;
+    if (roleA !== roleB) return roleA - roleB;
+
+    if (!sortBy) {
+      return (
+        a.row.customerCode.localeCompare(b.row.customerCode, 'vi') ||
+        a.row.departmentSlug.localeCompare(b.row.departmentSlug, 'vi')
+      );
+    }
+
     const va = sortValueOf(a, sortBy, context);
     const vb = sortValueOf(b, sortBy, context);
     if (va === null && vb === null) return 0;

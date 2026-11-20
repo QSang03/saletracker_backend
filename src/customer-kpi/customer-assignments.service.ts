@@ -84,6 +84,7 @@ const CRITERIA_SHEET_LINES = [
   '3/ Support Khách / Thăm hỏi',
   '4/ Liên lạc / phản hồi',
   '5/ Gợi ý thực hiện',
+  'GHI CHÚ KHÁCH GỘP: merge ô STT nhiều dòng = 1 nhóm; dòng CHÍNH (MẸ) + các dòng PHỤ (CON); ô KEY/NON trống của CON kế thừa MẸ cùng phòng.',
 ];
 
 /**
@@ -493,6 +494,7 @@ export class CustomerAssignmentsService {
     const dbCustomerByKey = new Map(
       dbCustomers.map((c) => [`${c.customer_code}|${c.sap_code}`, c]),
     );
+    const dbCustomerById = new Map(dbCustomers.map((c) => [c.id, c]));
     const dbAssignments = await this.assignmentRepo.find();
     const assignmentsByCustomer = new Map<number, CustomerAssignment[]>();
     for (const a of dbAssignments) {
@@ -519,6 +521,9 @@ export class CustomerAssignmentsService {
       rowsParsed: parsed.rowCount,
       customersParsed: parsed.customers.length,
       duplicatePairs: parsed.duplicatePairs,
+      // Nhóm khách gộp đọc từ ô STT merge + số ô KEY/NON CON được kế thừa MẸ.
+      groupsParsed: parsed.groups.length,
+      inheritedTierCells: parsed.inheritedTierCells,
       create: 0,
       update: 0,
       delete: 0,
@@ -566,7 +571,46 @@ export class CustomerAssignmentsService {
       }
       for (const w of p.warnings) warnings.push(w);
 
-      // 4a. Thông tin khách đổi (hoặc khách đã xoá được kích hoạt lại).
+      // 4a. Quan hệ nhóm khách gộp (MẸ/CON) — tính TRƯỚC khối thông tin khách
+      // để gộp chung vào customer-level UPDATE.
+      //
+      // parentKey:
+      //   string  -> CON trỏ về (mã, SAP) của MẸ
+      //   null    -> MẸ hoặc khách đứng riêng: bỏ liên kết cũ nếu có
+      //   undefined -> nhóm có STT nhưng thiếu dòng MẸ: KHÔNG đụng liên kết cũ
+      let parentKey: string | null | undefined;
+      if (p.group_role === 'CON' && p.group_main_code) {
+        parentKey = `${p.group_main_code}|${p.group_main_sap ?? ''}`;
+      } else if (p.group_role === 'ME') {
+        parentKey = null;
+      } else if (p.group_key != null) {
+        parentKey = undefined;
+      } else {
+        parentKey = null;
+      }
+      // Nhóm trỏ về chính khách (dữ liệu bẩn) → bỏ qua, không tự trỏ.
+      if (
+        typeof parentKey === 'string' &&
+        parentKey === `${p.customer_code}|${p.sap_code}`
+      ) {
+        warnings.push(
+          `Dòng ${p.row_num}: nhóm STT trỏ về chính khách — bỏ qua liên kết MẸ`,
+        );
+        parentKey = undefined;
+      }
+      const dbParent =
+        dbCustomer?.parent_customer_id != null
+          ? (dbCustomerById.get(dbCustomer.parent_customer_id) ?? null)
+          : null;
+      const dbParentKey = dbParent
+        ? `${dbParent.customer_code}|${dbParent.sap_code}`
+        : null;
+      const parentCustomer =
+        typeof parentKey === 'string'
+          ? dbCustomerByKey.get(parentKey) ?? null
+          : null;
+
+      // 4b. Thông tin khách đổi (hoặc khách đã xoá được kích hoạt lại).
       // File không có cột tên khách — không so sánh customer_name.
       if (dbCustomer) {
         const oldFields: any = {};
@@ -593,6 +637,28 @@ export class CustomerAssignmentsService {
         ) {
           oldFields.credit_days = dbCustomer.credit_days;
           newFields.credit_days = p.credit_days;
+        }
+        // Liên kết nhóm: chỉ ghi khi có thay đổi thật. Với CON, new_data lưu
+        // (mã, SAP) của MẸ thay vì id — apply resolve sau khi mọi khách (kể cả
+        // MẸ mới tạo trong cùng session) đã tồn tại.
+        if (parentKey !== undefined) {
+          if (parentKey == null) {
+            if (dbCustomer.parent_customer_id != null) {
+              oldFields.parent_customer_id = dbCustomer.parent_customer_id;
+              oldFields.parent_customer_code = dbParent?.customer_code ?? null;
+              newFields.parent_customer_id = null;
+              newFields.parent_customer_code = null;
+              newFields.parent_sap_code = null;
+              newFields.group_key = p.group_key;
+            }
+          } else if (dbParentKey !== parentKey) {
+            oldFields.parent_customer_id = dbCustomer.parent_customer_id;
+            oldFields.parent_customer_code = dbParent?.customer_code ?? null;
+            newFields.parent_customer_id = parentCustomer?.id ?? null;
+            newFields.parent_customer_code = p.group_main_code;
+            newFields.parent_sap_code = p.group_main_sap ?? '';
+            newFields.group_key = p.group_key;
+          }
         }
         if (Object.keys(newFields).length) {
           drafts.push({
@@ -623,6 +689,10 @@ export class CustomerAssignmentsService {
           sale_id: saleId,
           customer_tier: a.tier,
           zalo_account_id: null, // job Python tự gắn ≤ 5 phút sau khi apply
+          // Chỉ để preview hiển thị "Kế thừa từ MẸ"; apply chỉ đọc
+          // customer_tier như cũ.
+          tier_inherited: a.tier_inherited,
+          group_key: p.group_key,
         };
         const error = changeErrorFor(p, saleId ?? undefined, rowExtraErrors);
 
@@ -644,6 +714,16 @@ export class CustomerAssignmentsService {
                     // File thiếu LOẠI MÃ / để trống → khách mới mặc định là CHÍNH
                     customer_role: p.customer_role ?? CustomerRole.CHINH,
                     credit_days: p.credit_days,
+                    // CON mới: apply resolve mã MẸ sau khi tạo xong mọi khách.
+                    parent_customer_code:
+                      typeof parentKey === 'string'
+                        ? p.group_main_code
+                        : null,
+                    parent_sap_code:
+                      typeof parentKey === 'string'
+                        ? (p.group_main_sap ?? '')
+                        : null,
+                    group_key: p.group_key,
                   },
             },
             error,
@@ -796,6 +876,8 @@ export class CustomerAssignmentsService {
       status: session.status,
       summary,
       criteria: parsed.criteria,
+      // Tóm tắt nhóm gộp để FE (bước preview) hiển thị MẸ/CON + cảnh báo.
+      groups: parsed.groups,
       errors: rowErrors.slice(0, 50),
       warnings: warnings.slice(0, 50),
     };
@@ -882,6 +964,14 @@ export class CustomerAssignmentsService {
         assignmentsByCustomer.set(a.customer_id, list);
       }
 
+      // Liên kết MẸ/CON phải chờ tất cả khách trong session được tạo/sửa xong:
+      // dòng CON có thể đứng trước dòng MẸ trong file. Map theo customerId —
+      // một khách chỉ có một parent hiện hành, change sau thắng.
+      const pendingParentLinks = new Map<
+        number,
+        { parentCode: string | null; parentSap: string; changeId: number }
+      >();
+
       for (const change of changes) {
         if (change.action === ImportChangeAction.UNCHANGED) {
           continue; // dòng "không đổi" — hiển thị cho người duyệt, không ghi
@@ -922,6 +1012,17 @@ export class CustomerAssignmentsService {
             } else if (customer.status === CustomerStatus.DELETED) {
               customer.status = CustomerStatus.ACTIVE;
               await em.save(customer);
+            }
+
+            // Khách mới tạo trong session có thể là CON — chờ sau vòng lặp mới
+            // resolve MẸ (MẸ có thể nằm ở dòng sau). Khách đã tồn tại thì
+            // customer-level UPDATE (4a) đã mang parent, không xử lý ở đây.
+            if (customerCreated && nd.customer?.parent_customer_code) {
+              pendingParentLinks.set(customer.id, {
+                parentCode: nd.customer.parent_customer_code,
+                parentSap: String(nd.customer.parent_sap_code ?? ''),
+                changeId: change.id,
+              });
             }
 
             const duplicated = (
@@ -989,6 +1090,8 @@ export class CustomerAssignmentsService {
                       status: customer.status,
                       customer_role: customer.customer_role,
                       credit_days: customer.credit_days,
+                      // Backup để rollback trả đúng nhóm MẸ/CON cũ.
+                      parent_customer_id: customer.parent_customer_id,
                     },
                   },
                   action_type: 'UPDATE',
@@ -999,6 +1102,20 @@ export class CustomerAssignmentsService {
               if (nd.status) customer.status = nd.status;
               if (nd.customer_role) customer.customer_role = nd.customer_role;
               if (nd.credit_days != null) customer.credit_days = nd.credit_days;
+              // Parent lưu (mã, SAP) — resolve sau vòng lặp. `null` = bỏ liên
+              // kết (MẸ/khách đứng riêng).
+              if (
+                Object.prototype.hasOwnProperty.call(
+                  nd,
+                  'parent_customer_code',
+                )
+              ) {
+                pendingParentLinks.set(customer.id, {
+                  parentCode: nd.parent_customer_code ?? null,
+                  parentSap: String(nd.parent_sap_code ?? ''),
+                  changeId: change.id,
+                });
+              }
               await em.save(customer);
               applied++;
             } else {
@@ -1136,6 +1253,51 @@ export class CustomerAssignmentsService {
         }
       }
 
+      // Resolve liên kết nhóm SAU khi mọi khách đã được tạo/sửa — dòng CON có
+      // thể đứng trước dòng MẸ trong file. Không resolve được thì ghi conflict
+      // để admin thấy, không lặng lẽ bỏ qua.
+      for (const [customerId, pending] of pendingParentLinks) {
+        const customer = customers.get(customerId);
+        if (!customer) {
+          conflicts.push({
+            changeId: pending.changeId,
+            reason: 'không tìm thấy khách để gắn nhóm MẸ/CON',
+          });
+          continue;
+        }
+        if (pending.parentCode == null) {
+          customer.parent_customer_id = null;
+          await em.save(customer);
+          continue;
+        }
+        const parent = customerByKey.get(
+          `${pending.parentCode}|${pending.parentSap}`,
+        );
+        if (!parent) {
+          conflicts.push({
+            changeId: pending.changeId,
+            reason: `không tìm thấy khách MẸ "${pending.parentCode}|${pending.parentSap}" để gắn nhóm`,
+          });
+          continue;
+        }
+        if (parent.id === customer.id) {
+          conflicts.push({
+            changeId: pending.changeId,
+            reason: 'khách không thể là MẸ của chính nó',
+          });
+          continue;
+        }
+        if (parent.status === CustomerStatus.DELETED) {
+          conflicts.push({
+            changeId: pending.changeId,
+            reason: `khách MẸ "${pending.parentCode}|${pending.parentSap}" đang bị ẩn/xoá`,
+          });
+          continue;
+        }
+        customer.parent_customer_id = parent.id;
+        await em.save(customer);
+      }
+
       // Trạng thái session ghi TRONG transaction — nếu lỗi giữa chừng thì
       // rollback luôn cả session, tránh session đã apply mà dữ liệu chưa ghi.
       session.status = ImportSessionStatus.APPLIED as any;
@@ -1266,6 +1428,17 @@ export class CustomerAssignmentsService {
               customer.status = od.customer.status;
               customer.customer_role = od.customer.customer_role;
               customer.credit_days = od.customer.credit_days;
+              // Backup cũ (trước bản khách gộp) không có field này — chỉ trả
+              // khi có để không xoá oan liên kết đang đúng.
+              if (
+                Object.prototype.hasOwnProperty.call(
+                  od.customer,
+                  'parent_customer_id',
+                )
+              ) {
+                customer.parent_customer_id =
+                  od.customer.parent_customer_id ?? null;
+              }
               await em.save(customer);
               restored++;
             } else if (od.assignment) {
@@ -1384,7 +1557,8 @@ export class CustomerAssignmentsService {
 
     const ws = wb.addWorksheet('File Chi Tiết');
     ws.addRow(FILE_CHI_TIET_HEADERS);
-    // 2 dòng ví dụ — người nhập xoá đi rồi điền theo
+    // 2 dòng ví dụ MẸ + CON — người nhập xoá đi rồi điền theo.
+    // Dòng CHÍNH = MẸ, dòng PHỤ = CON; ô STT được merge để định nghĩa nhóm.
     ws.addRow([
       1,
       'C29962',
@@ -1392,11 +1566,11 @@ export class CustomerAssignmentsService {
       '',
       '',
       '',
-      'NKDS36-ĐỖ MINH HÙNG',
+      'NKDS36-ĐỖ MINH HÙNG', // S1-LAPTOP
       '',
       '',
       'CHÍNH',
-      'Key',
+      'Key', // LAPTOP → MẸ KEY ở phòng laptop
       '',
       '',
       '',
@@ -1405,25 +1579,26 @@ export class CustomerAssignmentsService {
       50000000,
     ]);
     ws.addRow([
-      2,
+      1, // cùng STT, merge với dòng MẸ
       'C00375',
       'HQS_Q03_SR_PHUCHAI',
       '',
       'NKDS20-NGUYỄN THỊ THANH HẰNG', // S1-PC, LCD → phòng pc
       '',
+      'NKDS36-ĐỖ MINH HÙNG', // cùng sale laptop với MẸ
       '',
       '',
+      'PHỤ',
+      '', // LAPTOP trống → kế thừa Key của MẸ
       '',
-      'CHÍNH',
       '',
-      '',
-      '',
-      'NON', // PC - SERVER → phân loại của đúng phòng pc
-      '',
+      'NON', // PC - SERVER ghi cụ thể → giữ NON, không kế thừa
       '',
       '',
       0,
     ]);
+    // Merge ô STT của nhóm mẫu (A2:A3).
+    ws.mergeCells(2, 1, 3, 1);
     ws.columns.forEach((c) => (c.width = 22));
 
     const buf = await wb.xlsx.writeBuffer();
@@ -1520,6 +1695,7 @@ export class CustomerAssignmentsService {
     const qb = this.assignmentRepo
       .createQueryBuilder('a')
       .innerJoinAndSelect('a.customer', 'c')
+      .leftJoinAndSelect('c.parent', 'parent')
       .innerJoinAndSelect('a.sale', 'u')
       .where('c.status != :deleted', { deleted: CustomerStatus.DELETED });
 
@@ -1559,7 +1735,7 @@ export class CustomerAssignmentsService {
     }
     if (query.search) {
       qb.andWhere(
-        '(c.customer_code LIKE :s OR c.customer_name LIKE :s OR c.sap_code LIKE :s)',
+        '(c.customer_code LIKE :s OR c.customer_name LIKE :s OR c.sap_code LIKE :s OR parent.customer_code LIKE :s)',
         { s: `%${query.search}%` },
       );
     }
@@ -1603,8 +1779,57 @@ export class CustomerAssignmentsService {
     const ws = wb.addWorksheet('File Chi Tiết');
     ws.addRow(FILE_CHI_TIET_HEADERS);
 
+    // Xuất nhóm MẸ/CON giống file gốc: gom theo groupId, MẸ trước CON, merge
+    // ô STT của cả nhóm để lần nạp lại vẫn nhận ra khách gộp.
+    const rows = [...byCustomer.values()];
+    const groupIdOf = (customer: Customer) =>
+      customer.parent_customer_id ?? customer.id;
+    const roleRank = (customer: Customer) =>
+      customer.parent_customer_id == null ? 0 : 1;
+    rows.sort(
+      (a, b) =>
+        groupIdOf(a.customer) - groupIdOf(b.customer) ||
+        roleRank(a.customer) - roleRank(b.customer) ||
+        a.customer.customer_code.localeCompare(b.customer.customer_code, 'vi') ||
+        a.customer.sap_code.localeCompare(b.customer.sap_code, 'vi'),
+    );
+    const groupedIds = new Set<number>();
+    for (const row of rows) {
+      if (row.customer.parent_customer_id != null) {
+        groupedIds.add(groupIdOf(row.customer));
+      }
+    }
+
     let stt = 0;
-    for (const { customer, assignments } of byCustomer.values()) {
+    let currentGroupId: number | null = null;
+    let groupStartRow = 0;
+    let groupRowCount = 0;
+    let groupHasMain = false;
+    let groupMainTierBySlug = new Map<string, string>();
+
+    const flushGroup = () => {
+      if (
+        currentGroupId != null &&
+        groupHasMain &&
+        groupRowCount > 1 &&
+        groupStartRow > 0
+      ) {
+        // Merge ô STT (cột 1) — master giữ giá trị STT đã ghi ở dòng MẸ.
+        ws.mergeCells(groupStartRow, 1, groupStartRow + groupRowCount - 1, 1);
+      }
+    };
+
+    for (const { customer, assignments } of rows) {
+      const groupId = groupIdOf(customer);
+      if (groupId !== currentGroupId) {
+        flushGroup();
+        currentGroupId = groupId;
+        groupStartRow = 0;
+        groupRowCount = 0;
+        groupHasMain = false;
+        groupMainTierBySlug = new Map();
+      }
+
       const empBySlug = new Map<string, string>();
       const tierBySlug = new Map<string, string>();
       for (const a of assignments) {
@@ -1620,33 +1845,61 @@ export class CustomerAssignmentsService {
       // Khách không còn phân công xuất được → bỏ hẳn dòng: dòng trống sẽ bị
       // import hiểu là "khách vắng mặt trong file" → xoá hết phân công đang có.
       if (!empBySlug.size) continue;
-      stt++;
+
+      const isGrouped = groupedIds.has(groupId);
+      const isChild = customer.parent_customer_id != null;
+      const isMain =
+        isGrouped &&
+        !isChild &&
+        customer.customer_role !== CustomerRole.PHU;
+      if (isMain && !groupHasMain) {
+        groupHasMain = true;
+        // Tier của MẸ theo phòng — CON trùng tier sẽ xuất ô trống để giữ
+        // quan hệ kế thừa khi nạp lại.
+        groupMainTierBySlug = tierBySlug;
+      }
+      const sttValue =
+        groupHasMain && groupRowCount > 0 ? '' : ++stt;
 
       const row: Array<string | number> = [
-        stt,
+        sttValue,
         customer.sap_code || '',
         customer.customer_code,
       ];
       for (const { slug } of EMP_DEPT_COLUMNS) {
         row.push(empBySlug.get(slug) ?? '');
       }
+      // Vai trò: ưu tiên dữ liệu DB; nhóm có MẸ/CON mà role null thì suy ra
+      // từ vị trí để round-trip không mất nhóm.
       row.push(
         customer.customer_role === CustomerRole.PHU
           ? 'PHỤ'
           : customer.customer_role === CustomerRole.CHINH
             ? 'CHÍNH'
-            : '',
+            : isChild
+              ? 'PHỤ'
+              : isMain
+                ? 'CHÍNH'
+                : '',
       );
       for (const { slug } of TIER_DEPT_COLUMNS) {
-        row.push(tierBySlug.get(slug) ?? '');
+        const own = tierBySlug.get(slug) ?? '';
+        const mainTier = groupHasMain
+          ? groupMainTierBySlug.get(slug)
+          : undefined;
+        // CON + tier trùng MẸ cùng phòng → để trống để lần nạp lại kế thừa.
+        row.push(isChild && own && mainTier === own ? '' : own);
       }
       row.push(customer.credit_days ?? '');
       // Cột T04..T09 / ĐIỂM / tổng ds của bản gốc lấy từ sheet BCBH ẩn —
       // backend không sinh, để trống (import cũng không đọc các cột này).
       for (let i = 0; i < 8; i++) row.push('');
 
-      ws.addRow(row);
+      const added = ws.addRow(row);
+      if (groupRowCount === 0) groupStartRow = added.number;
+      groupRowCount++;
     }
+    flushGroup();
 
     ws.columns.forEach((c) => (c.width = 22));
 

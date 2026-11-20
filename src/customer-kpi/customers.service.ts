@@ -25,6 +25,7 @@ import { maskCustomerRevenue } from './kpi-mask.helper';
 import { KpiRevenueViewService } from './kpi-revenue-view.service';
 import { NkmSaleMap } from './nkm-sale-map.entity';
 import { CustomerRole } from './customer.entity';
+import { groupRoleOf } from './customer-group.helper';
 import { CustomerQueryDto } from './dto/customer-query.dto';
 import { UpdateCustomerDto } from './dto/update-customer.dto';
 import {
@@ -349,6 +350,8 @@ export class CustomersService {
     const qb = this.assignmentRepo
       .createQueryBuilder('a')
       .innerJoinAndSelect('a.customer', 'c')
+      // Mã MẸ của nhóm khách gộp — tìm theo mã MẸ trả về cả CON.
+      .leftJoinAndSelect('c.parent', 'parent')
       .andWhere('c.status != :deletedStatus', {
         deletedStatus: CustomerStatus.DELETED,
       });
@@ -389,15 +392,26 @@ export class CustomersService {
     }
     if (query.search) {
       qb.andWhere(
-        '(c.customer_code LIKE :search OR c.customer_name LIKE :search OR c.sap_code LIKE :search)',
+        '(c.customer_code LIKE :search OR c.customer_name LIKE :search OR c.sap_code LIKE :search OR parent.customer_code LIKE :search)',
         {
           search: `%${query.search}%`,
         },
       );
     }
 
-    qb.orderBy('a.department_slug', 'ASC')
+    // Nhóm khách gộp đứng cạnh nhau: groupId (MẸ id) → MẸ trước CON → mã KH
+    // → phòng ban. Cột STT trên UI vẫn là STT dòng như cũ.
+    // ORDER BY phải dùng alias của addSelect — TypeORM coi chuỗi có dấu ngoặc
+    // là alias nếu truyền thẳng vào orderBy.
+    qb.addSelect('COALESCE(c.parent_customer_id, c.id)', 'group_order')
+      .addSelect(
+        'CASE WHEN c.parent_customer_id IS NULL THEN 0 ELSE 1 END',
+        'group_role_order',
+      )
+      .orderBy('group_order', 'ASC')
+      .addOrderBy('group_role_order', 'ASC')
       .addOrderBy('c.customer_code', 'ASC')
+      .addOrderBy('a.department_slug', 'ASC')
       .skip((page - 1) * pageSize)
       .take(pageSize);
 
@@ -428,9 +442,36 @@ export class CustomersService {
       linkCounts.map((r) => [Number(r.assignment_id), Number(r.link_count)]),
     );
 
+    // Số khách trong từng nhóm để FE hiện "Nhóm N" — đếm toàn cục, không chỉ
+    // trang hiện tại (nhóm có thể nằm vắt qua trang).
+    const groupIds = [
+      ...new Set(
+        assignments.map((a) => a.customer.parent_customer_id ?? a.customer.id),
+      ),
+    ];
+    const groupSizeMap = new Map<number, number>();
+    if (groupIds.length > 0) {
+      const sizeRows = await this.customerRepo
+        .createQueryBuilder('gc')
+        .select('COALESCE(gc.parent_customer_id, gc.id)', 'groupId')
+        .addSelect('COUNT(*)', 'count')
+        .where('gc.status != :deleted', { deleted: CustomerStatus.DELETED })
+        .andWhere(
+          '(gc.id IN (:...groupIds) OR gc.parent_customer_id IN (:...groupIds))',
+          { groupIds },
+        )
+        .groupBy('COALESCE(gc.parent_customer_id, gc.id)')
+        .getRawMany<{ groupId: number | string; count: string }>();
+      for (const row of sizeRows) {
+        groupSizeMap.set(Number(row.groupId), Number(row.count));
+      }
+    }
+
     const data = assignments.map((a) => {
       const u = userMap.get(a.sale_id);
       const linkCount = countMap.get(a.id) ?? 0;
+      const parentCustomerId = a.customer.parent_customer_id ?? null;
+      const groupId = parentCustomerId ?? a.customer.id;
       return {
         assignmentId: a.id,
         departmentSlug: a.department_slug,
@@ -440,6 +481,14 @@ export class CustomersService {
         saleZaloLinked: (u?.zaloLinkStatus ?? 0) === 1,
         zaloLinked: linkCount > 0,
         zaloAccountCount: linkCount,
+        // Nhóm khách gộp — FE hiện badge MẸ/CON + sắp xếp liền nhau.
+        group: {
+          id: groupId,
+          parentCustomerId,
+          parentCustomerCode: a.customer.parent?.customer_code ?? null,
+          role: groupRoleOf(parentCustomerId, a.customer.customer_role),
+          size: groupSizeMap.get(groupId) ?? 1,
+        },
         customer: {
           id: a.customer.id,
           customerCode: a.customer.customer_code,
@@ -459,7 +508,7 @@ export class CustomersService {
     const userIds = await this.scopeUserIds(user);
     const assignment = await this.assignmentRepo.findOne({
       where: { id: assignmentId },
-      relations: ['customer'],
+      relations: ['customer', 'customer.parent'],
     });
     if (!assignment) {
       throw new ForbiddenException(
@@ -480,10 +529,45 @@ export class CustomersService {
       order: { created_at: 'DESC' },
     });
 
+    // Nhóm khách gộp: lấy MẸ + toàn bộ CON còn hoạt động để modal chi tiết
+    // hiển thị đủ danh sách thành viên.
+    const parentCustomerId = assignment.customer.parent_customer_id ?? null;
+    const groupId = parentCustomerId ?? assignment.customer.id;
+    const groupRows = await this.customerRepo.find({
+      where: [{ id: groupId }, { parent_customer_id: groupId }],
+      select: [
+        'id',
+        'customer_code',
+        'sap_code',
+        'customer_role',
+        'parent_customer_id',
+        'status',
+      ],
+      order: { customer_code: 'ASC' },
+    });
+    const activeGroupRows = groupRows.filter(
+      (row) => row.status !== CustomerStatus.DELETED,
+    );
+    const group = {
+      id: groupId,
+      parentCustomerId,
+      parentCustomerCode: assignment.customer.parent?.customer_code ?? null,
+      role: groupRoleOf(parentCustomerId, assignment.customer.customer_role),
+      size: activeGroupRows.length,
+      members: activeGroupRows.map((row) => ({
+        customerId: row.id,
+        customerCode: row.customer_code,
+        sapCode: row.sap_code,
+        customerRole: row.customer_role,
+        role: groupRoleOf(row.parent_customer_id, row.customer_role),
+      })),
+    };
+
     return {
       assignmentId: assignment.id,
       departmentSlug: assignment.department_slug,
       customerTier: assignment.customer_tier,
+      group,
       // Map camelCase để khớp đúng hình dạng response của GET /customers
       customer: {
         id: assignment.customer.id,

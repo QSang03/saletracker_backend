@@ -151,3 +151,48 @@ ALTER TABLE `order_details`
 --    SELECT status, COUNT(*) FROM order_details GROUP BY status;
 --    -> không còn pending/confirmed
 --    SELECT COUNT(*) FROM order_details WHERE is_project = 1;
+
+-- ----------------------------------------------------------------------------
+-- BƯỚC 5 (BẮT BUỘC cho khách gộp): thêm customers.parent_customer_id
+--
+-- Vì sao: nhóm khách gộp MẸ/CON từ ô STT merge trong file import cần liên kết
+-- CON -> MẸ. Cột nullable, index để truy vấn nhóm. TypeORM synchronize cũng
+-- tự thêm khi boot, nhưng pre-create ở đây tránh ALTER bảng khách lúc đang chạy
+-- và giữ đúng thứ tự deploy.
+--
+-- Lưu ý: FK self-reference để TypeORM synchronize tạo (entity @ManyToOne).
+-- Nếu môi trường tắt synchronize, thêm thủ công:
+--   ALTER TABLE `customers`
+--     ADD CONSTRAINT `FK_customers_parent`
+--     FOREIGN KEY (`parent_customer_id`) REFERENCES `customers`(`id`)
+--     ON DELETE SET NULL;
+-- ----------------------------------------------------------------------------
+SET @parent_col_exists := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'customers'
+    AND COLUMN_NAME = 'parent_customer_id'
+);
+SET @ddl := IF(@parent_col_exists = 0,
+  'ALTER TABLE `customers` ADD COLUMN `parent_customer_id` INT NULL',
+  'DO 0');
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @parent_idx_exists := (
+  SELECT COUNT(*) FROM information_schema.STATISTICS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'customers'
+    AND INDEX_NAME = 'idx_customers_parent'
+);
+SET @ddl := IF(@parent_idx_exists = 0,
+  'ALTER TABLE `customers` ADD INDEX `idx_customers_parent` (`parent_customer_id`)',
+  'DO 0');
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- Kiểm tra sau bước 5:
+--   SHOW COLUMNS FROM customers LIKE 'parent_customer_id';
+--   SHOW INDEX FROM customers WHERE Key_name = 'idx_customers_parent';

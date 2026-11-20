@@ -138,6 +138,77 @@ assert.equal(quarter.get(10)?.status, KpiQuarterStatus.PASSED);
 // sale 11 phủ đủ KEY nhưng thiếu doanh số
 assert.equal(quarter.get(11)?.status, KpiQuarterStatus.FAILED_REVENUE);
 
+// ------------------------------------------------------- khách gộp MẸ/CON
+
+{
+  const groupAssignments: CoverageAssignment[] = [
+    // sale 20: MẸ M1 KEY + 2 CON KEY cùng nhóm 100; MẸ bán → cả 3 mã covered.
+    { saleId: 20, customerCode: 'M1', tier: 'KEY', groupId: 100 },
+    { saleId: 20, customerCode: 'C1', tier: 'KEY', groupId: 100 },
+    { saleId: 20, customerCode: 'C2', tier: 'KEY', groupId: 100 },
+    // Nhóm NON cùng sale — không ảnh hưởng độ phủ KEY.
+    { saleId: 20, customerCode: 'M2', tier: 'NON', groupId: 200 },
+    { saleId: 20, customerCode: 'C3', tier: 'NON', groupId: 200 },
+    // sale 21: MẸ KEY + CON NON khác tier — mỗi tier độc lập.
+    { saleId: 21, customerCode: 'M3', tier: 'KEY', groupId: 300 },
+    { saleId: 21, customerCode: 'C4', tier: 'NON', groupId: 300 },
+    // sale 22: chỉ CON NON bán, MẸ KEY không bán → KEY không được cover.
+    { saleId: 22, customerCode: 'M4', tier: 'KEY', groupId: 400 },
+    { saleId: 22, customerCode: 'C5', tier: 'NON', groupId: 400 },
+  ];
+  const groupRevenue: CoverageRevenueRow[] = [
+    { slpCode: 200, customerCode: 'M1', quantity: 1, lineTotal: 100 },
+    { slpCode: 200, customerCode: 'C1', quantity: 0, lineTotal: 0 },
+    { slpCode: 200, customerCode: 'C2', quantity: 0, lineTotal: 0 },
+    { slpCode: 200, customerCode: 'M2', quantity: 1, lineTotal: 50 },
+    { slpCode: 200, customerCode: 'C3', quantity: 0, lineTotal: 0 },
+    { slpCode: 201, customerCode: 'M3', quantity: 1, lineTotal: 100 },
+    { slpCode: 201, customerCode: 'C4', quantity: 0, lineTotal: 0 },
+    { slpCode: 202, customerCode: 'M4', quantity: 0, lineTotal: 0 },
+    { slpCode: 202, customerCode: 'C5', quantity: 1, lineTotal: 100 },
+  ];
+  const groupMappings: SaleSlpMapping[] = [
+    { saleId: 20, slpCodes: [200] },
+    { saleId: 21, slpCodes: [201] },
+    { saleId: 22, slpCodes: [202] },
+  ];
+  const monthlyGroup = computeMonthlyCoverage(
+    groupAssignments,
+    groupRevenue,
+    groupMappings,
+    60,
+  );
+  // Mỗi mã CON vẫn là 1 khách: 3 KEY (M1,C1,C2); MẸ bán → cả 3 covered.
+  assert.equal(monthlyGroup.get(20)?.nKey, 3);
+  assert.equal(monthlyGroup.get(20)?.coveredKey, 3);
+  assert.equal(monthlyGroup.get(20)?.coverageRate, 100);
+  assert.equal(monthlyGroup.get(20)?.status, KpiMonthlyStatus.PASSED);
+  // sale 21: nKey chỉ tính mã KEY; CON NON không vào mẫu số KEY.
+  assert.equal(monthlyGroup.get(21)?.nKey, 1);
+  assert.equal(monthlyGroup.get(21)?.coveredKey, 1);
+  // sale 22: doanh số của CON NON KHÔNG cover MẸ KEY (khác tier).
+  assert.equal(monthlyGroup.get(22)?.nKey, 1);
+  assert.equal(monthlyGroup.get(22)?.coveredKey, 0);
+  assert.equal(monthlyGroup.get(22)?.status, KpiMonthlyStatus.FAILED);
+
+  const groupTargets = [
+    { saleId: 20, targetValue: 100, actualValue: 100, hasTarget: true },
+    { saleId: 21, targetValue: 100, actualValue: 100, hasTarget: true },
+    { saleId: 22, targetValue: 100, actualValue: 100, hasTarget: true },
+  ];
+  const quarterGroup = computeQuarterSettlement(
+    groupAssignments,
+    groupRevenue,
+    groupMappings,
+    groupTargets,
+  );
+  assert.equal(quarterGroup.get(20)?.status, KpiQuarterStatus.PASSED);
+  assert.equal(quarterGroup.get(20)?.coveredKey, 3);
+  assert.equal(quarterGroup.get(21)?.status, KpiQuarterStatus.PASSED);
+  assert.equal(quarterGroup.get(22)?.status, KpiQuarterStatus.FAILED_KEY_COVERAGE);
+  console.log('OK: coverage khách gộp — mỗi CON 1 khách, gộp theo tier');
+}
+
 // ---------------------------------------------------------------- fiscal
 
 assert.deepEqual(fiscalQuarterMonths(2026, 1), [
@@ -250,9 +321,17 @@ const workingDays = new WorkingDaysService(fakeRepo);
     customers: [
       {
         totals: { revenue: 100, nkmQuantity: 2, orders: 1 },
+        groupRevenue: { quantity: 2, lineTotal: 100, hasRevenue: true },
         quote: { quoteCount: 1, lastQuoteAmount: 500 },
         criteria: [
-          { key: 'doanh_so_key', actualValue: 1, quantity: 2, lineTotal: 100 },
+          {
+            key: 'doanh_so_key',
+            actualValue: 1,
+            quantity: 2,
+            lineTotal: 100,
+            groupQuantity: 2,
+            groupLineTotal: 100,
+          },
         ],
       },
     ],
@@ -275,6 +354,10 @@ const workingDays = new WorkingDaysService(fakeRepo);
   assert.equal(sale.customers[0].quote.lastQuoteAmount, null);
   assert.equal(sale.customers[0].criteria[0].quantity, null);
   assert.equal(sale.customers[0].criteria[0].lineTotal, null);
+  assert.equal(sale.customers[0].criteria[0].groupQuantity, null);
+  assert.equal(sale.customers[0].criteria[0].groupLineTotal, null);
+  assert.equal(sale.customers[0].groupRevenue.quantity, null);
+  assert.equal(sale.customers[0].groupRevenue.lineTotal, null);
   assert.equal(sale.customers[0].criteria[0].actualValue, 1);
 
   const monthly: any = { sale_id: 1, bonus_amount: 5000000, n_key: 10 };

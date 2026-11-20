@@ -25,6 +25,7 @@ import { KpiScopeService, KpiUser } from './kpi-scope.service';
 import { KpiSaleDirectoryService } from './kpi-sale-directory.service';
 import { KpiCustomerNamesService } from './kpi-customer-names.service';
 import { CustomerAppointmentsService } from './customer-appointments.service';
+import { groupRoleOf } from './customer-group.helper';
 import {
   FiscalQuarter,
   fiscalQuarterOf,
@@ -56,6 +57,14 @@ interface AssignmentRow {
   lastVisitMonthAt: string | null;
   lastVisitQuarterAt: string | null;
   lastAppointmentCode: string | null;
+  /** Nhóm khách gộp: CON trỏ về MẸ; groupId = MẸ id hoặc id khách đứng riêng. */
+  parentCustomerId: number | null;
+  groupId: number;
+  parentCustomerCode: string | null;
+  groupRole: 'ME' | 'CON' | null;
+  /** Đã gặp nhờ thành viên khác trong nhóm — UI ghi "Đã gặp (nhóm)". */
+  visitInheritedMonth: boolean;
+  visitInheritedQuarter: boolean;
 }
 
 interface VisitAgg {
@@ -218,7 +227,7 @@ export class KpiVisitCoverageService {
   private async loadAssignments(saleId: number): Promise<AssignmentRow[]> {
     const assignments = await this.assignmentRepo.find({
       where: { sale_id: saleId },
-      relations: ['customer'],
+      relations: ['customer', 'customer.parent'],
     });
     return assignments
       .filter(
@@ -226,22 +235,36 @@ export class KpiVisitCoverageService {
           assignment.customer &&
           assignment.customer.status !== CustomerStatus.DELETED,
       )
-      .map((assignment) => ({
-        assignmentId: assignment.id,
-        customerId: assignment.customer_id,
-        customerCode: assignment.customer.customer_code,
-        customerName: assignment.customer.customer_name ?? null,
-        sapCode: assignment.customer.sap_code ?? '',
-        tier: assignment.customer_tier === CustomerTier.KEY ? 'KEY' : 'NON',
-        departmentSlug: assignment.department_slug,
-        visitedMonth: false,
-        visitedQuarter: false,
-        visitCountMonth: 0,
-        visitCountQuarter: 0,
-        lastVisitMonthAt: null,
-        lastVisitQuarterAt: null,
-        lastAppointmentCode: null,
-      }));
+      .map((assignment) => {
+        const parentCustomerId =
+          assignment.customer.parent_customer_id ?? null;
+        return {
+          assignmentId: assignment.id,
+          customerId: assignment.customer_id,
+          customerCode: assignment.customer.customer_code,
+          customerName: assignment.customer.customer_name ?? null,
+          sapCode: assignment.customer.sap_code ?? '',
+          tier: assignment.customer_tier === CustomerTier.KEY ? 'KEY' : 'NON',
+          departmentSlug: assignment.department_slug,
+          visitedMonth: false,
+          visitedQuarter: false,
+          visitCountMonth: 0,
+          visitCountQuarter: 0,
+          lastVisitMonthAt: null,
+          lastVisitQuarterAt: null,
+          lastAppointmentCode: null,
+          parentCustomerId,
+          groupId: parentCustomerId ?? assignment.customer_id,
+          parentCustomerCode:
+            assignment.customer.parent?.customer_code ?? null,
+          groupRole: groupRoleOf(
+            parentCustomerId,
+            assignment.customer.customer_role,
+          ),
+          visitInheritedMonth: false,
+          visitInheritedQuarter: false,
+        };
+      });
   }
 
   private async loadVisits(
@@ -297,19 +320,80 @@ export class KpiVisitCoverageService {
     visitMap: Map<number, VisitAgg>,
     names: Map<string, string>,
   ): AssignmentRow[] {
+    // Khách gộp: gom visit theo groupId. Tập customerId của nhóm gồm cả id MẸ
+    // (để lịch của MẸ vẫn cover CON dù MẸ không có assignment trong sale).
+    const customerIdsByGroup = new Map<number, Set<number>>();
+    for (const assignment of assignments) {
+      const set =
+        customerIdsByGroup.get(assignment.groupId) ?? new Set<number>();
+      set.add(assignment.customerId);
+      if (assignment.parentCustomerId != null) {
+        set.add(assignment.parentCustomerId);
+      }
+      customerIdsByGroup.set(assignment.groupId, set);
+    }
+    const groupVisitMap = new Map<number, VisitAgg>();
+    for (const [groupId, customerIds] of customerIdsByGroup) {
+      const agg: VisitAgg = {
+        monthCount: 0,
+        quarterCount: 0,
+        lastMonthAt: null,
+        lastQuarterAt: null,
+        lastAppointmentCode: null,
+      };
+      for (const customerId of customerIds) {
+        const visit = visitMap.get(customerId);
+        if (!visit) continue;
+        agg.monthCount += visit.monthCount;
+        agg.quarterCount += visit.quarterCount;
+        if (
+          visit.lastMonthAt &&
+          (!agg.lastMonthAt || visit.lastMonthAt > agg.lastMonthAt)
+        ) {
+          agg.lastMonthAt = visit.lastMonthAt;
+        }
+        if (
+          visit.lastQuarterAt &&
+          (!agg.lastQuarterAt || visit.lastQuarterAt > agg.lastQuarterAt)
+        ) {
+          agg.lastQuarterAt = visit.lastQuarterAt;
+        }
+        if (visit.lastAppointmentCode) {
+          agg.lastAppointmentCode = visit.lastAppointmentCode;
+        }
+      }
+      if (agg.monthCount > 0 || agg.quarterCount > 0) {
+        groupVisitMap.set(groupId, agg);
+      }
+    }
+
     return assignments.map((assignment) => {
       const visit = visitMap.get(assignment.customerId);
+      const groupVisit = groupVisitMap.get(assignment.groupId);
+      const ownMonth = (visit?.monthCount ?? 0) > 0;
+      const ownQuarter = (visit?.quarterCount ?? 0) > 0;
+      const groupMonth = (groupVisit?.monthCount ?? 0) > 0;
+      const groupQuarter = (groupVisit?.quarterCount ?? 0) > 0;
       return {
         ...assignment,
         customerName:
           names.get(assignment.customerCode) ?? assignment.customerName,
-        visitedMonth: (visit?.monthCount ?? 0) > 0,
-        visitedQuarter: (visit?.quarterCount ?? 0) > 0,
+        // Bất kỳ thành viên nào trong nhóm đã gặp → cả nhóm tính đã gặp.
+        visitedMonth: ownMonth || groupMonth,
+        visitedQuarter: ownQuarter || groupQuarter,
+        // Số lần gặp vẫn của RIÊNG khách để summary không nhân đôi lượt gặp.
         visitCountMonth: visit?.monthCount ?? 0,
         visitCountQuarter: visit?.quarterCount ?? 0,
-        lastVisitMonthAt: visit?.lastMonthAt ?? null,
-        lastVisitQuarterAt: visit?.lastQuarterAt ?? null,
-        lastAppointmentCode: visit?.lastAppointmentCode ?? null,
+        lastVisitMonthAt:
+          visit?.lastMonthAt ?? groupVisit?.lastMonthAt ?? null,
+        lastVisitQuarterAt:
+          visit?.lastQuarterAt ?? groupVisit?.lastQuarterAt ?? null,
+        lastAppointmentCode:
+          visit?.lastAppointmentCode ??
+          groupVisit?.lastAppointmentCode ??
+          null,
+        visitInheritedMonth: !ownMonth && groupMonth,
+        visitInheritedQuarter: !ownQuarter && groupQuarter,
       };
     });
   }
@@ -604,9 +688,15 @@ export class KpiVisitCoverageService {
           !search ||
           row.customerCode.toLowerCase().includes(search) ||
           row.sapCode.toLowerCase().includes(search) ||
-          (row.customerName ?? '').toLowerCase().includes(search),
+          (row.customerName ?? '').toLowerCase().includes(search) ||
+          (row.parentCustomerCode ?? '').toLowerCase().includes(search),
       )
       .sort((a, b) => {
+        // Nhóm khách gộp trước — MẸ rồi CON, sau đó mới tier/trạng thái gặp.
+        if (a.groupId !== b.groupId) return a.groupId - b.groupId;
+        const roleRank = (row: AssignmentRow) =>
+          row.groupRole === 'ME' ? 0 : row.groupRole === 'CON' ? 1 : 2;
+        if (roleRank(a) !== roleRank(b)) return roleRank(a) - roleRank(b);
         if (a.tier !== b.tier) return a.tier === 'KEY' ? -1 : 1;
         const aVisited =
           visitPeriod === 'month' ? a.visitedMonth : a.visitedQuarter;

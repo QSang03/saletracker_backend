@@ -78,6 +78,11 @@ interface RowInput {
   criteria?: Record<string, { status: string; actualValue: number | null }>;
   /** Kết luận theo loại khách; mặc định 0 tiêu chí đạt / không áp dụng. */
   tierSummary?: { applicable: number; passed: number; verdict: 'pass' | 'fail' | null };
+  /** Nhóm khách gộp — bỏ trống để test hành vi cũ. */
+  groupId?: number;
+  parentCustomerId?: number | null;
+  parentCustomerCode?: string | null;
+  groupRole?: 'ME' | 'CON' | null;
 }
 
 const CRITERIA = ['support_khach', 'lien_lac_phan_hoi', 'goi_y_thuc_hien'];
@@ -93,6 +98,10 @@ const makeRow = (input: RowInput): KpiReportCustomer => ({
     customerRole: input.role ?? null,
     departmentSlug: input.department ?? 'may-in',
     sapCode: input.sapCode ?? '',
+    groupId: input.groupId,
+    parentCustomerId: input.parentCustomerId,
+    parentCustomerCode: input.parentCustomerCode,
+    groupRole: input.groupRole,
   },
   zaloLinked: input.zaloLinked ?? true,
   tierSummary: input.tierSummary ?? {
@@ -319,6 +328,58 @@ check('sortBy=mã tiêu chí, no_data rơi xuống cuối', order(sortKpiCustome
 check('sortBy=mã tiêu chí asc vẫn đẩy no_data xuống cuối', order(sortKpiCustomers(ROWS, 'lien_lac_phan_hoi', 'asc', CTX)) === '3,1,2');
 check('sortBy=daysSinceContact desc đưa khách chưa liên lạc lên đầu', order(sortKpiCustomers(ROWS, 'daysSinceContact', 'desc', CTX)) === '2,3,1');
 check('sortBy=debtBalance null xếp cuối', order(sortKpiCustomers(ROWS, 'debtBalance', 'desc', CTX)) === '1,3,2');
+
+// Khách gộp: sort theo doanh số vẫn giữ các thành viên cùng nhóm cạnh nhau và
+// MẸ đứng trước CON, dù CON có doanh số cao hơn.
+const GROUPED = [
+  customer(21, {
+    tier: 'KEY',
+    role: 'PHU',
+    groupId: 100,
+    parentCustomerId: 20,
+    parentCustomerCode: 'CODE_20',
+    groupRole: 'CON',
+    revenue: 999,
+  }),
+  customer(20, {
+    tier: 'KEY',
+    role: 'CHINH',
+    groupId: 100,
+    parentCustomerId: null,
+    groupRole: 'ME',
+    revenue: 10,
+  }),
+  customer(31, {
+    tier: 'KEY',
+    role: 'PHU',
+    groupId: 300,
+    parentCustomerId: 30,
+    parentCustomerCode: 'CODE_30',
+    groupRole: 'CON',
+    revenue: 888,
+  }),
+  customer(30, {
+    tier: 'KEY',
+    role: 'CHINH',
+    groupId: 300,
+    parentCustomerId: null,
+    groupRole: 'ME',
+    revenue: 20,
+  }),
+];
+const groupedCtx = makeContext(GROUPED);
+check(
+  'nhóm gộp: sortBy=revenue vẫn giữ nhóm cạnh nhau, MẸ trước',
+  order(sortKpiCustomers(GROUPED, 'revenue', 'desc', groupedCtx)) === '20,21,30,31',
+);
+check(
+  'nhóm gộp: không sortBy vẫn gom nhóm + MẸ trước',
+  order(sortKpiCustomers(GROUPED, undefined, undefined, groupedCtx)) === '20,21,30,31',
+);
+check(
+  'nhóm gộp: tìm theo mã MẸ trả về cả CON',
+  filterKpiCustomers(GROUPED, { search: 'CODE_20' }, groupedCtx).length === 2,
+);
 check('KPI_SORT_KEYS có đủ cột mong đợi', KPI_SORT_KEYS.length === 12);
 
 // ------------------------------------------------------- overview (cấp sale)

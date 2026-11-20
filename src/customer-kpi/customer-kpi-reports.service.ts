@@ -88,6 +88,12 @@ import {
   sortKpiCustomers,
   summarizeKpiSales,
 } from './kpi-report-filter';
+import {
+  GroupEvidence,
+  GroupMemberEvidenceInput,
+  buildGroupEvidence,
+  groupRoleOf,
+} from './customer-group.helper';
 
 /** Nhóm gợi ý thực hiện (mục 5.4) — thứ tự = mức độ khẩn cấp. */
 const SUGGESTION_REASONS: Record<string, string> = {
@@ -201,6 +207,15 @@ interface AssignmentRow {
   customerRole: string | null;
   departmentSlug: string;
   sapCode: string;
+  /** Khách MẸ (customers.id) — null nếu là MẸ hoặc khách đứng riêng. */
+  parentCustomerId: number | null;
+  /** id nhóm = parent_customer_id ?? customerId — khoá gộp bằng chứng KPI. */
+  groupId: number;
+  /** Mã khách của dòng MẸ (để FE hiện "Thuộc MẸ <mã>"). */
+  parentCustomerCode: string | null;
+  groupRole: 'ME' | 'CON' | null;
+  /** Số khách KHÁC NHAU trong nhóm ở phạm vi đang xem (>=1). */
+  groupSize: number;
 }
 
 /** Dòng phân phối của một sale trong báo cáo 3 cấp (pivot của lead). */
@@ -318,6 +333,8 @@ export class CustomerKpiReportsService {
     const qb = this.assignmentRepo
       .createQueryBuilder('a')
       .innerJoinAndSelect('a.customer', 'c')
+      // Mã MẸ để hiển thị + nhóm khách gộp (CON trỏ về MẸ).
+      .leftJoinAndSelect('c.parent', 'parent')
       .where('c.status <> :deleted', { deleted: 'deleted' });
     const effectiveSale = saleId ?? undefined;
     if (effectiveSale !== undefined) {
@@ -333,8 +350,9 @@ export class CustomerKpiReportsService {
         customerCode: row.customer?.customer_code ?? '',
       })),
     );
-    return rows.map((row) => {
+    const mapped = rows.map((row) => {
       const names = zaloNames.get(row.id) ?? [];
+      const parentCustomerId = row.customer?.parent_customer_id ?? null;
       return {
         assignmentId: row.id,
         saleId: row.sale_id,
@@ -352,8 +370,28 @@ export class CustomerKpiReportsService {
         customerRole: row.customer?.customer_role ?? null,
         departmentSlug: row.department_slug ?? '',
         sapCode: row.customer?.sap_code ?? '',
+        parentCustomerId,
+        groupId: parentCustomerId ?? row.customer_id,
+        parentCustomerCode: row.customer?.parent?.customer_code ?? null,
+        groupRole: groupRoleOf(
+          parentCustomerId,
+          row.customer?.customer_role ?? null,
+        ),
+        groupSize: 1,
       };
     });
+    // Số khách khác nhau trong nhóm ở phạm vi đang xem — dùng cho badge
+    // "Nhóm N" và sắp xếp. Một khách nhiều phòng ban chỉ đếm một lần.
+    const groupCustomerIds = new Map<number, Set<number>>();
+    for (const row of mapped) {
+      const set = groupCustomerIds.get(row.groupId) ?? new Set<number>();
+      set.add(row.customerId);
+      groupCustomerIds.set(row.groupId, set);
+    }
+    for (const row of mapped) {
+      row.groupSize = groupCustomerIds.get(row.groupId)?.size ?? 1;
+    }
+    return mapped;
   }
 
   /**
@@ -637,6 +675,7 @@ export class CustomerKpiReportsService {
       }
     }
     if (assignmentByContact.size === 0) {
+      this.propagateGroupOrderSuggestions(assignments, buckets, byAssignment);
       return {
         byAssignment,
         bySale: this.finalizeSaleSuggestions(
@@ -733,6 +772,7 @@ export class CustomerKpiReportsService {
       }
     }
 
+    this.propagateGroupOrderSuggestions(assignments, buckets, byAssignment);
     return {
       byAssignment,
       bySale: this.finalizeSaleSuggestions(
@@ -741,6 +781,46 @@ export class CustomerKpiReportsService {
         totalBySaleTier,
       ),
     };
+  }
+
+  /**
+   * TC6 "gợi ý đơn hàng" cấp sale: nếu MẸ/1 thành viên trong nhóm có đơn chưa
+   * chốt thì mọi CON cùng nhóm đều được tính vào "x/y khách có đơn". Số lượng
+   * đơn/giá trị (`count`/`totalValue`) vẫn đếm thực tế, KHÔNG nhân bản.
+   */
+  private propagateGroupOrderSuggestions(
+    assignments: AssignmentRow[],
+    buckets: Map<number, SaleSuggestionBucket>,
+    byAssignment: Map<number, CustomerOrderSuggestion>,
+  ): void {
+    const membersBySaleGroup = new Map<string, AssignmentRow[]>();
+    for (const row of assignments) {
+      const key = `${row.saleId}|${row.groupId}`;
+      const list = membersBySaleGroup.get(key) ?? [];
+      list.push(row);
+      membersBySaleGroup.set(key, list);
+    }
+    for (const members of membersBySaleGroup.values()) {
+      const distinctCustomers = new Set(
+        members.map((member) => member.customerId),
+      );
+      const hasChild = members.some((member) => member.parentCustomerId != null);
+      if (distinctCustomers.size <= 1 && !hasChild) continue;
+      const groupHasOrders = members.some(
+        (member) => (byAssignment.get(member.assignmentId)?.count ?? 0) > 0,
+      );
+      if (!groupHasOrders) continue;
+      for (const member of members) {
+        const bucket = buckets.get(member.saleId);
+        if (!bucket) continue;
+        bucket.assignmentIds.add(member.assignmentId);
+        const tier = normalizedTier(member.customerTier);
+        if (tier === 'KEY') bucket.key.assignmentIds.add(member.assignmentId);
+        else if (tier === 'NON') {
+          bucket.non.assignmentIds.add(member.assignmentId);
+        }
+      }
+    }
   }
 
   /**
@@ -1300,6 +1380,57 @@ export class CustomerKpiReportsService {
     return result;
   }
 
+  /**
+   * Gộp doanh số kỳ hiện tại/kỳ trước theo nhóm MẸ/CON (cùng sale) để gợi ý
+   * "KEY rơi doanh số / chưa có doanh số" không báo oan cho CON khi MẸ đã mua.
+   *
+   * Dedupe theo customerId (một khách nhiều phòng ban) và chỉ cộng các giá trị
+   * không null; nhóm toàn null vẫn null = không có dữ liệu.
+   */
+  private groupSuggestionRevenue(
+    assignments: AssignmentRow[],
+    revenue: Map<number, SuggestionRevenueContext> | undefined,
+  ): Map<number, SuggestionRevenueContext> | undefined {
+    if (!revenue) return undefined;
+    const groups = new Map<
+      string,
+      {
+        customerIds: Set<number>;
+        current: number | null;
+        previous: number | null;
+      }
+    >();
+    for (const row of assignments) {
+      const key = `${row.saleId}|${row.groupId}`;
+      const group = groups.get(key) ?? {
+        customerIds: new Set<number>(),
+        current: null,
+        previous: null,
+      };
+      if (!group.customerIds.has(row.customerId)) {
+        group.customerIds.add(row.customerId);
+        const context = revenue.get(row.assignmentId);
+        if (context?.current != null) {
+          group.current = (group.current ?? 0) + context.current;
+        }
+        if (context?.previous != null) {
+          group.previous = (group.previous ?? 0) + context.previous;
+        }
+      }
+      groups.set(key, group);
+    }
+    const result = new Map<number, SuggestionRevenueContext>();
+    for (const row of assignments) {
+      const group = groups.get(`${row.saleId}|${row.groupId}`);
+      if (!group) continue;
+      result.set(row.assignmentId, {
+        current: group.current,
+        previous: group.previous,
+      });
+    }
+    return result;
+  }
+
   /** Ngày dữ liệu hoạt động mới nhất trong tập đã nạp — độ tươi dữ liệu. */
   private lastActivityDate(
     activity: Map<number, ActivityDayRow[]>,
@@ -1501,6 +1632,128 @@ export class CustomerKpiReportsService {
       customersBySale.set(row.saleId, list);
     }
 
+    // Doanh thu RIÊNG của assignment. `undefined` = chưa đồng bộ được NKM /
+    // sale chưa map mã — khác với "khách không mua gì" ({quantity: 0}).
+    const revenueForRow = (
+      row: AssignmentRow,
+    ): { tier: string | null; quantity: number; lineTotal: number } | undefined => {
+      if (!revenue || revenue.salesWithoutMapping.has(row.saleId)) {
+        return undefined;
+      }
+      const found = revenue.byAssignment.get(row.assignmentId);
+      return {
+        tier: row.customerTier,
+        quantity: found?.quantity ?? 0,
+        lineTotal: found?.lineTotal ?? 0,
+      };
+    };
+
+    // ── Bằng chứng nhóm MẸ/CON, tính MỘT lần cho mỗi (sale, nhóm) ──
+    // Chỉ dựng khi nhóm có >1 khách hoặc có dòng CON. Khách đứng riêng (kể cả
+    // khách một mã bị gán nhiều phòng trong cùng sale) giữ nguyên cách chấm
+    // từng assignment như trước — không đổi hành vi ngoài phạm vi khách gộp.
+    const groupMembersBySale = new Map<string, AssignmentRow[]>();
+    const groupCustomerIdsBySale = new Map<string, Set<number>>();
+    for (const [saleId, saleCustomers] of customersBySale) {
+      for (const row of saleCustomers) {
+        const key = `${saleId}|${row.groupId}`;
+        const list = groupMembersBySale.get(key) ?? [];
+        list.push(row);
+        groupMembersBySale.set(key, list);
+        const ids = groupCustomerIdsBySale.get(key) ?? new Set<number>();
+        ids.add(row.customerId);
+        groupCustomerIdsBySale.set(key, ids);
+      }
+    }
+    const groupEvidenceBySale = new Map<string, GroupEvidence>();
+    for (const [key, members] of groupMembersBySale) {
+      const customerCount = groupCustomerIdsBySale.get(key)?.size ?? 0;
+      const hasChild = members.some((row) => row.parentCustomerId != null);
+      if (customerCount <= 1 && !hasChild) continue;
+      const inputs: GroupMemberEvidenceInput[] = members.map((row) => ({
+        customerId: row.customerId,
+        tier: row.customerTier,
+        days: activity.get(row.assignmentId) ?? [],
+        revenue: revenueForRow(row),
+        openOrders:
+          orderSuggestions?.byAssignment.get(row.assignmentId) ?? null,
+        debtBalance: debtBalances.get(row.customerId) ?? null,
+        appointmentReason: appointmentReasons.get(row.assignmentId),
+      }));
+      groupEvidenceBySale.set(key, buildGroupEvidence(inputs));
+    }
+
+    const evidenceFor = (row: AssignmentRow) =>
+      groupEvidenceBySale.get(`${row.saleId}|${row.groupId}`);
+    const evidenceDays = (row: AssignmentRow): ActivityDayRow[] =>
+      evidenceFor(row)?.days ?? activity.get(row.assignmentId) ?? [];
+    const evidenceDebt = (row: AssignmentRow): number | null => {
+      const evidence = evidenceFor(row);
+      return evidence
+        ? evidence.debtBalance
+        : (debtBalances.get(row.customerId) ?? null);
+    };
+    const evidenceOpenOrders = (row: AssignmentRow) => {
+      const evidence = evidenceFor(row);
+      return evidence
+        ? (evidence.openOrders ?? null)
+        : (orderSuggestions?.byAssignment.get(row.assignmentId) ?? null);
+    };
+    const evidenceAppointmentReason = (
+      row: AssignmentRow,
+    ): string | undefined => {
+      const evidence = evidenceFor(row);
+      // Có evidence + reason undefined = ít nhất một thành viên có dữ liệu
+      // lịch hẹn → cả nhóm chấm được, KHÔNG fallback lý do riêng của CON.
+      return evidence
+        ? evidence.appointmentReason
+        : appointmentReasons.get(row.assignmentId);
+    };
+    const revenueWithGroupFor = (row: AssignmentRow) => {
+      const own = revenueData(revenue, revenueForRow(row));
+      if (!own) return undefined;
+      const evidence = evidenceFor(row);
+      const tier = (own.tier ?? '').toUpperCase();
+      const reached =
+        tier === 'KEY'
+          ? evidence?.revenue.keyReached
+          : tier === 'NON'
+            ? evidence?.revenue.nonReached
+            : undefined;
+      return {
+        ...own,
+        reached,
+        groupQuantity: evidence?.revenue.quantity ?? own.quantity,
+        groupLineTotal: evidence?.revenue.lineTotal ?? own.lineTotal,
+      };
+    };
+    const groupRevenueFor = (row: AssignmentRow) => {
+      const own = revenueForRow(row);
+      const evidence = evidenceFor(row);
+      if (!own && !evidence) return null;
+      return {
+        quantity: evidence?.revenue.quantity ?? own?.quantity ?? 0,
+        lineTotal: evidence?.revenue.lineTotal ?? own?.lineTotal ?? 0,
+        hasRevenue:
+          evidence?.revenue.hasRevenue ?? (own?.quantity ?? 0) > 0,
+      };
+    };
+    const revenueStatusFor = (
+      row: AssignmentRow,
+    ): 'has_revenue' | 'no_revenue' | 'no_data' => {
+      const own = revenueForRow(row);
+      if (!own) return 'no_data';
+      const evidence = evidenceFor(row);
+      const tier = (own.tier ?? '').toUpperCase();
+      const reached =
+        tier === 'KEY'
+          ? evidence?.revenue.keyReached
+          : tier === 'NON'
+            ? evidence?.revenue.nonReached
+            : undefined;
+      return (reached ?? own.quantity > 0) ? 'has_revenue' : 'no_revenue';
+    };
+
     const scored = new Map<
       number,
       {
@@ -1575,26 +1828,43 @@ export class CustomerKpiReportsService {
           nkmQuantity: number;
         };
         revenueStatus: 'has_revenue' | 'no_revenue' | 'no_data';
+        /** Doanh số cả nhóm (hiển thị "DS nhóm"); `totals.revenue` vẫn riêng khách. */
+        groupRevenue: {
+          quantity: number;
+          lineTotal: number;
+          hasRevenue: boolean;
+        } | null;
       }[] = [];
-      const revenueCustomers = revenue?.bySale.get(saleId) ?? [];
-      const revenueFor = (row: AssignmentRow) => {
-        // Sale chưa tra được mã nhân viên NKM → KHÔNG chấm doanh số cho khách
-        // (no_data), khác với "khách không mua gì" (fail) — cùng luật với
-        // salesWithoutMapping cấp sale bên dưới.
-        if (revenue && revenue.salesWithoutMapping.has(row.saleId)) {
-          return undefined;
-        }
-        const found = revenue?.byAssignment.get(row.assignmentId);
-        return {
-          tier: row.customerTier,
-          quantity: found?.quantity ?? 0,
-          lineTotal: found?.lineTotal ?? 0,
-        };
-      };
+      // Doanh thu cấp sale: giữ số tiền/số phiếu của từng dòng, thêm cờ
+      // `reached` theo nhóm cùng tier để "Khách KEY x/y" tính cả CON nhờ MẸ.
+      const groupIdByCustomerId = new Map<number, number>();
+      for (const row of saleCustomers) {
+        groupIdByCustomerId.set(row.customerId, row.groupId);
+      }
+      const revenueCustomers: RevenueCustomerInput[] = (
+        revenue?.bySale.get(saleId) ?? []
+      ).map((row) => {
+        const groupId = groupIdByCustomerId.get(row.customerId);
+        const evidence =
+          groupId != null
+            ? groupEvidenceBySale.get(`${saleId}|${groupId}`)
+            : undefined;
+        const tier = (row.tier ?? '').toUpperCase();
+        const reached =
+          tier === 'KEY'
+            ? evidence?.revenue.keyReached
+            : tier === 'NON'
+              ? evidence?.revenue.nonReached
+              : undefined;
+        return { ...row, reached };
+      });
 
       for (const definition of definitions) {
         const perCustomer = saleCustomers.map((row) => {
-          const days = activity.get(row.assignmentId) ?? [];
+          // Dùng bằng chứng NHÓM cho mọi tiêu chí (support/Zalo/gợi ý...) để
+          // mọi thành viên cùng nhận một kết quả. Doanh số vẫn tách tier.
+          const days = evidenceDays(row);
+          const debtBalance = evidenceDebt(row);
           const customerTarget = this.scoring.resolveCustomerTarget(
             definition,
             targets.get(`${saleId}|${row.customerId}|${definition.key}`) ??
@@ -1605,16 +1875,16 @@ export class CustomerKpiReportsService {
             row,
             days,
             targetValue: customerTarget,
-            debtBalance: debtBalances.get(row.customerId) ?? null,
+            debtBalance,
             criterion: this.scoring.scoreCustomer(
               definition,
               days,
               customerTarget,
               fromDate,
-              debtBalances.get(row.customerId) ?? null,
-              revenueData(revenue, revenueFor(row)),
-              orderSuggestions?.byAssignment.get(row.assignmentId) ?? null,
-              appointmentReasons.get(row.assignmentId),
+              debtBalance,
+              revenueWithGroupFor(row),
+              evidenceOpenOrders(row),
+              evidenceAppointmentReason(row),
               row.customerTier,
             ),
           };
@@ -1744,11 +2014,11 @@ export class CustomerKpiReportsService {
       }
 
       for (const row of saleCustomers) {
+        // Số liệu HIỂN THỊ của chính khách (tin nhắn/đơn/doanh số riêng) —
+        // không dùng group days ở đây để tránh nhân đôi số liệu nhóm lên từng
+        // dòng CON. Tiêu chí bên dưới mới dùng evidence nhóm.
         const days = activity.get(row.assignmentId) ?? [];
-        // Doanh số NKM của khách trong kỳ — cùng nguồn với tiêu chí doanh số.
-        // customer_activity_daily.revenue là rollup của hệ thống cũ (luôn 0) nên
-        // totals.revenue phải lấy từ customer_revenue_daily đã nạp sẵn ở trên.
-        const revenueRow = revenueFor(row);
+        const revenueRow = revenueForRow(row);
         const criteria = definitions.map((definition) => {
           const customerTarget = this.scoring.resolveCustomerTarget(
             definition,
@@ -1758,13 +2028,13 @@ export class CustomerKpiReportsService {
           );
           const criterion = this.scoring.scoreCustomer(
             definition,
-            days,
+            evidenceDays(row),
             customerTarget,
             fromDate,
-            debtBalances.get(row.customerId) ?? null,
-            revenueData(revenue, revenueRow),
-            orderSuggestions?.byAssignment.get(row.assignmentId) ?? null,
-            appointmentReasons.get(row.assignmentId),
+            evidenceDebt(row),
+            revenueWithGroupFor(row),
+            evidenceOpenOrders(row),
+            evidenceAppointmentReason(row),
             row.customerTier,
           );
           // Cùng luật ghi đè với vòng chấm cấp sale: ghi đè cả sale ép mọi ô
@@ -1828,12 +2098,12 @@ export class CustomerKpiReportsService {
             nkmQuantity: revenueRow?.quantity ?? 0,
           },
           // FE cột "Doanh số" đọc trạng thái này: có phát sinh = ≥1 phiếu trong
-          // kỳ; no_data = sale chưa tra được mã NKM (KHÔNG kết luận trượt).
-          revenueStatus: !revenueRow
-            ? 'no_data'
-            : revenueRow.quantity > 0
-              ? 'has_revenue'
-              : 'no_revenue',
+          // kỳ HOẶC MẸ cùng nhóm/tier phát sinh; no_data = sale chưa tra được
+          // mã NKM (KHÔNG kết luận trượt).
+          revenueStatus: revenueStatusFor(row),
+          // Doanh số cả nhóm để FE hiện tooltip "DS nhóm"; totals.revenue vẫn
+          // là doanh số riêng của mã khách này.
+          groupRevenue: groupRevenueFor(row),
         });
       }
 
@@ -1934,7 +2204,7 @@ export class CustomerKpiReportsService {
     // Doanh số cho NHÓM GỢI Ý DOANH SỐ: kỳ hiện tại (khoảng xem) + kỳ trước
     // cùng độ dài. Chỉ nạp khi khoảng xem chạm tới hôm nay (gợi ý luôn neo
     // theo ngày hiện tại) và có tiêu chí gợi ý đang bật.
-    const suggestionRevenue =
+    const suggestionRevenueRaw =
       to >= this.today() &&
       definitions.some(
         (definition) => definition.metric === SUGGESTION_ACK_METRIC,
@@ -1948,6 +2218,12 @@ export class CustomerKpiReportsService {
             this.shiftDate(from, -1),
           )
         : undefined;
+    // Gợi ý doanh số KEY đọc doanh số NHÓM (MẸ + CON) — tránh báo "chưa có
+    // doanh số" cho CON khi MẸ đã mua.
+    const suggestionRevenue = this.groupSuggestionRevenue(
+      assignments,
+      suggestionRevenueRaw,
+    );
 
     // SLA 2h chỉ nạp khi tiêu chí đang bật — tránh query thừa.
     const slaViolations = definitions.some(
@@ -2486,17 +2762,74 @@ export class CustomerKpiReportsService {
         hasRevenue: customer.revenueStatus === 'has_revenue',
       }));
 
+    const careStageRank: Record<string, number> = {
+      purchased: 3,
+      quoted: 2,
+      communicated: 1,
+      unreached: 0,
+    };
+    /**
+     * careStage gộp theo nhóm MẸ/CON: lấy stage CAO NHẤT trong nhóm (MẸ đã bán
+     * → CON cũng "Đã bán"; MẸ đã giao tiếp → CON cũng vậy). Cần enrich cả
+     * thành viên ngoài trang hiện tại để kết luận đúng.
+     */
+    const enrichWithGroupCareStage = async (
+      display: typeof entry.customers,
+      seed?: Map<number, CustomerInteractionInfo>,
+    ): Promise<Map<number, CustomerInteractionInfo>> => {
+      const groupIds = new Set(display.map((customer) => customer.row.groupId));
+      const groupMembers = entry.customers.filter((customer) =>
+        groupIds.has(customer.row.groupId),
+      );
+      const result = new Map(seed ?? []);
+      const missing = groupMembers.filter(
+        (customer) => !result.has(customer.row.assignmentId),
+      );
+      if (missing.length > 0) {
+        const enriched = await this.interactionService.enrich(
+          query.saleId,
+          window.from,
+          window.to,
+          interactionInputs(missing),
+        );
+        for (const [assignmentId, info] of enriched) {
+          result.set(assignmentId, info);
+        }
+      }
+      const groupStage = new Map<
+        number,
+        CustomerInteractionInfo['careStage']
+      >();
+      for (const member of groupMembers) {
+        const stage =
+          result.get(member.row.assignmentId)?.careStage ?? 'unreached';
+        const current = groupStage.get(member.row.groupId);
+        if (current == null || careStageRank[stage] > careStageRank[current]) {
+          groupStage.set(member.row.groupId, stage);
+        }
+      }
+      for (const customer of display) {
+        const stage = groupStage.get(customer.row.groupId);
+        const info = result.get(customer.row.assignmentId);
+        if (stage && info) {
+          result.set(customer.row.assignmentId, { ...info, careStage: stage });
+        }
+      }
+      return result;
+    };
+
     // careStage chỉ có sau khi gộp tương tác, nên phải enrich TOÀN BỘ khách
     // đã qua bộ lọc danh tính rồi mới cắt trang. Không lọc careStage thì giữ
     // nguyên đường cũ: cắt trang trước, enrich đúng trang đó.
     let interactions: Map<number, CustomerInteractionInfo> | undefined;
     if (filters.careStage) {
-      interactions = await this.interactionService.enrich(
+      const seed = await this.interactionService.enrich(
         query.saleId,
         window.from,
         window.to,
         interactionInputs(filtered),
       );
+      interactions = await enrichWithGroupCareStage(filtered, seed);
       const stage = filters.careStage;
       filtered = filtered.filter(
         (customer) =>
@@ -2516,11 +2849,9 @@ export class CustomerKpiReportsService {
       (page - 1) * pageSize,
       page * pageSize,
     );
-    interactions ??= await this.interactionService.enrich(
-      query.saleId,
-      window.from,
-      window.to,
-      interactionInputs(pagedCustomers),
+    interactions = await enrichWithGroupCareStage(
+      pagedCustomers,
+      interactions,
     );
     const paged = pagedCustomers.map((customer) => {
       const interaction = interactions.get(customer.row.assignmentId);
@@ -2536,12 +2867,22 @@ export class CustomerKpiReportsService {
         customerTier: customer.row.customerTier,
         customerRole: customer.row.customerRole,
         zaloLinked: customer.zaloLinked,
+        // Nhóm khách gộp — FE dùng badge MẸ/CON + sắp xếp liền nhau.
+        group: {
+          id: customer.row.groupId,
+          parentCustomerId: customer.row.parentCustomerId,
+          parentCustomerCode: customer.row.parentCustomerCode,
+          role: customer.row.groupRole,
+          size: customer.row.groupSize,
+        },
         // Kết luận theo loại khách: KEY = đạt cả 4 tiêu chí, NON = đếm x/4
         tierSummary: customer.tierSummary,
         totals: customer.totals,
         criteria: customer.criteria,
-        // 'has_revenue' khi khách có phát sinh NKM trong kỳ (≥1 phiếu)
+        // 'has_revenue' khi khách (hoặc MẸ cùng tier trong nhóm) có phát sinh.
         revenueStatus: customer.revenueStatus,
+        // Doanh số cả nhóm (tooltip "DS nhóm"); totals.revenue là của riêng khách.
+        groupRevenue: customer.groupRevenue,
         // Dữ liệu tương tác gộp sẵn cho FE (Sprint 3).
         careStage: interaction?.careStage ?? 'unreached',
         zalo: interaction?.zalo ?? {
@@ -3216,6 +3557,9 @@ export class CustomerKpiReportsService {
     const detailSheet = wb.addWorksheet('CHI TIET');
     detailSheet.addRow([
       'Sale',
+      'Nhóm',
+      'Vai trò nhóm',
+      'Mã MẸ',
       'Mã KH',
       'Tên khách hàng',
       'Loại',
@@ -3225,6 +3569,7 @@ export class CustomerKpiReportsService {
       'Số đơn',
       'Số phiếu NKM',
       'Doanh số NKM',
+      'DS nhóm',
       'Kết luận loại khách',
       ...criteriaNames,
     ]);
@@ -3232,6 +3577,13 @@ export class CustomerKpiReportsService {
       for (const customer of data.customers) {
         detailSheet.addRow([
           data.saleName,
+          customer.row.groupId ? `Nhóm ${customer.row.groupId}` : '',
+          customer.row.groupRole === 'ME'
+            ? 'MẸ'
+            : customer.row.groupRole === 'CON'
+              ? 'CON'
+              : '',
+          customer.row.parentCustomerCode ?? '',
           customer.row.customerCode,
           customer.row.customerName,
           customer.row.customerTier ?? '',
@@ -3241,6 +3593,7 @@ export class CustomerKpiReportsService {
           customer.totals.orders,
           this.occurrenceCell(customer.criteria),
           this.occurrenceRevenueCell(customer.criteria),
+          customer.groupRevenue?.lineTotal ?? '',
           this.tierCell(customer.tierSummary),
           ...customer.criteria.map((c) => this.customerCell(c)),
         ]);
@@ -3398,6 +3751,8 @@ export class CustomerKpiReportsService {
         customerTier: detail.customerTier,
         sale: detail.sale,
       },
+      // Nhóm khách gộp (MẸ/CON + danh sách thành viên) cho modal chi tiết.
+      group: detail.group ?? null,
       zaloAccounts: detail.zaloAccounts,
       ...daily,
     };

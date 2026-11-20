@@ -13,6 +13,11 @@ export interface CoverageAssignment {
   customerCode: string;
   /** KEY | NON (so sánh không phân biệt hoa thường). */
   tier: string | null;
+  /**
+   * id nhóm khách gộp (MẸ id) — CON cùng nhóm được cover khi có thành viên
+   * CÙNG TIER phát sinh. Bỏ trống (test cũ/dữ liệu cũ) → mỗi mã là một nhóm.
+   */
+  groupId?: number | string | null;
 }
 
 export interface CoverageRevenueRow {
@@ -94,20 +99,78 @@ function buildRevenueIndex(
   return index;
 }
 
-/** Khách KEY của từng sale — distinct theo customer_code. */
+/**
+ * Khoá nhóm để gộp độ phủ. Có groupId (khách gộp) thì dùng groupId; dữ liệu
+ * cũ/test không có groupId thì mỗi mã là một nhóm riêng — giữ nguyên hành vi.
+ */
+const coverageGroupKey = (row: CoverageAssignment): string =>
+  row.groupId != null
+    ? `g:${String(row.groupId)}`
+    : `c:${normalizeCode(row.customerCode)}`;
+
+/** Gom assignment theo sale để không quét lại toàn bộ cho từng mapping. */
+function indexAssignmentsBySale(
+  assignments: CoverageAssignment[],
+): Map<number, CoverageAssignment[]> {
+  const bySale = new Map<number, CoverageAssignment[]>();
+  for (const row of assignments) {
+    const list = bySale.get(row.saleId) ?? [];
+    list.push(row);
+    bySale.set(row.saleId, list);
+  }
+  return bySale;
+}
+
+/**
+ * Khách KEY của từng sale — distinct theo customer_code, kèm các nhóm mà mã
+ * đó thuộc. Một mã có thể thuộc nhiều nhóm nếu nhiều SAP cùng code.
+ */
 function buildKeyCustomers(
   assignments: CoverageAssignment[],
-): Map<number, Set<string>> {
-  const bySale = new Map<number, Set<string>>();
+): Map<number, Map<string, Set<string>>> {
+  const bySale = new Map<number, Map<string, Set<string>>>();
   for (const row of assignments) {
     if (String(row.tier ?? '').toUpperCase() !== 'KEY') continue;
     const code = normalizeCode(row.customerCode);
     if (!code) continue;
-    const set = bySale.get(row.saleId) ?? new Set<string>();
-    set.add(code);
-    bySale.set(row.saleId, set);
+    const byCode = bySale.get(row.saleId) ?? new Map<string, Set<string>>();
+    const groups = byCode.get(code) ?? new Set<string>();
+    groups.add(coverageGroupKey(row));
+    byCode.set(code, groups);
+    bySale.set(row.saleId, byCode);
   }
   return bySale;
+}
+
+/**
+ * Mã KEY được cover khi có ít nhất một thành viên CÙNG TIER trong nhóm phát
+ * sinh (quantity > 0). Mỗi mã CON vẫn là một khách riêng — nếu MẸ KEY đã bán
+ * thì toàn bộ CON KEY cùng nhóm đều được cover.
+ */
+function coveredKeyCodes(
+  saleAssignments: CoverageAssignment[],
+  keyGroups: Map<string, Set<string>>,
+  revenue: Map<string, { quantity: number; lineTotal: number }>,
+): Set<string> {
+  const reachedGroups = new Set<string>();
+  for (const row of saleAssignments) {
+    const tier = String(row.tier ?? '').toUpperCase();
+    if (tier !== 'KEY' && tier !== 'NON') continue;
+    if ((revenue.get(normalizeCode(row.customerCode))?.quantity ?? 0) <= 0) {
+      continue;
+    }
+    reachedGroups.add(`${tier}|${coverageGroupKey(row)}`);
+  }
+  const covered = new Set<string>();
+  for (const [code, groups] of keyGroups) {
+    for (const group of groups) {
+      if (reachedGroups.has(`KEY|${group}`)) {
+        covered.add(code);
+        break;
+      }
+    }
+  }
+  return covered;
 }
 
 /** Doanh thu theo khách của một sale trong kỳ (cộng các slpCode của sale). */
@@ -149,16 +212,22 @@ export function computeMonthlyCoverage(
   targetRate = 60,
 ): Map<number, MonthlyCoverageResult> {
   const keysBySale = buildKeyCustomers(assignments);
+  const assignmentsBySale = indexAssignmentsBySale(assignments);
   const revenueIndex = buildRevenueIndex(revenueRows);
   const result = new Map<number, MonthlyCoverageResult>();
 
   for (const mapping of mappings) {
-    const keyCodes = [...(keysBySale.get(mapping.saleId) ?? new Set())].sort();
+    const keyGroups =
+      keysBySale.get(mapping.saleId) ?? new Map<string, Set<string>>();
+    const keyCodes = [...keyGroups.keys()].sort();
     const hasMapping = mapping.slpCodes.length > 0;
     const revenue = revenueByCustomerOfSale(revenueIndex, mapping.slpCodes);
-    const coveredCodes = keyCodes.filter(
-      (code) => (revenue.get(code)?.quantity ?? 0) > 0,
+    const coveredSet = coveredKeyCodes(
+      assignmentsBySale.get(mapping.saleId) ?? [],
+      keyGroups,
+      revenue,
     );
+    const coveredCodes = keyCodes.filter((code) => coveredSet.has(code));
     const nKey = keyCodes.length;
     const coveredKey = coveredCodes.length;
     const coverageRate = nKey > 0 ? round2((coveredKey / nKey) * 100) : 0;
@@ -203,6 +272,7 @@ export function computeQuarterSettlement(
   targets: QuarterTargetInput[],
 ): Map<number, QuarterSettlementResult> {
   const keysBySale = buildKeyCustomers(assignments);
+  const assignmentsBySale = indexAssignmentsBySale(assignments);
   const revenueIndex = buildRevenueIndex(revenueRows);
   const targetBySale = new Map(targets.map((row) => [row.saleId, row]));
   const result = new Map<number, QuarterSettlementResult>();
@@ -214,11 +284,16 @@ export function computeQuarterSettlement(
       actualValue: 0,
       hasTarget: false,
     };
-    const keyCodes = [...(keysBySale.get(mapping.saleId) ?? new Set())].sort();
+    const keyGroups =
+      keysBySale.get(mapping.saleId) ?? new Map<string, Set<string>>();
+    const keyCodes = [...keyGroups.keys()].sort();
     const revenue = revenueByCustomerOfSale(revenueIndex, mapping.slpCodes);
-    const coveredCodes = keyCodes.filter(
-      (code) => (revenue.get(code)?.quantity ?? 0) > 0,
+    const coveredSet = coveredKeyCodes(
+      assignmentsBySale.get(mapping.saleId) ?? [],
+      keyGroups,
+      revenue,
     );
+    const coveredCodes = keyCodes.filter((code) => coveredSet.has(code));
     const nKey = keyCodes.length;
     const coveredKey = coveredCodes.length;
     const keyCoverageRate = nKey > 0 ? round2((coveredKey / nKey) * 100) : 0;
