@@ -2868,13 +2868,19 @@ export class CustomerKpiReportsService {
         customerRole: customer.row.customerRole,
         zaloLinked: customer.zaloLinked,
         // Nhóm khách gộp — FE dùng badge MẸ/CON + sắp xếp liền nhau.
-        group: {
-          id: customer.row.groupId,
-          parentCustomerId: customer.row.parentCustomerId,
-          parentCustomerCode: customer.row.parentCustomerCode,
-          role: customer.row.groupRole,
-          size: customer.row.groupSize,
-        },
+        // Khách đứng riêng (không parent, nhóm 1 khách) trả null để FE không
+        // hiện badge MẸ/đường phân cách nhóm.
+        group:
+          customer.row.parentCustomerId != null ||
+          (customer.row.groupSize ?? 1) > 1
+            ? {
+                id: customer.row.groupId,
+                parentCustomerId: customer.row.parentCustomerId,
+                parentCustomerCode: customer.row.parentCustomerCode,
+                role: customer.row.groupRole,
+                size: customer.row.groupSize,
+              }
+            : null,
         // Kết luận theo loại khách: KEY = đạt cả 4 tiêu chí, NON = đếm x/4
         tierSummary: customer.tierSummary,
         totals: customer.totals,

@@ -214,13 +214,28 @@ async function main() {
       conChange?.new_data?.tier_inherited === true,
     conChange?.new_data,
   );
+  check(
+    'Preview top-level tier_inherited (FE đọc trực tiếp)',
+    conChange?.tier_inherited === true,
+    conChange,
+  );
   const parentOk = changes.some(
     (row) =>
       row.customer_code === CODE_CON &&
       (row.new_data?.customer?.parent_customer_code === CODE_ME ||
-        row.new_data?.parent_customer_code === CODE_ME),
+        row.new_data?.parent_customer_code === CODE_ME ||
+        row.parent_customer_code === CODE_ME),
   );
   check('Preview có parent MẸ/CON', parentOk, changes);
+  check(
+    'Preview top-level parent_customer_code (FE đọc trực tiếp)',
+    changes.some(
+      (row) =>
+        row.customer_code === CODE_CON &&
+        row.parent_customer_code === CODE_ME,
+    ),
+    changes,
+  );
 
   // Apply
   const apply = await call(
@@ -248,6 +263,24 @@ async function main() {
     conRow?.group,
   );
   check('Nhóm size = 2', conRow?.group?.size === 2, conRow?.group);
+
+  // Visit coverage cũng phải trả group (FE dùng row.group để hiện badge).
+  const visit = await call(
+    token,
+    'GET',
+    `/customer-kpi-reports/visit-coverage?saleId=${sale.id}&search=${encodeURIComponent(CODE_CON)}&page=1&pageSize=50`,
+  );
+  const visitCon = (visit.json?.customers || []).find(
+    (row) => row.customerCode === CODE_CON,
+  );
+  check('Visit coverage thấy CON', !!visitCon, visit.json);
+  check(
+    'Visit coverage trả group CON + mã MẸ',
+    visitCon?.group?.role === 'CON' &&
+      visitCon?.group?.parentCustomerCode === CODE_ME &&
+      visitCon?.group?.size === 2,
+    visitCon?.group,
+  );
 
   // KPI group-aware: chèn activity cho MẸ, CON phải nhận tiêu chí liên lạc
   // (TC4) dù totals.outbound của CON = 0.

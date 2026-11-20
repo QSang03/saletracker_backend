@@ -472,6 +472,19 @@ export class CustomersService {
       const linkCount = countMap.get(a.id) ?? 0;
       const parentCustomerId = a.customer.parent_customer_id ?? null;
       const groupId = parentCustomerId ?? a.customer.id;
+      const groupSize = groupSizeMap.get(groupId) ?? 1;
+      // Khách đứng riêng (không có MẸ, nhóm 1 khách) → không trả group để FE
+      // không hiện badge MẸ/CON hoặc đường phân cách nhóm.
+      const groupInfo =
+        parentCustomerId != null || groupSize > 1
+          ? {
+              id: groupId,
+              parentCustomerId,
+              parentCustomerCode: a.customer.parent?.customer_code ?? null,
+              role: groupRoleOf(parentCustomerId, a.customer.customer_role),
+              size: groupSize,
+            }
+          : null;
       return {
         assignmentId: a.id,
         departmentSlug: a.department_slug,
@@ -482,13 +495,7 @@ export class CustomersService {
         zaloLinked: linkCount > 0,
         zaloAccountCount: linkCount,
         // Nhóm khách gộp — FE hiện badge MẸ/CON + sắp xếp liền nhau.
-        group: {
-          id: groupId,
-          parentCustomerId,
-          parentCustomerCode: a.customer.parent?.customer_code ?? null,
-          role: groupRoleOf(parentCustomerId, a.customer.customer_role),
-          size: groupSizeMap.get(groupId) ?? 1,
-        },
+        group: groupInfo,
         customer: {
           id: a.customer.id,
           customerCode: a.customer.customer_code,
@@ -548,20 +555,28 @@ export class CustomersService {
     const activeGroupRows = groupRows.filter(
       (row) => row.status !== CustomerStatus.DELETED,
     );
-    const group = {
-      id: groupId,
-      parentCustomerId,
-      parentCustomerCode: assignment.customer.parent?.customer_code ?? null,
-      role: groupRoleOf(parentCustomerId, assignment.customer.customer_role),
-      size: activeGroupRows.length,
-      members: activeGroupRows.map((row) => ({
-        customerId: row.id,
-        customerCode: row.customer_code,
-        sapCode: row.sap_code,
-        customerRole: row.customer_role,
-        role: groupRoleOf(row.parent_customer_id, row.customer_role),
-      })),
-    };
+    const groupSize = activeGroupRows.length;
+    const group =
+      parentCustomerId != null || groupSize > 1
+        ? {
+            id: groupId,
+            parentCustomerId,
+            parentCustomerCode:
+              assignment.customer.parent?.customer_code ?? null,
+            role: groupRoleOf(
+              parentCustomerId,
+              assignment.customer.customer_role,
+            ),
+            size: groupSize,
+            members: activeGroupRows.map((row) => ({
+              customerId: row.id,
+              customerCode: row.customer_code,
+              sapCode: row.sap_code,
+              customerRole: row.customer_role,
+              role: groupRoleOf(row.parent_customer_id, row.customer_role),
+            })),
+          }
+        : null;
 
     return {
       assignmentId: assignment.id,

@@ -361,6 +361,14 @@ export class CustomerAssignmentsService {
         new_sale_id: newSaleId,
         new_sale_name: newSale?.fullName ?? null,
         decided_by_name: decider?.fullName ?? null,
+        // Nhóm khách gộp — expose ở top-level để FE không phải đọc sâu trong
+        // new_data.customer (khách mới tạo) hoặc new_data (customer-level).
+        tier_inherited: ch.new_data?.tier_inherited === true,
+        group_key: ch.new_data?.group_key ?? null,
+        parent_customer_code:
+          ch.new_data?.parent_customer_code ??
+          ch.new_data?.customer?.parent_customer_code ??
+          null,
       };
     });
   }

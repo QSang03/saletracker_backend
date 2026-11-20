@@ -708,7 +708,33 @@ export class KpiVisitCoverageService {
 
     const page = Math.max(1, Number(query.page) || 1);
     const pageSize = Math.min(200, Math.max(1, Number(query.pageSize) || 50));
-    const pageRows = filtered.slice((page - 1) * pageSize, page * pageSize);
+    // Số khách khác nhau trong nhóm ở phạm vi sale này — trả kèm `group` cho
+    // FE hiện badge MẸ/CON. Khách đứng riêng (không parent, nhóm 1 khách)
+    // trả group = null để không hiện badge.
+    const groupCustomerIds = new Map<number, Set<number>>();
+    for (const row of enriched) {
+      const set = groupCustomerIds.get(row.groupId) ?? new Set<number>();
+      set.add(row.customerId);
+      groupCustomerIds.set(row.groupId, set);
+    }
+    const pageRows = filtered
+      .slice((page - 1) * pageSize, page * pageSize)
+      .map((row) => {
+        const groupSize = groupCustomerIds.get(row.groupId)?.size ?? 1;
+        return {
+          ...row,
+          group:
+            row.parentCustomerId != null || groupSize > 1
+              ? {
+                  id: row.groupId,
+                  parentCustomerId: row.parentCustomerId,
+                  parentCustomerCode: row.parentCustomerCode,
+                  role: row.groupRole,
+                  size: groupSize,
+                }
+              : null,
+        };
+      });
 
     return {
       saleId,
