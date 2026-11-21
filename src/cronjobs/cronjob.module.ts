@@ -1,6 +1,5 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { ScheduleModule } from '@nestjs/schedule';
 import { HttpModule } from '@nestjs/axios';
 import { CronjobService } from '../cronjobs/cronjob.service';
 import { ProductV2CronjobService } from './product-v2.cronjob.service';
@@ -39,7 +38,6 @@ import { SaleQuoteModule } from '../sale-quotes/sale-quote.module';
 
 @Module({
   imports: [
-    ScheduleModule.forRoot(),
     HttpModule,
     PermissionModule,
     UserModule, // Import UserModule để có UserStatusObserver

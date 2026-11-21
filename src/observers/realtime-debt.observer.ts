@@ -10,15 +10,17 @@ import { DebtLogs, ReminderStatus } from '../debt_logs/debt_logs.entity';
 import { DebtConfig } from '../debt_configs/debt_configs.entity';
 import { Debt } from '../debts/debt.entity';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, MoreThan } from 'typeorm';
+import { Repository, MoreThan, In } from 'typeorm';
 import { ChangeAction, DatabaseChangeLog } from './change_log.entity';
 
 @Injectable()
 export class RealTimeDebtObserver implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(RealTimeDebtObserver.name);
   private isRunning = false;
+  private isProcessing = false;
   private processingInterval: NodeJS.Timeout;
   private lastProcessedId = 0;
+  private readonly DEBT_TABLES = ['debts', 'debt_logs', 'debt_configs'];
 
   // Separate debounce queues for each ws_type
   private wsEventQueueDebt: any[] = [];
@@ -43,9 +45,12 @@ export class RealTimeDebtObserver implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   async onModuleInit() {
-    // Get last processed ID từ database
+    // Get last processed ID từ database cho riêng các bảng công nợ
     const lastLog = await this.changeLogRepo.findOne({
-      where: { processed: true },
+      where: {
+        processed: true,
+        table_name: In(this.DEBT_TABLES),
+      },
       order: { id: 'DESC' },
     });
 
@@ -78,69 +83,77 @@ export class RealTimeDebtObserver implements OnModuleInit, OnModuleDestroy {
   }
 
   private async processNewChanges() {
-    // Get unprocessed changes
-    const newChanges = await this.changeLogRepo.find({
-      where: {
-        id: MoreThan(this.lastProcessedId),
-        processed: false,
-      },
-      order: { id: 'ASC' },
-      take: 50, // Process max 50 changes per batch
-    });
-
-    if (newChanges.length === 0) return;
-
-    // Optimized flow: mark whole batch as processed first (single UPDATE),
-    // then process each record. If the batch-update fails, fall back to
-    // per-record update to preserve behavior.
-    const ids = newChanges.map((c) => c.id);
+    if (this.isProcessing) return;
+    this.isProcessing = true;
 
     try {
-      await this.changeLogRepo
-        .createQueryBuilder()
-        .update()
-        .set({ processed: true, processed_at: () => 'CURRENT_TIMESTAMP()' })
-        .where('id IN (:...ids)', { ids })
-        .execute();
+      // Get unprocessed changes for debt tables only (tránh nuốt bản ghi của campaigns/users)
+      const newChanges = await this.changeLogRepo.find({
+        where: {
+          id: MoreThan(this.lastProcessedId),
+          processed: false,
+          table_name: In(this.DEBT_TABLES),
+        },
+        order: { id: 'ASC' },
+        take: 50, // Process max 50 changes per batch
+      });
 
-      // Advance lastProcessedId to the max id in this batch
-      const maxId = Math.max(...ids, this.lastProcessedId);
-      this.lastProcessedId = maxId;
+      if (newChanges.length === 0) return;
 
-      // Now process each change (note: if service crashes here, events may be lost)
-      for (const change of newChanges) {
-        try {
-          await this.processIndividualChange(change);
-        } catch (error) {
-          this.logger.error(
-            `Error processing change ${change.id} after batch-mark: ${error.message}`,
-          );
+      // Optimized flow: mark whole batch as processed first (single UPDATE),
+      // then process each record. If the batch-update fails, fall back to
+      // per-record update to preserve behavior.
+      const ids = newChanges.map((c) => c.id);
+
+      try {
+        await this.changeLogRepo
+          .createQueryBuilder()
+          .update()
+          .set({ processed: true, processed_at: () => 'CURRENT_TIMESTAMP()' })
+          .where('id IN (:...ids)', { ids })
+          .execute();
+
+        // Advance lastProcessedId to the max id in this batch
+        const maxId = Math.max(...ids, this.lastProcessedId);
+        this.lastProcessedId = maxId;
+
+        // Now process each change (note: if service crashes here, events may be lost)
+        for (const change of newChanges) {
+          try {
+            await this.processIndividualChange(change);
+          } catch (error) {
+            this.logger.error(
+              `Error processing change ${change.id} after batch-mark: ${error.message}`,
+            );
+          }
+        }
+      } catch (batchError) {
+        this.logger.error(
+          'Error marking batch processed, falling back to per-record flow:',
+          batchError.stack,
+        );
+
+        // Fallback: original per-record behavior
+        for (const change of newChanges) {
+          try {
+            await this.processIndividualChange(change);
+
+            // Mark as processed
+            await this.changeLogRepo.update(change.id, {
+              processed: true,
+              processed_at: new Date(),
+            });
+
+            this.lastProcessedId = change.id;
+          } catch (error) {
+            this.logger.error(
+              `Error processing change ${change.id}: ${error.message}`,
+            );
+          }
         }
       }
-    } catch (batchError) {
-      this.logger.error(
-        'Error marking batch processed, falling back to per-record flow:',
-        batchError.stack,
-      );
-
-      // Fallback: original per-record behavior
-      for (const change of newChanges) {
-        try {
-          await this.processIndividualChange(change);
-
-          // Mark as processed
-          await this.changeLogRepo.update(change.id, {
-            processed: true,
-            processed_at: new Date(),
-          });
-
-          this.lastProcessedId = change.id;
-        } catch (error) {
-          this.logger.error(
-            `Error processing change ${change.id}: ${error.message}`,
-          );
-        }
-      }
+    } finally {
+      this.isProcessing = false;
     }
   }
 
@@ -479,7 +492,10 @@ export class RealTimeDebtObserver implements OnModuleInit, OnModuleDestroy {
   // Public methods
   async getStatus() {
     const unprocessedCount = await this.changeLogRepo.count({
-      where: { processed: false },
+      where: {
+        processed: false,
+        table_name: In(this.DEBT_TABLES) as any,
+      },
     });
 
     return {

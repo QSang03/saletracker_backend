@@ -10,15 +10,21 @@ import { Campaign } from '../campaigns/campaign.entity';
 import { CampaignInteractionLog } from '../campaign_interaction_logs/campaign_interaction_log.entity';
 import { CampaignSchedule } from '../campaign_schedules/campaign_schedule.entity';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, MoreThan } from 'typeorm';
+import { Repository, MoreThan, In } from 'typeorm';
 import { ChangeAction, DatabaseChangeLog } from './change_log.entity';
 
 @Injectable()
 export class RealTimeCampaignObserver implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(RealTimeCampaignObserver.name);
   private isRunning = false;
+  private isProcessing = false;
   private processingInterval: NodeJS.Timeout;
   private lastProcessedId = 0;
+  private readonly CAMPAIGN_TABLES = [
+    'campaigns',
+    'campaign_interaction_logs',
+    'campaign_schedules',
+  ];
 
   // Separate debounce queues for each ws_type
   private wsEventQueueCampaign: any[] = [];
@@ -43,9 +49,12 @@ export class RealTimeCampaignObserver implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   async onModuleInit() {
-    // Get last processed ID từ database
+    // Get last processed ID từ database cho riêng các bảng chiến dịch
     const lastLog = await this.changeLogRepo.findOne({
-      where: { processed: true },
+      where: {
+        processed: true,
+        table_name: In(this.CAMPAIGN_TABLES),
+      },
       order: { id: 'DESC' },
     });
 
@@ -80,42 +89,45 @@ export class RealTimeCampaignObserver implements OnModuleInit, OnModuleDestroy {
   }
 
   private async processNewChanges() {
-    // Get unprocessed changes for campaign tables only
-    const newChanges = await this.changeLogRepo
-      .createQueryBuilder('change_log')
-      .where('change_log.id > :lastProcessedId', {
-        lastProcessedId: this.lastProcessedId,
-      })
-      .andWhere('change_log.processed = false')
-      .andWhere('change_log.table_name IN (:...tableNames)', {
-        tableNames: [
-          'campaigns',
-          'campaign_interaction_logs',
-          'campaign_schedules',
-        ],
-      })
-      .orderBy('change_log.id', 'ASC')
-      .limit(50) // Process max 50 changes per batch
-      .getMany();
+    if (this.isProcessing) return;
+    this.isProcessing = true;
 
-    if (newChanges.length === 0) return;
+    try {
+      // Get unprocessed changes for campaign tables only
+      const newChanges = await this.changeLogRepo
+        .createQueryBuilder('change_log')
+        .where('change_log.id > :lastProcessedId', {
+          lastProcessedId: this.lastProcessedId,
+        })
+        .andWhere('change_log.processed = false')
+        .andWhere('change_log.table_name IN (:...tableNames)', {
+          tableNames: this.CAMPAIGN_TABLES,
+        })
+        .orderBy('change_log.id', 'ASC')
+        .limit(50) // Process max 50 changes per batch
+        .getMany();
 
-    for (const change of newChanges) {
-      try {
-        await this.processIndividualChange(change);
+      if (newChanges.length === 0) return;
 
-        // Mark as processed
-        await this.changeLogRepo.update(change.id, {
-          processed: true,
-          processed_at: new Date(),
-        });
+      for (const change of newChanges) {
+        try {
+          await this.processIndividualChange(change);
 
-        this.lastProcessedId = change.id;
-      } catch (error) {
-        this.logger.error(
-          `Error processing campaign change ${change.id}: ${error.message}`,
-        );
+          // Mark as processed
+          await this.changeLogRepo.update(change.id, {
+            processed: true,
+            processed_at: new Date(),
+          });
+
+          this.lastProcessedId = change.id;
+        } catch (error) {
+          this.logger.error(
+            `Error processing campaign change ${change.id}: ${error.message}`,
+          );
+        }
       }
+    } finally {
+      this.isProcessing = false;
     }
   }
 

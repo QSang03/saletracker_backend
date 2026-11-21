@@ -506,7 +506,17 @@ export class SaleDataSyncService {
 
     while (true) {
       // Quét các sản phẩm có khớp S1 (s1Matched = true hoặc s1ProductId != null)
+      // CHỈ SELECT CÁC CỘT CẦN DÙNG, TUYỆT ĐỐI KHÔNG LOAD rawData (JSON lớn) để tránh ngốn RAM
       const excelItems = await this.excelItemRepo.find({
+        select: [
+          'id',
+          'productCode',
+          's1ProductId',
+          's1StockQuantity',
+          's1Matched',
+          'isCustom',
+          'rawStatus',
+        ],
         where: [
           { s1Matched: true },
           { isCustom: false },
@@ -532,51 +542,37 @@ export class SaleDataSyncService {
         Array.from(productCodes),
       );
 
-      const itemsToSave: SaleExcelItem[] = [];
-
       for (const item of excelItems) {
         const prod = this.findProduct(prodMap, item.s1ProductId, item.productCode);
         if (prod) {
           const stock = prod.stock !== null && prod.stock !== undefined ? Math.max(0, Number(prod.stock)) : 0;
-          let changed = false;
-
-          // 1. Cập nhật số lượng tồn kho S1
-          if (item.s1StockQuantity !== stock) {
-            item.s1StockQuantity = stock;
-            changed = true;
-          }
-
-          if (!item.s1ProductId && prod.id) {
-            item.s1ProductId = prod.id;
-            changed = true;
-          }
-
-          if (!item.s1Matched) {
-            item.s1Matched = true;
-            item.isCustom = false;
-            changed = true;
-          }
-
           // 2. Cập nhật tình trạng kho:
           // Nếu tồn > 0: "SẴN HÀNG"
           // Nếu tồn = 0: "TẠM HẾT HÀNG"
           const newStatus = stock > 0 ? 'SẴN HÀNG' : 'TẠM HẾT HÀNG';
-          if (item.rawStatus !== newStatus) {
-            item.rawStatus = newStatus;
-            changed = true;
-          }
+          const targetS1ProductId = prod.id || item.s1ProductId || null;
 
-          // TUYỆT ĐỐI KHÔNG CHẠM VÀO ĐƠN GIÁ item.price!
+          const needUpdate =
+            item.s1StockQuantity !== stock ||
+            item.rawStatus !== newStatus ||
+            !item.s1Matched ||
+            item.isCustom !== false ||
+            (!item.s1ProductId && Boolean(prod.id));
 
-          if (changed) {
-            itemsToSave.push(item);
+          if (needUpdate) {
+            // Cập nhật trực tiếp bằng update theo id:
+            // 1. Nhẹ RAM, không phải giữ mảng entities lớn trong bộ nhớ.
+            // 2. An toàn tuyệt đối: MySQL chỉ cập nhật các cột này, raw_data và giá price trong DB được giữ nguyên vẹn 100%.
+            await this.excelItemRepo.update(item.id, {
+              s1StockQuantity: stock,
+              rawStatus: newStatus,
+              s1Matched: true,
+              isCustom: false,
+              s1ProductId: targetS1ProductId,
+            });
+            updatedItems++;
           }
         }
-      }
-
-      if (itemsToSave.length > 0) {
-        await this.excelItemRepo.save(itemsToSave);
-        updatedItems += itemsToSave.length;
       }
 
       offset += batchSize;
